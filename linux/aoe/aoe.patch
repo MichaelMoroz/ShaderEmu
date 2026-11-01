@@ -13,7 +13,7 @@ index ace2f53a7..bb040047e 100644
      friend class TPanel;
      friend class RGE_Scenario;
 diff --git a/include/drawarea.h b/include/drawarea.h
-index 591015c52..19adb2416 100644
+index 591015c52..e370f5dbb 100644
 --- a/include/drawarea.h
 +++ b/include/drawarea.h
 @@ -92,11 +92,13 @@ class TSpan_List_Manager {
@@ -30,12 +30,15 @@ index 591015c52..19adb2416 100644
      void AddSpan(int LeftPx, int RightPx, int Line);
      void AddShape(TShape* theShape, int shape_num, int Xpos, int Ypos, int Mirror);
      void AddShape_Align(unsigned char* Shape_Base, Shape_Info* SI, int Xpos, int Ypos, int Mirror);
-@@ -151,6 +153,8 @@ class TDrawArea {
+@@ -151,6 +153,11 @@ class TDrawArea {
      void** CurDisplayOffsets;            // +0xC0
      void** FloatOffsets;                 // +0xC4
      RGE_Color_Table* shadow_color_table; // +0xC8
 +    int aoe_whole_clip_owed;
 +    long aoe_clip_made[5];   // the rectangle SpanList holds, and [4] that it holds one
++    TSpan_List_Manager* aoe_clip_lists[4];   // the port: the spans of the rectangles asked for before, with these
++    long aoe_clip_rects[4][4];
++    int aoe_clip_next;
      TSpan_List_Manager* SpanList;        // +0xCC
      TSpan_List_Manager* CurSpanList;     // +0xD0
      int Float_X_Delta;                   // +0xD4
@@ -189,7 +192,7 @@ index 1d6e56032..74907c6f6 100644
          } else {
              rect = drawarea->ClipRect;
 diff --git a/src/asprite.cpp b/src/asprite.cpp
-index f99cb6f18..233dc640f 100644
+index f99cb6f18..7e5823127 100644
 --- a/src/asprite.cpp
 +++ b/src/asprite.cpp
 @@ -1,3 +1,4 @@
@@ -197,6 +200,24 @@ index f99cb6f18..233dc640f 100644
  #include "../include/game_globals.h"
  #include "../include/asprite.h"
  #include "../include/view.h"
+@@ -121,7 +122,7 @@ RGE_Active_Animated_Sprite::RGE_Active_Animated_Sprite(RGE_Sprite* new_sprite) :
+     last_frame = 0;
+     animate_interval = sprite->duration;
+ 
+-    if (animate_interval < g_sprite_minimum_animation_interval) {
++    if (animate_interval < 0.00100000005f)   /* the port: says of a float what the double's 0.001 says */ {
+         animate_interval = 0.001f;
+     }
+ 
+@@ -202,7 +203,7 @@ void RGE_Active_Animated_Sprite::update(float time, float speed) {
+                 else
+                     animate_interval = sprite->duration * sprite->base_speed / speed;
+ 
+-                if (animate_interval < g_sprite_minimum_animation_interval)
++                if (animate_interval < 0.00100000005f)   /* the port: says of a float what the double's 0.001 says */
+                     animate_interval = 0.001f;
+ 
+                 if (frame_looped != 0) {
 diff --git a/src/basegame.cpp b/src/basegame.cpp
 index 2ec743511..695fe1608 100644
 --- a/src/basegame.cpp
@@ -255,7 +276,7 @@ index 2ec743511..695fe1608 100644
          this->mouse_pointer->draw(1);
          this->erase_mouse = 1;
 diff --git a/src/drawarea.cpp b/src/drawarea.cpp
-index 9f77ab2ed..ff4dcbd6b 100644
+index 9f77ab2ed..e7e4a8bc4 100644
 --- a/src/drawarea.cpp
 +++ b/src/drawarea.cpp
 @@ -1,3 +1,4 @@
@@ -263,15 +284,17 @@ index 9f77ab2ed..ff4dcbd6b 100644
  #include "../include/drawarea.h"
  #include "../include/asm_draw.h"
  #include "../include/color.h"
-@@ -964,6 +965,7 @@ TDrawArea::TDrawArea(char* SurfaceName, int ForceSystemMem) {
+@@ -964,6 +965,9 @@ TDrawArea::TDrawArea(char* SurfaceName, int ForceSystemMem) {
      this->Orien = 1;
      this->SpanList = 0;
      this->CurSpanList = 0;
 +    this->aoe_whole_clip_owed = 0;
++    memset(this->aoe_clip_lists, 0, sizeof this->aoe_clip_lists);
++    this->aoe_clip_next = 0;
      this->shadow_color_table = 0;
  
      int name_length = (int) strlen(SurfaceName);
-@@ -1116,7 +1118,9 @@ unsigned char TDrawArea::CheckSurface() {
+@@ -1116,7 +1120,9 @@ unsigned char TDrawArea::CheckSurface() {
      return 0;
  }
  
@@ -281,7 +304,15 @@ index 9f77ab2ed..ff4dcbd6b 100644
      if (this->DrawSystem != 0) {
          if (this->DrawSystem->DrawType == 1)
              return this->Bits;
-@@ -1509,6 +1513,7 @@ void TDrawArea::SetClipRect(tagRECT* rect) {
+@@ -1270,6 +1276,7 @@ void TDrawArea::SetSize(long wid_in, long hgt_in, int ExtendSurface) {
+         }
+     }
+ 
++    for (int aoe_i = 0; aoe_i < 4; aoe_i++) if (this->aoe_clip_lists[aoe_i] != 0) { delete this->aoe_clip_lists[aoe_i]; this->aoe_clip_lists[aoe_i] = 0; }
+     if (this->SpanList != 0) {
+         delete this->SpanList;
+     }
+@@ -1509,6 +1516,7 @@ void TDrawArea::SetClipRect(tagRECT* rect) {
      this->SetClipRect(this->ClipRect.left, this->ClipRect.top, this->ClipRect.right, this->ClipRect.bottom);
  }
  
@@ -289,10 +320,13 @@ index 9f77ab2ed..ff4dcbd6b 100644
  void TDrawArea::SetClipRect(long x1, long y1, long x2, long y2) {
      TSpan_List_Manager* span_list = this->SpanList;
  
-@@ -1517,6 +1522,15 @@ void TDrawArea::SetClipRect(long x1, long y1, long x2, long y2) {
+@@ -1517,22 +1525,73 @@ void TDrawArea::SetClipRect(long x1, long y1, long x2, long y2) {
      this->ClipRect.right = x2;
      this->ClipRect.bottom = y2;
  
++    // The port: the view's job draws through its masks: its own span list is not made anew at each start and end (68,000
++    // instructions a frame).
++    if (aoe_view_in_job() && span_list != 0) { this->CurSpanList = span_list; return; }
 +    // The port: every panel's end asks for the whole area, 600 lines of spans, and the next panel's start for
 +    // its own: the whole area's are made only if something is drawn under it (Lock).
 +    this->aoe_whole_clip_owed = 0;
@@ -305,7 +339,14 @@ index 9f77ab2ed..ff4dcbd6b 100644
      if (span_list != 0 && span_list->Num_Lines != this->Height) {
          if (this->SpanList != 0) {
              delete this->SpanList;
-@@ -1527,12 +1541,26 @@ void TDrawArea::SetClipRect(long x1, long y1, long x2, long y2) {
+         }
+         this->SpanList = 0;
++        for (int i = 0; i < 4; i++) {
++            if (this->aoe_clip_lists[i] != 0) delete this->aoe_clip_lists[i];
++            this->aoe_clip_lists[i] = 0;
++        }
+     }
+ 
      if (this->SpanList == 0) {
          span_list = new TSpan_List_Manager(this->Width, this->Height);
          this->SpanList = span_list;
@@ -317,7 +358,28 @@ index 9f77ab2ed..ff4dcbd6b 100644
 +        this->CurSpanList = this->SpanList;
 +        return;
 +    }
-+    this->aoe_clip_made[0] = x1; this->aoe_clip_made[1] = y1; this->aoe_clip_made[2] = x2; this->aoe_clip_made[3] = y2; this->aoe_clip_made[4] = 1;
++    // The port: and the panels ask for a few rectangles in turn: 25,000 instructions a frame made anew (AddRect and its nodes)
++    {
++        int made = this->aoe_clip_made[4] == 1, k;
++        for (k = 0; k < 4; k++) {
++            long* r = this->aoe_clip_rects[k];
++            if (this->aoe_clip_lists[k] != 0 && r[0] == x1 && r[1] == y1 && r[2] == x2 && r[3] == y2) break;
++        }
++        int found = k < 4;
++        if (!found) { k = this->aoe_clip_next; this->aoe_clip_next = (k + 1) & 3; }
++        TSpan_List_Manager* other = this->aoe_clip_lists[k];
++        if (made || found) {
++            this->aoe_clip_lists[k] = this->SpanList;
++            for (int i = 0; i < 4; i++) this->aoe_clip_rects[k][i] = this->aoe_clip_made[i];
++            if (!made) this->aoe_clip_lists[k] = 0;
++            this->SpanList = other != 0 ? other : new TSpan_List_Manager(this->Width, this->Height);
++        }
++        this->aoe_clip_made[0] = x1; this->aoe_clip_made[1] = y1; this->aoe_clip_made[2] = x2; this->aoe_clip_made[3] = y2; this->aoe_clip_made[4] = 1;
++        if (found) {
++            this->CurSpanList = this->SpanList;
++            return;
++        }
++    }
      this->SpanList->ResetAll();
      span_list = this->SpanList;
      span_list->SetSpanRegions(this->ClipRect.left, this->ClipRect.top, this->ClipRect.right, this->ClipRect.bottom);
@@ -332,7 +394,7 @@ index 9f77ab2ed..ff4dcbd6b 100644
      int y = this->ClipRect.top;
      if (y <= this->ClipRect.bottom) {
          do {
-@@ -2286,3 +2314,9 @@ void TDrawArea::take_snapshot(char* filespec, int& index_no) {
+@@ -2286,3 +2345,9 @@ void TDrawArea::take_snapshot(char* filespec, int& index_no) {
      }
      free(row);
  }
@@ -365,6 +427,21 @@ index 62726c191..37b9e144d 100644
  int SDI_Draw_Level = 0;
  int SDI_Draw_Line = 0;
  void* StringTableX = 0;
+diff --git a/src/m_s_obj.cpp b/src/m_s_obj.cpp
+index 095643260..bd589eb20 100644
+--- a/src/m_s_obj.cpp
++++ b/src/m_s_obj.cpp
+@@ -863,8 +863,8 @@ unsigned char RGE_Master_Static_Object::check_placement(
+     float min_y_value = row - radius_y;
+     float max_y_value = row + radius_y - g_static_object_coordinate_epsilon;
+ 
+-    if (!(min_x_value >= g_static_object_zero) || !(max_x_value < (float) map->map_width)
+-        || !(min_y_value >= g_static_object_zero) || !(max_y_value < (float) map->map_height)) {
++    if (!(min_x_value >= 0.0f) || !(max_x_value < (float) map->map_width)
++        || !(min_y_value >= 0.0f) || !(max_y_value < (float) map->map_height)) {
+         return 7;
+     }
+ 
 diff --git a/src/main.cpp b/src/main.cpp
 index b672d36a5..05d2733f2 100644
 --- a/src/main.cpp
@@ -379,7 +456,7 @@ index b672d36a5..05d2733f2 100644
      info.instance = prog_inst;
      info.prev_instance = prev_inst;
 diff --git a/src/move_obj.cpp b/src/move_obj.cpp
-index 8833dbaff..3e9b7114b 100644
+index 8833dbaff..08971e8bd 100644
 --- a/src/move_obj.cpp
 +++ b/src/move_obj.cpp
 @@ -11,6 +11,7 @@
@@ -390,7 +467,94 @@ index 8833dbaff..3e9b7114b 100644
  #include <stdio.h>
  #include <stdlib.h>
  
-@@ -1140,8 +1141,18 @@ int RGE_Moving_Object::doTrivialMove(float x, float y) {
+@@ -1066,11 +1067,21 @@ int RGE_Moving_Object::doMove() {
+     return 1;
+ }
+ 
++static inline float aoe_atan2f(float y, float x) {
++    float ax = __builtin_fabsf(x), ay = __builtin_fabsf(y);
++    float a = ay > ax ? ax / ay : ay / ax, t = a * a;
++    float r = a * (0.99997726f + t * (-0.33262347f + t * (0.19354346f + t * (-0.11643287f + t * (0.05265332f + t * -0.01172120f)))));
++    if (ay > ax) r = 1.5707964f - r;
++    if (x < 0.0f) r = 3.1415927f - r;
++    return y < 0.0f ? -r : r;
++}
++
++// The port: a float compared with a double's constant (40 instructions in the soft double, two moves here) against the float that says the same of every float.
+ int RGE_Moving_Object::doTrivialMove(float x, float y) {
+     int alreadyMoving = 1;
+-    if (this->speed == g_move_zero_double) {
++    if (this->speed == 0.0f) {
+         alreadyMoving = 0;
+-        if (this->sprite != 0 && this->sprite->base_speed > g_move_zero_double) {
++        if (this->sprite != 0 && this->sprite->base_speed > 0.0f) {
+             this->speed = ((RGE_Master_Moving_Object*) this->master_obj)->speed * this->sprite->base_speed;
+         } else {
+             this->speed = ((RGE_Master_Moving_Object*) this->master_obj)->speed;
+@@ -1079,17 +1090,17 @@ int RGE_Moving_Object::doTrivialMove(float x, float y) {
+ 
+     float distanceToCover = this->owner->world->world_time_delta_seconds * this->speed;
+ 
+-    if (this->collisionAvoidanceDistance > g_move_zero_double) {
++    if (this->collisionAvoidanceDistance > 0.0f) {
+         this->collisionAvoidanceDistance -= distanceToCover;
+-        if (this->collisionAvoidanceDistance > g_move_zero_double) {
++        if (this->collisionAvoidanceDistance > 0.0f) {
+             this->speed = 0.0f;
+             return 0;
+         }
+         this->collisionAvoidanceDistance = -1.0f;
+     }
+ 
+-    if (((RGE_Master_Moving_Object*) this->master_obj)->turn_speed > g_move_zero_double) {
+-        if (this->turnTimer >= g_move_zero_double) {
++    if (((RGE_Master_Moving_Object*) this->master_obj)->turn_speed > 0.0f) {
++        if (this->turnTimer >= 0.0f) {
+             this->turnTimer -= this->owner->world->world_time_delta_seconds;
+         } else {
+             this->turnTimer = 0.0f;
+@@ -1113,20 +1124,29 @@ int RGE_Moving_Object::doTrivialMove(float x, float y) {
+         targetDY = y - ((float) floor((double) this->world_y) - g_move_negative_half_float);
+     }
+ 
+-    float newAngle = (float) atan2((double) targetDY, (double) targetDX);
+-    this->boundAngle(&newAngle, -1);
+-    float angleDelta = newAngle - this->angle;
+-    while (angleDelta < g_move_negative_pi_double) {
+-        angleDelta -= g_move_negative_two_pi;
+-    }
+-    while (angleDelta > g_move_pi_double) {
+-        angleDelta -= g_move_two_pi;
++    // The port: the angle wanted only decides how many facets to turn and which way (a double's atan2 is 2,500 instructions, 9% of
++    // the first core). Floats tell it to 2e-6 of a radian; near a place where the decision changes it is made with the double's.
++    float newAngle, angleDelta, facetDelta;
++    for (int exactAngle = (targetDX == 0.0f && targetDY == 0.0f);; exactAngle = 1) {
++        newAngle = exactAngle ? (float) atan2((double) targetDY, (double) targetDX) : aoe_atan2f(targetDY, targetDX);
++        this->boundAngle(&newAngle, -1);
++        angleDelta = newAngle - this->angle;
++        while (angleDelta < -3.1415925f) {
++            angleDelta -= g_move_negative_two_pi;
++        }
++        while (angleDelta > 3.1415925f) {
++            angleDelta -= g_move_two_pi;
++        }
++        facetDelta = angleDelta * (float) numberFacets * g_move_inverse_full_circle;
++        if (exactAngle) break;
++        float along = __builtin_fabsf(facetDelta);
++        float off = along - (float) (int) along - 0.8f;
++        float toPi = __builtin_fabsf(angleDelta) - 3.1415927f;
++        if (!(off > -0.002f && off < 0.002f) && !(toPi > -0.002f)) break;
+     }
+-
+-    float facetDelta = angleDelta * (float) numberFacets * g_move_inverse_full_circle;
+     this->boundAngle(&this->angle, numberFacets);
+     while (this->turnTimer <= g_move_zero_angle
+-           && (facetDelta > g_move_turn_delta_upper || facetDelta < g_move_turn_delta_lower)) {
++           && (facetDelta > 0.79999995f || facetDelta < -0.79999995f)) {
+         this->turnTimer += ((RGE_Master_Moving_Object*) this->master_obj)->turn_speed;
+         if (angleDelta >= g_move_zero_angle) {
+             facetDelta -= g_move_positive_one;
+@@ -1140,8 +1160,18 @@ int RGE_Moving_Object::doTrivialMove(float x, float y) {
      this->boundAngle(&this->angle, numberFacets);
      this->set_angle();
  
@@ -411,6 +575,23 @@ index 8833dbaff..3e9b7114b 100644
      float newX = this->world_x + this->velocity_x;
      float newY = this->world_y + this->velocity_y;
  
+@@ -2116,14 +2146,14 @@ void RGE_Moving_Object::boundAngle(float* x, int numFacets) {
+         if (numFacets >= 0) {
+             do {
+                 float difference = *x - (float) i * bestDifference;
+-                if (difference < g_move_zero_double) {
++                if (difference < 0.0f) {
+                     difference = -difference;
+                 }
+                 if (difference < bestDifference) {
+                     bestDifference = difference;
+                     bestFacet = i;
+                 }
+-                if (bestDifference < g_move_angle_tolerance) {
++                if (bestDifference < 0.100000001f) {
+                     break;
+                 }
+                 ++i;
 diff --git a/src/rmm_dbct.cpp b/src/rmm_dbct.cpp
 index f3e0cf3a4..212817f2a 100644
 --- a/src/rmm_dbct.cpp
@@ -752,7 +933,7 @@ index d0ddcafa6..0967f4d2a 100644
  #include "../include/program_mode.h"
  #include "../include/asp_list.h"
 diff --git a/src/taiinfmd.cpp b/src/taiinfmd.cpp
-index 0d961d41b..c6978b038 100644
+index 0d961d41b..87c342895 100644
 --- a/src/taiinfmd.cpp
 +++ b/src/taiinfmd.cpp
 @@ -155,7 +155,7 @@ TribeInformationAIModule::TribeInformationAIModule(void* pW, int pID) :
@@ -791,7 +972,39 @@ index 0d961d41b..c6978b038 100644
      }
  
      return 1;
-@@ -2418,7 +2415,7 @@ void TribeInformationAIModule::removeObject(int objID) {
+@@ -2164,14 +2161,8 @@ ConstructionItem* TribeInformationAIModule::influencePlaceStructure(
+                 continue;
+             }
+ 
+-            int blockingObject = -1;
+-            if (masterObj->check_placement(
+-                    this->md->player, (float) x - (-0.5f), (float) y - (-0.5f), &blockingObject, 1, 1, 1, 1, 1, 1
+-                )
+-                != 0) {
+-                continue;
+-            }
+-
++            // The port: the influence map first (a few words), check_placement (376 instructions, 12% of the first core) for
++            // what is left: neither changes anything, so the same places come out.
+             int basePlacementTotal = 0;
+             int blocked = 0;
+             for (int clearX = minClear.x; clearX <= maxClear.x && blocked == 0; ++clearX) {
+@@ -2188,6 +2179,14 @@ ConstructionItem* TribeInformationAIModule::influencePlaceStructure(
+                 continue;
+             }
+ 
++            int blockingObject = -1;
++            if (masterObj->check_placement(
++                    this->md->player, (float) x - (-0.5f), (float) y - (-0.5f), &blockingObject, 1, 1, 1, 1, 1, 1
++                )
++                != 0) {
++                continue;
++            }
++
+             if (placementType == 4 || placementType == 6) {
+                 int old_connection_count = iMap.connectionCountValue;
+                 int connection_count = iMap.connectionsIncluding(minClear, maxClear, 0xff, 0xff, 1, 0, 1);
+@@ -2418,7 +2417,7 @@ void TribeInformationAIModule::removeObject(int objID) {
          ObjectMemory* mem = objectMemory(objID);
          if (mem != 0) {
              // obj->owner->id, kept raw for the same reason as in initialize.
@@ -968,7 +1181,7 @@ index a3c3afc39..6be4416f8 100644
                  case 0:
                      player = new TRIBE_Player(
 diff --git a/src/view.cpp b/src/view.cpp
-index 6439e31fe..df323111d 100644
+index 6439e31fe..1ac755a50 100644
 --- a/src/view.cpp
 +++ b/src/view.cpp
 @@ -1,3 +1,4 @@
@@ -976,7 +1189,7 @@ index 6439e31fe..df323111d 100644
  #include <windows.h>
  #include "../include/program_mode.h"
  #include <ddraw.h>
-@@ -1863,7 +1864,81 @@ long RGE_View::view_function(
+@@ -1863,7 +1864,84 @@ long RGE_View::view_function(
      return result;
  }
  
@@ -1053,12 +1266,15 @@ index 6439e31fe..df323111d 100644
 +#pragma push_macro("fog_next_shape")
 +#undef fog_next_shape
 +#define fog_next_shape (aoe_my_words->fog)
++#pragma push_macro("SDI_Capture_Info")
++#undef SDI_Capture_Info
++#define SDI_Capture_Info (aoe_my_words->capture)
  long RGE_View::view_function_terrain(unsigned char function_mode_in, tagRECT save_render_rect) {
 +    AoeCoreWords* const aoe_my_words = &aoe_core_words[mcw_on_worker() ? 1 : 0];
      int start_map_x;
      int start_row;
      int cols_2_scan;
-@@ -2011,7 +2086,7 @@ long RGE_View::view_function_terrain(unsigned char function_mode_in, tagRECT sav
+@@ -2011,7 +2089,7 @@ long RGE_View::view_function_terrain(unsigned char function_mode_in, tagRECT sav
  
                              draw_this_tile: {
                                  Tile_FogEdge_Table* edge_table = this->Tile_Edge_Tables[tile->tile_type];
@@ -1067,7 +1283,7 @@ index 6439e31fe..df323111d 100644
                                  VSpanMiniList* normal_draw_data;
                                  VSpanMiniList* fog_draw_data;
                                  VSpanMiniList* black_draw_data;
-@@ -2044,7 +2119,7 @@ long RGE_View::view_function_terrain(unsigned char function_mode_in, tagRECT sav
+@@ -2044,7 +2122,7 @@ long RGE_View::view_function_terrain(unsigned char function_mode_in, tagRECT sav
  
                                  normal_draw_data = edge_table[black_tile_mask_num].normal_draw;
                                  fog_draw_data = edge_table[black_tile_mask_num].fog_draw;
@@ -1076,7 +1292,16 @@ index 6439e31fe..df323111d 100644
  
                                  if (MapVis == RGE_TILE_FOGGED) {
                                      fog_draw_data = edge_table[0].normal_draw;
-@@ -2374,81 +2449,26 @@ long RGE_View::view_function_terrain(unsigned char function_mode_in, tagRECT sav
+@@ -2168,7 +2246,7 @@ long RGE_View::view_function_terrain(unsigned char function_mode_in, tagRECT sav
+                                 tile->draw_attribute &= 0xbf;
+                             }
+ 
+-                            if (view_debug_Objects == 0 && tile != 0) {
++                            if (view_debug_Objects == 0 && tile != 0 && tile->objects.list != 0) {
+                                 SDI_Capture_Info = 1;
+                                 if (MapVis == 0) {
+                                     this->futur_objs->SetCaptureLevel(0, 5);
+@@ -2374,81 +2452,26 @@ long RGE_View::view_function_terrain(unsigned char function_mode_in, tagRECT sav
          MouseSystem->Poll();
      }
  
@@ -1170,7 +1395,7 @@ index 6439e31fe..df323111d 100644
              );
              if (new_node != 0) {
                  DClipInfo_Node* tail = this->futur_objs->Draw_Level_Tail[0x1e];
-@@ -2459,8 +2479,6 @@ no_mouse_process: {
+@@ -2459,8 +2482,6 @@ no_mouse_process: {
                  }
                  this->futur_objs->Draw_Level_Tail[0x1e] = new_node;
              }
@@ -1179,15 +1404,16 @@ index 6439e31fe..df323111d 100644
      }
  }
  
-@@ -2759,6 +2777,7 @@ void RGE_View::Add_GDI_Clip_Mask(DClipInfo_Node* SDI, TSpan_List_Manager* Clip_M
+@@ -2759,6 +2780,8 @@ void RGE_View::Add_GDI_Clip_Mask(DClipInfo_Node* SDI, TSpan_List_Manager* Clip_M
      }
  }
  
++#pragma pop_macro("SDI_Capture_Info")
 +#pragma pop_macro("fog_next_shape")
  void RGE_View::draw_multi_object_outline() {
  }
  
-@@ -4232,8 +4251,8 @@ void DClipInfo_List::SetNumZones(int New_Size) {
+@@ -4232,8 +4255,8 @@ void DClipInfo_List::SetNumZones(int New_Size) {
      int i;
  
      if (New_Size >= Max_Zones) {
@@ -1198,7 +1424,7 @@ index 6439e31fe..df323111d 100644
          if (Zone_Ptrs != 0) {
              i = 0;
              if (Used_Zones > 0) {
-@@ -4243,8 +4262,8 @@ void DClipInfo_List::SetNumZones(int New_Size) {
+@@ -4243,8 +4266,8 @@ void DClipInfo_List::SetNumZones(int New_Size) {
                      i = i + 1;
                  } while (i < Used_Zones);
              }
@@ -1209,7 +1435,7 @@ index 6439e31fe..df323111d 100644
          }
          Zone_Ptrs = Ptrs;
          Zone_Size_Ptrs = new_zone_sizes;
-@@ -4262,7 +4281,7 @@ void DClipInfo_List::InitNewZone(int Zone_Size) {
+@@ -4262,7 +4285,7 @@ void DClipInfo_List::InitNewZone(int Zone_Size) {
      Used_Zones = zone_index + 1;
      alloc_size = Element_Size * Zone_Size;
      Zone_Size_Ptrs[zone_index] = Zone_Size;
@@ -1258,10 +1484,29 @@ index 8b843ae6c..09dd55910 100644
          if (do_draw_log != 0)
              write_draw_log2("<vf>\n");
 diff --git a/src/world.cpp b/src/world.cpp
-index 0b7cd1ad5..5fba4e362 100644
+index 0b7cd1ad5..725cb81cd 100644
 --- a/src/world.cpp
 +++ b/src/world.cpp
-@@ -623,7 +623,7 @@ void RGE_Game_World::command_init(int infile, TCommunications_Handler* com_hand)
+@@ -57,6 +57,8 @@ int __cdecl debug_rand(char*, int);
+ void __cdecl debug_srand(char*, int, unsigned int);
+ unsigned long __cdecl debug_timeGetTime(char*, int);
+ 
++// The port: the game's log of every change of alliances, a file in the machine's memory and 900 lines a time, is not written.
++#define AOE_DV(...) ((void) 0)
+ RGE_Game_World::RGE_Game_World() :
+     objectsValue(0), numberObjectsValue(0), maxNumberObjectsValue(10000), negativeObjectsValue(0), numberNegativeObjectsValue(0),
+     maxNumberNegativeObjectsValue(1000), maximumComputerPlayerUpdateTime(2), availableComputerPlayerUpdateTime(2),
+@@ -111,9 +113,6 @@ RGE_Game_World::RGE_Game_World() :
+     reusable_missile_objects = new RGE_Object_List;
+     reusable_doppleganger_objects = new RGE_Object_List;
+     scenario_object_flag = 0;
+-    if (DVlogf == 0) {
+-        DVlogf = fopen("c:\\aoeWVlog.txt", "w");
+-    }
+ }
+ 
+ RGE_Game_World::~RGE_Game_World() {
+@@ -623,7 +622,7 @@ void RGE_Game_World::command_init(int infile, TCommunications_Handler* com_hand)
  }
  
  void RGE_Game_World::world_init(int infile, TSound_Driver* sound_dvr, TCommunications_Handler* com_hand) {
@@ -1270,7 +1515,7 @@ index 0b7cd1ad5..5fba4e362 100644
      this->color_table_init(infile);
      this->init_sounds(infile, sound_dvr);
      this->init_sprites(infile);
-@@ -643,7 +643,7 @@ unsigned char RGE_Game_World::init(char* base_name, TSound_Driver* sound_dvr, TC
+@@ -643,7 +642,7 @@ unsigned char RGE_Game_World::init(char* base_name, TSound_Driver* sound_dvr, TC
      if (fd != -1) {
          rge_read(fd, version, 8);
  
@@ -1279,6 +1524,72 @@ index 0b7cd1ad5..5fba4e362 100644
              rge_close(fd);
              return 0;
          }
+@@ -3215,7 +3214,12 @@ void RGE_Game_World::update_mutual_allies() {
+     int one = 1;
+     int i, j;
+     int pNum, index;
+-    fprintf(DVlogf, s_update_visibilities, world_time);
++    // The port: the whole view and map are drawn again only if what the player sees changes. Any player's change of
++    // alliances asked for it: 5 million instructions on the view's worker and 2 on the first core, with the game at a stop.
++    unsigned long aoe_saw[2] = {0, 0};
++    int aoe_viewer = this->curr_player >= 0 && this->curr_player < player_num ? this->curr_player : -1;
++    if (aoe_viewer >= 0) { aoe_saw[0] = this->players[aoe_viewer]->mutualVisibleMask; aoe_saw[1] = this->players[aoe_viewer]->mutualExploredMask; }
++    AOE_DV( s_update_visibilities, world_time);
+     i = 0;
+     if (i < player_num)
+         do {
+@@ -3275,34 +3279,36 @@ void RGE_Game_World::update_mutual_allies() {
+     }
+ 
+     for (i = 0; i < player_num; i++) {
+-        fprintf(DVlogf, s_player, i);
+-        fprintf(DVlogf, s_masks, players[i]->mutualExploredMask, players[i]->mutualVisibleMask, players[i]->nonMutualVisibleMask);
+-        fprintf(DVlogf, s_player_flags, players[i]->allied_LOS_Enable, players[i]->allied_victory);
+-        fprintf(DVlogf, s_diplomacy);
++        AOE_DV( s_player, i);
++        AOE_DV( s_masks, players[i]->mutualExploredMask, players[i]->mutualVisibleMask, players[i]->nonMutualVisibleMask);
++        AOE_DV( s_player_flags, players[i]->allied_LOS_Enable, players[i]->allied_victory);
++        AOE_DV( s_diplomacy);
+         for (j = 0; j < 9; j++) {
+-            fprintf(DVlogf, s_decimal, players[i]->unitDiplomacy[j]);
++            AOE_DV( s_decimal, players[i]->unitDiplomacy[j]);
+             if (j < 8)
+-                fprintf(DVlogf, s_separator);
++                AOE_DV( s_separator);
+             else
+-                fprintf(DVlogf, s_list_end);
++                AOE_DV( s_list_end);
+         }
+-        fprintf(DVlogf, s_mutual_allies);
++        AOE_DV( s_mutual_allies);
+         for (j = 0; j < 9; j++) {
+-            fprintf(DVlogf, s_decimal, players[i]->mutualAlly[j]);
++            AOE_DV( s_decimal, players[i]->mutualAlly[j]);
+             if (j < 8)
+-                fprintf(DVlogf, s_separator);
++                AOE_DV( s_separator);
+             else
+-                fprintf(DVlogf, s_list_end);
++                AOE_DV( s_list_end);
+         }
+-        fprintf(DVlogf, s_removed_visible_bits);
++        AOE_DV( s_removed_visible_bits);
+         for (j = 0; j < 9; j++) {
+-            fprintf(DVlogf, s_hex, players[i]->RemoveVisibleBits[j]);
++            AOE_DV( s_hex, players[i]->RemoveVisibleBits[j]);
+             if (j < 8)
+-                fprintf(DVlogf, s_separator);
++                AOE_DV( s_separator);
+             else
+-                fprintf(DVlogf, s_list_end);
++                AOE_DV( s_list_end);
+         }
+     }
++    if (!getenv("AOE_ALLIES_REDRAW") && aoe_viewer >= 0 && aoe_saw[0] == this->players[aoe_viewer]->mutualVisibleMask && aoe_saw[1] == this->players[aoe_viewer]->mutualExploredMask)
++        return;
+     TPanel* panel;
+     if ((panel = rge_base_game->get_view_panel()) != 0)
+         panel->set_redraw(TPanel::RedrawImmediate);
 diff --git a/src/zone_map.cpp b/src/zone_map.cpp
 index b57eb84fd..3db09910e 100644
 --- a/src/zone_map.cpp

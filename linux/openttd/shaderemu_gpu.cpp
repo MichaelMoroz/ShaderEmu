@@ -711,6 +711,25 @@ public:
 		_streams[k].shades++;
 	}
 
+	/* (a toolbar's whole rectangle was 685k instructions by SetPixel) */
+	bool DrawCheckerRows(void *video, int width, int height, int odd, PixelColour colour) override
+	{
+		int vx, vy;
+		if (!Where(video, vx, vy) || vx < 0 || vy < 0 || vx + width > _width || vy + height > _height || VpCore() != 0) return false;
+		EnsureFrame();
+		Stream &s = _streams[0];
+		for (int y = 0; y < height; y++) {
+			odd ^= 1; /* (as upstream's: the first row begins at bo ^ 1) */
+			const int from = odd, n = ((width - 1 - from) & ~1) + 1;
+			if (width <= from) continue;
+			if (n == 1) { PutPixel(vx + from, vy + y, colour.p); continue; }
+			Rec *r = NewRec(s, 0);
+			if (r == nullptr) return true;
+			*r = MakeRec(colour.p | ((vx + from + vy + y) & 1) << 8, 0, vx + from, vy + y, n, 1, K_CHECKER, 0);
+		}
+		return true;
+	}
+
 	void SetPixel(void *video, int x, int y, PixelColour colour) override
 	{
 		int vx, vy;

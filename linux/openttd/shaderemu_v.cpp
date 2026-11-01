@@ -34,6 +34,8 @@
 #include "../timer/timer_game_calendar.h"
 #include "../gui.h"
 #include "../company_gui.h"
+#include "../saveload/saveload.h"
+#include "../fileio_type.h"
 #include "../landscape.h"
 #include "../table/sprites.h"
 #include "../rail_cmd.h"
@@ -208,6 +210,7 @@ void VideoDriver_ShaderEmu::UnlockVideoBuffer() {}
  * counted (a scroll or a band left wrong). OPENTTD_HOLD=N|bad|big: the program stops at picture N
  * of the play script, or at the first that differs (by over 1,000 pixels), and says where both
  * pictures are in memory. */
+bool VehViewsOut();
 static int _play_frame = -1;     ///< pictures of OPENTTD_PLAY's script so far, -1 before it
 static int _checked, _check_bad, _check_line, _check_part_line;
 static long long _check_pixels;
@@ -683,12 +686,9 @@ void TickYield()
 	_tick_state = TickState::Running;
 }
 
-/** OPENTTD_SUM_AT=N: at the end of tick N, null_v.cpp's sum and one of every vehicle's place, speed and cargo. */
-static void TickSumAt()
+/** null_v.cpp's sum and one of every vehicle's place, speed and cargo. */
+static std::string StateSum()
 {
-	static const uint64_t at = std::max(Number(getenv("OPENTTD_SUM_AT")), 0);
-	static const uint64_t base = TimerGameTick::counter - 1;
-	if (at == 0 || TimerGameTick::counter - base != at) return;
 	uint32_t h = 2166136261u, hv = 2166136261u;
 	auto add = [](uint32_t &h, uint32_t v) { for (int k = 0; k < 4; k++) h = (h ^ ((v >> (8 * k)) & 0xff)) * 16777619u; };
 	for (uint t = 0; t < Map::Size(); t++) {
@@ -711,8 +711,76 @@ static void TickSumAt()
 		add(hv, static_cast<uint32_t>(v->z_pos) | v->cur_speed << 16);
 		add(hv, v->cargo.StoredCount() | v->progress << 24);
 	}
-	std::string line = fmt::format("openttd: tick {}, sum {:08x}, vehicles {} sum {:08x}\n", at, h, Vehicle::GetNumItems(), hv);
+	return fmt::format("sum {:08x}, vehicles {} sum {:08x}", h, Vehicle::GetNumItems(), hv);
+}
+
+/** OPENTTD_SUM_AT=N: at the end of tick N, null_v.cpp's sum and one of every vehicle's place, speed and cargo. */
+static void TickSumAt()
+{
+	static const uint64_t at = std::max(Number(getenv("OPENTTD_SUM_AT")), 0);
+	static const uint64_t base = TimerGameTick::counter - 1;
+	if (at == 0 || TimerGameTick::counter - base != at) return;
+	std::string line = fmt::format("openttd: tick {}, {}\n", at, StateSum());
 	TickDefer([line] { fmt::print(stderr, "{}", line); });
+}
+
+/**
+ * OPENTTD_SAVE_AT=N:FILE: at tick N or the next the first core sees, the game is saved as a player's save is, its sum and time said
+ * and written beside it, and the program ends; OPENTTD_SAVE_FORMAT=lzma:2 names a format as a config would. A game loaded
+ * with OPENTTD_LOAD_CHECK=FILE says its sum and time against that file and ends (test_all's openttd-save).
+ */
+static void SaveAtStep()
+{
+	static const char *const want = getenv("OPENTTD_SAVE_AT");
+	static bool done = false;
+	if (want == nullptr || done || _game_mode != GM_NORMAL) return;
+	static const uint64_t base = TimerGameTick::counter;
+	if (TimerGameTick::counter - base < static_cast<uint64_t>(std::max(Number(want), 0))) return;
+	const char *path = strchr(want, ':');
+	if (path == nullptr) return;
+	path++;
+	done = true;
+	TickFinish();
+	if (const char *format = getenv("OPENTTD_SAVE_FORMAT"); format != nullptr) _savegame_format = format;
+	const std::string sum = StateSum();
+	const uint32_t from = VpTime();
+	const uint64_t counted = Instructions();
+	const SaveOrLoadResult r = SaveOrLoad(path, SLO_SAVE, DFT_GAME_FILE, NO_DIRECTORY);
+	WaitTillSaved();
+	const uint32_t ms = (VpTime() - from) / 5; /* (VpTime's are 0.2 ms) */
+	char tag[5] = {};
+	long bytes = -1;
+	if (FILE *f = fopen(path, "rb"); f != nullptr) {
+		fread(tag, 1, 4, f);
+		fseek(f, 0, SEEK_END);
+		bytes = ftell(f);
+		fclose(f);
+	}
+	fmt::print(stderr, "openttd: saved {}, tag {}, {} bytes, {} ms, {} million instructions on the first core, {}\n", r == SL_OK ? "ok" : "FAILED", tag, bytes, ms, (Instructions() - counted) / 1000000, sum);
+	if (FILE *f = fopen((std::string(path) + ".sum").c_str(), "w"); f != nullptr) {
+		fmt::print(f, "{}", sum);
+		fclose(f);
+	}
+	_exit_game = true;
+}
+
+static uint32_t _load_from;
+void SeLoadBegins() { _load_from = VpTime(); }
+
+/** What SwitchToMode says of a game just loaded (before a tick of it). */
+void SeLoadEnded()
+{
+	const char *check = getenv("OPENTTD_LOAD_CHECK");
+	if (check == nullptr) return;
+	const uint32_t ms = (VpTime() - _load_from) / 5;
+	const std::string sum = StateSum();
+	char told[128] = {};
+	if (FILE *f = fopen(check, "r"); f != nullptr) {
+		fgets(told, sizeof(told), f);
+		fclose(f);
+	}
+	fmt::print(stderr, "openttd: loaded in {} ms, {}: {}\n", ms, sum, sum == told ? "as saved" : "NOT as saved");
+	_exit_game = true;
 }
 
 void TickAfter() { TickSumAt(); }
@@ -891,8 +959,8 @@ static void PlayDepotLook(bool last)
 	SeGpuSettle();
 	uint32_t least = 100, kept_off = 0;
 	std::string each;
-	for (const Vehicle *h : Vehicle::Iterate()) { /* (none of these moves: its copy must say where it is) */
-		if (h->vehstatus.Test(VehState::Hidden) && h->vehstatus.Test(VehState::Stopped) && (h->drawn.x != h->x_pos || h->drawn.y != h->y_pos || h->drawn.z != h->z_pos)) kept_off++;
+	for (const Vehicle *h : Vehicle::Iterate()) { /* (its copy must say where it is) */
+		if (h->vehstatus.Test(VehState::Hidden) && h->vehstatus.Test(VehState::Stopped) && !h->veh_far && std::abs(h->drawn.x - h->x_pos) + std::abs(h->drawn.y - h->y_pos) > 16) { /* (one still coasting in a tunnel moves: a tick's way) */ kept_off++; }
 	}
 	for (const Window *o : Window::Iterate()) {
 		if (o->viewport == nullptr || o->window_class == WC_MAIN_WINDOW) continue;
@@ -914,7 +982,7 @@ static void PlayDepotLook(bool last)
 /* OPENTTD_PLAY_SCENE=depot, after the looks: the script waits while the vehicle drives out with its window open, goes back into a depot, and then a
  * window is opened on one already on the road. Every picture: the view's centre against the vehicle, its copy against it, and its pixels in the view
  * (OPENTTD_DRAW=cpu) against its sprite drawn alone. */
-struct DriveStage { uint32_t looks = 0, off = 0, max_off = 0, stale = 0, stale_run = 0, stale_most = 0, shown = 0, unseen = 0, moved = 0; int32_t from_x = 0, from_y = 0; };
+struct DriveStage { uint32_t looks = 0, off = 0, off_last = 0, max_off = 0, stale = 0, stale_run = 0, stale_most = 0, shown = 0, unseen = 0, moved = 0; int32_t from_x = 0, from_y = 0; };
 static int _drive = -1;
 static uint32_t _drive_pictures;
 static DriveStage _drive_stage[3];
@@ -924,7 +992,15 @@ static bool DriveSeen(const Vehicle *v, const Viewport &vp)
 {
 	static std::vector<uint8_t> alone;
 	constexpr int ROWS = 96, HALF = 48;
-	if (_screen.dst_ptr == nullptr) return true;
+	static std::vector<uint8_t> gpu;
+	const bool lists = SeGpuOn();
+	if (lists) {
+		SeGpuSettle();
+		SeGpuPicture(gpu);
+		if (gpu.empty()) return true;
+	} else if (_screen.dst_ptr == nullptr) {
+		return true;
+	}
 	const int pitch = _screen.pitch;
 	alone.assign(static_cast<size_t>(pitch) * ROWS, 0);
 	DrawPixelInfo d{};
@@ -940,7 +1016,8 @@ static bool DriveSeen(const Vehicle *v, const Viewport &vp)
 	}
 	const Point pt = RemapCoords(v->drawn.x, v->drawn.y, v->drawn.z);
 	const int cx = vp.left + UnScaleByZoom(pt.x - vp.virtual_left, vp.zoom), cy = vp.top + UnScaleByZoom(pt.y - vp.virtual_top, vp.zoom);
-	const uint8_t *screen = static_cast<const uint8_t *>(_screen.dst_ptr);
+	const uint8_t *screen = lists ? gpu.data() : static_cast<const uint8_t *>(_screen.dst_ptr);
+	const int stride = lists ? _screen.width : pitch;
 	int best = 0, all = 0;
 	for (int oy = -6; oy <= 6; oy++) for (int ox = -6; ox <= 6; ox++) {
 		int same = 0, n = 0;
@@ -950,7 +1027,7 @@ static bool DriveSeen(const Vehicle *v, const Viewport &vp)
 			const int sx = cx + ox + x - HALF, sy = cy + oy + y - HALF;
 			if (sx < vp.left || sy < vp.top || sx >= vp.left + vp.width || sy >= vp.top + vp.height) continue;
 			n++;
-			same += screen[sy * pitch + sx] == p;
+			same += screen[sy * stride + sx] == p;
 		}
 		if (same > best) best = same, all = n;
 	}
@@ -967,7 +1044,10 @@ static void DriveLook(DriveStage &s, const Vehicle *v, const Window *w)
 	const uint32_t off = std::max(std::abs(w->viewport->scrollpos_x - pt.x), std::abs(w->viewport->scrollpos_y - pt.y));
 	if (s.looks == 0) s.from_x = v->x_pos, s.from_y = v->y_pos;
 	s.looks++;
-	if (off > 64) s.off++;
+	if (off > 64) {
+		s.off++;
+		s.off_last = s.looks;
+	}
 	s.max_off = std::max(s.max_off, off);
 	s.moved = std::max<uint32_t>(s.moved, std::abs(v->x_pos - s.from_x) + std::abs(v->y_pos - s.from_y));
 	const bool hidden = v->vehstatus.Test(VehState::Hidden);
@@ -1016,8 +1096,8 @@ static bool PlayDriveStep()
 			static const char *const names[] = { "out of the depot", "back to a depot", "on the road" };
 			for (int i = 0; i < 3; i++) {
 				const DriveStage &s = _drive_stage[i];
-				PlayLine(fmt::format("openttd: depot drive, {}: {} pictures, moved {}, {} off the vehicle (most {}), copy stale {} (at most {} together), shown {} and not seen {}\n",
-						names[i], s.looks, s.moved, s.off, s.max_off, s.stale, s.stale_most, s.shown, s.unseen));
+				PlayLine(fmt::format("openttd: depot drive, {}: {} pictures, moved {}, {} off the vehicle (most {}, last at {}), copy stale {} (at most {} together), shown {} and not seen {}\n",
+						names[i], s.looks, s.moved, s.off, s.max_off, s.off_last, s.stale, s.stale_most, s.shown, s.unseen));
 			}
 			_drive = -1;
 			return false;
@@ -1235,7 +1315,8 @@ static void PlayStep()
 			TwTimes(tick, park, instret);
 			const double s = std::chrono::duration<double>(now - p.start).count();
 			const uint64_t ticks = TimerGameTick::counter - p.ticks;
-extern uint32_t _veh_made_wrong, _veh_synced, _veh_ahead, _veh_copies_off, _veh_copies_seen;
+extern uint32_t _veh_made_wrong, _veh_synced, _veh_ahead, _veh_copies_off, _veh_copies_seen, _veh_copies_far, _veh_copies_moving, _veh_region_scans, _veh_region_made;
+if (GetEnv("OPENTTD_MADE_CHECK").has_value()) PlayLine(fmt::format("openttd: copies near the views: {} looked at, {} far, {} moved since the tick's end, {} off; {} rectangles said, {} made from far\n", _veh_copies_seen, _veh_copies_far, _veh_copies_moving, _veh_copies_off, _veh_region_scans, _veh_region_made));
 if (GetEnv("OPENTTD_MADE_CHECK").has_value()) PlayLine(fmt::format("openttd: vehicles listed {}, as the tick made them {}, the short look not agreeing {}; copies looked at {}, not as the vehicle {}\n", _veh_synced, _veh_ahead, _veh_made_wrong, _veh_copies_seen, _veh_copies_off));
 			PlayLine(fmt::format("openttd: play {} tick on a worker: {:.2f} ticks a second, {:.0f} ms of the worker's a tick, waiting {:.0f}% "
 					"of the time, {:.2f} MIPS in ticks; the first core waited {:.1f} ms a picture for it ({:.1f} holds, the longest {:.1f} ms)\n",
@@ -1384,6 +1465,7 @@ void VideoDriver_ShaderEmu::InputLoop()
 		hosting = nullptr;
 	}
 
+	SaveAtStep();
 	PlayStep();
 	if (old_ctrl_pressed != _ctrl_pressed) HandleCtrlChanged();
 }
@@ -1431,7 +1513,7 @@ void VideoDriver_ShaderEmu::WorkerTick()
 		}
 	}
 	const bool pointer_waits = _have_pending && _pending.type == GR_EVENT_TYPE_MOUSE_MOTION && t - held_at < 66 * 5;
-	_se_light = (!_have_pending || pointer_waits) && !_left_button_down && !_right_button_down && TwLightPicture() && SeDirtyOnlyViews();
+	_se_light = (!_have_pending || pointer_waits) && !_left_button_down && !_right_button_down && TwLightPicture() && SeDirtyOnlyViews() && !VehViewsOut();
 	if (!_se_light) {
 		held_at = t;
 		TwHold(false);
@@ -1503,8 +1585,8 @@ void VideoDriver_ShaderEmu::WorkerTick()
 	_se_light = false;
 	TwService();
 	TwGrant();
-	/* (OPENTTD_PACE_MS: the picture's work the pace keeps to while it scrolls; only zoomed out comes near it: 90 ms and 130 differ by 6% and less, both ways up) */
-	static const uint32_t pace_ms = [] { int n = Number(getenv("OPENTTD_PACE_MS")); return n > 0 ? n : 130; }();
+	/* (OPENTTD_PACE_MS: the picture's work the pace keeps to while it scrolls; only zoomed out comes near it: 130 gave it 12.9 pictures and 4.5 ticks a second, 250 11.7 and 6.4, none at all 10.0 and 7.7, both ways up) */
+	static const uint32_t pace_ms = [] { int n = Number(getenv("OPENTTD_PACE_MS")); return n > 0 ? n : 250; }();
 	TwPace(VpTime() - work_from, pace_ms * 5, _vp_scrolls != scrolls);
 }
 

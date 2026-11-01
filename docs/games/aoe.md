@@ -1,6 +1,6 @@
 # Age of Empires, the 1997 trial
 
-The decompiled game (`github.com/dcostap/aoe1-decomp`, pinned at `6d6d8b1`; the plan read `f4fdf3f`) over a Win32 and DirectDraw layer of our own, with the data of the trial (`docs/plans/aoe-plan.md`). It starts on the desktop and plays. It has no sound and uses no worker cores, and runs at 6 to 8 frames a second ("Speed").
+The decompiled game (`github.com/dcostap/aoe1-decomp`, pinned at `6d6d8b1`; the plan read `f4fdf3f`) over a Win32 and DirectDraw layer of our own, with the data of the trial (`docs/plans/aoe-plan.md`). It starts on the desktop and plays. It has no sound, draws its view on a worker core, and plays at 11 to 15 frames a second on the card ("Speed in play").
 
 **No game data in the repository.** The data is under the trial's EULA, and the code is recovered from Microsoft's binary. Nothing of the game or the trial is committed: only the port, the patch and the tools. The program is not in `ALL` in `linux/nommu/build.sh` or in `linux/prebuilt`. The trial's `Empires.exe` is not read at all. The game's own `verify_cd` is set to 0, because the trial has no CD.
 
@@ -144,9 +144,46 @@ The "before" ran with `AOE_MOVES=all` and already had the other fixes below. Wha
   It is copied from what was kept: the rows between the two pieces are the view's, which draws them whole.
 - **A selection** waited for the object panel's half-second look. Another object selected passes that gate.
 
-Still there: the first order of a game stops about 1.3 s (`order` above: world 465 ms, then 770 ms with core 0 nearly idle
-waiting for the view's job, then 282 ms), not found. One calibrated run had one more stop of 2.1 s (11.6M instructions in
-a world update), which two other runs and a profile did not have.
+- **A stop of 1.3 s** was not the first order's, though it fell there: a computer player's change of alliances
+  (`update_mutual_allies`) asked for the whole view and map again and wrote 900 lines of log, 7 million instructions in all.
+  The log is gone, and the redraw comes only if what the player sees changes (`AOE_ALLIES_REDRAW=1` is the way before). State
+  sums do not move. Pictures do, by what the redraw used to repair: at update 500 of the script one stale 4 x 4 speck at about
+  (388, 362), which a whole redraw clears and which looks like the terrain's own specks. Scrolling over it clears it too only
+  where the tile is drawn again; how many gather in a long game was not measured.
+
+Still open: one calibrated run had a stop of 2.1 s (11.6M instructions in a world update), which later runs did not have; it
+was not named.
+
+## Speed in play
+
+The aim is 15 frames a second in play, 52 passes a frame at the card's 860 to 900 passes a second, and it is not reached in
+every run. `aoe-play` on the card, the build before and the build after in turn (1 November 2026, lean tick):
+
+| | Before | After |
+|---|---|---|
+| `aoe-play`, frames a second | 9.3, 8.7 | 13.6, 11.3, and 9.9 on the merged build |
+| Passes a frame | 98, 104 | 66, 80, 85 |
+| `aoe-play-moving` | 11.5 (78 passes) | 14.6 (62 passes), 12.6 (65 passes) on the merged build |
+
+The runs on one side spread as much as that because other sessions' runs held the machine between them. On the calibrated clock:
+`aoe-play` 14.7, `aoe-play-moving` 13.8. Standing acts reach 13 to 21 on that clock, scrolling 5 to 15.
+
+- **Soft doubles** were 21.5% of the first core and are 4.1%: a moving object's angle in floats (`aoe_atan2f`, a double's `atan2`
+  was 9%), the double's only near where the decision changes; and in the mover, sprites and placement a float against a double's
+  constant is compared with the float that says the same of every float. `aoe_soft.c` has the conversions and comparisons
+  in code of its own.
+- **Clips**: the spans of the last four rectangles are kept (`aoe_clip_lists`). **A building's place**: the influence map is
+  looked at before `check_placement`; neither changes anything, so the same places come out.
+
+What bounds it: a frame is the walk on its worker, about 30 passes with the first core waiting (the first core has next to nothing
+to do beside it: panels are redrawn only when they change), then the world update beside the raster, about 35 passes.
+The world update cannot start before the walk ends, since the walk reads the objects. Next would be the walk on more workers, or
+its terrain part after the world starts: the latter stores to tiles the world's stores share texels with, so tile state the view
+keeps must first move apart.
+
+Tried and not taken: `-O3 -fsched-pressure -funroll-loops` was no faster in play (10.9 against 11.6 on the calibrated clock).
+LTO does not link: the decompiled source defines a class differently in different files (`taiuaimd.h`). PGO was not tried.
+A branchless `get_tile_mask_num` was 64 instructions a call against 59.
 
 ## The view on a worker
 
@@ -161,13 +198,22 @@ What the walk sets around a shape and a panel's drawing must not see is one for 
 centre with no picture, found only by comparing pictures. The sprites' state is one for each core too (`aoe_asm.cpp`),
 the view has its own copy of the page's draw area and span list, and what grows in a job comes from a piece of its own
 (`aoe_any_calloc`), never the heap. A view's clock looks do not move `AOE_TICK_MS`'s clock, which moved the state sums of
-script runs on purpose: update 500 `64d33a6f`, 1000 `5032c153`, under qemu and on the machine, inline and on the worker.
+script runs on purpose: update 500 `64d33a6f`, 1000 `5032c153`, inline, and under qemu when it was last compared.
+
+With the view on a worker a script run's sums are not one value: the same program gave 1000 `5032c153` and, with
+`RVC_RACES` or `AOE_PICSUM`, `138ef893`. The first core's clock looks are not the same in number from run to run, so a script's
+later steps come at other clock values (a step at 14521 against 14488) and a click at another update. That is what was seen; no
+other cause was ruled out. So `test_all.py aoe` runs `AOE_VIEW=inline`, and sums compare only there. Its check also used to
+pass on any run, as the console echoes the `AOE-NO-DATA` of the typed command: it is anchored now.
 
 `AOE_PICSUM=N` prints sums of a picture's three bands, `AOE_PICDUMP=F` a grid of block hashes of frame F, and
 `AOE_PICROWS=1` the bottom left's pixels. Worker against inline at updates to 500: top and view bands equal; the bottom
 band differs in 4 of 21 pictures, when the panel's half-second look falls on another frame (a percent trained shown a look
-earlier), which was read off the pictures once and not checked for each. `RVC_RACES` with `RVC_RACES_NEAR=4`: 0 undone in
-the game's script run, 2 near places not yet named.
+earlier), which was read off the pictures once and not checked for each. Comparing a worker's pictures needs care: which
+frame a band shows moves with timing, and differs between images of one program. `RVC_RACES` with `RVC_RACES_NEAR=4`: 0
+undone in the game's script run; 3 near places not named. On the desktop one undone was seen, at 0x81000040: the window system's
+pointer worker (`wm_job`, `scr_shaderemu.c`) and its first core (`cursor_put`) on the cursor's registers, not the game's;
+`wm_job` writes again what differs, so it heals.
 
 ## What ends a round
 
@@ -201,6 +247,5 @@ The cursor is the game's own, drawn into its picture, and it is in captures from
 ## Not done
 
 - Sound and music: `DirectSoundCreate` fails and the game runs silent. `docs/machine/sound.md` is the way.
-- Workers: none, so `RVC_RACES` has nothing to say yet. See "Speed".
 - `linux/nommu/memory.py`.
 - Saving, multiplayer (DirectPlay stubs) and scenarios were not tried. Computer players gather and build over 5 game minutes; a whole game was not played.

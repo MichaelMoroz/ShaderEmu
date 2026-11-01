@@ -257,9 +257,9 @@ CASES = [
     # blitter's (OPENTTD_DRAW=cpu): rvc_cpu draws no GPU list, and the GPU's picture is checked under rvc_harness --cpu --warp
     # ("The picture on the GPU")
     # Age of Empires is on images made with --aoe only (docs/games/aoe.md): an image without its data says so and passes
-    case('aoe', 'games aoe', X + 'if [ -f /usr/share/aoe/Empires.dat ]; then AOE_TICK_MS=33 AOE_SUM_EVERY=500 AOE_SUM_END=1000 '
+    case('aoe', 'games aoe', X + 'if [ -f /usr/share/aoe/Empires.dat ]; then AOE_VIEW=inline AOE_TICK_MS=33 AOE_SUM_EVERY=500 AOE_SUM_END=1000 '
          'AOE_SCRIPT="3000 click 400 245;3000 click 400 172;3000 click 237 568;2000 click 369 118;1000 rclick 505 170;1000 click 370 215;1000 click 163 508" aoe; else echo AOE-NO-DATA; fi',
-         wall=120, has=[r'aoesum: update 1000 time 99900 objects 4357 sum 5032c153|AOE-NO-DATA']),
+         wall=120, has=[r'^(aoesum: update 1000 time 99900 objects 4357 sum 5032c153|AOE-NO-DATA)']),
     case('openttd-scroll', 'games openttd', X + 'OPENTTD_DRAW=cpu OPENTTD_PLAY=1 OPENTTD_PLAY_ODD=1 OPENTTD_PAUSE=1 OPENTTD_CHECK=1 openttd -g /usr/share/openttd/busy.sav',
          True, wall=400, has=[r'openttd: play round 1: .*checked (19\d|200), 0 differ \(0 pixels']),
     case('openttd-scroll-serial', 'games openttd', X + 'OPENTTD_DRAW=cpu OPENTTD_PLAY=1 OPENTTD_PAUSE=1 OPENTTD_CHECK=1 OPENTTD_WORKERS=0 openttd -g /usr/share/openttd/busy.sav',
@@ -270,12 +270,18 @@ CASES = [
          True, wall=400, has=[r'openttd: play round 1: .*checked \d+, 0 differ \(0 pixels']),
     # a window of a new vehicle hidden in a depot and the other small views, with light pictures, which OPENTTD_CHECK turns off (docs/games/openttd.md,
     # "Pictures the tick does not wait for"): its view followed a copy no sync had made, the map's north corner
+    # a game saved uncompressed, as named LZMA, and with an encoder that cannot start, and each loaded: its state as it was saved
+    case('openttd-save', 'games openttd', X + ' ; '.join(
+        f'OPENTTD_DRAW=cpu {e} OPENTTD_SAVE_AT=8:/tmp/{n}.sav openttd -g /usr/share/openttd/busy.sav; OPENTTD_DRAW=cpu OPENTTD_LOAD_CHECK=/tmp/{n}.sav.sum openttd -g /tmp/{n}.sav'
+        for n, e in (('plain', ''), ('packed', 'OPENTTD_SAVE_FORMAT=lzma'), ('fallback', 'OPENTTD_SAVE_FORMAT=lzma OPENTTD_SAVE_NOENCODER=1'))),
+         True, wall=900, has=[r'saved ok, tag OTTN, ', r'saved ok, tag OTTX, ', r'LZMA at preset \d does not start, lzma_ret 5,[^~]*saved ok, tag OTTN, ',
+             r'(?s)(: as saved.*){3}'], never=[r'NOT as saved']),
     case('openttd-depot', 'games openttd', X + 'OPENTTD_DRAW=cpu OPENTTD_PLAY=1 OPENTTD_PLAY_PART=window OPENTTD_PLAY_SCENE=depot openttd -g /usr/share/openttd/busy.sav',
          True, wall=400, has=[r'openttd: depot views: \d\d pictures, [1-9]\d* light, 0 off the vehicle, 0 stopped and hidden with their copies elsewhere; not black.* the least ([5-9]\d|100)%',
              # the vehicle started, sent back, and another already on the road with its window opened: where the view is in every picture, its copy, its pixels
-             r'depot drive, out of the depot: 500 pictures, moved \d{2,}, 0 off the vehicle \(most \d+\), copy stale \d \(at most \d together\), shown [2-5]\d\d and not seen 0',
-             r'depot drive, back to a depot: 500 pictures, moved \d{2,}, 0 off the vehicle \(most \d+\), copy stale \d \(at most \d together\), shown [1-5]\d\d and not seen 0',
-             r'depot drive, on the road: 300 pictures, moved \d{2,}, [0-2] off the vehicle \(most \d+\), copy stale \d \(at most \d together\), shown [23]\d\d and not seen 0']),
+             r'depot drive, out of the depot: 500 pictures, moved \d{2,}, 0 off the vehicle \(most \d+, last at \d+\), copy stale \d \(at most \d together\), shown [2-5]\d\d and not seen 0',
+             r'depot drive, back to a depot: 500 pictures, moved \d{2,}, 0 off the vehicle \(most \d+, last at \d+\), copy stale \d \(at most \d together\), shown \d{2,} and not seen 0',
+             r'depot drive, on the road: 300 pictures, moved \d{2,}, [0-2] off the vehicle \(most \d+, last at \d+\), copy stale \d \(at most \d together\), shown [23]\d\d and not seen 0']),
     # started twice in one boot (docs/games/openttd.md, "At exit"): the first played with its ships' paths made ahead, the
     # second must find its sprites as they are (a worker left running at exit once wrote into the next program's pages)
     case('openttd-twice', 'games openttd', X + 'OPENTTD_PLAY=1 OPENTTD_PLAY_SHORT=1 openttd -g /usr/share/openttd/busy.sav; '
