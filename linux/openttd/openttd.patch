@@ -2364,7 +2364,7 @@ index 9f92375..990d8b2 100644
  		ChangeObject(ni.ref1, from_index, to_index);
  		ChangeObject(ni.ref2, from_index, to_index);
 diff --git a/src/openttd.cpp b/src/openttd.cpp
-index 7d585b0..556a332 100644
+index 7d585b0..4178922 100644
 --- a/src/openttd.cpp
 +++ b/src/openttd.cpp
 @@ -73,6 +73,11 @@
@@ -2537,7 +2537,25 @@ index 7d585b0..556a332 100644
  	if (result == SL_OK) return true;
  
  	if (_network_dedicated && ogm == GM_MENU) {
-@@ -1173,6 +1261,14 @@ void SwitchToMode(SwitchMode new_mode)
+@@ -1100,6 +1188,8 @@ void SwitchToMode(SwitchMode new_mode)
+ 			ResetGRFConfig(true);
+ 			ResetWindowSystem();
+ 
++			void SeLoadBegins();
++			SeLoadBegins();
+ 			if (!SafeLoad(_file_to_saveload.name, _file_to_saveload.file_op, _file_to_saveload.ftype.detailed, GM_NORMAL, NO_DIRECTORY)) {
+ 				ShowErrorMessage(GetSaveLoadErrorType(), GetSaveLoadErrorMessage(), WL_CRITICAL);
+ 			} else {
+@@ -1109,6 +1199,8 @@ void SwitchToMode(SwitchMode new_mode)
+ 				OnStartGame(_network_dedicated);
+ 				/* Decrease pause counter (was increased from opening load dialog) */
+ 				Command<CMD_PAUSE>::Post(PauseMode::SaveLoad, false);
++				void SeLoadEnded();
++				SeLoadEnded();
+ 			}
+ 
+ 			UpdateSocialIntegration(GM_NORMAL);
+@@ -1173,6 +1265,14 @@ void SwitchToMode(SwitchMode new_mode)
  			}
  
  			UpdateSocialIntegration(GM_MENU);
@@ -2552,7 +2570,7 @@ index 7d585b0..556a332 100644
  			break;
  
  		case SM_SAVE_GAME: // Save game.
-@@ -1241,8 +1337,13 @@ void StateGameLoop()
+@@ -1241,8 +1341,13 @@ void StateGameLoop()
  		BasePersistentStorageArray::SwitchMode(PSM_LEAVE_GAMELOOP);
  		UpdateLandscapingLimits();
  
@@ -2568,7 +2586,7 @@ index 7d585b0..556a332 100644
  	} else {
  		if (_debug_desync_level > 2 && TimerGameEconomy::date_fract == 0 && (TimerGameEconomy::date.base() & 0x1F) == 0) {
  			/* Save the desync savegame if needed. */
-@@ -1277,8 +1378,13 @@ void StateGameLoop()
+@@ -1277,8 +1382,13 @@ void StateGameLoop()
  #endif
  		UpdateLandscapingLimits();
  
@@ -2584,7 +2602,7 @@ index 7d585b0..556a332 100644
  		cur_company.Restore();
  	}
  
-@@ -1342,6 +1448,9 @@ void GameLoop()
+@@ -1342,6 +1452,9 @@ void GameLoop()
  	}
  
  	if (_request_newgrf_scan) {
@@ -2594,7 +2612,7 @@ index 7d585b0..556a332 100644
  		ScanNewGRFFiles(_request_newgrf_scan_callback);
  		_request_newgrf_scan = false;
  		_request_newgrf_scan_callback = nullptr;
-@@ -1363,6 +1472,9 @@ void GameLoop()
+@@ -1363,6 +1476,9 @@ void GameLoop()
  
  	/* switch game mode? */
  	if (_switch_mode != SM_NONE && !HasModalProgress()) {
@@ -2604,7 +2622,7 @@ index 7d585b0..556a332 100644
  		SwitchToMode(_switch_mode);
  		_switch_mode = SM_NONE;
  		if (_exit_game) return;
-@@ -1385,9 +1497,15 @@ void GameLoop()
+@@ -1385,9 +1501,15 @@ void GameLoop()
  			NetworkClientConnectGame(_settings_client.network.last_joined, COMPANY_SPECTATOR);
  		}
  		/* Singleplayer */
@@ -4389,7 +4407,7 @@ index 9070e07..8c35392 100644
  	this->tick_counter++;
  
 diff --git a/src/saveload/saveload.cpp b/src/saveload/saveload.cpp
-index ebec3d2..9937635 100644
+index ebec3d2..0ec99f2 100644
 --- a/src/saveload/saveload.cpp
 +++ b/src/saveload/saveload.cpp
 @@ -70,6 +70,7 @@
@@ -4696,7 +4714,57 @@ index ebec3d2..9937635 100644
  		this->lzma.next_out  = buf;
  		this->lzma.avail_out = size;
  
-@@ -3162,12 +3401,21 @@ static SaveOrLoadResult DoLoad(std::shared_ptr<LoadFilter> reader, bool load_che
+@@ -2739,7 +2978,12 @@ struct LZMASaveFilter : SaveFilter {
+ 	 */
+ 	LZMASaveFilter(std::shared_ptr<SaveFilter> chain, uint8_t compression_level) : SaveFilter(std::move(chain)), lzma(_lzma_init)
+ 	{
+-		if (lzma_easy_encoder(&this->lzma, compression_level, LZMA_CHECK_CRC32) != LZMA_OK) SlError(STR_GAME_SAVELOAD_ERROR_BROKEN_INTERNAL_ERROR, "cannot initialize compressor");
++		/* OPENTTD_SAVE_NOENCODER=1: as when memory has no piece for it (test_all's openttd-save) */
++		const lzma_ret r = GetEnv("OPENTTD_SAVE_NOENCODER") != nullptr ? LZMA_MEM_ERROR : lzma_easy_encoder(&this->lzma, compression_level, LZMA_CHECK_CRC32);
++		if (r != LZMA_OK) {
++			fmt::print(stderr, "openttd: LZMA at preset {} does not start, lzma_ret {}, {} bytes asked\n", compression_level, static_cast<int>(r), lzma_easy_encoder_memusage(compression_level));
++			SlError(STR_GAME_SAVELOAD_ERROR_BROKEN_INTERNAL_ERROR, "cannot initialize compressor");
++		}
+ 	}
+ 
+ 	/** Clean up what we allocated. */
+@@ -2849,7 +3093,8 @@ static const SaveLoadFormat _saveload_formats[] = {
+ static std::pair<const SaveLoadFormat &, uint8_t> GetSavegameFormat(std::string_view full_name)
+ {
+ 	/* Find default savegame format, the highest one with which files can be written. */
+-	auto it = std::find_if(std::rbegin(_saveload_formats), std::rend(_saveload_formats), [](const auto &slf) { return slf.init_write != nullptr; });
++	/* (here "none": what is kept between sessions is packed by nxpersist, and an encoder is 17 MB of memory and minutes of a tick held) */
++	auto it = std::find_if(std::rbegin(_saveload_formats), std::rend(_saveload_formats), [](const auto &slf) { return slf.init_write != nullptr && slf.tag == SAVEGAME_TAG_NONE; });
+ 	if (it == std::rend(_saveload_formats)) SlError(STR_GAME_SAVELOAD_ERROR_BROKEN_INTERNAL_ERROR, "no writeable savegame formats");
+ 
+ 	const SaveLoadFormat &def = *it;
+@@ -2991,11 +3236,23 @@ static SaveOrLoadResult SaveFileToDisk(bool threaded)
+ 	try {
+ 		auto [fmt, compression] = GetSavegameFormat(_savegame_format);
+ 
++		/* An encoder that cannot start is no reason to lose the game: the file is then not compressed. */
++		std::shared_ptr<SaveFilter> packed;
++		uint32_t tag = fmt.tag;
++		try {
++			packed = fmt.init_write(_sl.sf, compression);
++		} catch (...) {
++			tag = SAVEGAME_TAG_NONE;
++			packed = CreateSaveFilter<NoCompSaveFilter>(_sl.sf, 0);
++			_sl.error_str = {};
++			_sl.extra_msg.clear();
++		}
++
+ 		/* We have written our stuff to memory, now write it to file! */
+-		uint32_t hdr[2] = { fmt.tag, TO_BE32(SAVEGAME_VERSION << 16) };
++		uint32_t hdr[2] = { tag, TO_BE32(SAVEGAME_VERSION << 16) };
+ 		_sl.sf->Write((uint8_t*)hdr, sizeof(hdr));
+ 
+-		_sl.sf = fmt.init_write(_sl.sf, compression);
++		_sl.sf = std::move(packed);
+ 		_sl.dumper->Flush(_sl.sf);
+ 
+ 		ClearSaveLoadState();
+@@ -3162,12 +3419,21 @@ static SaveOrLoadResult DoLoad(std::shared_ptr<LoadFilter> reader, bool load_che
  	_next_offs = 0;
  
  	if (!load_check) {
@@ -4718,7 +4786,7 @@ index ebec3d2..9937635 100644
  
  		_gamelog.Reset();
  
-@@ -3257,6 +3505,9 @@ SaveOrLoadResult LoadWithFilter(std::shared_ptr<LoadFilter> reader)
+@@ -3257,6 +3523,9 @@ SaveOrLoadResult LoadWithFilter(std::shared_ptr<LoadFilter> reader)
   */
  SaveOrLoadResult SaveOrLoad(std::string_view filename, SaveLoadOperation fop, DetailedFileType dft, Subdirectory sb, bool threaded)
  {

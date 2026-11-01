@@ -54,7 +54,7 @@ def drive(a, d):
     if len(lines) >= 3:
         bad = False
         for l, (name, shown) in zip(lines[-3:], stages.items()):
-            bad |= not re.search(name + r': \d+ pictures, moved \d{2,}, \d off the vehicle .*, shown ' + shown + ' and not seen ([0-9]|1[0-9])$', l)
+            bad |= not re.search(name + r': \d+ pictures, moved \d{2,}, [0-2] off the vehicle .*, shown ' + shown + ' and not seen ([0-9]|1[0-9])$', l)
     print('drive with lists drawn:', 'FAIL' if bad else 'PASS')
     return bad
 
