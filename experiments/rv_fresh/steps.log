@@ -1,0 +1,18 @@
+04:00 tick.hlsl adds core=4x8 budget=8192  ns=24.34 pass_us=199.4 step1 fetch loop 4x8
+04:19 tick.hlsl adds core=8x8 budget=8192  ns=24.41 pass_us=200.0 step1 8x8
+04:33 steps\s2.hlsl adds core=4x8 budget=8192 NOREG ns=29.83 pass_us=244.4 s2_decode_noreg
+04:46 steps\s2.hlsl adds core=4x8 budget=8192  ns=42.51 pass_us=348.2 s2_regs_fetch_each
+04:57 steps\s2.hlsl adds core=4x8 budget=8192 KEEP ns=45.68 pass_us=374.2 s2_regs_keep
+05:09 steps\s2.hlsl adds core=8x8 budget=8192 KEEP ns=48.41 pass_us=396.6 s2_regs_keep_8x8
+05:09 steps\s2.hlsl adds core=8x4 budget=8192 KEEP ns=45.68 pass_us=374.2 s2_regs_keep_8x4
+05:09 steps\s2.hlsl adds core=4x8 budget=8192 KEEP ns=0.00 pass_us=0.0 
+05:16 steps\s3.hlsl add14 core=4x8 budget=8192  ns=165.95 pass_us=1359.5 s3_onepath
+05:16 steps\s3.hlsl add14 core=4x8 budget=8192 TREE ns=150.11 pass_us=1229.7 s3_tree
+05:16 steps\s3.hlsl alu core=4x8 budget=8192  ns=165.51 pass_us=1355.9 s3_onepath
+05:16 steps\s3.hlsl alu core=4x8 budget=8192 TREE ns=149.83 pass_us=1227.4 s3_tree
+05:16 steps\s3.hlsl alu core=4x8 budget=2048  ns=166.02 pass_us=340.0 
+05:35 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=0 ns=42.39 pass_us=347.2 L0
+05:40 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=1 ns=47.26 pass_us=387.1 L1
+05:51 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=2 ns=46.72 pass_us=382.7 L2
+05:51 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=3 ns=48.59 pass_us=398.0 L3
+05:51 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=4 ns=97.00 pass_us=794.7 L4
