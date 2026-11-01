@@ -1,6 +1,6 @@
 # The card's code of a tick: its D3D11 blob as DXIL on D3D12 under Nsight, then the trace's SASS.  Run through tools\gpu_queue.ps1 by this script.
 #   pwsh experiments\rv_fuse\sass.ps1 -Name tree -Rvc experiments\rvc_lean [-Stamp]    (the blob comes from a short WARP run of the harness)
-param([int]$Ticks = 0, [int]$Dur = 400, [string]$Name, [string]$Rvc, [string]$Code = '', [string]$Load = 'shell', [string]$Dir = 'C:\Users\micha\agents_isa\snap', [string]$Image = 'C:\Users\micha\agents_isa\img',
+param([int]$Wait = 400000, [int]$Ticks = 0, [int]$Dur = 400, [string]$Name, [string]$Rvc, [string]$Code = '', [string]$Load = 'shell', [string]$Dir = 'C:\Users\micha\agents_isa\snap', [string]$Image = 'C:\Users\micha\agents_isa\img',
       [string]$Ngfx = 'C:\Program Files\NVIDIA Corporation\Nsight Graphics 2026.3.1\host\windows-desktop-nomad-x64\ngfx.exe')
 $snap = Join-Path $Dir "$Load\$Load.snap"
 $Root = (Get-Location).Path
@@ -20,7 +20,7 @@ if ($Code) { $env:RVC_CODE_FILE = $Code }
 $appArgs = "--rvc $Rvc --define NO_PAGING --no-doubles --payload $Image --load-state $snap --seconds 8 $(if ($Ticks) { "--ticks $Ticks" })"
 $cmd = @"
 `$p = Start-Process -FilePath '$Ngfx' -ArgumentList @('--activity','"GPU Trace Profiler"','--exe','$Root\bin\rvc_trace12.exe','--dir','$Root','--args','"$appArgs"','--start-after-ms','2500','--max-duration-ms','$Dur','--pc-samples-per-pm-interval-per-sm','64','--auto-export','--architecture','"Blackwell GB20x"','--real-time-shader-profiler','--set-gpu-clocks','unaltered','--output-dir','$out') -RedirectStandardOutput '$out\ngfx.out' -RedirectStandardError '$out\ngfx.err' -NoNewWindow -PassThru
-if (-not `$p.WaitForExit(56000)) { Stop-Process -Id `$p.Id -Force; Get-Process rvc_trace12 -ErrorAction SilentlyContinue | Stop-Process -Force }
+if (-not `$p.WaitForExit($Wait)) { Stop-Process -Id `$p.Id -Force; Get-Process rvc_trace12 -ErrorAction SilentlyContinue | Stop-Process -Force }
 "@
 Set-Content -Path "$out\go.ps1" -Value $cmd
 pwsh -NoProfile -File tools\gpu_queue.ps1 pwsh -NoProfile -File "$out\go.ps1" 2>&1 | Select-Object -Last 3
