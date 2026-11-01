@@ -126,17 +126,22 @@ void aoe_view_post(RGE_View* view) {
     }
 }
 
+extern void aoe_lat(int kind, int a, int b);
 void aoe_view_wait_walked(void) {
     if (!st.busy) return;
+    aoe_lat('w', 0, 0);
     while (!walked.v) {
         if (mcw_done(1)) break;
         mcw_rest();
     }
+    aoe_lat('x', 0, 0);
 }
 
 void aoe_view_join(void) {
     if (!st.busy) return;
+    aoe_lat('j', 0, 0);
     if (st.workers > 0) mcw_wait(1);
+    aoe_lat('k', 0, 0);
     st.busy = 0;
 }
 

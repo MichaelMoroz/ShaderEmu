@@ -186,16 +186,20 @@ struct Dc {
 
 static int nearest(COLORREF c, const PALETTEENTRY* pal) {
     if ((c >> 24) == 1) return c & 255;
-    static COLORREF last_c = 0xffffffff;
-    static int last_i;
-    if (c == last_c) return last_i;
+    static COLORREF last_c[4] = {0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff};
+    static int last_i[4], next_i;
+    static const PALETTEENTRY* last_pal;
+    static unsigned last_sum;
+    unsigned pal_sum = pal[0].peRed + pal[7].peGreen * 3 + pal[64].peBlue * 5 + pal[255].peRed * 7;   // (a palette changed in place)
+    if (pal != last_pal || pal_sum != last_sum) { last_pal = pal; last_sum = pal_sum; for (int i = 0; i < 4; i++) last_c[i] = 0xffffffff; }
+    for (int i = 0; i < 4; i++) if (c == last_c[i]) return last_i[i];
     int r = c & 255, g = (c >> 8) & 255, b = (c >> 16) & 255, best = 0, bd = 1 << 30;
     for (int i = 0; i < 256; i++) {
         int dr = r - pal[i].peRed, dg = g - pal[i].peGreen, db = b - pal[i].peBlue;
         int d = dr * dr + dg * dg + db * db;
         if (d < bd) { bd = d; best = i; }
     }
-    last_c = c; last_i = best;
+    last_c[next_i] = c; last_i[next_i] = best; next_i = (next_i + 1) & 3;
     return best;
 }
 

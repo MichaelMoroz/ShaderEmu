@@ -34,6 +34,22 @@ def main(path):
         print(f'{name:18} {ms(came):>6} {ms(taken):>6} {taken[4] if taken else 0:>5} {ms(after[0] if after else None):>6} '
               f'{ms(after[1] if len(after) > 1 else None):>6} {ms(shown):>6} {fps:>5.1f} {per:>8.0f} {len(moves):>6} '
               f'{max((r[4] for r in moves), default=0):>8} {worst:>11}')
+    pics = [r for r in rec if r[3] == 'P' and acts and r[0] >= acts[0][1]]
+    if len(pics) > 1:
+        span = pics[-1][0] - pics[0][0]
+        for a, b, what in (('w', 'x', 'waiting for the walk'), ('j', 'k', 'waiting for the raster')):
+            wait, at, n = 0, None, 0
+            for r in rec:
+                if r[0] < pics[0][0] or r[0] > pics[-1][0]:
+                    continue
+                if r[3] == a:
+                    at = r[0]
+                elif r[3] == b and at is not None:
+                    wait += r[0] - at
+                    n += 1
+                    at = None
+            print(f'{what}: {wait} ms of {span} ({100 * wait / span:.0f}%), {wait / max(1, len(pics) - 1):.1f} ms a frame, {n} times')
+        print(f'{(len(pics) - 1) * 1000 / span:.1f} frames a second over the acts, {span / (len(pics) - 1):.0f} ms a frame')
 
 
 main(sys.argv[1])
