@@ -15,6 +15,8 @@ void aoe_win_close(void);
 int aoe_win_event(struct aoe_event *e);
 void aoe_win_rest(void);
 unsigned aoe_win_clock(void);
+int aoe_win_buttons(void);
+void aoe_win_pointer(int *x, int *y);
 #ifdef __cplusplus
 }
 #endif

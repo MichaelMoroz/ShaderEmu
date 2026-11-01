@@ -2,7 +2,7 @@
  * An argument is a key (enter, tab, up, f4, meta, ... or a character), with ctrl+, alt+ or
  * shift+ before it for keys held meanwhile, a number of milliseconds to wait, X,Y (or ctrl+X,Y) for a click
  * of the left button there, r:X,Y for the right one, or drag:X,Y:X,Y for the left one held
- * from the first place to the second, wheel:X,Y:N for N notches of the wheel there (up is
+ * from the first place to the second (rdrag:X,Y:X,Y the right one), wheel:X,Y:N for N notches of the wheel there (up is
  * positive), down:KEY and up:KEY for a key held over what comes between:
  *   nxkey meta down enter 500 alt+tab 60,200 r:300,200 wheel:300,200:-2 down:ctrl tab tab 800 up:ctrl */
 #include <fcntl.h>
@@ -78,16 +78,22 @@ click(int x, int y, int button)
 	point(x, y, button, 0);
 }
 
-/* The left button held from one place to another, in eight steps. */
+/* A button held from one place to another, in eight steps. */
 static void
-drag(int x0, int y0, int x1, int y1)
+drag_by(int x0, int y0, int x1, int y1, int button)
 {
 	int i;
 
-	point(x0, y0, 0x110, 1);
+	point(x0, y0, button, 1);
 	for (i = 1; i <= 8; i++)
-		point(x0 + (x1 - x0) * i / 8, y0 + (y1 - y0) * i / 8, 0x110, 1);
-	point(x1, y1, 0x110, 0);
+		point(x0 + (x1 - x0) * i / 8, y0 + (y1 - y0) * i / 8, button, 1);
+	point(x1, y1, button, 0);
+}
+
+static void
+drag(int x0, int y0, int x1, int y1)
+{
+	drag_by(x0, y0, x1, y1, 0x110);
 }
 
 /* The wheel turned `notches` (up is positive) with the pointer at x, y. */
@@ -120,6 +126,11 @@ main(int argc, char **argv)
 
 		if (sscanf(argv[i], "drag:%d,%d:%d,%d", &x0, &y0, &x1, &y1) == 4) {
 			drag(x0, y0, x1, y1);
+			usleep(150000);
+			continue;
+		}
+		if (sscanf(argv[i], "rdrag:%d,%d:%d,%d", &x0, &y0, &x1, &y1) == 4) {
+			drag_by(x0, y0, x1, y1, 0x111);
 			usleep(150000);
 			continue;
 		}

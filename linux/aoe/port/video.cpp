@@ -147,26 +147,6 @@ HRESULT IDirectDraw::CreateClipper(DWORD, IDirectDrawClipper** out, IUnknown*) {
 HRESULT IDirectDraw::GetCaps(LPDDCAPS a, LPDDCAPS) { DWORD n = a->dwSize; memset(a, 0, sizeof *a); a->dwSize = n; return DD_OK; }
 HRESULT aoe_DirectDrawCreate(GUID*, IDirectDraw** out, IUnknown*) { *out = new IDirectDraw; return DD_OK; }
 
-// ------------------------------------------------------------------ the sound's parts: none yet
-HRESULT aoe_DirectSoundCreate(GUID*, IDirectSound**, IUnknown*) { return E_FAIL; }
-ULONG IDirectSoundBuffer::Release() { return 0; }
-HRESULT IDirectSoundBuffer::Lock(DWORD, DWORD, LPVOID*, LPDWORD, LPVOID*, LPDWORD, DWORD) { return E_FAIL; }
-HRESULT IDirectSoundBuffer::Unlock(LPVOID, DWORD, LPVOID, DWORD) { return E_FAIL; }
-HRESULT IDirectSoundBuffer::Play(DWORD, DWORD, DWORD) { return E_FAIL; }
-HRESULT IDirectSoundBuffer::Stop() { return E_FAIL; }
-HRESULT IDirectSoundBuffer::SetCurrentPosition(DWORD) { return E_FAIL; }
-HRESULT IDirectSoundBuffer::GetCurrentPosition(LPDWORD, LPDWORD) { return E_FAIL; }
-HRESULT IDirectSoundBuffer::GetStatus(LPDWORD s) { if (s) *s = 0; return E_FAIL; }
-HRESULT IDirectSoundBuffer::SetVolume(LONG) { return E_FAIL; }
-HRESULT IDirectSoundBuffer::GetVolume(LONG*) { return E_FAIL; }
-HRESULT IDirectSoundBuffer::SetPan(LONG) { return E_FAIL; }
-HRESULT IDirectSoundBuffer::GetPan(LONG*) { return E_FAIL; }
-HRESULT IDirectSoundBuffer::SetFrequency(DWORD) { return E_FAIL; }
-HRESULT IDirectSoundBuffer::GetFrequency(LPDWORD) { return E_FAIL; }
-HRESULT IDirectSoundBuffer::SetFormat(LPCWAVEFORMATEX) { return E_FAIL; }
-HRESULT IDirectSound::CreateSoundBuffer(LPDSBUFFERDESC, IDirectSoundBuffer**, IUnknown*) { return E_FAIL; }
-HRESULT IDirectSound::DuplicateSoundBuffer(IDirectSoundBuffer*, IDirectSoundBuffer**) { return E_FAIL; }
-HRESULT IDirectSound::GetCaps(LPDSCAPS) { return E_FAIL; }
 
 // ------------------------------------------------------------------ GDI
 struct GdiObj { int kind; COLORREF color; int style; const AoeFont* font; RECT rect; PALETTEENTRY* pal; };
@@ -459,13 +439,13 @@ HRESULT IDirectDrawSurface::GetDC(HDC* out) {
 }
 HRESULT IDirectDrawSurface::ReleaseDC(HDC d) { ::ReleaseDC(0, d); return DD_OK; }
 
-// the modes: 800 x 600, the size of the only full pictures the trial has (AOE_640=1 offers 640 x 480 too)
+// the modes: 800 x 600, the size of the only full pictures the trial has, and 640 x 480, a window on a desktop (scr_game.cpp cuts them)
 HRESULT IDirectDraw::EnumDisplayModes(DWORD, LPDDSURFACEDESC, LPVOID ctx, long (*cb)(_DDSURFACEDESC*, void*)) {
     DDSURFACEDESC d;
     memset(&d, 0, sizeof d);
     d.ddpfPixelFormat.dwRGBBitCount = 8;
     d.dwWidth = 800; d.dwHeight = 600;
     cb(&d, ctx);
-    if (getenv("AOE_640")) { d.dwWidth = 640; d.dwHeight = 480; cb(&d, ctx); }
+    d.dwWidth = 640; d.dwHeight = 480; cb(&d, ctx);
     return DD_OK;
 }

@@ -7,22 +7,30 @@
 #include <GLES/segl.h>
 #include <nano-X.h>
 #include "aoe_window.h"
+#include "ui_single.h"
 
 #define ONE 65536
 static GR_WINDOW_ID window;
 static GLuint texture;
 static uint8_t *page;
-static int page_w, page_h, drawn;
+static int page_w, page_h, drawn, hidden;
 static volatile const uint32_t *control_words;
 
 unsigned aoe_win_clock(void) { return control_words[0x34 / 4]; }
+/* the machine's input words (docs/machine/input.md): the pointer's place and its buttons, left 1, right 2 */
+int aoe_win_buttons(void) { return control_words[0x20 / 4 + 2]; }
+void aoe_win_pointer(int *x, int *y) { *x = control_words[0x20 / 4]; *y = control_words[0x20 / 4 + 1]; }
 
 uint8_t *aoe_win_open(int w, int h, const char *title)
 {
     if (GrOpen() < 0) { fprintf(stderr, "aoe: no Nano-X server (start one: nano-X -p &)\n"); exit(1); }
-    /* A frame like any program's: what the screen has no room for of it is off the screen (docs/system/nanox.md,
-     * "A window wider or taller than the screen has room for"), and the game's picture stays whole, above the bar. */
-    window = GrNewWindowEx(GR_WM_PROPS_APPWINDOW | GR_WM_PROPS_ONTOP, (char *) title, GR_ROOT_WINDOW_ID, -1, -1, w, h, 0);
+    if (ui_single_instance()) { GrClose(); _exit(0); }   /* a game takes all the memory one needs: the one that is up comes forward */
+    /* A window like any program's, under other windows and the bar. Only on a screen with no room for its frame and the bar (the frame's
+     * caption 29 rows, the bar 26) what is left of the frame is off the screen (docs/system/nanox.md, "A window wider or taller than the
+     * screen has room for"), and the game's picture stays whole, above the bar. */
+    GR_SCREEN_INFO screen;
+    GrGetScreenInfo(&screen);
+    window = GrNewWindowEx(GR_WM_PROPS_APPWINDOW | (screen.rows < h + 58 ? GR_WM_PROPS_ONTOP : 0), (char *) title, GR_ROOT_WINDOW_ID, -1, -1, w, h, 0);
     GrSelectEvents(window, GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_KEY_UP | GR_EVENT_MASK_BUTTON_DOWN |
         GR_EVENT_MASK_BUTTON_UP | GR_EVENT_MASK_MOUSE_POSITION | GR_EVENT_MASK_CLOSE_REQ | GR_EVENT_MASK_UPDATE | GR_EVENT_MASK_EXPOSURE);
     GrMapWindow(window);
@@ -57,6 +65,7 @@ void aoe_win_present(void)
     static const GLfixed xyz[12] = { 0, 0, 0, ONE, 0, 0, ONE, ONE, 0, 0, ONE, 0 };
     static const GLfixed uv[8] = { 0, 0, ONE, 0, ONE, ONE, 0, ONE };
     int width, height;
+    if (hidden) return;   /* the bar's button took it down: nothing shows, and a list here would be for a window that is not mapped */
     seglSize(&width, &height);
     glViewport(0, 0, width, height);
     glMatrixMode(GL_PROJECTION);
@@ -147,8 +156,11 @@ int aoe_win_event(struct aoe_event *e)
             e->kind = AOE_CLOSE;
             return 1;
         case GR_EVENT_TYPE_UPDATE:
-            if (g.update.utype == GR_UPDATE_UNMAP || g.update.utype == GR_UPDATE_UNMAPTEMP || g.update.utype == GR_UPDATE_DESTROY)
+            if (g.update.utype == GR_UPDATE_UNMAP || g.update.utype == GR_UPDATE_UNMAPTEMP || g.update.utype == GR_UPDATE_DESTROY) {
+                hidden = 1;
                 continue;
+            }
+            hidden = 0;
             /* A frame or a move gives the window other memory, and a game at its menu draws nothing more: the page
              * is still the picture, so it is shown again (docs/games/aoe.md, "A window made again"). */
             seglWindowChanged();

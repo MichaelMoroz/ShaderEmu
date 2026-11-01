@@ -203,7 +203,8 @@ The canonical 2D driver is `linux/openttd/shaderemu_v.cpp` (and Doom's `doom_vid
   OpenTTD's `mixer_shaderemu.cpp` maps a mixer channel to a voice and copies a sound into the
   pool on first play.
 - **Play from the ROM where the file lies**: `snd_rom(fd, first_bytes, n)` gives a ROM file's
-  physical address (Quake's WAVs inside the pak, Doom's WAD lumps, Micropolis's `sounds.bin`).
+  physical address (Quake's WAVs inside the pak, Doom's WAD lumps, Micropolis's `sounds.bin`). 16-bit samples must lie on an
+  even address: Age of Empires' `make_data.py` writes its DRS files anew with padding for that.
 - **Pack at build time** into what the card plays: IMA ADPCM with a checkpoint every 32 samples
   (`tools/make_tdawn_sound.py`, ClassiCube's `sound/adpcm_encode.c`, Half-Life's `repack.py`),
   or unsigned bytes decoded by libmedia's host build (`$WORK/src/libmedia/media_test-host`).
@@ -353,6 +354,61 @@ drawing reads and marks.
   that races stays off by default. The `worker-core-bugs` skill reads its output.
 - `mctest 3 120000` must PASS before and after the game in one boot, also after
   `killall -9` mid-run (the NES's `nes-kill` case).
+
+### Controls for VR
+
+The game is played in the world too, so design its input for a hand, not a mouse (`docs/machine/input.md`; `unity/ShaderEmu/Scripts/EmuPointer.cs`).
+A beam or a hand drives the desktop's pointer: trigger or click is the left button, grip or right click the right one. It shakes, it has no edge to rest
+on (the sample after the last on the picture is off it), and holding a button is what a person does without thinking: a held button is a drag.
+None of what follows has been judged in a headset unless a game's document says so; `rvc_cpu` and `nxkey` test the guest's half.
+
+- **Mouse to pointer.** "Steady pointer" (on by default, in a headset) filters the place and holds a press where it went down until the beam has gone
+  7 pixels, so a game's click needs a slop of that or more. A press beyond it is a drag: keep a button's meaning at its release, not at its press.
+- **No screen-edge scrolling.** Take the game's scrolling at the picture's edges out by default, with a switch for the old way. A mouse is stopped at an
+  edge and a beam is not. In a window the edge is not even the screen's. The tree's games:
+  - Tiberian Dawn and Red Alert: gone, the right button dragged (`docs/games/tdawn.md`, "The map is dragged"; `ScrollClass::AI`).
+  - Age of Empires: the right button past 10 pixels, `AOE_SCROLL=edge` is the way back (`docs/games/aoe.md`, "Controls").
+  - OpenTTD: its own right-button drag of a viewport, with upstream's `autoscroll` left off. The port added nothing for this.
+- **Scroll by a drag, a pixel for a pixel.** The map goes with the hand, from where it stood at the press, so a hand that comes back brings the map back.
+  Pick the button by what the game's left drag already does (a box is the usual) and what a right click is: a right click stays an order if a press that
+  did not move past the slop is given to the game at its release, and a press that begins off the map (a panel) is never a drag. The right button
+  is a hand's grip. A selection must survive a drag, and the release must give no order. Keep the minimap's click and the keyboard's arrows too.
+- **A drag follows the machine's words.** While a button is held read the pointer and buttons from `0x81000020` (Tiberian Dawn's `host_buttons`, Age of
+  Empires' `held_by_words`): they go on past the window's sides, and a host's beam run off the display stays on its edge with the button down
+  (`EmuPointer`, `onEdge`; `docs/system/nanox.md`, "A drag that leaves the screen"), where the window system's move stops and its release can come late or
+  not to you. `nxkey`'s presses are not in those words, so go by them only for a press they have shown.
+- **3D games** turn the view while the left button is dragged, a quarter of a degree a pixel, and the right button fires (`docs/machine/input.md`).
+- **Tested with:** `nxkey rdrag:X,Y:X,Y` (`drag:` the left button, `r:X,Y` a right click, `wheel:X,Y:0` the pointer moved with no button), a log of what each input
+  came to (`AOE_INPUT_LOG`, `TDAWN_INPUT_LOG`), and `rvc_cpu --pointer-sweep 0 --pointer-button 2,S,T` for a drag in the machine's words; `--pointer-circle X,Y,R`
+  without a button over the window's edge must print nothing. A `test_all` case says places and states: `test_all.py aoe-drag` is an example (a click
+  orders, a drag moves the view by the sum it should and orders nothing, the selection stays, a box is a box, the pointer resting on the edge moves nothing). Look
+  at captures too.
+
+**A 3D game on a holodeck** (`docs/world/holodeck.md`; Doom, Quake, Quake III, ClassiCube and Half-Life do it, each in its port file; `linux/quake/vid_shaderemu.c` is short):
+
+- The game's number: `linux/apps/gameid.h` (`GAME_*`), the same in `unity/ShaderEmu/Scripts/EmuGamepad.cs`, and in `EmuHolodeck.ByWords` for it to be played from the
+  seat on a desktop (`played == 1 || 2 || 3 || 7 || 9` today). A number has four bits: 9 of 15 are taken. Both hands, as ClassiCube? `twoHanded` there too.
+- `seglHostState()` gives eight words a frame (`GLES/segl.h`, a macro for each field; "What the machine is told"). The game keeps `seated`: 0, 1 with tracked hands
+  (`SEGL_HOST_HANDS`), 2 a desktop's sitter (`SEGL_HOST_KIND == 2`). Seated 1: the right hand aims, the body turns by the right stick; the left stick walks the way the head
+  looks. Seated 2: word 4's counter turns the body, and the head's tilt is the aim's rise.
+- **The stick and the triggers by the words, not the window's keys.** A sitter's keyboard may be elsewhere. By `ByWords`: W, A, S, D and the arrows are the left stick, Ctrl or the left
+  button the right trigger, the right button the left one, Space the jump bit, E the right grip (Half-Life's use). Read them while seated 1 and 2.
+- `seglWorldEye(game, eye, znear, zfar, fx, fy)` says how high the player's eye is, so that the room's scale puts it at the sitter's own, written only when it changes.
+- The weapon in the right hand, at the room's scale, on the beam; shots leave the hand along it, with no autoaim. While seated, leave out a test of what the camera sees, as Quake
+  does, or there is no world behind the seat (ClassiCube's chunks are the head's).
+- **Tested with:** a `NAME_SEAT` switch that prints the turns and the eye word, and `rvc_cpu --host 00000112,0,0,0,0,00007f00,0,0` (a desktop's sitter with the left stick
+  forward) must walk it from where it stands, and stand still with that word 0. `--host W0,...,W7` gives all eight, `--host-mouse N` a mouse, `--host-from S W0,...` other words from
+  guest second S. A hand 30 degrees right and 10 up must give that aim, and 100 counts a second about 6.6 degrees a second. Started in the background there it wants `</dev/null`, if it reads the terminal.
+  The room itself only runs in Unity: say plainly it was not tried there if it was not.
+
+A 2D game has none of this: on a holodeck it is the console's screen, and its controls are the rules above.
+
+### Windowed
+
+A game opens as an ordinary window of a size that leaves the bar and other programs usable (`docs/system/nanox.md`, "The window manager and the bar"): `GR_WM_PROPS_APPWINDOW`, no `ONTOP` unless
+the screen has no room for its frame and the bar (caption 29 rows, bar 26), `seglWindowChanged()` and a present on any update but an unmap, none while unmapped, and `ui_single_instance()` (`ui_single.h`)
+if a second copy has no use. Check it moves, closes and comes back from the bar's button (`app_fuzz.py plan`). Look at what the game lays out at a smaller size:
+data with pictures for one size only can be cut (`aoe_picture_cut` in Age of Empires' `scr_game.cpp`).
 
 ## Step 8: the desktop
 

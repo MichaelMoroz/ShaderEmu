@@ -12,6 +12,8 @@ extern "C" int mcw_on_worker(void);
 #undef fopen
 
 static int window_open;
+extern "C" int aoe_start_width(void) { const char* e = getenv("AOE_SIZE"); return e && atoi(e) == 800 ? 800 : 640; }
+extern "C" int aoe_scroll_edges(void) { const char* e = getenv("AOE_SCROLL"); return e && !strcmp(e, "edge"); }
 unsigned long aoe_clock_ms(void) {
     if (window_open) return aoe_win_clock();
     struct timeval t;
@@ -101,6 +103,7 @@ static void lat_write(void) {
 }
 void aoe_present(void) {
     frames++;
+    { extern void aoe_sound_look(void); aoe_sound_look(); }
     aoe_lat('P', 0, 0);
     // AOE_PICSUM=N: a sum of the picture every N frames, to compare two ways of drawing it
     static int picsum = -1; static long picdump = getenv("AOE_PICDUMP") ? atol(getenv("AOE_PICDUMP")) : 0;
@@ -108,10 +111,10 @@ void aoe_present(void) {
     if (picsum && page && frames % picsum == 0) {
         if (window_open) aoe_win_settle();
         const unsigned* p = (const unsigned*) page; unsigned hs[3] = {2166136261u, 2166136261u, 2166136261u};
-        for (int i = 0; i < 800 * 600 / 4; i++) { int row = i / 200, b = row < 20 ? 0 : row < 474 ? 1 : 2; hs[b] = (hs[b] ^ p[i]) * 16777619u; }
+        for (int i = 0; i < aoe_w * aoe_h / 4; i++) { int row = i / (aoe_w / 4), b = row < 20 ? 0 : row < aoe_h - 126 ? 1 : 2; hs[b] = (hs[b] ^ p[i]) * 16777619u; }
         fprintf(stderr, "aoepic %ld %08x %08x %08x\n", frames, hs[0], hs[1], hs[2]);
-        if (frames == picdump) for (int r = 0; r < 30; r++) { fprintf(stderr, "aoegrid %02d ", r); for (int c = 0; c < 40; c++) { unsigned g = 0; for (int y = 0; y < 20; y++) for (int x = 0; x < 20; x++) g = g * 31 + page[(r * 20 + y) * 800 + c * 20 + x]; fprintf(stderr, "%02x", (g ^ g >> 8 ^ g >> 16) & 255); } fprintf(stderr, "\n"); }
-        if (frames == picdump && getenv("AOE_PICROWS")) for (int y = 474; y < 600; y++) { fprintf(stderr, "aoerow "); for (int x = 0; x < 260; x++) fprintf(stderr, "%02x", page[y * 800 + x]); fprintf(stderr, "\n"); }
+        if (frames == picdump) for (int r = 0; r < 30; r++) { fprintf(stderr, "aoegrid %02d ", r); for (int c = 0; c < 40; c++) { unsigned g = 0; for (int y = 0; y < 20; y++) for (int x = 0; x < 20; x++) g = g * 31 + page[(r * 20 + y) * aoe_w + c * 20 + x]; fprintf(stderr, "%02x", (g ^ g >> 8 ^ g >> 16) & 255); } fprintf(stderr, "\n"); }
+        if (frames == picdump && getenv("AOE_PICROWS")) for (int y = aoe_h - 126; y < aoe_h; y++) { fprintf(stderr, "aoerow "); for (int x = 0; x < 260; x++) fprintf(stderr, "%02x", page[y * aoe_w + x]); fprintf(stderr, "\n"); }
     }
     if (window_open) aoe_win_present();
 }
@@ -119,12 +122,44 @@ void aoe_before_blit(void) { if (window_open) aoe_win_settle(); }
 void aoe_window_make(int, int, const char*) {}
 void aoe_window_close(void) { if (window_open) aoe_win_close(); window_open = 0; }
 
+// AOE_INPUT_LOG=1: what the right button and the left one's box came to (docs/games/aoe.md, "Controls")
+void aoe_input_log(const char* what, int a, int b, int c, int d) {
+    static int on = -1;
+    if (on < 0) on = getenv("AOE_INPUT_LOG") != 0;
+    if (on) fprintf(stderr, "aoeinput: %s %d %d %d %d\n", what, a, b, c, d);
+}
+
+// A button held in a beam's hand: the machine's own words follow it past the window's sides and say when it comes up, where the window
+// system's events would stop or be owed (docs/games/aoe.md, "Controls"). Only a press those words have shown: nxkey's presses are not in them.
+static int held_seen[3], held_ox, held_oy;
+static void held_by_words(void) {
+    int bits = aoe_win_buttons();
+    for (int c = 1; c <= 2; c++) {
+        if (!aoe_keys[c]) { held_seen[c] = 0; continue; }
+        if (bits & c) {
+            if (!held_seen[c]) aoe_win_origin(&held_ox, &held_oy);
+            held_seen[c] = 1;
+            int x, y; aoe_win_pointer(&x, &y); x -= held_ox; y -= held_oy;
+            if (x != aoe_mouse_x || y != aoe_mouse_y) {
+                aoe_mouse_x = x; aoe_mouse_y = y;
+                aoe_lat('M', x, y);
+                aoe_post(WM_MOUSEMOVE, (aoe_keys[1] ? MK_LBUTTON : 0) | (aoe_keys[2] ? MK_RBUTTON : 0), MAKELONG(x, y));
+            }
+        } else if (held_seen[c]) {   // up in the words: the window's event, if it comes, finds it up already
+            held_seen[c] = 0;
+            aoe_keys[c] = 0;
+            aoe_post(c == 1 ? WM_LBUTTONUP : WM_RBUTTONUP, 0, MAKELONG(aoe_mouse_x, aoe_mouse_y));
+        }
+    }
+}
+
 static void events_of_window(void) {
     static unsigned last;
     unsigned now = aoe_win_clock();
     if (now - last < 10) return;   // a look at the window system is a call to another program
     last = now;
     struct aoe_event e;
+    held_by_words();
     while (aoe_win_event(&e)) {
         switch (e.kind) {
         case AOE_KEY_DOWN:
@@ -137,20 +172,24 @@ static void events_of_window(void) {
         case AOE_BUTTON_DOWN:
             aoe_lat('B', e.a, e.b);
             aoe_mouse_x = e.a; aoe_mouse_y = e.b;
+            aoe_input_log("press", e.c, e.a, e.b, aoe_win_buttons());
             aoe_keys[e.c == 1 ? 1 : 2] = 1;
             aoe_post(e.c == 1 ? WM_LBUTTONDOWN : WM_RBUTTONDOWN, e.c == 1 ? MK_LBUTTON : MK_RBUTTON, MAKELONG(e.a, e.b));
             break;
         case AOE_BUTTON_UP:
+            if (!aoe_keys[e.c == 1 ? 1 : 2]) break;   // (the words said so first)
             aoe_mouse_x = e.a; aoe_mouse_y = e.b;
             aoe_keys[e.c == 1 ? 1 : 2] = 0;
             aoe_post(e.c == 1 ? WM_LBUTTONUP : WM_RBUTTONUP, 0, MAKELONG(e.a, e.b));
             break;
         case AOE_MOVE:
+            if ((aoe_keys[1] && held_seen[1]) || (aoe_keys[2] && held_seen[2])) break;   // (the words are ahead of it)
             aoe_lat('M', e.a, e.b);
             aoe_mouse_x = e.a; aoe_mouse_y = e.b;
             aoe_post(WM_MOUSEMOVE, (aoe_keys[1] ? MK_LBUTTON : 0) | (aoe_keys[2] ? MK_RBUTTON : 0), MAKELONG(e.a, e.b));
             break;
         case AOE_CLOSE:
+            fprintf(stderr, "aoe: the window was closed\n");
             aoe_post(WM_CLOSE, 0, 0);
             break;
         }
@@ -235,6 +274,12 @@ void aoe_events(void) {
         int ox = 0, oy = 0; aoe_win_origin(&ox, &oy);
         FILE* f = fopen("/tmp/aoe-ready", "w");
         if (f) { fprintf(f, "%d %d\n", ox, oy); fclose(f); }
+    } else if (!strcmp(what, "view")) {
+        // where the view stands, a hundredth of a tile, and how many are selected
+        extern void aoe_view_place(float*, float*, int*);
+        float vx, vy; int selected;
+        aoe_view_place(&vx, &vy, &selected);
+        fprintf(stderr, "aoeview: %d %d selected %d\n", (int) (vx * 100), (int) (vy * 100), selected);
     } else if (!strcmp(what, "quit")) {
         fprintf(stderr, "aoe: script's end, frames %ld\n", frames);
         aoe_window_close();

@@ -43,6 +43,28 @@ def pe_strings(path):
                     o += n * 2
     return out
 
+def write_drs_even(source, target):
+    """A DRS with every item on an even offset: 16-bit samples must lie on an even address for the sound card, which plays them where
+    they lie in the ROM (linux/aoe/port/sound.cpp). Only padding is new: the game reads the offsets from the file's own tables."""
+    d = open(source, 'rb').read()
+    types = struct.unpack_from('<I', d, 0x38)[0]
+    entries = []
+    for i in range(types):
+        _, table, count = struct.unpack_from('<III', d, 0x40 + i * 12)
+        entries += [(struct.unpack_from('<I', d, table + k * 12 + 4)[0], table + k * 12 + 4, struct.unpack_from('<I', d, table + k * 12 + 8)[0]) for k in range(count)]
+    entries.sort()
+    first = entries[0][0]
+    head = bytearray(d[:first])
+    body = bytearray()
+    for at, where, size in entries:
+        if (first + len(body)) & 1:
+            body.append(0)
+        struct.pack_into('<I', head, where, first + len(body))
+        body += d[at:at + size]
+    with open(target, 'wb') as f:
+        f.write(head)
+        f.write(body)
+
 def write_language(trial, out):
     s = pe_strings(os.path.join(trial, 'language.dll'))
     with open(os.path.join(out, 'language.txt'), 'w', encoding='latin1', newline='\n') as f:
@@ -96,6 +118,9 @@ def main():
     for n in os.listdir(trial):
         if n.lower().endswith(KEEP) or n.lower() in ('tileedge.dat',):
             shutil.copyfile(os.path.join(trial, n), os.path.join(out, n))
+    # the waves on even addresses, for the sound card
+    for n in ('Sounds.drs', 'Interfac.drs'):
+        write_drs_even(os.path.join(trial, n), os.path.join(out, n))
     # the world's data: see dat34.py
     here = os.path.dirname(os.path.abspath(__file__))
     sys.path.insert(0, here)
@@ -104,3 +129,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+

@@ -1,5 +1,5 @@
 diff --git a/include/basegame.h b/include/basegame.h
-index ace2f53a7..bb040047e 100644
+index ace2f53a..bb040047 100644
 --- a/include/basegame.h
 +++ b/include/basegame.h
 @@ -338,6 +338,9 @@ class RGE_Base_Game {
@@ -13,7 +13,7 @@ index ace2f53a7..bb040047e 100644
      friend class TPanel;
      friend class RGE_Scenario;
 diff --git a/include/drawarea.h b/include/drawarea.h
-index 591015c52..e370f5dbb 100644
+index 591015c5..e370f5db 100644
 --- a/include/drawarea.h
 +++ b/include/drawarea.h
 @@ -92,11 +92,13 @@ class TSpan_List_Manager {
@@ -43,7 +43,7 @@ index 591015c52..e370f5dbb 100644
      TSpan_List_Manager* CurSpanList;     // +0xD0
      int Float_X_Delta;                   // +0xD4
 diff --git a/include/tribegam.h b/include/tribegam.h
-index d47ed773c..913cb4f2e 100644
+index d47ed773..913cb4f2 100644
 --- a/include/tribegam.h
 +++ b/include/tribegam.h
 @@ -27,9 +27,9 @@ struct RGE_Prog_Info;
@@ -59,7 +59,7 @@ index d47ed773c..913cb4f2e 100644
  // Square map dimensions, in tiles. MapSize stores a separate option index.
  #define TRIBE_MAP_DIMENSION_TINY      72
 diff --git a/include/view.h b/include/view.h
-index 912300f4e..994de7362 100644
+index 912300f4..994de736 100644
 --- a/include/view.h
 +++ b/include/view.h
 @@ -141,11 +141,9 @@ class DClipInfo_List {
@@ -86,7 +86,7 @@ index 912300f4e..994de7362 100644
      int sprite_check(unsigned char* Shape_Base, Shape_Info* Shape, int check_x, int check_y);
      void draw_terrain_shape(
 diff --git a/src/Mouseptr.cpp b/src/Mouseptr.cpp
-index 26c48c448..9b3f3f498 100644
+index 26c48c44..9b3f3f49 100644
 --- a/src/Mouseptr.cpp
 +++ b/src/Mouseptr.cpp
 @@ -1,3 +1,4 @@
@@ -103,7 +103,7 @@ index 26c48c448..9b3f3f498 100644
      lplpDDClipper = 0;
      if (this->active != 0 && this->custom_draw != 0 && this->GameMode != 0 && this->GameEnabled != 0) {
 diff --git a/src/Panel.cpp b/src/Panel.cpp
-index 6fcfc515c..8fc9b19ca 100644
+index 6fcfc515..3e39581a 100644
 --- a/src/Panel.cpp
 +++ b/src/Panel.cpp
 @@ -1,3 +1,4 @@
@@ -129,13 +129,48 @@ index 6fcfc515c..8fc9b19ca 100644
      tagRECT* rect;
  
 +    // The port: over the view that a worker is drawing: wait for it. Rows above and below it are other texels.
-+    if (aoe_view_busy() && !aoe_view_in_job() && clip_rect.bottom >= 20 && clip_rect.top < 474) aoe_view_join();
++    if (aoe_view_busy() && !aoe_view_in_job() && clip_rect.bottom >= 20 && clip_rect.top < render_area->Height - 126) aoe_view_join();
 +
      dc = render_area->DrawDc;
      if (dc != 0) {
          SelectClipRgn(dc, clip_rgn);
+diff --git a/src/Panel_ez.cpp b/src/Panel_ez.cpp
+index 1b7ed184..073b7104 100644
+--- a/src/Panel_ez.cpp
++++ b/src/Panel_ez.cpp
+@@ -43,6 +43,7 @@ long TEasy_Panel::setup(
+     int t2g;
+     int s2g;
+     int background_pos_in;
++    int aoe_centred = 0;
+     int f1r;
+     int f1b;
+     int button_pic_id;
+@@ -185,6 +186,13 @@ long TEasy_Panel::setup(
+         if (this->render_area->Width < 800 || stricmp(background_pic_file_name_b1, "none") == 0) {
+             this->set_background(background_pic_file_name_a1, back_pic_id_a1);
+             this->set_background2(background_pic_file_name_a2, back_pic_id_a2);
++            // The port: the trial has no pictures for 640 x 480. The middle of the one for 800 x 600 (background_pos 1), which the
++            // menu's buttons are laid out over at either size.
++            if (this->background_pic == 0 && this->render_area->Width < 800 && stricmp(background_pic_file_name_b1, "none") != 0) {
++                this->set_background(background_pic_file_name_b1, back_pic_id_b1);
++                this->set_background2(background_pic_file_name_b2, back_pic_id_b2);
++                aoe_centred = this->background_pic != 0;
++            }
+         } else if (this->render_area->Width < 1024) {
+             this->set_background(background_pic_file_name_b1, back_pic_id_b1);
+             this->set_background2(background_pic_file_name_b2, back_pic_id_b2);
+@@ -196,7 +204,7 @@ long TEasy_Panel::setup(
+         this->set_shadow_amount(shad_amt);
+         this->set_palette(palette_file_name, pal_id);
+         this->set_cursor(cursor_file_name, cursor_id);
+-        this->set_background_pos(background_pos_in);
++        this->set_background_pos(aoe_centred ? 1 : background_pos_in);
+         this->set_background_colors(background_color1_in, background_color1_in);
+         this->set_bevel_colors(bc1, bc2, bc3, bc4, bc5, bc6);
+         this->set_text_colors(
 diff --git a/src/Pnl_msg.cpp b/src/Pnl_msg.cpp
-index bd430bc52..aa4b385ff 100644
+index bd430bc5..aa4b385f 100644
 --- a/src/Pnl_msg.cpp
 +++ b/src/Pnl_msg.cpp
 @@ -1,3 +1,4 @@
@@ -152,7 +187,7 @@ index bd430bc52..aa4b385ff 100644
      void* old_font;
      unsigned long font_rgb;
 diff --git a/src/Pnl_txt.cpp b/src/Pnl_txt.cpp
-index 5dc3f00ad..f4278b85a 100644
+index 5dc3f00a..f4278b85 100644
 --- a/src/Pnl_txt.cpp
 +++ b/src/Pnl_txt.cpp
 @@ -1108,6 +1108,10 @@ int TTextPanel::append_line(char* text_in, long id_in) {
@@ -167,7 +202,7 @@ index 5dc3f00ad..f4278b85a 100644
      return insert_line((int) num_lines, text_in, text2_in, id_in);
  }
 diff --git a/src/Shape.cpp b/src/Shape.cpp
-index 1d6e56032..74907c6f6 100644
+index 1d6e5603..74907c6f 100644
 --- a/src/Shape.cpp
 +++ b/src/Shape.cpp
 @@ -1,3 +1,4 @@
@@ -191,8 +226,40 @@ index 1d6e56032..74907c6f6 100644
              return 1;
          } else {
              rect = drawarea->ClipRect;
+diff --git a/src/Sounddrv.cpp b/src/Sounddrv.cpp
+index 2136b0af..1bf6c1bc 100644
+--- a/src/Sounddrv.cpp
++++ b/src/Sounddrv.cpp
+@@ -174,6 +174,9 @@ void TSound_Driver::set_volume(long in_vol, int permanent) {
+     if (permanent != 0) {
+         this->volume = in_vol;
+     }
++#ifdef AOE_SHADEREMU
++    { extern void aoe_sound_master(long); aoe_sound_master(in_vol); }
++#endif
+     if (this->mixer_open == 0) {
+         return;
+     }
+@@ -425,6 +428,17 @@ int TDigital::load(char* file_name, long res_id) {
+         res_id = this->resource_id;
+     }
+ 
++#ifdef AOE_SHADEREMU
++    {
++        extern IDirectSoundBuffer* aoe_sound_load(long id, const char* path);
++        sprintf(file_with_path, "%s%s", this->sound_system->path, this->sound_file);
++        this->sound_buffer = aoe_sound_load(res_id, file_with_path);
++        if (this->sound_buffer != 0)
++            goto success_return;
++        this->failed = 1;
++        goto fail_return;
++    }
++#endif
+     if (sound_file_first != 0 || res_id < 0) {
+         sprintf(file_with_path, "%s%s", this->sound_system->path, this->sound_file);
+         fd = _open(file_with_path, _O_RDONLY, 0);
 diff --git a/src/asprite.cpp b/src/asprite.cpp
-index f99cb6f18..7e5823127 100644
+index f99cb6f1..7e582312 100644
 --- a/src/asprite.cpp
 +++ b/src/asprite.cpp
 @@ -1,3 +1,4 @@
@@ -219,7 +286,7 @@ index f99cb6f18..7e5823127 100644
  
                  if (frame_looped != 0) {
 diff --git a/src/basegame.cpp b/src/basegame.cpp
-index 2ec743511..695fe1608 100644
+index 2ec74351..695fe160 100644
 --- a/src/basegame.cpp
 +++ b/src/basegame.cpp
 @@ -1,3 +1,5 @@
@@ -276,7 +343,7 @@ index 2ec743511..695fe1608 100644
          this->mouse_pointer->draw(1);
          this->erase_mouse = 1;
 diff --git a/src/drawarea.cpp b/src/drawarea.cpp
-index 9f77ab2ed..e7e4a8bc4 100644
+index 9f77ab2e..e7e4a8bc 100644
 --- a/src/drawarea.cpp
 +++ b/src/drawarea.cpp
 @@ -1,3 +1,4 @@
@@ -405,7 +472,7 @@ index 9f77ab2ed..e7e4a8bc4 100644
 +    aoe_clip_now = 0;
 +}
 diff --git a/src/game_globals.cpp b/src/game_globals.cpp
-index 62726c191..37b9e144d 100644
+index 62726c19..37b9e144 100644
 --- a/src/game_globals.cpp
 +++ b/src/game_globals.cpp
 @@ -22,7 +22,8 @@ int safe_draw_log = 0;
@@ -428,7 +495,7 @@ index 62726c191..37b9e144d 100644
  int SDI_Draw_Line = 0;
  void* StringTableX = 0;
 diff --git a/src/m_s_obj.cpp b/src/m_s_obj.cpp
-index 095643260..bd589eb20 100644
+index 09564326..bd589eb2 100644
 --- a/src/m_s_obj.cpp
 +++ b/src/m_s_obj.cpp
 @@ -863,8 +863,8 @@ unsigned char RGE_Master_Static_Object::check_placement(
@@ -443,7 +510,7 @@ index 095643260..bd589eb20 100644
      }
  
 diff --git a/src/main.cpp b/src/main.cpp
-index b672d36a5..05d2733f2 100644
+index b672d36a..7c39465f 100644
 --- a/src/main.cpp
 +++ b/src/main.cpp
 @@ -26,7 +26,7 @@ extern "C" int __stdcall WinMain(HINSTANCE prog_inst, HINSTANCE prev_inst, char*
@@ -455,8 +522,31 @@ index b672d36a5..05d2733f2 100644
      info.max_players_per_cd = 3;
      info.instance = prog_inst;
      info.prev_instance = prev_inst;
+@@ -48,10 +48,10 @@ extern "C" int __stdcall WinMain(HINSTANCE prog_inst, HINSTANCE prev_inst, char*
+     info.fixed_window_size = 1;
+     info.use_dir_draw = 1;
+     info.use_sys_mem = 0;
+-    info.use_music = 1;
++    info.use_music = 0;   // the port: MIDI through Windows' MCI, which the machine has not (docs/games/aoe.md, "Sound")
+     info.use_sound = 1;
+     info.fast_view = 1;
+-    info.auto_scroll = 1;
++    { extern int aoe_scroll_edges(void); info.auto_scroll = aoe_scroll_edges(); }   // the port: a drag, not the window's edges
+     info.mouse_scroll_edge = 3;
+     info.mouse_scroll_max_dist = 4.0f;
+     info.key_scroll_max_dist = 4.0f;
+@@ -61,8 +61,7 @@ extern "C" int __stdcall WinMain(HINSTANCE prog_inst, HINSTANCE prev_inst, char*
+     info.use_ima = 0;
+     info.use_midi = 0;
+     info.use_wave_music = 0;
+-    info.main_wid = 800;
+-    info.main_hgt = 600;
++    { extern int aoe_start_width(void); info.main_wid = aoe_start_width(); info.main_hgt = info.main_wid * 3 / 4; }   // the port
+     info.zone_guid = ZONE_GUID;
+ 
+     strcpy(info.data_dir, "data2\\");
 diff --git a/src/move_obj.cpp b/src/move_obj.cpp
-index 8833dbaff..08971e8bd 100644
+index 8833dbaf..08971e8b 100644
 --- a/src/move_obj.cpp
 +++ b/src/move_obj.cpp
 @@ -11,6 +11,7 @@
@@ -593,7 +683,7 @@ index 8833dbaff..08971e8bd 100644
                  }
                  ++i;
 diff --git a/src/rmm_dbct.cpp b/src/rmm_dbct.cpp
-index f3e0cf3a4..212817f2a 100644
+index f3e0cf3a..212817f2 100644
 --- a/src/rmm_dbct.cpp
 +++ b/src/rmm_dbct.cpp
 @@ -270,6 +270,13 @@ uchar RGE_RMM_Database_Controller::init(
@@ -611,7 +701,7 @@ index f3e0cf3a4..212817f2a 100644
      this->update_map_info(in_map);
      this->create_shared_resources();
 diff --git a/src/scr_game.cpp b/src/scr_game.cpp
-index 92412fb64..2e54bd425 100644
+index 92412fb6..0206fa0f 100644
 --- a/src/scr_game.cpp
 +++ b/src/scr_game.cpp
 @@ -167,7 +167,7 @@ TRIBE_Screen_Game::TRIBE_Screen_Game() : TScreenPanel(s_Game_Screen) {
@@ -623,7 +713,34 @@ index 92412fb64..2e54bd425 100644
          }
          if (this->button_bldg_pics[i] == 0 || !(this->button_bldg_pics[i])->is_loaded()) {
              this->error_code = 1;
-@@ -1083,6 +1083,66 @@ long TRIBE_Screen_Game::handle_idle() {
+@@ -745,6 +745,26 @@ void TRIBE_Screen_Game::set_overlapped_redraw(TPanel* redraw_panel, TPanel* call
+     }
+ }
+ 
++// The port: the trial's game screen is a picture for 800 x 600. At 640 x 480 the layout (handle_size) puts what is right of the buttons 160
++// pixels to the left and the bottom panel 120 up, so a piece of the middle of each band is left out: the top bar from 376 and the bottom panel from
++// 406, each 160 wide, where nothing of the 640 layout looks.
++static void aoe_picture_cut(TShape* pic, TDrawArea* area) {
++    tagRECT save, piece;
++    save = area->ClipRect;
++    static const struct { short left, right, top, bottom, x, y, frame; } pieces[4] = {
++        { 0, 375, 0, 19, 0, 0, 0 }, { 376, 639, 0, 19, -160, 0, 0 }, { 0, 405, 354, 479, 0, 354, 1 }, { 406, 639, 354, 479, -160, 354, 1 } };
++    for (int i = 0; i < 4; i++) {
++        piece.left = pieces[i].left > save.left ? pieces[i].left : save.left;
++        piece.right = pieces[i].right < save.right ? pieces[i].right : save.right;
++        piece.top = pieces[i].top > save.top ? pieces[i].top : save.top;
++        piece.bottom = pieces[i].bottom < save.bottom ? pieces[i].bottom : save.bottom;
++        if (piece.left > piece.right || piece.top > piece.bottom) continue;
++        area->SetClipRect(&piece);
++        pic->shape_draw(area, pieces[i].x, pieces[i].y, pieces[i].frame, 0, 0);
++    }
++    area->SetClipRect(&save);
++}
++
+ void TRIBE_Screen_Game::set_map_buttons_redraw(TPanel::RedrawMode redraw_mode) {
+     if (this->pnl_wid < 800) {
+         this->button_panel[5]->set_redraw(redraw_mode);
+@@ -1083,6 +1103,66 @@ long TRIBE_Screen_Game::handle_idle() {
      return result;
  }
  
@@ -690,7 +807,7 @@ index 92412fb64..2e54bd425 100644
  void TRIBE_Screen_Game::handle_game_update() {
      int update_counter = 0;
  
-@@ -1143,6 +1203,7 @@ void TRIBE_Screen_Game::handle_game_update() {
+@@ -1143,6 +1223,7 @@ void TRIBE_Screen_Game::handle_game_update() {
                  game_state = 1;
              } else {
                  game_state = this->world->update();
@@ -698,7 +815,33 @@ index 92412fb64..2e54bd425 100644
                  if (out_of_sync2 != 0) {
                      return;
                  }
-@@ -3520,12 +3581,41 @@ void TRIBE_Screen_Game::draw() {
+@@ -2270,11 +2351,12 @@ void TRIBE_Screen_Game::player_changed(int old_player_id, int new_player_id) {
+                     game_pic_id = culture + 0xC631;
+                 }
+             } else {
+-                sprintf(str, s_game_a_format, culture);
++                // The port: the trial has only the pictures for 800 x 600. The draw below cuts them to this size.
++                sprintf(str, s_game_b_format, culture);
+                 if (culture == RGE_CULTURE_ROMAN) {
+-                    game_pic_id = 0xCF12;
++                    game_pic_id = 0xCF13;
+                 } else {
+-                    game_pic_id = culture + 0xC62D;
++                    game_pic_id = culture + 0xC631;
+                 }
+             }
+             this->game_screen_pic = new TShape(str, game_pic_id);
+@@ -3502,8 +3584,7 @@ void TRIBE_Screen_Game::draw() {
+                     this->game_screen_pic->shape_draw(this->render_area, 0, 0, 0, 0, 0);
+                     this->game_screen_pic->shape_draw(this->render_area, 0, 474, 1, 0, 0);
+                 } else {
+-                    this->game_screen_pic->shape_draw(this->render_area, 0, 0, 0, 0, 0);
+-                    this->game_screen_pic->shape_draw(this->render_area, 0, 354, 1, 0, 0);
++                    aoe_picture_cut(this->game_screen_pic, this->render_area);
+                 }
+                 this->render_area->Unlock(s_scr_game_draw2);
+             }
+@@ -3520,6 +3601,30 @@ void TRIBE_Screen_Game::draw() {
          this->draw_setup(flag);
          if (this->game_screen_pic) {
              if (this->render_area->Lock(s_scr_game_draw3, 1)) {
@@ -707,18 +850,19 @@ index 92412fb64..2e54bd425 100644
 +                static unsigned char* kept_bottom;
 +                static unsigned char kept_top[800 * 20];
 +                static TDrawArea* kept_area;
-+                int kept_w = this->pnl_wid;
++                static int kept_at;
++                int kept_w = this->pnl_wid, kept_row = this->pnl_hgt - 126;
 +                tagRECT r = this->clip_rect;
 +                // Any place: the rows between the two pieces are the view's, which draws them whole (6 million instructions
 +                // a whole screen through the pictures' rows, each time something asks for all of it).
-+                if (kept_bottom && kept_area == this->render_area && flag == 0 && this->pnl_wid == 800 && this->pnl_hgt == 600) {
-+                    long left = r.left < 0 ? 0 : r.left, right = r.right > 799 ? 799 : r.right;
-+                    long top = r.top < 0 ? 0 : r.top, bottom = r.bottom > 599 ? 599 : r.bottom;
++                if (kept_bottom && kept_area == this->render_area && flag == 0 && kept_at == kept_w && kept_w <= 800) {
++                    long left = r.left < 0 ? 0 : r.left, right = r.right > kept_w - 1 ? kept_w - 1 : r.right;
++                    long top = r.top < 0 ? 0 : r.top, bottom = r.bottom > this->pnl_hgt - 1 ? this->pnl_hgt - 1 : r.bottom;
 +                    if (left <= right) {
 +                        for (long y = top; y <= bottom && y < 20; y++)
 +                            memcpy((unsigned char*) this->render_area->DisplayOffsets[y] + left, kept_top + y * 800 + left, right - left + 1);
-+                        for (long y = top < 474 ? 474 : top; y <= bottom; y++)
-+                            memcpy((unsigned char*) this->render_area->DisplayOffsets[y] + left, kept_bottom + (y - 474) * 800 + left, right - left + 1);
++                        for (long y = top < kept_row ? kept_row : top; y <= bottom; y++)
++                            memcpy((unsigned char*) this->render_area->DisplayOffsets[y] + left, kept_bottom + (y - kept_row) * 800 + left, right - left + 1);
 +                    }
 +                    this->render_area->Unlock(s_scr_game_draw3);
 +                    this->draw_finish();
@@ -728,20 +872,25 @@ index 92412fb64..2e54bd425 100644
                  if (this->pnl_wid >= 1024 && this->pnl_hgt >= 768) {
                      this->game_screen_pic->shape_draw(this->render_area, 0, 0, 0, 0, 0);
                      this->game_screen_pic->shape_draw(this->render_area, 0, 642, 1, 0, 0);
-                 } else if (this->pnl_wid >= 800 && this->pnl_hgt >= 600) {
+@@ -3527,8 +3632,14 @@ void TRIBE_Screen_Game::draw() {
                      this->game_screen_pic->shape_draw(this->render_area, 0, 0, 0, 0, 0);
                      this->game_screen_pic->shape_draw(this->render_area, 0, 474, 1, 0, 0);
-+                    if (r.left <= 0 && r.top <= 474 && r.right >= 799 && r.bottom >= 599 && kept_w == 800) {
-+                        if (!kept_bottom) kept_bottom = (unsigned char*) malloc(800 * 126);
-+                        kept_area = this->render_area;
-+                        for (long y = 474; y < 600; y++) memcpy(kept_bottom + (y - 474) * 800, this->render_area->DisplayOffsets[y], 800);
-+                        for (long y = 0; y < 20; y++) memcpy(kept_top + y * 800, this->render_area->DisplayOffsets[y], 800);
-+                    }
                  } else {
-                     this->game_screen_pic->shape_draw(this->render_area, 0, 0, 0, 0, 0);
-                     this->game_screen_pic->shape_draw(this->render_area, 0, 354, 1, 0, 0);
+-                    this->game_screen_pic->shape_draw(this->render_area, 0, 0, 0, 0, 0);
+-                    this->game_screen_pic->shape_draw(this->render_area, 0, 354, 1, 0, 0);
++                    aoe_picture_cut(this->game_screen_pic, this->render_area);
++                }
++                if (this->pnl_wid <= 800 && r.left <= 0 && r.top <= kept_row && r.right >= kept_w - 1 && r.bottom >= this->pnl_hgt - 1) {
++                    if (!kept_bottom) kept_bottom = (unsigned char*) malloc(800 * 126);
++                    kept_area = this->render_area;
++                    kept_at = kept_w;
++                    for (long y = kept_row; y < this->pnl_hgt; y++) memcpy(kept_bottom + (y - kept_row) * 800, this->render_area->DisplayOffsets[y], kept_w);
++                    for (long y = 0; y < 20; y++) memcpy(kept_top + y * 800, this->render_area->DisplayOffsets[y], kept_w);
+                 }
+                 this->render_area->Unlock(s_scr_game_draw3);
+             }
 diff --git a/src/scr_mps.cpp b/src/scr_mps.cpp
-index ba309be4a..b37bad5d2 100644
+index ba309be4..b37bad5d 100644
 --- a/src/scr_mps.cpp
 +++ b/src/scr_mps.cpp
 @@ -142,10 +142,6 @@ TribeMPSetupScreen::TribeMPSetupScreen() : TScreenPanel("MP Setup Screen") {
@@ -756,7 +905,7 @@ index ba309be4a..b37bad5d2 100644
          this->playerCivDrop[i]->append_line(0x280A, 17);
  
 diff --git a/src/spanlist.cpp b/src/spanlist.cpp
-index 1d48af6a4..0e2669029 100644
+index 1d48af6a..0e266902 100644
 --- a/src/spanlist.cpp
 +++ b/src/spanlist.cpp
 @@ -1,3 +1,4 @@
@@ -924,7 +1073,7 @@ index 1d48af6a4..0e2669029 100644
      y1 = 0;
      y2 = YOffset;
 diff --git a/src/stat_obj.cpp b/src/stat_obj.cpp
-index d0ddcafa6..0967f4d2a 100644
+index d0ddcafa..0967f4d2 100644
 --- a/src/stat_obj.cpp
 +++ b/src/stat_obj.cpp
 @@ -1,3 +1,4 @@
@@ -933,7 +1082,7 @@ index d0ddcafa6..0967f4d2a 100644
  #include "../include/program_mode.h"
  #include "../include/asp_list.h"
 diff --git a/src/taiinfmd.cpp b/src/taiinfmd.cpp
-index 0d961d41b..87c342895 100644
+index 0d961d41..87c34289 100644
 --- a/src/taiinfmd.cpp
 +++ b/src/taiinfmd.cpp
 @@ -155,7 +155,7 @@ TribeInformationAIModule::TribeInformationAIModule(void* pW, int pID) :
@@ -1014,7 +1163,7 @@ index 0d961d41b..87c342895 100644
          }
      }
 diff --git a/src/tplayer.cpp b/src/tplayer.cpp
-index 6919808e6..3f60592f0 100644
+index 6919808e..3f60592f 100644
 --- a/src/tplayer.cpp
 +++ b/src/tplayer.cpp
 @@ -1,3 +1,4 @@
@@ -1031,7 +1180,7 @@ index 6919808e6..3f60592f0 100644
      if (this->update_time > 1.0f) {
          do {
 diff --git a/src/tpnl_btn.cpp b/src/tpnl_btn.cpp
-index 76606b50a..35aae7c9c 100644
+index 76606b50..35aae7c9 100644
 --- a/src/tpnl_btn.cpp
 +++ b/src/tpnl_btn.cpp
 @@ -1,3 +1,6 @@
@@ -1050,7 +1199,7 @@ index 76606b50a..35aae7c9c 100644
      long calc_y;
      long y;
 diff --git a/src/tpnl_obj.cpp b/src/tpnl_obj.cpp
-index 016de3c58..ab44a1282 100644
+index 016de3c5..ab44a128 100644
 --- a/src/tpnl_obj.cpp
 +++ b/src/tpnl_obj.cpp
 @@ -142,6 +142,7 @@ unsigned char TRIBE_Panel_Object::get_mode() {
@@ -1073,7 +1222,7 @@ index 016de3c58..ab44a1282 100644
  
      this->idle_time = debug_timeGetTime("C:\\msdev\\work\\age1_x1\\tpnl_obj.cpp", 895);
 diff --git a/src/tribegam.cpp b/src/tribegam.cpp
-index a600fe043..1a52df678 100644
+index a600fe04..1a52df67 100644
 --- a/src/tribegam.cpp
 +++ b/src/tribegam.cpp
 @@ -453,6 +453,7 @@ int TRIBE_Game::setup() {
@@ -1112,7 +1261,7 @@ index a600fe043..1a52df678 100644
      this->disable_input();
      this->set_game_mode(RGE_GAME_MODE_NORMAL, 0);
 diff --git a/src/trig.cpp b/src/trig.cpp
-index f5e7b7544..6036353b6 100644
+index f5e7b754..6036353b 100644
 --- a/src/trig.cpp
 +++ b/src/trig.cpp
 @@ -4,40 +4,12 @@
@@ -1160,7 +1309,7 @@ index f5e7b7544..6036353b6 100644
  }
  
 diff --git a/src/tvw_main.cpp b/src/tvw_main.cpp
-index 4a1f3c12d..11143b4eb 100644
+index 4a1f3c12..57631817 100644
 --- a/src/tvw_main.cpp
 +++ b/src/tvw_main.cpp
 @@ -1,3 +1,4 @@
@@ -1168,8 +1317,20 @@ index 4a1f3c12d..11143b4eb 100644
  
  #include "../include/basegame.h"
  #include "../include/program_mode.h"
+@@ -489,6 +490,11 @@ long TRIBE_Main_View::mouse_right_up_action(long x, long y, int ctrl_key, int sh
+     int mode = rge_base_game->prog_mode;
+     RGE_Pick_Info pick_info;
+ 
++    if (this->scroll_action == 10) {   // the port: the end of a drag of the map, in any game mode (a building being placed stays)
++        this->end_scroll_view();
++        return 1;
++    }
++
+     if (mode != ProgModeGame && mode != ProgModeGameTempPaused && mode != ProgModeScenarioEditor && mode != ProgModeGameOver) {
+         return 0;
+     }
 diff --git a/src/tworld.cpp b/src/tworld.cpp
-index a3c3afc39..6be4416f8 100644
+index a3c3afc3..6be4416f 100644
 --- a/src/tworld.cpp
 +++ b/src/tworld.cpp
 @@ -238,6 +238,7 @@ void TRIBE_World::setup_players(RGE_Player_Info& info) {
@@ -1181,7 +1342,7 @@ index a3c3afc39..6be4416f8 100644
                  case 0:
                      player = new TRIBE_Player(
 diff --git a/src/view.cpp b/src/view.cpp
-index 6439e31fe..1ac755a50 100644
+index 6439e31f..ed5ef9e1 100644
 --- a/src/view.cpp
 +++ b/src/view.cpp
 @@ -1,3 +1,4 @@
@@ -1340,7 +1501,12 @@ index 6439e31fe..1ac755a50 100644
 -                        goto no_mouse_process;
 -                    }
 -                }
--
++    // The port: the job needs no more of the game than this
++    aoe_walked_list = this->futur_objs;
++    aoe_walked_rect = save_render_rect;
++    if (aoe_view_wanted()) aoe_view_walked();
++    else this->aoe_pick_touched(this->futur_objs, save_render_rect);
+ 
 -                MouseSystem->set_game_facet(0);
 -                if (this->message_panel != 0 && rge_base_game->rollover != 0) {
 -                    this->message_panel->remove_message();
@@ -1355,12 +1521,7 @@ index 6439e31fe..1ac755a50 100644
 -            }
 -        }
 -    }
-+    // The port: the job needs no more of the game than this
-+    aoe_walked_list = this->futur_objs;
-+    aoe_walked_rect = save_render_rect;
-+    if (aoe_view_wanted()) aoe_view_walked();
-+    else this->aoe_pick_touched(this->futur_objs, save_render_rect);
- 
+-
 -no_mouse_process: {
 -    PanelNode* child_node = this->first_child_node;
 -    while (child_node != 0) {
@@ -1413,7 +1574,61 @@ index 6439e31fe..1ac755a50 100644
  void RGE_View::draw_multi_object_outline() {
  }
  
-@@ -4232,8 +4255,8 @@ void DClipInfo_List::SetNumZones(int New_Size) {
+@@ -3731,6 +3754,11 @@ RGE_Static_Object* RGE_View::hit_object(
+     return picked;
+ }
+ 
++// The port: where the view stood when a drag of the map began (scroll action 10): first core only, and from there each time, so that
++// a hand that comes back brings the map back to the pixel. A tile is 64 x 32 pixels: to the right on the screen is both coordinates up,
++// upward is x up and y down, and the map goes with the hand, so the view goes against it.
++static float aoe_drag_x, aoe_drag_y;
++extern void aoe_input_log(const char* what, int a, int b, int c, int d);   // AOE_INPUT_LOG=1 (host.cpp)
+ int RGE_View::start_scroll_view(unsigned char scroll_action_in, long x, long y, int ctrl_key, int shift_key) {
+     RGE_Pick_Info pick_info;
+     int result;
+@@ -3752,6 +3780,10 @@ int RGE_View::start_scroll_view(unsigned char scroll_action_in, long x, long y,
+         this->set_redraw((TPanel::RedrawMode) 1);
+     }
+ 
++    if (scroll_action_in == 10) {
++        aoe_drag_x = this->player->view_x;
++        aoe_drag_y = this->player->view_y;
++    }
+     result = 0;
+     this->scroll_action = scroll_action_in;
+     this->mouse_last_x = x;
+@@ -3801,6 +3833,17 @@ int RGE_View::handle_scroll_view(long x, long y) {
+     save_view_y = this->player->view_y;
+ 
+     switch (this->scroll_action) {
++        case 10: {
++            float across = (float) (x - this->mouse_down_x) / 64.0f, down = (float) (y - this->mouse_down_y) / 32.0f;
++            this->player->set_view_loc(aoe_drag_x - across + down, aoe_drag_y - across - down);
++            this->mouse_last_x = x;
++            this->mouse_last_y = y;
++            { extern void aoe_lat(int, int, int); aoe_lat('V', (int) (this->player->view_x * 100), (int) (this->player->view_y * 100)); }
++            if (save_view_x == this->player->view_x && save_view_y == this->player->view_y)
++                return 0;
++            this->set_redraw((TPanel::RedrawMode) 1);
++            return 1;
++        }
+         case 2:
+             this->mouse_last_x = x;
+             this->mouse_last_y = y;
+@@ -3964,7 +4007,12 @@ void RGE_View::end_scroll_view() {
+     long min_x, max_x, min_y, max_y;
+ 
+     switch (this->scroll_action) {
++        case 10:
++            aoe_input_log("drag", this->mouse_last_x - this->mouse_down_x, this->mouse_last_y - this->mouse_down_y,
++                (int) ((this->player->view_x - aoe_drag_x) * 100), (int) ((this->player->view_y - aoe_drag_y) * 100));
++            break;
+         case 2:
++            aoe_input_log("box", this->mouse_down_x, this->mouse_down_y, this->mouse_last_x, this->mouse_last_y);
+             if (this->mouse_down_x > this->mouse_last_x) {
+                 min_x = this->mouse_last_x;
+                 max_x = this->mouse_down_x;
+@@ -4232,8 +4280,8 @@ void DClipInfo_List::SetNumZones(int New_Size) {
      int i;
  
      if (New_Size >= Max_Zones) {
@@ -1424,7 +1639,7 @@ index 6439e31fe..1ac755a50 100644
          if (Zone_Ptrs != 0) {
              i = 0;
              if (Used_Zones > 0) {
-@@ -4243,8 +4266,8 @@ void DClipInfo_List::SetNumZones(int New_Size) {
+@@ -4243,8 +4291,8 @@ void DClipInfo_List::SetNumZones(int New_Size) {
                      i = i + 1;
                  } while (i < Used_Zones);
              }
@@ -1435,7 +1650,7 @@ index 6439e31fe..1ac755a50 100644
          }
          Zone_Ptrs = Ptrs;
          Zone_Size_Ptrs = new_zone_sizes;
-@@ -4262,7 +4285,7 @@ void DClipInfo_List::InitNewZone(int Zone_Size) {
+@@ -4262,7 +4310,7 @@ void DClipInfo_List::InitNewZone(int Zone_Size) {
      Used_Zones = zone_index + 1;
      alloc_size = Element_Size * Zone_Size;
      Zone_Size_Ptrs[zone_index] = Zone_Size;
@@ -1445,7 +1660,7 @@ index 6439e31fe..1ac755a50 100644
      Total_Blocks = Total_Blocks + Zone_Size;
      Free_Blocks = Free_Blocks + Zone_Size;
 diff --git a/src/vis_unit.cpp b/src/vis_unit.cpp
-index e4bedbf20..caa61b734 100644
+index e4bedbf2..caa61b73 100644
 --- a/src/vis_unit.cpp
 +++ b/src/vis_unit.cpp
 @@ -1,4 +1,5 @@
@@ -1464,7 +1679,7 @@ index e4bedbf20..caa61b734 100644
              do {
                  if (ChangedMask == 0) {
 diff --git a/src/vw_main.cpp b/src/vw_main.cpp
-index 8b843ae6c..09dd55910 100644
+index 8b843ae6..c1716c41 100644
 --- a/src/vw_main.cpp
 +++ b/src/vw_main.cpp
 @@ -1,3 +1,4 @@
@@ -1472,7 +1687,45 @@ index 8b843ae6c..09dd55910 100644
  
  #include "../include/basegame.h"
  #include "../include/main.h"
-@@ -851,7 +852,9 @@ void RGE_Main_View::draw() {
+@@ -51,7 +52,14 @@ long RGE_Main_View::handle_idle() {
+     return result;
+ }
+ 
++// The port: where the player's view stands, for a script's "view" step (host.cpp)
++static RGE_Player* aoe_view_player;
++void aoe_view_place(float* x, float* y, int* selected) {
++    *x = *y = 0; *selected = 0;
++    if (aoe_view_player) { *x = aoe_view_player->view_x; *y = aoe_view_player->view_y; *selected = aoe_view_player->sel_count; }
++}
+ int RGE_Main_View::do_auto_scroll() {
++    aoe_view_player = this->player;
+     tagRECT rect;
+     tagPOINT point;
+     float scroll_dist2;
+@@ -734,6 +742,14 @@ long RGE_Main_View::mouse_right_move_action(long x, long y, int ctrl_key, int sh
+         return 1;
+     }
+ 
++    // The port: a beam in a hand cannot find a window's edge, so the right button (a hand's grip) moved past TPanel's 10 pixels drags the map,
++    // a pixel for a pixel, selection or none; TPanel then has mouse_action 3, so that the release gives no order (docs/games/aoe.md, "Controls").
++    if (!rge_base_game->prog_info->auto_scroll) {
++        this->release_mouse();
++        this->start_scroll_view(10, this->mouse_down_x, this->mouse_down_y, ctrl_key, shift_key);
++        this->handle_scroll_view(x, y);
++        return 1;
++    }
+     if (this->player->sel_count == 0) {
+         this->release_mouse();
+         this->start_scroll_view(1, this->mouse_down_x, this->mouse_down_y, ctrl_key, shift_key);
+@@ -774,6 +790,7 @@ long RGE_Main_View::mouse_right_up_action(long x, long y, int ctrl_key, int shif
+                         && rge_base_game->prog_mode != RGE_PROGRAM_MODE_SCENARIO_EDITOR) {
+                         if (rge_base_game->game_mode == RGE_GAME_MODE_NORMAL) {
+                             if (shift_key == 0) {
++                                { extern void aoe_input_log(const char*, int, int, int, int); aoe_input_log("order", x, y, this->player->sel_count, 0); }
+                                 this->command_make_do(x, y, 1, -1);
+                             } else {
+                                 RGE_Static_Object** list;
+@@ -851,7 +868,9 @@ void RGE_Main_View::draw() {
          if (do_draw_log != 0)
              write_draw_log2("<vs>");
          color_log(0x4C, 0x4C, 1);
@@ -1484,7 +1737,7 @@ index 8b843ae6c..09dd55910 100644
          if (do_draw_log != 0)
              write_draw_log2("<vf>\n");
 diff --git a/src/world.cpp b/src/world.cpp
-index 0b7cd1ad5..725cb81cd 100644
+index 0b7cd1ad..725cb81c 100644
 --- a/src/world.cpp
 +++ b/src/world.cpp
 @@ -57,6 +57,8 @@ int __cdecl debug_rand(char*, int);
@@ -1591,7 +1844,7 @@ index 0b7cd1ad5..725cb81cd 100644
      if ((panel = rge_base_game->get_view_panel()) != 0)
          panel->set_redraw(TPanel::RedrawImmediate);
 diff --git a/src/zone_map.cpp b/src/zone_map.cpp
-index b57eb84fd..3db09910e 100644
+index b57eb84f..3db09910 100644
 --- a/src/zone_map.cpp
 +++ b/src/zone_map.cpp
 @@ -160,55 +160,43 @@ uchar RGE_Zone_Map::do_zone_map() {
