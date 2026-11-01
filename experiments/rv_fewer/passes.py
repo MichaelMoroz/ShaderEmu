@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """RVC_PASSLOG's lines (end ran pc ra ms) summed by reason and place: passes.py LOG ELF"""
-import collections, subprocess, sys
+import collections, os, subprocess, sys
 BASE = 0x85000040
 by = collections.Counter(); ran = collections.Counter(); places = collections.Counter(); place_ran = collections.Counter()
 for l in open(sys.argv[1]):
@@ -17,7 +17,7 @@ for e, c in by.most_common():
 def name(a):
     if not BASE <= a < BASE + 0x5c0000:
         return f'{a:x} (not the game)'
-    p = subprocess.run(['/home/micha/shaderemu-linux/toolchain/bin/riscv32-linux-addr2line', '-f', '-i', '-C', '-e', sys.argv[2], '%x' % (a - BASE)], capture_output=True, text=True)
+    p = subprocess.run([os.path.expanduser('~/shaderemu-linux/toolchain/bin/riscv32-linux-addr2line'), '-f', '-i', '-C', '-e', sys.argv[2], '%x' % (a - BASE)], capture_output=True, text=True)
     t = p.stdout.split('\n')
     return ' < '.join(t[i][:34] + ':' + t[i + 1].rsplit('/', 1)[-1].split(' ')[0] for i in range(0, min(len(t) - 1, 6), 2))
 for (e, pc, ra), c in places.most_common(25):

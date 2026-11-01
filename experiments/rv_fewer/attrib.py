@@ -4,7 +4,7 @@ Run in WSL:  python3 attrib.py PROF_DIR ELF BASE [CLASS] [TOP] > out.txt
 Self: the innermost frame of each pc. Lines: the same frame's file:line. Inlined-in: every frame's sum (inclusive of
 what is inlined into it, not of calls)."""
 import collections, os, subprocess, sys
-prof, elf, base = sys.argv[1], sys.argv[2], int(sys.argv[3], 16)
+prof, elf, base = sys.argv[1], os.path.expanduser(sys.argv[2]), int(sys.argv[3], 16)
 cls = sys.argv[4] if len(sys.argv) > 4 else '0'
 top = int(sys.argv[5]) if len(sys.argv) > 5 else 70
 import struct
@@ -22,7 +22,7 @@ for l in open(os.path.join(prof, 'pcs.txt')):
     # (what lies there in this run may be another program's: only a pc with the ELF's own word is the program's)
     if base <= pc < base + 0x5c0000 and code[(pc - base) // 4] == int(f[3], 16): cnt[pc - base] += n
 addrs = sorted(cnt)
-A2L = os.path.expanduser('/home/micha/shaderemu-linux/toolchain/bin/riscv32-linux-addr2line')
+A2L = os.path.expanduser('~/shaderemu-linux/toolchain/bin/riscv32-linux-addr2line')
 p = subprocess.run([A2L, '-f', '-i', '-C', '-a', '-e', elf], input='\n'.join('%x' % a for a in addrs), capture_output=True, text=True)
 self_f = collections.Counter(); lines = collections.Counter(); incl = collections.Counter()
 cur = None; frames = []

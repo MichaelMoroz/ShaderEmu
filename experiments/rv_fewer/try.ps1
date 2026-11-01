@@ -6,12 +6,12 @@ $f = "build/rv_fewer/try.env"
 $s = "build/rv_fewer/try.sh"
 @"
 . $f
-before=`$(stat -c %Y /home/micha/agents/fewer/nm/work/src/tdawn-build/vanillatd)
+before=`$(stat -c %Y `$HOME/agents/fewer/nm/work/src/tdawn-build/vanillatd)
 sleep 1
 bash experiments/rv_fewer/env.sh build > /dev/null
-after=`$(stat -c %Y /home/micha/agents/fewer/nm/work/src/tdawn-build/vanillatd)
-[ "`$before" != "`$after" ] || { echo NOT REBUILT; grep -E 'error|undefined' /home/micha/agents/fewer/nm/logs/tdawn-build.sh.log | head -12; exit 9; }
-/home/micha/shaderemu-linux/toolchain/bin/riscv32-linux-size /home/micha/agents/fewer/nm/work/src/tdawn-build/vanillatd | tail -1
+after=`$(stat -c %Y `$HOME/agents/fewer/nm/work/src/tdawn-build/vanillatd)
+[ "`$before" != "`$after" ] || { echo NOT REBUILT; grep -E 'error|undefined' `$HOME/agents/fewer/nm/logs/tdawn-build.sh.log | head -12; exit 9; }
+`$HOME/shaderemu-linux/toolchain/bin/riscv32-linux-size `$HOME/agents/fewer/nm/work/src/tdawn-build/vanillatd | tail -1
 "@ -replace "`r`n","`n" | Set-Content -NoNewline $s
 wsl -- bash $s
 if ($LASTEXITCODE) { exit 9 }

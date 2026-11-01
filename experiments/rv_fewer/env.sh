@@ -2,7 +2,7 @@
 # A private build home's environment and a build of Tiberian Dawn in it (linux/nommu/build.sh with HOME moved).
 #   bash experiments/rv_fewer/env.sh build [ENV=VALUE ...]     the game; the ELF is $W/src/tdawn-build/vanillatd
 #   bash experiments/rv_fewer/env.sh run COMMAND...            a command with the toolchain on the path
-export REALHOME=/home/micha
+export REALHOME=$HOME
 export HOME=$REALHOME/agents/fewer
 export PYTHONUSERBASE=$REALHOME/.local
 export NM=$HOME/nm W=$HOME/nm/work

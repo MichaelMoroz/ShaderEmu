@@ -16,7 +16,8 @@ for l in open(sys.argv[1] + '/pcs.txt'):
     else:
         other += n
 addrs = sorted(cnt)
-A2L = '/home/micha/shaderemu-linux/toolchain/bin/riscv32-linux-addr2line'
+import os
+A2L = os.path.expanduser('~/shaderemu-linux/toolchain/bin/riscv32-linux-addr2line')
 p = subprocess.run([A2L, '-f', '-e', sys.argv[2]], input='\n'.join('%x' % a for a in addrs), capture_output=True, text=True)
 names = p.stdout.split('\n')[0::2]
 by = collections.Counter()

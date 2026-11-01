@@ -2,7 +2,8 @@
 """Who calls a function on core 0, from a profile's edges.txt. In WSL: python3 callers.py PROF ELF BASE REGEX [REGEX...]"""
 import bisect, collections, os, re, subprocess, sys
 prof, elf, base = sys.argv[1], sys.argv[2], int(sys.argv[3], 16)
-NM = '/home/micha/shaderemu-linux/toolchain/bin/riscv32-linux-nm'
+import os
+NM = os.path.expanduser('~/shaderemu-linux/toolchain/bin/riscv32-linux-nm')
 syms = []
 for l in subprocess.run([NM, '-n', '-C', elf], capture_output=True, text=True).stdout.split('\n'):
     p = l.split(' ', 2)
