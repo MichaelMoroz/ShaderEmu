@@ -208,6 +208,7 @@ void VideoDriver_ShaderEmu::UnlockVideoBuffer() {}
  * counted (a scroll or a band left wrong). OPENTTD_HOLD=N|bad|big: the program stops at picture N
  * of the play script, or at the first that differs (by over 1,000 pixels), and says where both
  * pictures are in memory. */
+bool VehViewsOut();
 static int _play_frame = -1;     ///< pictures of OPENTTD_PLAY's script so far, -1 before it
 static int _checked, _check_bad, _check_line, _check_part_line;
 static long long _check_pixels;
@@ -924,7 +925,15 @@ static bool DriveSeen(const Vehicle *v, const Viewport &vp)
 {
 	static std::vector<uint8_t> alone;
 	constexpr int ROWS = 96, HALF = 48;
-	if (_screen.dst_ptr == nullptr) return true;
+	static std::vector<uint8_t> gpu;
+	const bool lists = SeGpuOn();
+	if (lists) {
+		SeGpuSettle();
+		SeGpuPicture(gpu);
+		if (gpu.empty()) return true;
+	} else if (_screen.dst_ptr == nullptr) {
+		return true;
+	}
 	const int pitch = _screen.pitch;
 	alone.assign(static_cast<size_t>(pitch) * ROWS, 0);
 	DrawPixelInfo d{};
@@ -940,7 +949,8 @@ static bool DriveSeen(const Vehicle *v, const Viewport &vp)
 	}
 	const Point pt = RemapCoords(v->drawn.x, v->drawn.y, v->drawn.z);
 	const int cx = vp.left + UnScaleByZoom(pt.x - vp.virtual_left, vp.zoom), cy = vp.top + UnScaleByZoom(pt.y - vp.virtual_top, vp.zoom);
-	const uint8_t *screen = static_cast<const uint8_t *>(_screen.dst_ptr);
+	const uint8_t *screen = lists ? gpu.data() : static_cast<const uint8_t *>(_screen.dst_ptr);
+	const int stride = lists ? _screen.width : pitch;
 	int best = 0, all = 0;
 	for (int oy = -6; oy <= 6; oy++) for (int ox = -6; ox <= 6; ox++) {
 		int same = 0, n = 0;
@@ -950,7 +960,7 @@ static bool DriveSeen(const Vehicle *v, const Viewport &vp)
 			const int sx = cx + ox + x - HALF, sy = cy + oy + y - HALF;
 			if (sx < vp.left || sy < vp.top || sx >= vp.left + vp.width || sy >= vp.top + vp.height) continue;
 			n++;
-			same += screen[sy * pitch + sx] == p;
+			same += screen[sy * stride + sx] == p;
 		}
 		if (same > best) best = same, all = n;
 	}
@@ -1235,7 +1245,8 @@ static void PlayStep()
 			TwTimes(tick, park, instret);
 			const double s = std::chrono::duration<double>(now - p.start).count();
 			const uint64_t ticks = TimerGameTick::counter - p.ticks;
-extern uint32_t _veh_made_wrong, _veh_synced, _veh_ahead, _veh_copies_off, _veh_copies_seen;
+extern uint32_t _veh_made_wrong, _veh_synced, _veh_ahead, _veh_copies_off, _veh_copies_seen, _veh_copies_far, _veh_region_scans, _veh_region_made;
+if (GetEnv("OPENTTD_MADE_CHECK").has_value()) PlayLine(fmt::format("openttd: copies near the views: {} looked at, {} far, {} off; {} rectangles said, {} made from far\n", _veh_copies_seen, _veh_copies_far, _veh_copies_off, _veh_region_scans, _veh_region_made));
 if (GetEnv("OPENTTD_MADE_CHECK").has_value()) PlayLine(fmt::format("openttd: vehicles listed {}, as the tick made them {}, the short look not agreeing {}; copies looked at {}, not as the vehicle {}\n", _veh_synced, _veh_ahead, _veh_made_wrong, _veh_copies_seen, _veh_copies_off));
 			PlayLine(fmt::format("openttd: play {} tick on a worker: {:.2f} ticks a second, {:.0f} ms of the worker's a tick, waiting {:.0f}% "
 					"of the time, {:.2f} MIPS in ticks; the first core waited {:.1f} ms a picture for it ({:.1f} holds, the longest {:.1f} ms)\n",
@@ -1431,7 +1442,7 @@ void VideoDriver_ShaderEmu::WorkerTick()
 		}
 	}
 	const bool pointer_waits = _have_pending && _pending.type == GR_EVENT_TYPE_MOUSE_MOTION && t - held_at < 66 * 5;
-	_se_light = (!_have_pending || pointer_waits) && !_left_button_down && !_right_button_down && TwLightPicture() && SeDirtyOnlyViews();
+	_se_light = (!_have_pending || pointer_waits) && !_left_button_down && !_right_button_down && TwLightPicture() && SeDirtyOnlyViews() && !VehViewsOut();
 	if (!_se_light) {
 		held_at = t;
 		TwHold(false);
@@ -1503,8 +1514,8 @@ void VideoDriver_ShaderEmu::WorkerTick()
 	_se_light = false;
 	TwService();
 	TwGrant();
-	/* (OPENTTD_PACE_MS: the picture's work the pace keeps to while it scrolls; only zoomed out comes near it: 90 ms and 130 differ by 6% and less, both ways up) */
-	static const uint32_t pace_ms = [] { int n = Number(getenv("OPENTTD_PACE_MS")); return n > 0 ? n : 130; }();
+	/* (OPENTTD_PACE_MS: the picture's work the pace keeps to while it scrolls; only zoomed out comes near it: 130 gave it 12.9 pictures and 4.5 ticks a second, 250 11.7 and 6.4, none at all 10.0 and 7.7, both ways up) */
+	static const uint32_t pace_ms = [] { int n = Number(getenv("OPENTTD_PACE_MS")); return n > 0 ? n : 250; }();
 	TwPace(VpTime() - work_from, pace_ms * 5, _vp_scrolls != scrolls);
 }
 

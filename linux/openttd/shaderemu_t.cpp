@@ -585,6 +585,7 @@ static void TwLetGo()
 	_tw_release.v = _tw_req.v;
 }
 
+bool VehTickHolds();
 static uint32_t _tw_ticks_seen; ///< the first core's: ticks ended when it last held the tick
 static uint32_t _tw_light_run; ///< the first core's: pictures since it last held the tick
 
@@ -601,7 +602,7 @@ static bool TwLightOff()
 bool TwLightPicture()
 {
 	static const uint32_t most = [] { const char *e = getenv("OPENTTD_LIGHT_MOST"); return e != nullptr ? static_cast<uint32_t>(atoi(e)) : 8; }();
-	if (TwLightOff() || !_tw_on || _tw_held_now || _tw_granted || _tw_where.v == 0 || _tw_ticks.v != _tw_ticks_seen) return false;
+	if (TwLightOff() || !_tw_on || _tw_held_now || _tw_granted || _tw_where.v == 0 || (VehTickHolds() && _tw_ticks.v != _tw_ticks_seen)) return false;
 	if (_tw_excl.v != _tw_excl_done.v) return false;
 	return ++_tw_light_run < most;
 }

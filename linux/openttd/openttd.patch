@@ -330,6 +330,20 @@ index d1148b7..eda444a 100644
  	uint8_t *dst = temp_dst->data;
  
  	/* Make the sprites per zoom-level */
+diff --git a/src/blitter/base.hpp b/src/blitter/base.hpp
+index 56fcf8e..5a9e408 100644
+--- a/src/blitter/base.hpp
++++ b/src/blitter/base.hpp
+@@ -78,6 +78,9 @@ public:
+ 	 * @param height the height of the buffer.
+ 	 * @param pal the palette to use.
+ 	 */
++	/** A checkered rectangle whole, if this blitter has a way (the machine GPU lists: a record a row, not a call a pixel). */
++	virtual bool DrawCheckerRows(void *video, int width, int height, int odd, PixelColour colour) { return false; }
++
+ 	virtual void DrawColourMappingRect(void *dst, int width, int height, PaletteID pal) = 0;
+ 
+ 	/**
 diff --git a/src/command.cpp b/src/command.cpp
 index ce4a948..a15a657 100644
 --- a/src/command.cpp
@@ -665,7 +679,7 @@ index c1de3c5..f0c5f07 100644
  	void UpdateData()
  	{
 diff --git a/src/gfx.cpp b/src/gfx.cpp
-index 2cae30c..ad67b4b 100644
+index 2cae30c..03d5cff 100644
 --- a/src/gfx.cpp
 +++ b/src/gfx.cpp
 @@ -29,6 +29,9 @@
@@ -731,7 +745,15 @@ index 2cae30c..ad67b4b 100644
  	if (_cursor.visible) UndrawMouseCursor();
  
  	if (_networking) NetworkUndrawChatMessage();
-@@ -1241,6 +1266,9 @@ std::unique_ptr<uint32_t[]> DrawSpriteToRgbaBuffer(SpriteID spriteId, ZoomLevel
+@@ -151,6 +176,7 @@ void GfxFillRect(int left, int top, int right, int bottom, const std::variant<Pi
+ 		case FILLRECT_CHECKER: {
+ 			uint8_t bo = (oleft - left + dpi->left + otop - top + dpi->top) & 1;
+ 			PixelColour pc = std::get<PixelColour>(colour);
++			if (blitter->DrawCheckerRows(dst, right, bottom, bo, pc)) break;
+ 			do {
+ 				for (int i = (bo ^= 1); i < right; i += 2) blitter->SetPixel(dst, i, 0, pc);
+ 				dst = blitter->MoveTo(dst, 0, 1);
+@@ -1241,6 +1267,9 @@ std::unique_ptr<uint32_t[]> DrawSpriteToRgbaBuffer(SpriteID spriteId, ZoomLevel
  
  static void GfxMainBlitterViewport(const Sprite *sprite, int x, int y, BlitterMode mode, const SubSprite *sub, SpriteID sprite_id)
  {
@@ -741,7 +763,7 @@ index 2cae30c..ad67b4b 100644
  	GfxBlitter<ZOOM_BASE, false>(sprite, x, y, mode, sub, sprite_id, _cur_dpi->zoom);
  }
  
-@@ -1320,6 +1348,9 @@ void ScreenSizeChanged()
+@@ -1320,6 +1349,9 @@ void ScreenSizeChanged()
  	_dirty_blocks_per_row = CeilDiv(_screen.width, DIRTY_BLOCK_WIDTH);
  	_dirty_blocks_per_column = CeilDiv(_screen.height, DIRTY_BLOCK_HEIGHT);
  	_dirty_blocks.resize(_dirty_blocks_per_column * _dirty_blocks_per_row);
@@ -751,7 +773,7 @@ index 2cae30c..ad67b4b 100644
  
  	/* check the dirty rect */
  	if (_invalid_rect.right >= _screen.width) _invalid_rect.right = _screen.width;
-@@ -1337,9 +1368,15 @@ void UndrawMouseCursor()
+@@ -1337,9 +1369,15 @@ void UndrawMouseCursor()
  {
  	/* Don't undraw mouse cursor if it is handled by the video driver. */
  	if (VideoDriver::GetInstance()->UseSystemCursor()) return;
@@ -767,7 +789,7 @@ index 2cae30c..ad67b4b 100644
  
  	if (_cursor.visible) {
  		Blitter *blitter = BlitterFactory::GetCurrentBlitter();
-@@ -1353,6 +1390,9 @@ void DrawMouseCursor()
+@@ -1353,6 +1391,9 @@ void DrawMouseCursor()
  {
  	/* Don't draw mouse cursor if it is handled by the video driver. */
  	if (VideoDriver::GetInstance()->UseSystemCursor()) return;
@@ -777,7 +799,7 @@ index 2cae30c..ad67b4b 100644
  
  	/* Don't draw the mouse cursor if the screen is not ready */
  	if (_screen.dst_ptr == nullptr) return;
-@@ -1361,6 +1401,9 @@ void DrawMouseCursor()
+@@ -1361,6 +1402,9 @@ void DrawMouseCursor()
  
  	/* Redraw mouse cursor but only when it's inside the window */
  	if (!_cursor.in_window) return;
@@ -787,7 +809,7 @@ index 2cae30c..ad67b4b 100644
  
  	/* Don't draw the mouse cursor if it's already drawn */
  	if (_cursor.visible) {
-@@ -1437,6 +1480,10 @@ void RedrawScreenRect(int left, int top, int right, int bottom)
+@@ -1437,6 +1481,10 @@ void RedrawScreenRect(int left, int top, int right, int bottom)
  
  	if (_networking) NetworkUndrawChatMessage();
  
@@ -798,7 +820,7 @@ index 2cae30c..ad67b4b 100644
  	DrawOverlappedWindowForAll(left, top, right, bottom);
  
  	VideoDriver::GetInstance()->MakeDirty(left, top, right - left, bottom - top);
-@@ -1449,15 +1496,50 @@ void RedrawScreenRect(int left, int top, int right, int bottom)
+@@ -1449,15 +1497,50 @@ void RedrawScreenRect(int left, int top, int right, int bottom)
   *
   * @ingroup dirty
   */
@@ -851,7 +873,7 @@ index 2cae30c..ad67b4b 100644
  
  			/* First try coalescing downwards */
  			size_t height = std::find_if_not(block + 1, last_of_column, is_dirty) - block;
-@@ -1489,11 +1571,16 @@ void DrawDirtyBlocks()
+@@ -1489,11 +1572,16 @@ void DrawDirtyBlocks()
  			bottom = std::min(_invalid_rect.bottom, bottom);
  
  			if (left < right && top < bottom) {
@@ -868,7 +890,7 @@ index 2cae30c..ad67b4b 100644
  	++_dirty_block_colour;
  	_invalid_rect.left = _screen.width;
  	_invalid_rect.top = _screen.height;
-@@ -1515,6 +1602,9 @@ void DrawDirtyBlocks()
+@@ -1515,6 +1603,9 @@ void DrawDirtyBlocks()
   */
  void AddDirtyBlock(int left, int top, int right, int bottom)
  {
@@ -878,7 +900,7 @@ index 2cae30c..ad67b4b 100644
  	if (left < 0) left = 0;
  	if (top < 0) top = 0;
  	if (right > _screen.width) right = _screen.width;
-@@ -1534,12 +1624,132 @@ void AddDirtyBlock(int left, int top, int right, int bottom)
+@@ -1534,12 +1625,132 @@ void AddDirtyBlock(int left, int top, int right, int bottom)
  
  	assert(left < right && height > 0);
  
@@ -1011,7 +1033,7 @@ index 2cae30c..ad67b4b 100644
  /**
   * This function mark the whole screen as dirty. This results in repainting
   * the whole screen. Use this with care as this function will break the
-@@ -1548,6 +1758,10 @@ void AddDirtyBlock(int left, int top, int right, int bottom)
+@@ -1548,6 +1759,10 @@ void AddDirtyBlock(int left, int top, int right, int bottom)
   */
  void MarkWholeScreenDirty()
  {
@@ -6089,11 +6111,51 @@ index ae00db2..0b114cc 100644
  	Point pt = RemapCoords2(TileX(this->xy) * TILE_SIZE, TileY(this->xy) * TILE_SIZE);
  
  	if (this->cache.sign.kdtree_valid) _viewport_sign_kdtree.Remove(ViewportSignKdtreeItem::MakeTown(this->index));
+diff --git a/src/train.h b/src/train.h
+index 0f3f954..2da5dfe 100644
+--- a/src/train.h
++++ b/src/train.h
+@@ -103,6 +103,9 @@ struct Train final : public GroundVehicle<Train, VEH_TRAIN> {
+ 
+ 	TrackBits track{};
+ 	TrainForceProceeding force_proceed{};
++#ifdef WITH_SHADEREMU
++	uint32_t delta_key = UINT32_MAX; ///< NOSAVE: what UpdateDeltaXY last went by
++#endif
+ 
+ 	/** We don't want GCC to zero our struct! It already is zeroed and has an index! */
+ 	Train() : GroundVehicleBase() {}
 diff --git a/src/train_cmd.cpp b/src/train_cmd.cpp
-index 91a1111..9d12b4f 100644
+index 91a1111..bb10f52 100644
 --- a/src/train_cmd.cpp
 +++ b/src/train_cmd.cpp
-@@ -4059,6 +4059,9 @@ static bool TrainLocoHandler(Train *v, bool mode)
+@@ -1492,6 +1492,12 @@ CommandCost CmdSellRailWagon(DoCommandFlags flags, Vehicle *t, bool sell_chain,
+ 
+ void Train::UpdateDeltaXY()
+ {
++#ifdef WITH_SHADEREMU
++	/* (a wagon's every step: as it was unless what it goes by has changed) */
++	const uint32_t key = static_cast<uint32_t>(this->direction) | (this->flags.Test(VehicleRailFlag::Flipped) ? 16u : 0u) | static_cast<uint32_t>(this->gcache.cached_veh_length) << 8 | static_cast<uint32_t>(this->engine_type.base()) << 16;
++	if (key == this->delta_key) return;
++	this->delta_key = key;
++#endif
+ 	/* Set common defaults. */
+ 	this->bounds = {{-1, -1, 0}, {3, 3, 6}, {}};
+ 
+@@ -3551,7 +3557,12 @@ bool TrainController(Train *v, Vehicle *nomove, bool reverse)
+ 
+ 		v->x_pos = gp.x;
+ 		v->y_pos = gp.y;
++#ifdef WITH_SHADEREMU
++		/* (the tile hash goes by the tile; hidden: it is listed) */
++		if (gp.new_tile != gp.old_tile || v->vehstatus.Test(VehState::Hidden)) v->UpdatePosition();
++#else
+ 		v->UpdatePosition();
++#endif
+ 
+ 		/* update the Z position of the vehicle */
+ 		int old_z = v->UpdateInclination(gp.new_tile != gp.old_tile, false);
+@@ -4059,6 +4070,9 @@ static bool TrainLocoHandler(Train *v, bool mode)
  
  			/* No more moving this tick */
  			if (j < adv_spd || v->cur_speed == 0) break;
@@ -6103,7 +6165,7 @@ index 91a1111..9d12b4f 100644
  
  			OrderType order_type = v->current_order.GetType();
  			/* Do not skip waypoints (incl. 'via' stations) when passing through at full speed. */
-@@ -4117,13 +4120,18 @@ bool Train::Tick()
+@@ -4117,13 +4131,18 @@ bool Train::Tick()
  	this->tick_counter++;
  
  	if (this->IsFrontEngine()) {
@@ -6123,10 +6185,18 @@ index 91a1111..9d12b4f 100644
  		return TrainLocoHandler(this, true);
  	} else if (this->IsFreeWagon() && this->vehstatus.Test(VehState::Crashed)) {
 diff --git a/src/vehicle.cpp b/src/vehicle.cpp
-index 91588a6..98ed998 100644
+index 91588a6..f18c98c 100644
 --- a/src/vehicle.cpp
 +++ b/src/vehicle.cpp
-@@ -60,9 +60,19 @@
+@@ -14,6 +14,7 @@
+ #include "spritecache.h"
+ #include "timetable.h"
+ #include "viewport_func.h"
++#include "window_gui.h"
+ #include "news_func.h"
+ #include "command_func.h"
+ #include "company_func.h"
+@@ -60,9 +61,19 @@
  #include "timer/timer_game_calendar.h"
  #include "timer/timer_game_economy.h"
  #include "timer/timer_game_tick.h"
@@ -6146,7 +6216,7 @@ index 91588a6..98ed998 100644
  #include "safeguards.h"
  
  /* Number of bits in the hash to use from each vehicle coord */
-@@ -107,6 +117,67 @@ VehiclePool _vehicle_pool("Vehicle");
+@@ -107,6 +118,67 @@ VehiclePool _vehicle_pool("Vehicle");
  INSTANTIATE_POOL_METHODS(Vehicle)
  
  
@@ -6214,7 +6284,7 @@ index 91588a6..98ed998 100644
  /**
   * Determine shared bounds of all sprites.
   * @param[out] bounds Shared bounds.
-@@ -115,7 +186,12 @@ void VehicleSpriteSeq::GetBounds(Rect *bounds) const
+@@ -115,7 +187,12 @@ void VehicleSpriteSeq::GetBounds(Rect *bounds) const
  {
  	bounds->left = bounds->top = bounds->right = bounds->bottom = 0;
  	for (uint i = 0; i < this->count; ++i) {
@@ -6227,7 +6297,7 @@ index 91588a6..98ed998 100644
  		if (i == 0) {
  			bounds->left = spr->x_offs;
  			bounds->top  = spr->y_offs;
-@@ -656,7 +732,246 @@ void ResetVehicleHash()
+@@ -656,7 +733,369 @@ void ResetVehicleHash()
  void ResetVehicleColourMap()
  {
  	for (Vehicle *v : Vehicle::Iterate()) { v->colourmap = PAL_NONE; }
@@ -6253,6 +6323,9 @@ index 91588a6..98ed998 100644
 +
 +void VehiclesChangedAll() { _veh_all = true; }
 +
++/* (only ever set while the tick runs: its own texels. A hold's look through the views for a sprite to make is 12% of a zoomed-out first core, for none) */
++static struct alignas(16) { bool yes = true; char pad[15]; } _veh_revalidate_any;
++
 +static void VehicleDrawMake(const Vehicle *v, Vehicle::Drawn &d)
 +{
 +	d.seq.count = v->sprite_cache.sprite_seq.count;
@@ -6270,6 +6343,7 @@ index 91588a6..98ed998 100644
 +		if (to != TO_INVALID) d.transparency = static_cast<uint8_t>(to);
 +	}
 +	d.revalidate = v->sprite_cache.revalidate_before_draw;
++	if (d.revalidate) _veh_revalidate_any.yes = true;
 +}
 +
 +static void VehicleDrawRefresh(Vehicle *v) { VehicleDrawMake(v, v->drawn); }
@@ -6295,7 +6369,7 @@ index 91588a6..98ed998 100644
 +};
 +static VehReady _veh_ready[2];
 +static std::vector<Vehicle *> _veh_free_next; ///< out of the hash at the last sync: freed at the next, when no list names them
-+uint32_t _veh_copies_off, _veh_copies_seen;
++uint32_t _veh_copies_off, _veh_copies_seen, _veh_copies_far;
 +uint32_t _veh_synced, _veh_ahead; ///< vehicles made anew at syncs, and of them from what the tick made (OPENTTD_PICTURE_LOG)
 +
 +static void VehicleViewportNow(Vehicle *v, bool dirty);
@@ -6339,6 +6413,7 @@ index 91588a6..98ed998 100644
 +	Vehicle::Made &m = v->tw_made[_veh_made_slot];
 +	if (m.round != _veh_round) m.round = _veh_round, m.listed = false;
 +	m.ok = false;
++	v->made_failed = true;
 +	extern bool _draw_bounding_boxes;
 +	if (_draw_bounding_boxes || v->vehstatus.Test(VehState::DefaultPalette) && v->colourmap == PAL_NONE) return;
 +	Rect r;
@@ -6350,12 +6425,22 @@ index 91588a6..98ed998 100644
 +	m.status = v->vehstatus;
 +	m.told = false;
 +	m.ok = true;
++	v->made_failed = false;
 +}
 +
 +/* A wagon moves more than a step a tick, and only the last step's copy is read: a copy is made when the tick ends, or when it is held (a copy a step
 + * was 12% of a tick). */
++/* The tick says itself that a side of copies is ready: it turns to the other side at its end if the first core has applied the last, so a tick's end
++ * needs no hold (docs/games/openttd.md, "A tick's end without a hold"). Stored last, read first. OPENTTD_TICK_HOLD=1: a hold at every tick's end, as before. */
++static volatile uint32_t _veh_turned = 0;  ///< by the tick, or the sync with the tick held
++static volatile uint32_t _veh_applied = 0; ///< by the first core
++/* (zoomed out a vehicle moves a pixel in several ticks and every move is parts drawn again: its copies at most this often, in VpTime's 5 kHz) */
++static volatile uint32_t _veh_turn_gap = 0; ///< by the first core
++static uint32_t _veh_turned_at = 0; ///< by the tick
 +static std::vector<VehicleID> _veh_make_later;
 +static uint32_t _veh_make_stamp = 1;
++
++static bool VehInRegionTick(const Vehicle *v);
 +
 +static inline void VehicleMakeLater(const Vehicle *v)
 +{
@@ -6363,6 +6448,8 @@ index 91588a6..98ed998 100644
 +	v->made_stamp = _veh_make_stamp;
 +	_veh_make_later.push_back(v->index);
 +}
++
++bool VehTickHolds() { static const bool h = GetEnv("OPENTTD_TICK_HOLD").has_value(); return h; }
 +
 +/** On the tick's worker, the tick ended or held. */
 +void VehiclesMakeLater(bool held)
@@ -6373,6 +6460,7 @@ index 91588a6..98ed998 100644
 +	for (VehicleID id : _veh_make_later) {
 +		Vehicle *v = Vehicle::GetIfValid(id);
 +		if (v == nullptr) continue;
++		if (!VehInRegionTick(v)) continue;
 +		VehicleMakeAhead(v);
 +		Vehicle::Made &m = v->tw_made[_veh_made_slot];
 +		if (!m.ok) {
@@ -6384,9 +6472,90 @@ index 91588a6..98ed998 100644
 +	}
 +	_veh_make_later.clear();
 +	_veh_make_stamp++;
++	if (!held && !at_once && !VehTickHolds() && _veh_turned == _veh_applied && !_veh_ready[_veh_made_slot].list.empty() &&
++			(_veh_turn_gap == 0 || static_cast<int32_t>(VpTime() - _veh_turned_at) >= static_cast<int32_t>(_veh_turn_gap))) {
++		_veh_turned_at = VpTime();
++		_veh_made_slot ^= 1;
++		_veh_round++;
++		_veh_turned = _veh_turned + 1;
++	}
 +}
 +
 +static void VehicleViewportNow(Vehicle *v, bool dirty);
++
++/*
++ * Only vehicles near a view are made (docs/games/openttd.md, "Copies near the views"): the first core says, the tick held, which rectangles those are;
++ * the tick makes no copy of a vehicle outside them and marks it far, and a sync that finds a view has come near a far vehicle's place makes it then.
++ */
++static constexpr int VEH_REGIONS = 6;
++static struct alignas(16) { Rect rect[VEH_REGIONS]; int n = 0; } _veh_region; ///< n 0: every vehicle (none said yet, or OPENTTD_VEH_ALL=1)
++
++static inline bool VehInRegion(int x, int y, int z)
++{
++	if (_veh_region.n == 0) return true;
++	const Point p = RemapCoords(x, y, z);
++	for (int i = 0; i < _veh_region.n; i++) {
++		const Rect &r = _veh_region.rect[i];
++		if (p.x >= r.left && p.x <= r.right && p.y >= r.top && p.y <= r.bottom) return true;
++	}
++	return false;
++}
++
++/** Whether every view lies in a rectangle said, within \p inside pixels of its edge. */
++static bool VehViewsIn(int inside)
++{
++	for (const Window *w : Window::Iterate()) {
++		if (w->viewport == nullptr || w->IsShaded()) continue;
++		const Viewport &vp = *w->viewport;
++		const int m = ScaleByZoom(inside, vp.zoom);
++		bool in = false;
++		for (int i = 0; i < _veh_region.n && !in; i++) {
++			const Rect &r = _veh_region.rect[i];
++			in = vp.virtual_left - m >= r.left && vp.virtual_left + vp.virtual_width + m <= r.right && vp.virtual_top - m >= r.top && vp.virtual_top + vp.virtual_height + m <= r.bottom;
++		}
++		if (!in) return false;
++	}
++	return true;
++}
++
++static const bool _veh_all_always = GetEnv("OPENTTD_VEH_ALL").has_value();
++
++/** A picture that lets the tick run must not show a view past what was said (the tick is held for it instead). */
++bool VehViewsOut() { return !_veh_all_always && !VehViewsIn(0); }
++
++uint32_t _veh_region_scans, _veh_region_made;
++
++/** The first core, the tick held: the rectangles said anew if a view has come within half the margin of their edge, and far vehicles now near one made. */
++static void VehRegionUpdate()
++{
++	static constexpr int MARGIN = 512; /* (pixels: a view scrolled this far between holds, at most eight pictures, still has its vehicles) */
++	if (_veh_all_always || (_veh_region.n != 0 && VehViewsIn(MARGIN / 2))) return;
++	int n = 0;
++	for (const Window *w : Window::Iterate()) {
++		if (w->viewport == nullptr || w->IsShaded()) continue;
++		const Viewport &vp = *w->viewport;
++		const int m = ScaleByZoom(MARGIN, vp.zoom);
++		const Rect r{vp.virtual_left - m, vp.virtual_top - m, vp.virtual_left + vp.virtual_width + m, vp.virtual_top + vp.virtual_height + m};
++		if (n < VEH_REGIONS) {
++			_veh_region.rect[n++] = r;
++		} else {
++			Rect &q = _veh_region.rect[VEH_REGIONS - 1];
++			q = {std::min(q.left, r.left), std::min(q.top, r.top), std::max(q.right, r.right), std::max(q.bottom, r.bottom)};
++		}
++	}
++	if (n == 0) return;
++	_veh_region.n = n;
++	_veh_region_scans++;
++	for (Vehicle *v : Vehicle::Iterate()) {
++		if (!v->veh_far) continue;
++		if (!VehInRegion(v->x_pos, v->y_pos, v->z_pos) && !VehInRegion(v->drawn.x, v->drawn.y, v->drawn.z)) continue;
++		v->veh_far = false;
++		v->tw_made[0].ok = v->tw_made[1].ok = false;
++		VehicleViewportNow(v, true);
++		VehicleDrawRefresh(v);
++		_veh_region_made++;
++	}
++}
 +
 +/**
 + * The first core: the hash and the dirty blocks and the drawn copy of the vehicles that are as the tick made them. The tick may be running:
@@ -6394,9 +6563,16 @@ index 91588a6..98ed998 100644
 + */
 +void VehiclesApply()
 +{
++	static const uint32_t gap_ms = [] { auto e = GetEnv("OPENTTD_ZOOM_COPY_MS"); if (!e.has_value()) return 200u; uint32_t n = 0; for (char c : *e) n = n * 10 + (c - 48); return n; }();
++	bool all_far_out = true;
++	for (const Window *w : Window::Iterate()) {
++		if (w->viewport != nullptr && !w->IsShaded() && w->viewport->zoom < ZoomLevel::Out4x) { all_far_out = false; break; }
++	}
++	_veh_turn_gap = all_far_out ? gap_ms * 5 : 0;
++	const uint32_t turned = _veh_turned;
++	if (turned == _veh_applied) return;
 +	const uint32_t slot = _veh_made_slot ^ 1;
 +	std::vector<Vehicle *> &ready = _veh_ready[slot].list;
-+	if (ready.empty()) return;
 +	for (Vehicle *v : ready) {
 +		const Vehicle::Made &m = v->tw_made[slot];
 +		if (!m.ok) continue;
@@ -6404,23 +6580,37 @@ index 91588a6..98ed998 100644
 +		DrawnCopy(v->drawn, m.drawn);
 +	}
 +	ready.clear();
++	_veh_applied = turned;
++}
++
++static bool VehInRegionTick(const Vehicle *v)
++{
++	if (VehInRegion(v->x_pos, v->y_pos, v->z_pos)) {
++		if (v->veh_far) v->veh_far = false;
++		return true;
++	}
++	v->veh_far = true;
++	return false;
 +}
 +
 +/** The first core, the tick waiting or none on a worker: the viewports made as the vehicles listed are now, or as the tick made them, for VehiclesApply. */
 +void VehiclesSync(bool viewports)
 +{
++	if (viewports) VehRegionUpdate();
 +	/* (nothing since the sync of the wait that began this hold: what that sync left is still applied with the tick running) */
 +	if (_veh_changed.empty() && _veh_dead.empty() && !_veh_all && _veh_ready[_veh_made_slot].list.empty()) return;
 +	VehiclesApply();
 +	/* OPENTTD_MADE_CHECK=1: the tick held, every copy is as its vehicle unless the tick moved it since it last made one (and that one is listed for this sync) */
 +	static const bool copies_check = GetEnv("OPENTTD_MADE_CHECK").has_value();
-+	if (copies_check && TickElsewhere()) {
++	if (copies_check && TickElsewhere() && _veh_round > 2) {
++		/* (none skipped but for how far a vehicle goes between a copy and a sync, a tick's worth: every vehicle whose place or copy is near a view) */
 +		for (const Vehicle *v : Vehicle::Iterate()) {
-+			const Vehicle::Made &m = v->tw_made[_veh_made_slot];
-+			if (v->made_stamp == _veh_make_stamp || (m.round == _veh_round && m.ok && m.listed)) continue;
-+			if (v->vehstatus.Test(VehState::Hidden) && v->drawn.hidden) continue;
-+			if (v->x_pos != v->drawn.x || v->y_pos != v->drawn.y || v->z_pos != v->drawn.z || v->vehstatus.Test(VehState::Hidden) != v->drawn.hidden) _veh_copies_off++;
 +			_veh_copies_seen++;
++			/* (far: it is made when the tick next ends if it has come near, so the place it was at then is outside) */
++			if (v->veh_far) { _veh_copies_far++; continue; }
++			if (!VehInRegion(v->x_pos, v->y_pos, v->z_pos)) continue;
++			if (v->vehstatus.Test(VehState::Hidden) != v->drawn.hidden && v->made_stamp != _veh_make_stamp) _veh_copies_off++;
++			else if (std::abs(v->x_pos - v->drawn.x) + std::abs(v->y_pos - v->drawn.y) > 96) _veh_copies_off++;
 +		}
 +	}
 +	for (Vehicle *v : _veh_free_next) free(v);
@@ -6435,12 +6625,15 @@ index 91588a6..98ed998 100644
 +	const uint32_t slot = _veh_made_slot;
 +	_veh_made_slot ^= 1; /* (what the tick stored so far is read now, and until VehiclesApply) */
 +	_veh_round++;
++	_veh_turned = _veh_turned + 1;
 +	if (_veh_all) {
 +		_veh_all = false;
 +		_veh_changed.clear();
 +		_veh_ready[0].list.clear();
 +		_veh_ready[1].list.clear();
++		_veh_applied = _veh_turned;
 +		for (Vehicle *v : Vehicle::Iterate()) {
++			v->veh_far = false;
 +			v->tw_made[0].ok = v->tw_made[1].ok = false;
 +			if (viewports) VehicleViewportNow(v, true);
 +			VehicleDrawRefresh(v);
@@ -6458,7 +6651,7 @@ index 91588a6..98ed998 100644
 +		_veh_synced++;
 +		/* (listed because the tick could not make it, a sprite whose bounds no core has kept yet, it must be made here: the tick never can, and a vehicle
 +		 * that moves every tick would stay where its copy was, in a depot, hidden) */
-+		if (later && v->made_stamp == _veh_make_stamp && v->tw_made[slot].ok) continue;
++		if (later && v->made_stamp == _veh_make_stamp && !v->made_failed) continue;
 +		if (viewports && VehicleAsMade(v)) {
 +			_veh_ahead++;
 +			continue;
@@ -6474,7 +6667,7 @@ index 91588a6..98ed998 100644
  
  /**
   * List of vehicles that should check for autoreplace this tick.
-@@ -867,6 +1182,9 @@ Vehicle::~Vehicle()
+@@ -867,6 +1306,9 @@ Vehicle::~Vehicle()
  		return;
  	}
  
@@ -6484,7 +6677,7 @@ index 91588a6..98ed998 100644
  	/* sometimes, eg. for disaster vehicles, when company bankrupts, when removing crashed/flooded vehicles,
  	 * it may happen that vehicle chain is deleted when visible */
  	if (!this->vehstatus.Test(VehState::Hidden)) this->MarkAllViewportsDirty();
-@@ -877,6 +1195,20 @@ Vehicle::~Vehicle()
+@@ -877,6 +1319,20 @@ Vehicle::~Vehicle()
  	delete v;
  
  	UpdateVehicleTileHash(this, true);
@@ -6505,7 +6698,7 @@ index 91588a6..98ed998 100644
  	UpdateVehicleViewportHash(this, INVALID_COORD, 0, this->sprite_cache.old_coord.left, this->sprite_cache.old_coord.top);
  	if (this->type != VEH_EFFECT) {
  		DeleteVehicleNews(this->index);
-@@ -959,15 +1291,34 @@ void CallVehicleTicks()
+@@ -959,15 +1415,34 @@ void CallVehicleTicks()
  
  	{
  		PerformanceMeasurer framerate(PFE_GL_ECONOMY);
@@ -6541,7 +6734,7 @@ index 91588a6..98ed998 100644
  
  		/* Vehicle could be deleted in this tick */
  		if (!v->Tick()) {
-@@ -1039,6 +1390,11 @@ void CallVehicleTicks()
+@@ -1039,6 +1514,11 @@ void CallVehicleTicks()
  		}
  	}
  
@@ -6553,7 +6746,7 @@ index 91588a6..98ed998 100644
  	Backup<CompanyID> cur_company(_current_company);
  	for (auto &it : _vehicles_to_autoreplace) {
  		Vehicle *v = Vehicle::Get(it.first);
-@@ -1089,8 +1445,61 @@ void CallVehicleTicks()
+@@ -1089,8 +1569,61 @@ void CallVehicleTicks()
   * Add vehicle sprite for drawing to the screen.
   * @param v Vehicle to draw.
   */
@@ -6615,7 +6808,7 @@ index 91588a6..98ed998 100644
  	PaletteID pal = PAL_NONE;
  
  	if (v->vehstatus.Test(VehState::DefaultPalette)) pal = v->vehstatus.Test(VehState::Crashed) ? PALETTE_CRASH : GetVehiclePalette(v);
-@@ -1118,8 +1527,23 @@ static void DoDrawVehicle(const Vehicle *v)
+@@ -1118,8 +1651,30 @@ static void DoDrawVehicle(const Vehicle *v)
   * Add the vehicle sprites that should be drawn at a part of the screen.
   * @param dpi Rectangle being drawn.
   */
@@ -6623,6 +6816,13 @@ index 91588a6..98ed998 100644
 +static bool _vp_revalidate_only; ///< ViewportAddVehicles only makes the sprites that change when drawn
 +
 +/** What the vehicles in dpi keep of their drawing (sprites made anew, colour maps), made now by the first core. */
++bool VehiclesRevalidateWanted()
++{
++	const bool any = _veh_revalidate_any.yes;
++	_veh_revalidate_any.yes = false;
++	return any;
++}
++
 +void ViewportRevalidateVehicles(DrawPixelInfo *dpi)
 +{
 +	_vp_revalidate_only = true;
@@ -6639,7 +6839,7 @@ index 91588a6..98ed998 100644
  	/* The bounding rectangle */
  	const int l = dpi->left;
  	const int r = dpi->left + dpi->width;
-@@ -1157,7 +1581,11 @@ void ViewportAddVehicles(DrawPixelInfo *dpi)
+@@ -1157,7 +1712,11 @@ void ViewportAddVehicles(DrawPixelInfo *dpi)
  
  			while (v != nullptr) {
  
@@ -6651,7 +6851,7 @@ index 91588a6..98ed998 100644
  					l <= v->coord.right + xb &&
  					t <= v->coord.bottom + yb &&
  					r >= v->coord.left - xb &&
-@@ -1167,7 +1595,13 @@ void ViewportAddVehicles(DrawPixelInfo *dpi)
+@@ -1167,7 +1726,13 @@ void ViewportAddVehicles(DrawPixelInfo *dpi)
  					 * This vehicle can potentially be drawn as part of this viewport and
  					 * needs to be revalidated, as the sprite may not be correct.
  					 */
@@ -6665,7 +6865,7 @@ index 91588a6..98ed998 100644
  						VehicleSpriteSeq seq;
  						v->GetImage(v->direction, EIT_ON_MAP, &seq);
  
-@@ -1187,12 +1621,32 @@ void ViewportAddVehicles(DrawPixelInfo *dpi)
+@@ -1187,12 +1752,32 @@ void ViewportAddVehicles(DrawPixelInfo *dpi)
  						}
  
  						v->sprite_cache.revalidate_before_draw = false;
@@ -6701,7 +6901,7 @@ index 91588a6..98ed998 100644
  				}
  
  				v = v->hash_viewport_next;
-@@ -1662,16 +2116,38 @@ void VehicleEnterDepot(Vehicle *v)
+@@ -1662,16 +2247,38 @@ void VehicleEnterDepot(Vehicle *v)
  void Vehicle::UpdatePosition()
  {
  	UpdateVehicleTileHash(this, false);
@@ -6741,7 +6941,7 @@ index 91588a6..98ed998 100644
  
  	/* z-bounds are not used. */
  	Point pt = RemapCoords(this->x_pos + this->bounds.origin.x + this->bounds.offset.x, this->y_pos + this->bounds.origin.y + this->bounds.offset.y, this->z_pos);
-@@ -1690,6 +2166,9 @@ void Vehicle::UpdateBoundingBoxCoordinates(bool update_cache) const
+@@ -1690,6 +2297,9 @@ void Vehicle::UpdateBoundingBoxCoordinates(bool update_cache) const
  		new_coord.top    = std::min(new_coord.top, RemapCoords(x, y, z + bounds.extent.z).y);
  		new_coord.bottom = std::max(new_coord.bottom, RemapCoords(x + bounds.extent.x, y + bounds.extent.y, z).y + 1);
  	}
@@ -6751,7 +6951,7 @@ index 91588a6..98ed998 100644
  
  	if (update_cache) {
  		/*
-@@ -1713,12 +2192,115 @@ void Vehicle::UpdateBoundingBoxCoordinates(bool update_cache) const
+@@ -1713,12 +2323,115 @@ void Vehicle::UpdateBoundingBoxCoordinates(bool update_cache) const
   * Update the vehicle on the viewport, updating the right hash and setting the new coordinates.
   * @param dirty Mark the (new and old) coordinates of the vehicle as dirty.
   */
@@ -6766,7 +6966,7 @@ index 91588a6..98ed998 100644
 +
 +static void VehicleViewportNow(Vehicle *v, bool dirty);
 +
- void Vehicle::UpdateViewport(bool dirty)
++void Vehicle::UpdateViewport(bool dirty)
 +{
 +	if (TickOnWorker()) {
 +		VehicleMakeLater(this);
@@ -6844,7 +7044,7 @@ index 91588a6..98ed998 100644
 +
 +void Vehicle::UpdateViewportNow(bool dirty, const Rect *made)
 +#else
-+void Vehicle::UpdateViewport(bool dirty)
+ void Vehicle::UpdateViewport(bool dirty)
 +#endif
  {
  	/* If the existing cache is invalid we should ignore it, as it will be set to the current coords by UpdateBoundingBoxCoordinates */
@@ -6867,7 +7067,7 @@ index 91588a6..98ed998 100644
  
  	if (ignore_cached_coords) {
  		UpdateVehicleViewportHash(this, this->coord.left, this->coord.top, INVALID_COORD, INVALID_COORD);
-@@ -1726,9 +2308,19 @@ void Vehicle::UpdateViewport(bool dirty)
+@@ -1726,9 +2439,19 @@ void Vehicle::UpdateViewport(bool dirty)
  		UpdateVehicleViewportHash(this, this->coord.left, this->coord.top, this->sprite_cache.old_coord.left, this->sprite_cache.old_coord.top);
  	}
  
@@ -6887,7 +7087,7 @@ index 91588a6..98ed998 100644
  		} else {
  			this->sprite_cache.is_viewport_candidate = ::MarkAllViewportsDirty(
  				std::min(this->sprite_cache.old_coord.left, this->coord.left),
-@@ -1754,6 +2346,11 @@ void Vehicle::UpdatePositionAndViewport()
+@@ -1754,6 +2477,11 @@ void Vehicle::UpdatePositionAndViewport()
   */
  bool Vehicle::MarkAllViewportsDirty() const
  {
@@ -6900,7 +7100,7 @@ index 91588a6..98ed998 100644
  }
  
 diff --git a/src/vehicle_base.h b/src/vehicle_base.h
-index 7edf724..de46941 100644
+index 7edf724..ae583f3 100644
 --- a/src/vehicle_base.h
 +++ b/src/vehicle_base.h
 @@ -157,10 +157,30 @@ struct VehicleSpriteSeq {
@@ -6934,7 +7134,7 @@ index 7edf724..de46941 100644
  
  /** A vehicle pool for a little over 1 million vehicles. */
  typedef Pool<Vehicle, VehicleID, 512> VehiclePool;
-@@ -237,17 +257,40 @@ public:
+@@ -237,17 +257,42 @@ public:
  
  	CargoPayment *cargo_payment = nullptr; ///< The cargo payment we're currently in
  
@@ -6965,6 +7165,8 @@ index 7edf724..de46941 100644
 +		bool hidden = true, shadow = false, crashed = false, revalidate = false;
 +	} drawn;
 +	mutable uint32_t drawn_epoch = 0; ///< NOSAVE: the sync it was last listed for (VehicleChanged)
++	mutable bool made_failed = false; ///< NOSAVE: the tick could not make its copy (bounds not kept): the sync must
++	mutable bool veh_far = false; ///< NOSAVE: its copy was left where it was: it was outside all the views' rectangles when the tick last moved it
 +	mutable uint32_t made_stamp = 0; ///< NOSAVE: the tick's: the round of makes it was last listed for (VehiclesMakeLater)
 +	/** NOSAVE: its copy and its rectangle as the tick on its worker made them when it last moved, used by the sync if it is as it was then */
 +	struct alignas(16) Made {
@@ -6980,7 +7182,7 @@ index 7edf724..de46941 100644
  	/* Related to age and service time */
  	TimerGameCalendar::Year build_year{}; ///< Year the vehicle has been built.
  	TimerGameCalendar::Date age{}; ///< Age in calendar days.
-@@ -781,7 +824,12 @@ public:
+@@ -781,7 +826,12 @@ public:
  
  	void UpdatePosition();
  	void UpdateViewport(bool dirty);
@@ -6994,7 +7196,7 @@ index 7edf724..de46941 100644
  	void UpdatePositionAndViewport();
  	bool MarkAllViewportsDirty() const;
  
-@@ -1171,7 +1219,15 @@ struct SpecializedVehicle : public Vehicle {
+@@ -1171,7 +1221,15 @@ struct SpecializedVehicle : public Vehicle {
  		 * to resolve a new sprite.
  		 */
  		if (this->direction != this->sprite_cache.last_direction || this->sprite_cache.is_viewport_candidate) {
@@ -7212,7 +7414,7 @@ index 7aafcbd..2b5a339 100644
  };
  
 diff --git a/src/viewport.cpp b/src/viewport.cpp
-index 6427a14..e8c0b62 100644
+index 6427a14..3362c06 100644
 --- a/src/viewport.cpp
 +++ b/src/viewport.cpp
 @@ -99,6 +99,11 @@
@@ -9102,7 +9304,7 @@ index 6427a14..e8c0b62 100644
 +		const Vehicle *veh = Vehicle::GetIfValid(vp.follow_vehicle);
 +		if (veh == nullptr) return; /* (a picture the tick is not held for: it is being deleted) */
 +		/* (where it is drawn, in every picture: a held one in the middle of a tick has the vehicle further on than its copy) */
-+		Point pt = MapXYZToViewport(vp, veh->drawn.x, veh->drawn.y, veh->drawn.z);
++		Point pt = veh->veh_far ? MapXYZToViewport(vp, veh->x_pos, veh->y_pos, veh->z_pos) : MapXYZToViewport(vp, veh->drawn.x, veh->drawn.y, veh->drawn.z);
 +#else
  		const Vehicle *veh = Vehicle::Get(vp.follow_vehicle);
  		Point pt = MapXYZToViewport(vp, veh->x_pos, veh->y_pos, veh->z_pos);
@@ -9350,7 +9552,7 @@ index daf0172..1a64cdb 100644
  
  /**
 diff --git a/src/window.cpp b/src/window.cpp
-index ea6dc5b..5fc66f4 100644
+index ea6dc5b..fc1f6fc 100644
 --- a/src/window.cpp
 +++ b/src/window.cpp
 @@ -42,6 +42,9 @@
@@ -9542,7 +9744,7 @@ index ea6dc5b..5fc66f4 100644
  	if (allow_resize) {
  		def_width  = std::max(def_width,  this->width); // Don't allow default size to be smaller than smallest size
  		def_height = std::max(def_height, this->height);
-@@ -3124,6 +3202,48 @@ static const IntervalTimer<TimerWindow> white_border_interval(std::chrono::milli
+@@ -3124,6 +3202,58 @@ static const IntervalTimer<TimerWindow> white_border_interval(std::chrono::milli
  /**
   * Update the continuously changing contents of the windows, such as the viewports
   */
@@ -9575,6 +9777,16 @@ index ea6dc5b..5fc66f4 100644
 +	}
 +	/* (what a vehicle makes when first drawn, for all that the views show: the drawing that follows lets the tick go) */
 +	extern void ViewportRevalidateVehicles(DrawPixelInfo *dpi);
++	extern bool VehiclesRevalidateWanted();
++	/* (none new, and no view has moved to where one was left) */
++	static uint32_t views_were = 0;
++	uint32_t views = 0;
++	for (Window *w : Window::Iterate()) {
++		if (w->viewport != nullptr && !w->IsShaded()) views = views * 31 + w->viewport->virtual_left + w->viewport->virtual_top * 7 + w->viewport->virtual_width * 13 + w->viewport->virtual_height * 17;
++	}
++	const bool wanted = VehiclesRevalidateWanted();
++	if (!wanted && views == views_were) return;
++	views_were = views;
 +	for (Window *w : Window::Iterate()) {
 +		if (w->viewport == nullptr || w->IsShaded()) continue;
 +		DrawPixelInfo whole = {};
@@ -9591,7 +9803,7 @@ index ea6dc5b..5fc66f4 100644
  void UpdateWindows()
  {
  	static auto last_time = std::chrono::steady_clock::now();
-@@ -3139,8 +3259,21 @@ void UpdateWindows()
+@@ -3139,8 +3269,21 @@ void UpdateWindows()
  
  	ProcessPendingPerformanceMeasurements();
  
@@ -9613,7 +9825,7 @@ index ea6dc5b..5fc66f4 100644
  
  	/* Process invalidations before anything else. */
  	for (Window *w : Window::Iterate()) {
-@@ -3153,12 +3286,23 @@ void UpdateWindows()
+@@ -3153,12 +3296,23 @@ void UpdateWindows()
  	 * But still empty the invalidation queues above. */
  	if (_network_dedicated) return;
  
@@ -9637,7 +9849,7 @@ index ea6dc5b..5fc66f4 100644
  	NetworkDrawChatMessage();
  	/* Redraw mouse cursor in case it was hidden */
  	DrawMouseCursor();
-@@ -3178,6 +3322,9 @@ void UpdateWindows()
+@@ -3178,6 +3332,9 @@ void UpdateWindows()
   */
  void SetWindowDirty(WindowClass cls, WindowNumber number)
  {
@@ -9647,7 +9859,7 @@ index ea6dc5b..5fc66f4 100644
  	for (const Window *w : Window::Iterate()) {
  		if (w->window_class == cls && w->window_number == number) w->SetDirty();
  	}
-@@ -3191,6 +3338,9 @@ void SetWindowDirty(WindowClass cls, WindowNumber number)
+@@ -3191,6 +3348,9 @@ void SetWindowDirty(WindowClass cls, WindowNumber number)
   */
  void SetWindowWidgetDirty(WindowClass cls, WindowNumber number, WidgetID widget_index)
  {
@@ -9657,7 +9869,7 @@ index ea6dc5b..5fc66f4 100644
  	for (const Window *w : Window::Iterate()) {
  		if (w->window_class == cls && w->window_number == number) {
  			w->SetWidgetDirty(widget_index);
-@@ -3204,6 +3354,9 @@ void SetWindowWidgetDirty(WindowClass cls, WindowNumber number, WidgetID widget_
+@@ -3204,6 +3364,9 @@ void SetWindowWidgetDirty(WindowClass cls, WindowNumber number, WidgetID widget_
   */
  void SetWindowClassesDirty(WindowClass cls)
  {
@@ -9667,7 +9879,7 @@ index ea6dc5b..5fc66f4 100644
  	for (const Window *w : Window::Iterate()) {
  		if (w->window_class == cls) w->SetDirty();
  	}
-@@ -3236,6 +3389,9 @@ void Window::ProcessScheduledResize()
+@@ -3236,6 +3399,9 @@ void Window::ProcessScheduledResize()
   */
  void Window::InvalidateData(int data, bool gui_scope)
  {
@@ -9677,7 +9889,7 @@ index ea6dc5b..5fc66f4 100644
  	this->SetDirty();
  	if (!gui_scope) {
  		/* Schedule GUI-scope invalidation for next redraw. */
-@@ -3296,6 +3452,9 @@ void Window::ProcessHighlightedInvalidations()
+@@ -3296,6 +3462,9 @@ void Window::ProcessHighlightedInvalidations()
   */
  void InvalidateWindowData(WindowClass cls, WindowNumber number, int data, bool gui_scope)
  {
@@ -9687,7 +9899,7 @@ index ea6dc5b..5fc66f4 100644
  	for (Window *w : Window::Iterate()) {
  		if (w->window_class == cls && w->window_number == number) {
  			w->InvalidateData(data, gui_scope);
-@@ -3313,6 +3472,9 @@ void InvalidateWindowData(WindowClass cls, WindowNumber number, int data, bool g
+@@ -3313,6 +3482,9 @@ void InvalidateWindowData(WindowClass cls, WindowNumber number, int data, bool g
   */
  void InvalidateWindowClassesData(WindowClass cls, int data, bool gui_scope)
  {
@@ -9697,7 +9909,7 @@ index ea6dc5b..5fc66f4 100644
  	for (Window *w : Window::Iterate()) {
  		if (w->window_class == cls) {
  			w->InvalidateData(data, gui_scope);
-@@ -3512,6 +3674,9 @@ int PositionNetworkChatWindow(Window *w)
+@@ -3512,6 +3684,9 @@ int PositionNetworkChatWindow(Window *w)
   */
  void ChangeVehicleViewports(VehicleID from_index, VehicleID to_index)
  {

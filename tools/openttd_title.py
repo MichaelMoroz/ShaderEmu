@@ -6,6 +6,7 @@ no list and OPENTTD_CHECK looks at no title: docs/games/openttd.md, "The picture
 """
 import argparse
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -37,12 +38,34 @@ def shares(p):
     return yellow.mean(), brown.mean(), navy.mean()
 
 
+def drive(a, d):
+    """openttd-depot's scene with the lists drawn: test_all's rvc_cpu draws none."""
+    log = os.path.join(d, 'drive.log')
+    if os.path.exists(log):
+        os.remove(log)
+    cmd = "nano-X -p & sleep 2; OPENTTD_MADE_CHECK=1 OPENTTD_PLAY=1 OPENTTD_PLAY_PART=window OPENTTD_PLAY_SCENE=depot openttd -g /usr/share/openttd/busy.sav; echo LX-''DONE\n"
+    subprocess.run(['pwsh', '-NoProfile', '-File', os.path.join(ROOT, 'tools', 'gpu_queue.ps1'), a.harness, '--cpu', '--warp', '--image', a.image, '--no-viz', '--no-stdin',
+                    '--seconds', '500', '--uart-log', log, '--expect', '/ # ', '--send', cmd, '--until', 'LX-DONE'], cwd=ROOT, capture_output=True, env=dict(os.environ, RVC_THREADS='8'))
+    bad = True
+    lines = [l.strip() for l in open(log, encoding='latin-1') if 'depot drive' in l and not l.startswith('/')]
+    stages = {'out of the depot': r'[2-5]\d\d', 'back to a depot': r'[1-5]\d\d', 'on the road': r'[23]\d\d'}
+    for l in lines[-3:]:
+        print(l)
+    if len(lines) >= 3:
+        bad = False
+        for l, (name, shown) in zip(lines[-3:], stages.items()):
+            bad |= not re.search(name + r': \d+ pictures, moved \d{2,}, [0-2] off the vehicle .*, shown ' + shown + ' and not seen ([0-9]|1[0-9])$', l)
+    print('drive with lists drawn:', 'FAIL' if bad else 'PASS')
+    return bad
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--harness', default=os.path.join(ROOT, 'bin', 'rvc_harness.exe'))
     ap.add_argument('--image', default=os.path.join(ROOT, 'build', 'images', 'nommu'))
     ap.add_argument('--sleep', type=int, default=60)
     ap.add_argument('--keep')
+    ap.add_argument('--no-drive', action='store_true')
     a = ap.parse_args()
     d = a.keep or tempfile.mkdtemp()
     os.makedirs(d, exist_ok=True)
@@ -57,6 +80,8 @@ def main():
         bad |= y < 0.4 or b < 0.03 or n > 0.01
     print(f'lists against cpu: {differ:.2%} of the window differs')
     bad |= differ > 0.01
+    if not a.no_drive:
+        bad |= drive(a, d)
     print('FAIL' if bad else 'PASS')
     return 1 if bad else 0
 

@@ -422,7 +422,7 @@ about 40 s to make, then 15 pictures and all 37 ticks a second.
 
 These figures are from before "Pictures the tick does not wait for", at an interval of 66 ms (`OPENTTD_FRAME_MS`, now 33): a picture that does not wait for it lets the pace space the ticks less.
 
-On the card, RTX 5090 (`rvc_harness --d3d11 --unity 11.1,1.4,0.75`, `OPENTTD_PLAY=2`, two runs):
+On the card, RTX 5070 Laptop (`rvc_harness --d3d11 --unity 11.1,1.4,0.75`, `OPENTTD_PLAY=2`, two runs):
 
 | | |
 |---|---|
@@ -474,7 +474,7 @@ Ticks are bounded by a tick's length on one core: about 100 ms (94 to 103) of th
 wait at all that is 10 a second, under the 2x of 11 to 13. Vehicles run in pool order on one random stream, so a tick is not split
 without changing the game. Zoomed out is bounded by the pieces (6 million instructions a picture, the dearest 300k).
 
-On the card, RTX 5090, one run (`--d3d11 --unity 11.1,1.4,0.75`, `OPENTTD_PLAY=2`), round 2: 12.57 pictures and 3.77 game ticks a
+On the card, RTX 5070 Laptop, one run (`--d3d11 --unity 11.1,1.4,0.75`, `OPENTTD_PLAY=2`), round 2: 12.57 pictures and 3.77 game ticks a
 second, against the 10.29 to 11.21 and 2.57 to 2.86 of "Speed on 31 October". With the lists below: round 2 13.64 pictures and
 3.55 ticks a second, the scroll 29.06 pictures (it was 20.63), windows closed 30.03 (21.41), windows 17.00 (18.51), one run each.
 
