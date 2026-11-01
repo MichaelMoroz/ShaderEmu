@@ -3,7 +3,7 @@ Shader "ShaderEmu/Machine"
     // The machine's commit of the state rows (experiments/rvc_lean/main.shader's, RAM in one
     // texture), the GPU device's control pass and the passes around them, drawn by EmuMachine.cs
     // with VRCGraphics.Blit; none reads the texture it draws. The CPUTick pass is
-    // MachineTick.shader: a file of its own, so that nothing changed here or in the GPU's
+    // MachineTickLean.shader: a file of its own, so that nothing changed here or in the GPU's
     // sources makes Unity compile it again (four minutes).
     // A material's numbers are floats, exact to 24 bits, so 32-bit values arrive as two halves.
     Properties
@@ -210,7 +210,7 @@ Shader "ShaderEmu/Machine"
             float _Init;
             Texture2D<uint4> _TickOut0, _TickOut1, _TickOut2, _TickOut3, _TickOut4, _TickOut5, _TickOut6, _TickOut7;
 
-            // the state before the tick, as MachineTick.shader reads it
+            // the state before the tick, as MachineTickLean.shader reads it
             static uint hart = 0;
             static uint2 state_off = uint2(0, 0);
             static uint mc_core = 0;

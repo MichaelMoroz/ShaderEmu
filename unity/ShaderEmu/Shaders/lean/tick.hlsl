@@ -232,7 +232,7 @@ void remember(uint t, uint at) { m2_t = m1_t; m2_at = m1_at; m1_t = t; m1_at = a
 uint slot(uint4 tags, uint tag) { return tags.x == tag ? 1 : tags.y == tag ? 2 : tags.z == tag ? 3 : 0; }
 // where the cache holds RAM texel t (4b + entry), or 0: a table is looked in when the one before is full
 uint find(inout uint4 c[C_N], uint t) {
-    // (the tables one after another, each one's bucket worked out only when it is looked in: the old tick's l1_find)
+    // (the tables one after another, each one's bucket worked out only when it is looked in)
     uint n = 1u << bits, b = t & (n - 1), found = 0;
     bool more = false;
     [branch] if (OCC(b)) {
@@ -280,7 +280,7 @@ uint ram_word(inout uint4 c[C_N], uint o) {
 }
 // `bits` into the word at RAM offset o under `mask`: the tables looked in one after another, each
 // one's bucket worked out only when the one before is full; a whole word into a texel the cache
-// has is written without reading what was there (the old tick's shape, mem.h)
+// has is written without reading what was there
 void ram_store(inout uint4 c[C_N], uint o, uint v, uint mask) {
     if (o >= RAM_MAX) return;
     uint t = o >> 4, wi = (o >> 2) & 3, tag = t + 1, n = 1u << bits, b0 = 0, b1 = 0, f0 = 0, f1 = 0;
@@ -381,7 +381,7 @@ static uint4 fw0, fw1;
 uint fetch(uint a) {
     uint t = (a & 0x7fffffff) >> 4;
     // (no test of "this texel is the window's": a jump within the texel reads it again, 3 in 1,000,
-    // and every other entry passes a test less; the old tick's cpu.h)
+    // and every other entry passes a test less)
     [branch] if (t == fw_t + 1) fw0 = fw1; else fw0 = TEX(RAM_ADDR(t));   // (an if: a ?: would read the texel either way)
     fw1 = TEX(RAM_ADDR(t + 1)); fw_t = t;
     return idx(fw0, (a >> 2) & 3);
@@ -513,7 +513,7 @@ uint fast(inout uint4 c[C_N], uint room) {
         uint w = cur.x, opc = w & 0x7f, f3 = (w >> 12) & 7, rd = (w >> 7) & 31;
         uint a = xr[(w >> 15) & 31], b = xr[(w >> 20) & 31], next = pc + 4, v = 0, dst = rd == 0 ? 64 : rd;
         bool ok = true;
-        // arithmetic, loads, stores and floats a group, in it arithmetic and loads one (the old tick's tree)
+        // arithmetic, loads, stores and floats a group, in it arithmetic and loads one
         bool alu = (w & 0x5f) == 0x13 && (w & 0xfe00007f) != 0x02000033, ld = opc == 0x03;   // (flw and fsw are the floats')
         [branch] if (alu || ld || opc == 0x23 || (w & 0x5f) == 0x07 || opc == 0x53) {
             [branch] if (alu || ld) {
@@ -542,7 +542,7 @@ uint fast(inout uint4 c[C_N], uint room) {
                     [branch] if (ok) ram_store(c, sa & 0x7ffffffc, b << (off * 8), (f3 == 2 ? 0xffffffff : f3 == 1 ? 0xffff : 0xff) << (off * 8));
                     dst = 64;
                 } else [branch] if (opc == 0x53) {
-                    // (opcode 0x53 before flw and fsw: a program has more of them, the old tick's order) floats: a sum, a difference, a product, and the light ones; the rest are the general step's
+                    // (opcode 0x53 before flw and fsw: a program has more of them) floats: a sum, a difference, a product, and the light ones; the rest are the general step's
                     uint f7 = w >> 25, fa = a, fb = xr[32 + ((w >> 20) & 31)];
                     [branch] if ((f7 & 0x68) != 0x68) fa = xr[32 + ((w >> 15) & 31)];   // (an if: a ?: read the register either way)
                     bool to_f = true;

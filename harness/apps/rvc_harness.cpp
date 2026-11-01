@@ -421,7 +421,7 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--list-adapters") { listAdapters(); exit(0); }
         else if (a == "--rvc") {
             o.rvcDir = next("--rvc");
-            std::replace(o.rvcDir.begin(), o.rvcDir.end(), '\\', '/');   // compared with "experiments/rvc_compute"
+            std::replace(o.rvcDir.begin(), o.rvcDir.end(), '\\', '/');
             o.rvcDirSet = true;
         }
         else if (a == "--payload") { o.payloadDir = next("--payload"); o.payloadSet = true; }
@@ -871,7 +871,7 @@ int main(int argc, char** argv) {
     bool nommuLinux = opt.kernel == "nommu" && opt.image == "linux-net" && opt.loadState.empty();
     if (opt.machine < 0) {
         const BootImage* im = opt.loadState.empty() ? findImage(opt.image) : nullptr;
-        opt.machine = im && (isLean(opt.rvcDir) || opt.rvcDir == "experiments/rvc_compute") ? (nommuLinux ? 1 : im->machine) : 0;
+        opt.machine = im && isLean(opt.rvcDir) ? (nommuLinux ? 1 : im->machine) : 0;
     }
     if (nommuLinux && !linuxBuilt(opt)) {
         fprintf(stderr, "[harness] %s has not been made (docs/system/nommu.md)\n", linuxDir(opt).c_str());
@@ -882,11 +882,11 @@ int main(int argc, char** argv) {
     // the kernel's calls to it (docs/machine/boot.md).
     // (Linux without an MMU is our kernel on the machine without paging, its SBI and float unit kept)
     bool linuxMachine = opt.machine == 0 || (opt.machine == 1 && opt.ourKernel);
-    opt.sbi = linuxMachine && (isLean(opt.rvcDir) || opt.rvcDir == "experiments/rvc_compute") && (opt.ourKernel || !opt.loadState.empty());
+    opt.sbi = linuxMachine && isLean(opt.rvcDir) && (opt.ourKernel || !opt.loadState.empty());
     if (opt.machine == 1) opt.defines.push_back("NO_PAGING");
     if (opt.machine == 2) opt.defines.push_back("M_MODE_ONLY");
     // The full machine has single-precision float instructions (docs/machine/fpu.md).
-    if (linuxMachine && (isLean(opt.rvcDir) || opt.rvcDir == "experiments/rvc_compute") &&
+    if (linuxMachine && isLean(opt.rvcDir) &&
         std::find(opt.defines.begin(), opt.defines.end(), "FPU") == opt.defines.end())
         opt.defines.push_back("FPU");
     if (opt.machine > 0)

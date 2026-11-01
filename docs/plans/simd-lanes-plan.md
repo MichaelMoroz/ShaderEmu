@@ -78,7 +78,7 @@ The job's words are kept in words of the worker's state that are zeros now (texe
 `.y` and `.w`, texel 2's `.z` and `.w`, and more as needed): to be checked against the commit
 (which changes 8, 28 and 41) and the control pass before they are taken.
 
-A tick without lanes (the old tick, D3D12's one core, an older world) ignores a write to a CSR it
+A tick without lanes (D3D12's one core, an older world) ignores a write to a CSR it
 does not keep and reads it as 0: `0x0b8` reads 0, nothing stalls, and the library runs every index
 as a plain call (below).
 

@@ -1,7 +1,7 @@
 # The RISC-V machine's instruction set: what to add, measured (28 October 2026)
 
 Step five of `riscv-backport-plan.md` (section 6, "The ISA fork, last"). The machine runs RV32IMAF, ilp32, on the
-D3D11 tick of the old tick. Every candidate here was measured in the same way:
+D3D11 tick of the tick of then. Every candidate here was measured in the same way:
 
 - The programs were built again with it.
 - `rvc_cpu` ran them with the new instructions.
@@ -234,7 +234,7 @@ Not recommended.
 
 ## The tick, prototyped
 
-Three variants, copies of the old tick made by the study's script (scratchpad `tickvar.py`):
+Three variants, copies of the tick of then made by the study's script (scratchpad `tickvar.py`):
 
 - `build/isa/alt/old_tick_zb` (`ZB`, `ZB_X`);
 - `build/isa/alt/old_tick_fma` (`FAST_FMA`);
@@ -271,7 +271,7 @@ comparison frees the harness lock. Owed, in order:
 ## The card's timing (28 October 2026): not taken
 
 The three variants' own changes (`ZB`/`ZB_X`, `FAST_FMA`; 31 to 33 lines of `main.shader` and `src/emu.h`) were put on
-the backport's tick (the after machine's, RAM in one piece) in `build/isa2/the old tick_{zb,fma,zbfma}`. Each passed
+the backport's tick (the after machine's, RAM in one piece) in `build/isa2/tick_{zb,fma,zbfma}`. Each passed
 `mctest-3` on WARP (`tools/test_card.py mctest-3 --warp --parts --max-wall 0`, 174 to 182 s), the case the tree's own
 stamp holds. `lanetest` and `fptest` do not finish on WARP in parts with the tree's tick either (no line in 280 s), so
 they say nothing of the variants.

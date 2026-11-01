@@ -11,7 +11,7 @@ Texture2D<uint4> _TickState;       // what the tick keeps of the CPU's state are
 #define CORES 256
 #define TICK_STATE_WIDTH 2048
 #define WORKER_BAND_ROWS 48   // 8 * MC_STRIP_BANDS: six bands, 49 workers of five tiles to a band
-// The tick itself is drawn into eight targets, eight state texels a pixel (MachineTick.shader):
+// The tick itself is drawn into eight targets, eight state texels a pixel (MachineTickLean.shader):
 // core 0's eight columns, TICK_GAP empty ones, then a block of columns for each worker, 128
 // blocks to a band of TICK_STATE_ROWS rows, TICK_MRT_BANDS bands.
 #define TICK_MRT_W 1040

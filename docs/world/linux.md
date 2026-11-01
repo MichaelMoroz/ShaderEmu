@@ -22,7 +22,7 @@ result for a vector and splits the instruction (`ir/passes/ir_pass_scalarize.cpp
   (`spirv-val`: "Expected Result Type to be a composite type"). A driver handed that may do
   anything, which fits the crash VRChat had on Linux on every make of card.
 
-So `mulhu32()` and `mulhs32()` in `src/emu.h` are the 16-bit partial products under both compilers.
+So `mulhu32()` and `mulhs32()` in `experiments/rvc_lean/tick.hlsl` are the 16-bit partial products under both compilers.
 fxc2 still has `mulhi()`, `umulExtended()` and `imulExtended()`. Nothing of the machine's
 calls them, and nothing that ships to players should. Upstream vkd3d (Wine's, which Proton does not
 use for games) refuses the same instruction outright: "Extended multiplication is not implemented".
