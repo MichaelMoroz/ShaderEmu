@@ -3143,7 +3143,7 @@ index 277de17..9c9bd15 100644
  /***********************************************************************************************
   * Distance -- Determines the lepton distance between two coordinates.                         *
 diff --git a/tiberiandawn/display.cpp b/tiberiandawn/display.cpp
-index 20ff4f6..594c4a2 100644
+index 20ff4f6..6cdac27 100644
 --- a/tiberiandawn/display.cpp
 +++ b/tiberiandawn/display.cpp
 @@ -76,6 +76,12 @@
@@ -3159,7 +3159,17 @@ index 20ff4f6..594c4a2 100644
  #include "common/fading.h"
  #include "ccini.h"
  
-@@ -1389,6 +1395,12 @@ void DisplayClass::Read_INI(CCINIClass& ini)
+@@ -109,6 +115,9 @@ unsigned char DisplayClass::ShadowTrans[(SHADOW_COL_COUNT + 1) * 256];
+ ** Bit array of cell redraw flags
+ */
+ BooleanVectorClass DisplayClass::CellRedraw;
++#ifdef SHADEREMU
++bool DisplayClass::ShaderEmu_Cell_Flagged = true;
++#endif
+ 
+ /*
+ ** The main button that intercepts user input to the map
+@@ -1389,6 +1398,12 @@ void DisplayClass::Read_INI(CCINIClass& ini)
              }
          }
      }
@@ -3172,7 +3182,7 @@ index 20ff4f6..594c4a2 100644
  }
  
  /***********************************************************************************************
-@@ -1598,6 +1610,18 @@ bool DisplayClass::Scroll_Map(DirType facing, int& distance, bool really)
+@@ -1598,6 +1613,18 @@ bool DisplayClass::Scroll_Map(DirType facing, int& distance, bool really)
   *=============================================================================================*/
  void DisplayClass::Refresh_Cells(CELL cell, short const* list)
  {
@@ -3191,7 +3201,7 @@ index 20ff4f6..594c4a2 100644
      if (*list == REFRESH_SIDEBAR) {
          list++;
      }
-@@ -2092,6 +2116,15 @@ void DisplayClass::Draw_It(bool forced)
+@@ -2092,6 +2119,15 @@ void DisplayClass::Draw_It(bool forced)
  
      MapClass::Draw_It(forced);
  
@@ -3207,7 +3217,7 @@ index 20ff4f6..594c4a2 100644
      if (IsToRedraw || forced) {
          IsToRedraw = false;
  
-@@ -2146,6 +2179,26 @@ void DisplayClass::Draw_It(bool forced)
+@@ -2146,6 +2182,32 @@ void DisplayClass::Draw_It(bool forced)
          **	Check for a movement of the tactical map. If there has been some
          **	movement, then part (or all) of the icons must be redrawn.
          */
@@ -3227,15 +3237,45 @@ index 20ff4f6..594c4a2 100644
 +            if (IsRubberBand) {
 +                LogicPage->Draw_Rect(BandX + TacPixelX, BandY + TacPixelY, NewX + TacPixelX, NewY + TacPixelY, WHITE);
 +            }
++#ifdef SHADEREMU
++            if (ShaderEmu_Cell_Flagged)
++#endif
 +            CellRedraw.Reset();
++#ifdef SHADEREMU
++            ShaderEmu_Cell_Flagged = false;
++#endif
 +            return;
 +        }
 +#endif
          if (Lepton_To_Pixel(Coord_X(DesiredTacticalCoord)) != Lepton_To_Pixel(Coord_X(TacticalCoord))
              || Lepton_To_Pixel(Coord_Y(DesiredTacticalCoord)) != Lepton_To_Pixel(Coord_Y(TacticalCoord))) {
  
+@@ -2348,6 +2410,9 @@ void DisplayClass::Draw_It(bool forced)
+         **	and let the normal processing take care of the rest.
+         */
+         if (forced) {
++#ifdef SHADEREMU
++            ShaderEmu_Cell_Flagged = true;
++#endif
+             CellRedraw.Set();
+         }
+ 
+@@ -2403,7 +2468,13 @@ void DisplayClass::Draw_It(bool forced)
+         /*
+         **	Clear the redraw flags so that normal redraw flag setting can resume.
+         */
++#ifdef SHADEREMU
++        if (ShaderEmu_Cell_Flagged)
++#endif
+         CellRedraw.Reset();
++#ifdef SHADEREMU
++        ShaderEmu_Cell_Flagged = false;
++#endif
+         // Colour_Debug(0);
+ 
+ #ifdef SCENARIO_EDITOR
 diff --git a/tiberiandawn/display.h b/tiberiandawn/display.h
-index 42d052d..48bb75e 100644
+index 42d052d..d43bdc2 100644
 --- a/tiberiandawn/display.h
 +++ b/tiberiandawn/display.h
 @@ -145,6 +145,9 @@ public:
@@ -3248,7 +3288,7 @@ index 42d052d..48bb75e 100644
  
      /*
      **	Added functionality.
-@@ -197,6 +200,14 @@ public:
+@@ -197,8 +200,19 @@ public:
  
      void Flag_Cell(CELL cell)
      {
@@ -3262,7 +3302,22 @@ index 42d052d..48bb75e 100644
 +#endif
          Flag_To_Redraw(false);
          IsToRedraw = true;
++#ifdef SHADEREMU
++        ShaderEmu_Cell_Flagged = true;
++#endif
          CellRedraw[cell] = true;
+     };
+     bool Is_Cell_Flagged(CELL cell) const
+@@ -332,6 +346,9 @@ private:
+     **	be redrawn for a cell, then the corresponding flag will be true.
+     */
+     static BooleanVectorClass CellRedraw;
++#ifdef SHADEREMU
++    static bool ShaderEmu_Cell_Flagged; // (a bit of it may be set: Flag_Cell, its Set)
++#endif
+ 
+     //
+     // We need a way to bypass visible view checks when we are running in the context of GlyphX without using the
 diff --git a/tiberiandawn/externs.h b/tiberiandawn/externs.h
 index ff588bf..db7de79 100644
 --- a/tiberiandawn/externs.h
