@@ -152,7 +152,7 @@ fi
 L=$REPO/linux/libmedia
 if [ ! -x "$DATA/q3pack" ] || [ -n "$(find "$HERE/q3pack.c" "$L" -maxdepth 1 -name '*.[ch]' -newer "$DATA/q3pack")" ]; then
     gcc -O2 -w -I"$L" -I"$PROGRAMS/mc" -o "$DATA/q3pack" "$HERE/q3pack.c" \
-        $(for f in m_core m_simple m_png m_png_enc m_jpeg m_jpeg_enc m_gif m_gif_enc; do echo "$L/$f.c"; done) "$L/test/mcw_host.c" -lpthread -lm
+        $(for f in m_core m_simple m_png m_png_enc m_jpeg m_jpeg_enc m_gif m_gif_enc m_inflate; do echo "$L/$f.c"; done) "$L/test/mcw_host.c" -lpthread -lm
 fi
 if [ ! -f "$DATA/se.dat" ] || [ "$HERE/bake.py" -nt "$DATA/se.dat" ] || [ "$HERE/wanted.txt" -nt "$DATA/se.dat" ] || [ "$HERE/build.sh" -nt "$DATA/se.dat" ] ||
         [ "$DATA/q3pack" -nt "$DATA/se.dat" ]; then
