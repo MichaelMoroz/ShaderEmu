@@ -398,7 +398,9 @@ Not done: the two `.ini` files read a line at a time in Red Alert, the key arith
 
 ## Fewer instructions, 1 November 2026
 
-`experiments/rv_fewer/NOTES.md` has every number. h2h's load on the card went from 27,393 ms to 21,914 (1.250x, two runs a side, with nothing to spare), ended full 4.3% to 1.8%, core 0 on `rvc_cpu` 137.66 to 108.77 million, state `1a9a814b`: play 1.152x, the level's load about 1.59x.
+`experiments/rv_fewer/NOTES.md` has every number. h2h's load on the card went from 27,387 ms to 21,952 (1.248x, three runs a side), ended full 4.3% to 1.8%, core 0 on `rvc_cpu` 137.67 to 108.78 million, state `1a9a814b`: play 1.150x, the level's load about 1.59x.
+
+- The build goes by nothing of its folder: `tdawn-relative` gives the compiler paths from where it runs, since GCC knows a function that is not public, in the counts, by a sum with its path in it, and with whole paths they were lost silently in any other folder (the same commit 113.6 million against 108.8). Counts can be made in a private home now; two homes give the same bytes. Red Alert's build still has whole paths: `ralert.profile` holds in `~/nm` only.
 
 - What a start asked for and nobody read goes when first asked: multi-player scenario names, a scenario's digest and its SHA (`ScenarioCRC`, network games only), radar icons (`Radar_Icon`), the themes' files (`Is_Allowed`). The cells are cleared once before a scenario (`ShaderEmu_Cells_Clean`, unset at the end of `DisplayClass::Read_INI` and at a load).
 - The houses' scan bits come from a table made again only when `ShaderEmu_Scan_Gen` says something they read has changed (`ShaderEmu_Scan_Objects`; `TDAWN_CHECK_SCANS=1` makes it every time and counts how often it differs).
@@ -418,7 +420,7 @@ nearly always reaches one function becomes a test and that function's body), whi
 - `TDAWN_PROFILE=count linux/tdawn/build.sh` (and `ralert`'s) builds the program that counts, three times as large and a third as fast. Play what should be fast, with `TDAWN_SCENE=inline TDAWN_FRAMES_CORE=0` (the counters are not two cores' to write): the missions of "Speed"
   for 1,200 frames, and Red Alert's with `RALERT_HUNT=50` for 800. Build both games again at once after: the counting programs are in the image's folder meanwhile.
 - `python3 linux/tdawn/profile.py make linux/tdawn/tdawn.profile LOG ...` sums the runs' logs into the file the build keeps (`linux/ralert/ralert.profile`), and an ordinary build writes the compiler's `.gcda` files from it (`profile.py put`) and compiles with `-fprofile-use
-  -fprofile-partial-training`: what no run touched is compiled as before, not for size. A call's targets are known by a sum that has the source file's path in it: count with the repository's build script, not in another folder.
+  -fprofile-partial-training`: what no run touched is compiled as before, not for size. A function that is not public is known by a sum that has the source file's path in it: Tiberian Dawn's build gives relative paths (`tdawn-relative`, "Fewer instructions"), so its counts hold in any folder; Red Alert's must be made with the repository's build script in `~/nm`.
 - Red Alert counts only its own folder (`-fprofile-exclude-files=/common/`): with counters in the shared code its start reads no file of its encrypted archives (something in the key arithmetic does not survive the change of code; not looked into further).
 
 The counts are of a tree's functions as they were: a function changed since is compiled without them (no warning: `-Wno-coverage-mismatch`), so a profile ages gracefully and is worth making again after a large change. The state sums are the same with and without.

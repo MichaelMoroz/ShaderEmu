@@ -49,7 +49,8 @@ if [ "${TDAWN_PROFILE:-}" = count ]; then
     PGO="-L$WORK/src/nogcov -fprofile-generate -fprofile-update=single -fprofile-exclude-files=/common/"; COUNTS="-DSHADEREMU_PGO"
 elif [ -f "$HERE/ralert.profile" ]; then
     python3 "$TD/profile.py" put "$HERE/ralert.profile" "$BUILD"
-    PGO="-fprofile-use -fprofile-partial-training -fprofile-correction -Wno-missing-profile -Wno-coverage-mismatch"
+    # (the counts' sum in the flags: make knows nothing of the .gcda files, linux/tdawn/build.sh)
+    PGO="-fprofile-use -fprofile-partial-training -fprofile-correction -Wno-missing-profile -Wno-coverage-mismatch -DSHADEREMU_COUNTS=$(sha1sum "$HERE/ralert.profile" | cut -c1-12)"
 fi
 cmake -S "$SRC" -B "$BUILD" -DCMAKE_TOOLCHAIN_FILE="$WORK/src/tdawn-toolchain.cmake" -DCMAKE_BUILD_TYPE=Release \
     -DSDL2=OFF -DOPENAL=OFF -DNETWORKING=OFF -DBUILD_VANILLATD=OFF -DSHADEREMU=ON \
