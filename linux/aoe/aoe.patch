@@ -189,7 +189,7 @@ index 1d6e56032..74907c6f6 100644
          } else {
              rect = drawarea->ClipRect;
 diff --git a/src/asprite.cpp b/src/asprite.cpp
-index f99cb6f18..233dc640f 100644
+index f99cb6f18..7e5823127 100644
 --- a/src/asprite.cpp
 +++ b/src/asprite.cpp
 @@ -1,3 +1,4 @@
@@ -197,6 +197,24 @@ index f99cb6f18..233dc640f 100644
  #include "../include/game_globals.h"
  #include "../include/asprite.h"
  #include "../include/view.h"
+@@ -121,7 +122,7 @@ RGE_Active_Animated_Sprite::RGE_Active_Animated_Sprite(RGE_Sprite* new_sprite) :
+     last_frame = 0;
+     animate_interval = sprite->duration;
+ 
+-    if (animate_interval < g_sprite_minimum_animation_interval) {
++    if (animate_interval < 0.00100000005f)   /* the port: says of a float what the double's 0.001 says */ {
+         animate_interval = 0.001f;
+     }
+ 
+@@ -202,7 +203,7 @@ void RGE_Active_Animated_Sprite::update(float time, float speed) {
+                 else
+                     animate_interval = sprite->duration * sprite->base_speed / speed;
+ 
+-                if (animate_interval < g_sprite_minimum_animation_interval)
++                if (animate_interval < 0.00100000005f)   /* the port: says of a float what the double's 0.001 says */
+                     animate_interval = 0.001f;
+ 
+                 if (frame_looped != 0) {
 diff --git a/src/basegame.cpp b/src/basegame.cpp
 index 2ec743511..695fe1608 100644
 --- a/src/basegame.cpp
@@ -368,6 +386,21 @@ index 62726c191..37b9e144d 100644
  int SDI_Draw_Level = 0;
  int SDI_Draw_Line = 0;
  void* StringTableX = 0;
+diff --git a/src/m_s_obj.cpp b/src/m_s_obj.cpp
+index 095643260..bd589eb20 100644
+--- a/src/m_s_obj.cpp
++++ b/src/m_s_obj.cpp
+@@ -863,8 +863,8 @@ unsigned char RGE_Master_Static_Object::check_placement(
+     float min_y_value = row - radius_y;
+     float max_y_value = row + radius_y - g_static_object_coordinate_epsilon;
+ 
+-    if (!(min_x_value >= g_static_object_zero) || !(max_x_value < (float) map->map_width)
+-        || !(min_y_value >= g_static_object_zero) || !(max_y_value < (float) map->map_height)) {
++    if (!(min_x_value >= 0.0f) || !(max_x_value < (float) map->map_width)
++        || !(min_y_value >= 0.0f) || !(max_y_value < (float) map->map_height)) {
+         return 7;
+     }
+ 
 diff --git a/src/main.cpp b/src/main.cpp
 index b672d36a5..05d2733f2 100644
 --- a/src/main.cpp
@@ -382,7 +415,7 @@ index b672d36a5..05d2733f2 100644
      info.instance = prog_inst;
      info.prev_instance = prev_inst;
 diff --git a/src/move_obj.cpp b/src/move_obj.cpp
-index 8833dbaff..3e9b7114b 100644
+index 8833dbaff..08971e8bd 100644
 --- a/src/move_obj.cpp
 +++ b/src/move_obj.cpp
 @@ -11,6 +11,7 @@
@@ -393,7 +426,94 @@ index 8833dbaff..3e9b7114b 100644
  #include <stdio.h>
  #include <stdlib.h>
  
-@@ -1140,8 +1141,18 @@ int RGE_Moving_Object::doTrivialMove(float x, float y) {
+@@ -1066,11 +1067,21 @@ int RGE_Moving_Object::doMove() {
+     return 1;
+ }
+ 
++static inline float aoe_atan2f(float y, float x) {
++    float ax = __builtin_fabsf(x), ay = __builtin_fabsf(y);
++    float a = ay > ax ? ax / ay : ay / ax, t = a * a;
++    float r = a * (0.99997726f + t * (-0.33262347f + t * (0.19354346f + t * (-0.11643287f + t * (0.05265332f + t * -0.01172120f)))));
++    if (ay > ax) r = 1.5707964f - r;
++    if (x < 0.0f) r = 3.1415927f - r;
++    return y < 0.0f ? -r : r;
++}
++
++// The port: a float compared with a double's constant (40 instructions in the soft double, two moves here) against the float that says the same of every float.
+ int RGE_Moving_Object::doTrivialMove(float x, float y) {
+     int alreadyMoving = 1;
+-    if (this->speed == g_move_zero_double) {
++    if (this->speed == 0.0f) {
+         alreadyMoving = 0;
+-        if (this->sprite != 0 && this->sprite->base_speed > g_move_zero_double) {
++        if (this->sprite != 0 && this->sprite->base_speed > 0.0f) {
+             this->speed = ((RGE_Master_Moving_Object*) this->master_obj)->speed * this->sprite->base_speed;
+         } else {
+             this->speed = ((RGE_Master_Moving_Object*) this->master_obj)->speed;
+@@ -1079,17 +1090,17 @@ int RGE_Moving_Object::doTrivialMove(float x, float y) {
+ 
+     float distanceToCover = this->owner->world->world_time_delta_seconds * this->speed;
+ 
+-    if (this->collisionAvoidanceDistance > g_move_zero_double) {
++    if (this->collisionAvoidanceDistance > 0.0f) {
+         this->collisionAvoidanceDistance -= distanceToCover;
+-        if (this->collisionAvoidanceDistance > g_move_zero_double) {
++        if (this->collisionAvoidanceDistance > 0.0f) {
+             this->speed = 0.0f;
+             return 0;
+         }
+         this->collisionAvoidanceDistance = -1.0f;
+     }
+ 
+-    if (((RGE_Master_Moving_Object*) this->master_obj)->turn_speed > g_move_zero_double) {
+-        if (this->turnTimer >= g_move_zero_double) {
++    if (((RGE_Master_Moving_Object*) this->master_obj)->turn_speed > 0.0f) {
++        if (this->turnTimer >= 0.0f) {
+             this->turnTimer -= this->owner->world->world_time_delta_seconds;
+         } else {
+             this->turnTimer = 0.0f;
+@@ -1113,20 +1124,29 @@ int RGE_Moving_Object::doTrivialMove(float x, float y) {
+         targetDY = y - ((float) floor((double) this->world_y) - g_move_negative_half_float);
+     }
+ 
+-    float newAngle = (float) atan2((double) targetDY, (double) targetDX);
+-    this->boundAngle(&newAngle, -1);
+-    float angleDelta = newAngle - this->angle;
+-    while (angleDelta < g_move_negative_pi_double) {
+-        angleDelta -= g_move_negative_two_pi;
+-    }
+-    while (angleDelta > g_move_pi_double) {
+-        angleDelta -= g_move_two_pi;
++    // The port: the angle wanted only decides how many facets to turn and which way (a double's atan2 is 2,500 instructions, 9% of
++    // the first core). Floats tell it to 2e-6 of a radian; near a place where the decision changes it is made with the double's.
++    float newAngle, angleDelta, facetDelta;
++    for (int exactAngle = (targetDX == 0.0f && targetDY == 0.0f);; exactAngle = 1) {
++        newAngle = exactAngle ? (float) atan2((double) targetDY, (double) targetDX) : aoe_atan2f(targetDY, targetDX);
++        this->boundAngle(&newAngle, -1);
++        angleDelta = newAngle - this->angle;
++        while (angleDelta < -3.1415925f) {
++            angleDelta -= g_move_negative_two_pi;
++        }
++        while (angleDelta > 3.1415925f) {
++            angleDelta -= g_move_two_pi;
++        }
++        facetDelta = angleDelta * (float) numberFacets * g_move_inverse_full_circle;
++        if (exactAngle) break;
++        float along = __builtin_fabsf(facetDelta);
++        float off = along - (float) (int) along - 0.8f;
++        float toPi = __builtin_fabsf(angleDelta) - 3.1415927f;
++        if (!(off > -0.002f && off < 0.002f) && !(toPi > -0.002f)) break;
+     }
+-
+-    float facetDelta = angleDelta * (float) numberFacets * g_move_inverse_full_circle;
+     this->boundAngle(&this->angle, numberFacets);
+     while (this->turnTimer <= g_move_zero_angle
+-           && (facetDelta > g_move_turn_delta_upper || facetDelta < g_move_turn_delta_lower)) {
++           && (facetDelta > 0.79999995f || facetDelta < -0.79999995f)) {
+         this->turnTimer += ((RGE_Master_Moving_Object*) this->master_obj)->turn_speed;
+         if (angleDelta >= g_move_zero_angle) {
+             facetDelta -= g_move_positive_one;
+@@ -1140,8 +1160,18 @@ int RGE_Moving_Object::doTrivialMove(float x, float y) {
      this->boundAngle(&this->angle, numberFacets);
      this->set_angle();
  
@@ -414,6 +534,23 @@ index 8833dbaff..3e9b7114b 100644
      float newX = this->world_x + this->velocity_x;
      float newY = this->world_y + this->velocity_y;
  
+@@ -2116,14 +2146,14 @@ void RGE_Moving_Object::boundAngle(float* x, int numFacets) {
+         if (numFacets >= 0) {
+             do {
+                 float difference = *x - (float) i * bestDifference;
+-                if (difference < g_move_zero_double) {
++                if (difference < 0.0f) {
+                     difference = -difference;
+                 }
+                 if (difference < bestDifference) {
+                     bestDifference = difference;
+                     bestFacet = i;
+                 }
+-                if (bestDifference < g_move_angle_tolerance) {
++                if (bestDifference < 0.100000001f) {
+                     break;
+                 }
+                 ++i;
 diff --git a/src/rmm_dbct.cpp b/src/rmm_dbct.cpp
 index f3e0cf3a4..212817f2a 100644
 --- a/src/rmm_dbct.cpp
