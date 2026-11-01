@@ -1,0 +1,19 @@
+==  
+COUNT from "H2H A": core 0 137660651, all cores 256655226, 43 cores ran, the busiest worker 30091576, 17934 passes, 41.996 s of guest time, 1343 GPU lists
+tdawn: done at frame 1300: SCG03EA, 10 units, 54 infantry, 18 buildings, 188 overlays, state 1a9a814b
+6320562	  54568	1663392	8038522	 7aa87a	/home/micha/agents/fewer/nm/work/src/tdawn-build/vanillatd
+== -flto-partition=one
+COUNT from "H2H A": core 0 137585616, all cores 257906178, 43 cores ran, the busiest worker 31252966, 17934 passes, 42.011 s of guest time, 1343 GPU lists
+tdawn: done at frame 1300: SCG03EA, 10 units, 54 infantry, 18 buildings, 188 overlays, state 1a9a814b
+6301302	  54552	1663312	8019166	 7a5cde	/home/micha/agents/fewer/nm/work/src/tdawn-build/vanillatd
+== -fno-strict-aliasing
+COUNT from "H2H A": core 0 138615120, all cores 258870115, 43 cores ran, the busiest worker 29845263, 18054 passes, 42.285 s of guest time, 1343 GPU lists
+tdawn: done at frame 1300: SCG03EA, 10 units, 54 infantry, 18 buildings, 188 overlays, state 1a9a814b
+6387958	  54568	1663392	8105918	 7bafbe	/home/micha/agents/fewer/nm/work/src/tdawn-build/vanillatd
+== -fipa-pta
+COUNT from "H2H A": core 0 137716506, all cores 256828710, 43 cores ran, the busiest worker 31315646, 17941 passes, 42.032 s of guest time, 1343 GPU lists
+tdawn: done at frame 1300: SCG03EA, 10 units, 54 infantry, 18 buildings, 188 overlays, state 1a9a814b
+6312810	  54568	1663392	8030770	 7a8a32	/home/micha/agents/fewer/nm/work/src/tdawn-build/vanillatd
+== -frename-registers
+COUNT from "H2H A": core 0 2974376961, all cores 2974376961, 1 cores ran, the busiest worker 0, 363160 passes, 894.676 s of guest time, 3 GPU lists
+6298334	  54568	1663408	8016310	 7a51b6	/home/micha/agents/fewer/nm/work/src/tdawn-build/vanillatd

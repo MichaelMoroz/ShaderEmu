@@ -345,9 +345,10 @@ bool ShaderEmu_GL_Changed(void)
     uintptr_t all = 0; // which objects there are: one that has gone says nothing itself
     bool near = false;
     for (LayerType layer = LAYER_GROUND; layer < LAYER_COUNT; layer++) {
-        for (int index = 0; index < Map.Layer[layer].Count(); index++) {
+        int count = Map.Layer[layer].Count();
+        for (int index = 0; index < count; index++) {
             const ObjectClass* object = Map.Layer[layer][index];
-            all += (uintptr_t)object ^ (uintptr_t)object >> 7; // (whatever their order)
+            all += (uintptr_t)object; // (whatever their order: an object lies where no other lies)
             if (object->IsToDisplay && !near) {
                 int x = Coord_XCell(object->Coord), y = Coord_YCell(object->Coord);
                 near = x >= shown_x0 - 5 && x <= shown_x1 + 5 && y >= shown_y0 - 5 && y <= shown_y1 + 5;
