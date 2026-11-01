@@ -14,3 +14,4 @@
 | `micropolis.png` | Micropolis (GPL-3.0 with EA's terms) | `content/micropolis/tilesets/classic/icon1.ico` (the X11 release's 32-pixel map) at the commit `linux/micropolis/build.sh` names |
 | `openttd.png` | OpenTTD (GPL-2.0) | `media/openttd.128.png` at the tag `linux/openttd/build.sh` names |
 | `quake3.png` | ioquake3 (GPL-2.0) | `misc/quake3.png` at the commit `linux/quake3/build.sh` names |
+| `aoe.png` | this project's | a temple on its steps with the sun behind, drawn for it (nothing of the game's) |
