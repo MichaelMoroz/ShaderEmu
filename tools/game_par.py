@@ -229,7 +229,7 @@ def card_folder(image):
     return work
 
 
-def run_card(name, g, image, log, show, limit, rvc='experiments/rvc_opt'):
+def run_card(name, g, image, log, show, limit, rvc='experiments/rvc_lean'):
     if vr_running():
         print(f'{name}: not run on the card, {" and ".join(vr_running())} running')
         return None
@@ -310,7 +310,7 @@ def main():
     ap.add_argument('--plain', action='store_true', help='rvc_cpu without RVC_SOUND, RVC_WCACHE, RVC_ADFAULT and RVC_RACES (the counts before 15 October 2026)')
     ap.add_argument('--card', action='store_true', help='on the graphics card in real time, through tools/gpu_queue.ps1')
     ap.add_argument('--limit', type=int, default=240, help='with --card: seconds a run may take at most')
-    ap.add_argument('--rvc', default='experiments/rvc_opt', help='with --card: the processor folder (e.g. a copy of experiments/rvc_lean)')
+    ap.add_argument('--rvc', default='experiments/rvc_lean', help='with --card: the processor folder (e.g. a copy of experiments/rvc_lean)')
     ap.add_argument('--calibrated', action='store_true', help="rvc_cpu's clock as a card's: tools/card_model.json (tools/calibrate.py)")
     a = ap.parse_args()
     if a.card:

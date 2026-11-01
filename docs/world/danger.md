@@ -18,7 +18,7 @@ Reset on the control panel starts the machine over, whole.
 
 ## How
 
-`experiments/rvc_opt/src/zap.h`, included by the commit and not by the tick (an instruction
+`experiments/rvc_lean/src/zap.h`, included by the commit and not by the tick (an instruction
 costs what it did). For one commit the host sets:
 
 | Uniform | |

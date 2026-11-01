@@ -39,7 +39,7 @@ pass and no change to the commit.
   a load looks there first. In lanes, that array is the lane's stack, and nobody else sees it.
 - **A way out to RAM.** The commit takes a worker's stores bucket by bucket: a texel of three
   tags (a RAM texel's number and one), then those three texels, written where the tags say
-  (`ram_commit_geom` in `experiments/rvc_opt/src/ram.h`). It does not care where in the tables a
+  (`ram_commit_geom` in `experiments/rvc_lean/src/ram.h`). It does not care where in the tables a
   bucket was, and it asks only that texel 41's first word (`bloom`) is not 0.
 - **Two whole buckets a pixel.** The cache begins at texel 44 (`L1_AT`) and a bucket is four
   texels, so a pixel whose eight texels lie within the cache holds exactly two buckets: the pixel
@@ -78,7 +78,7 @@ The job's words are kept in words of the worker's state that are zeros now (texe
 `.y` and `.w`, texel 2's `.z` and `.w`, and more as needed): to be checked against the commit
 (which changes 8, 28 and 41) and the control pass before they are taken.
 
-A tick without lanes (`rvc_opt`, D3D12's one core, an older world) ignores a write to a CSR it
+A tick without lanes (the old tick, D3D12's one core, an older world) ignores a write to a CSR it
 does not keep and reads it as 0: `0x0b8` reads 0, nothing stalls, and the library runs every index
 as a plain call (below).
 

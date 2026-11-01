@@ -5,12 +5,12 @@ The machine has 256 cores, all run by the one tick pass: core 0, which runs Linu
 both about how the GPU runs pixels: the state as whole tiles of pixels, and workers that keep no more than
 they need ("What the card does with pixels" and the sections after it).
 
-    pwsh tools\gpu_queue.ps1 bin\rvc_harness.exe --rvc experiments\rvc_opt --image build\images\nommu
+    pwsh tools\gpu_queue.ps1 bin\rvc_harness.exe --rvc experiments\rvc_lean --image build\images\nommu
     / # mctest            (every worker; "mctest N LIMIT" for other numbers, "mctest N LIMIT bench" for the cost of a pass)
 
 The D3D11 harness with its eight targets, `rvc_cpu` and the world all compile `CORES=256`; the harness's
 `RVC_CORES=N` is a measurement, for what the others cost. The one-core machine is what is left where
-there are no workers: D3D12, `--no-mrt`, `--profile` (the code is under `#if CORES > 1`).
+there are no workers (the code is under `#if CORES > 1`): `experiments/rvc_compute` on D3D12; the tick itself is always eight targets.
 
 ## How it is made
 
@@ -138,7 +138,7 @@ both back afterwards (`CustomRenderTexture::copyIn`, `rvc_backend11.cpp`).
 ## Eight texels a pixel
 
 A pixel of the tick is eight texels of state: with eight render targets the pass runs an eighth of the pixels. The D3D11
-harness does that (`TICK_MRT`; `--no-mrt` for one target, as D3D12 has) and so does the world ("In Unity"): the tick
+harness does that (`TICK_MRT`) and so does the world ("In Unity"): the tick
 draws into eight targets 1,040 wide (`TICK_MRT_W`: core 0's eight columns, eight empty, 128 blocks of eight) and 16 rows
 for every 128 workers, 32 in all. Core 0's pixel (x, y) keeps texels 8x to 8x + 7 of row y. A worker's tile of 8 x 8 is a
 column of eight pixels, in a block of columns that is the worker's own. The same pass compiled with `TICK_UNPACK` then
@@ -332,7 +332,7 @@ What a program has to keep to:
   program has, and they are that program's until it closes them: a program that takes every
   core leaves none for the next. It may get fewer than it asked for, or none, and does the
   work itself then.
-- **No workers is the common case to allow for**: D3D12, `--no-mrt` and `--profile` have one core.
+- **No workers is the common case to allow for**: a program may get none, and the compute machine on D3D12 has one core.
   Every use has to fall back on the program doing the job itself.
 
 What it is good for, and what not:
@@ -361,7 +361,7 @@ pass of core 0 is 1.5 ms, and a full pass of all 255 workers 1.65 ms more. That 
 
 A worker's pixels can each run a function on an index of their own, and a field of 3,968 lanes of no
 core's takes a job from any program's first core (`docs/machine/lanes.md`): `mcw_lanes`, `mcw_field_begin`,
-`mcw_shade`. The lean tick has them; `rvc_cpu` and `rvc_opt` have none, and the library makes plain
+`mcw_shade`. The tick has them; `rvc_cpu` has none, and the library makes plain
 calls there.
 
 ## The second layer (`mcwx.h`)

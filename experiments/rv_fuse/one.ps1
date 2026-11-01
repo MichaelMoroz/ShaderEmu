@@ -1,5 +1,5 @@
 # One tick on one snapshot on the card, one line. -NoCode runs without the code file; -Zero with a code area of zeros (nothing translated).
-#   pwsh experiments\rv_fuse\one.ps1 -Tick experiments\rvc_opt -Load shell [-Frames 3000] [-Zero] [-More "--unity 11.1,7.1,1.0"]
+#   pwsh experiments\rv_fuse\one.ps1 -Tick experiments\rvc_lean -Load shell [-Frames 3000] [-Zero] [-More "--unity 11.1,7.1,1.0"]
 param([string]$Tick, [string]$Load = 'shell', [int]$Frames = 3000, [switch]$NoCode, [switch]$Zero, [string]$More = '', [string]$Code = '',
       [string]$Dir = 'C:\Users\micha\agents_isa\snap', [string]$Image = 'C:\Users\micha\agents_isa\img', [string]$Name = '')
 $snap = Join-Path $Dir "$Load\$Load.snap"

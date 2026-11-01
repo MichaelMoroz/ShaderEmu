@@ -151,7 +151,7 @@ VR frame, a played round 10.3 to 11.2 pictures and 2.6 to 2.9 game ticks a secon
 (`docs/games/openttd.md`, "Speed on 31 October").
 
 The D3D11 build needs no FXC: [fxc2](https://github.com/MichaelMoroz/FXC2) compiles the CPU shader
-in seconds where FXC takes minutes (`docs/machine/fxc2.md`). `experiments/rvc_opt/README.md` says how the
+in seconds where FXC takes minutes (`docs/machine/fxc2.md`). `experiments/rvc_lean/README.md` and `NOTES.md` say how the
 CPU shader is built and why.
 
 ## Try it (Windows)
@@ -220,9 +220,9 @@ longer answers: before the first build, `mkdir -p ~/nm/work/src/pathtrace-data` 
 
 ## Layout
 
-- `experiments/rvc_opt/` – the machine: the CPU's tick and commit passes (`main.shader`,
-  `src/`) and the GPU device (`gpu.shader`). A patched copy of rvc's shader (MIT, see its
-  `LICENSE`). The world's own tick is `experiments/rvc_lean`'s (`MachineTickLean`).
+- `experiments/rvc_lean/` – the machine, in the harness and in the world (`MachineTickLean`): the CPU's tick
+  (`tick.hlsl`) and commit (`main.shader`, `src/`) and the GPU device (`gpu.shader`). Derived from rvc's shader (MIT, see its
+  `LICENSE`).
 - `harness/` – runs the shaders outside Unity. `apps/rvc_harness.cpp` is the frontend over two
   backends: D3D11 with FXC bytecode, as VRChat runs it, and D3D12 with DXC; `apps/rvc_cpu.cpp`
   is the machine as an interpreter on the processor (`docs/machine/cpu-harness.md`). `core/` is the
@@ -245,8 +245,7 @@ longer answers: before the first build, `mkdir -p ~/nm/work/src/pathtrace-data` 
 - `programs/` – bare-metal programs in C, `programs/linux`: the OpenGL library and
   `glxgears`, `programs/mc`: the worker cores' library (`mcw.c`, `mcwx.h`) and its tests,
   `programs/hlsl`: the HLSL compiler, `programs/wl`: the machine's workloads piece by piece.
-- `experiments/` – beside `rvc_opt`: `rvc_lean` (the same processor written again, a shader a draw), and the
-  studies `rvc_compute`,
+- `experiments/` – beside `rvc_lean`, the studies `rvc_compute`,
   `isa_proto` and `udon_aot`.
 - `unity/ShaderEmu/` – the VRChat world: UdonSharp scripts, shaders and the editor scripts
   that build the scene.
@@ -291,7 +290,7 @@ a shader the sound card follows.
 
 ## Licence
 
-MIT (`LICENSE`). `experiments/rvc_opt` is derived from pimaker's rvc and keeps its own MIT
+MIT (`LICENSE`). `experiments/rvc_lean` is derived from pimaker's rvc and keeps its own MIT
 licence file. The kernel drivers in `linux/kernel` are GPL-2.0, as they are built into Linux.
 `linux/prebuilt` holds binaries built from other projects' sources; its README lists them
 with their licences.

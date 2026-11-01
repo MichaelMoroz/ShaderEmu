@@ -21,7 +21,7 @@ $cmds = @{
     grep = 'while true; do grep -r root /etc /bin /usr > /dev/null 2>&1; done'
 }
 $wait = @{ loop = 9; doom = 24; gzip = 12; sha = 12; find = 12; dd = 12; grep = 12 }
-$base = @("--d3d11", "--rvc", "experiments\rvc_opt", "--image", "linux-net", "--no-stdin")
+$base = @("--d3d11", "--rvc", "experiments\rvc_lean", "--image", "linux-net", "--no-stdin")
 $exe = (Resolve-Path "bin\rvc_harness.exe").Path
 New-Item -ItemType Directory -Force logs, build\snapshots | Out-Null
 

@@ -4,7 +4,7 @@ param([string]$Load, [string]$Shapes = '1', [int]$Frames = 12000, [string]$Dir =
 $snap = Join-Path $Dir "$Load\$Load.snap"
 $code = Join-Path $Dir "$Load\$Load.code"
 foreach ($t in @('tree') + ($Shapes -split ' ')) {
-    $tick = if ($t -eq 'tree') { 'experiments\rvc_opt' } else { "experiments\rvc_opt_s$t" }
+    $tick = if ($t -eq 'tree') { 'experiments\rvc_lean' } else { "experiments\rvc_lean_s$t" }
     $env:RVC_CODE_FILE = if ($t -eq 'tree') { '' } else { $code }
     $log = "logs\ua_$Load-$t.txt"
     Remove-Item $log -ErrorAction SilentlyContinue
