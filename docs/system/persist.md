@@ -69,10 +69,14 @@ where the desktop's icons stand (a file of lines), and whether the folder is loa
 
 ## The bytes
 
-`tar` of the folder, deflated as a gzip file by zlib inside `nxpersist`, after 16 bytes:
-`SEPD`, a version (1), the count of the bytes that follow, their CRC-32. It is not BusyBox's
-gzip, which has no levels. Level 1 is the default; level 6
-is tried only for a folder that level 1 leaves just over the limit.
+`tar` of the folder, after 16 bytes: `SEPD`, a version, the count of the bytes that follow, their
+CRC-32. Version 1 is a gzip file made by zlib inside `nxpersist` at level 1, which is the default and
+fast. A folder that does not fit so is packed with LZMA: version 2, an xz file with no sum of its own
+and then a word, what it unpacks to. Its dictionary is the folder's size, 2 MB at most (and so what a
+load wants in one piece), halved down to 256 KB when the encoder finds no memory, and with no memory
+at all the folder is deflated at level 9 instead. A folder that does not fit even then is refused, and one that level 1 left at twice the limit is refused
+at once, as LZMA takes minutes there and does not halve it.
+Both versions load.
 
 `nxpersist` hands over 96,000 bytes at most. A folder that packs to more is not saved: the
 window says by how much and names the three largest files, and what the host kept before

@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include "zlib.h"
+#include "lzma.h"
 #include "ui.h"
 #include "ui_ask.h"
 
@@ -22,7 +23,9 @@
 #define REG_REPLY 68
 #define REG_ADDRESS 72
 #define KIND_FILE 3
-#define HEADER 16		/* "SEPD", a version, the packed bytes' count, their CRC-32 */
+#define HEADER 16		/* "SEPD", a version (1 gzip, 2 xz), the packed bytes' count, their CRC-32 */
+#define DICT_MOST 0x200000	/* LZMA's dictionary, and so what a load must find in one piece */
+#define DICT_LEAST 0x40000
 #define WIDTH 320
 #define HEIGHT 70
 
@@ -181,13 +184,78 @@ deflated(const unsigned char *in, long n, unsigned char *out, long room, int lev
 	return at;
 }
 
+/* Packs `n` bytes as an xz file and what they unpack to into `out`; its length, 0 if there was no memory or room.
+   Its memory comes in pieces of several megabytes, which a machine that has run for a while may not have. */
+static long
+lzmaed(const unsigned char *in, long n, unsigned char *out, long room, uint32_t dict)
+{
+	lzma_stream z = LZMA_STREAM_INIT;
+	lzma_options_lzma options;
+	lzma_filter filters[2];
+	lzma_ret ended = LZMA_OK;
+	long at = 0, length = 0;
+	uint32_t size = (uint32_t)n;
+
+	if (lzma_lzma_preset(&options, 4))
+		return 0;
+	options.dict_size = dict;
+	filters[0].id = LZMA_FILTER_LZMA2, filters[0].options = &options;
+	filters[1].id = LZMA_VLI_UNKNOWN, filters[1].options = NULL;
+	if (room < 4 || lzma_stream_encoder(&z, filters, LZMA_CHECK_NONE) != LZMA_OK)
+		return 0;
+	z.next_out = out, z.avail_out = room - 4;
+	while (ended == LZMA_OK) {
+		long here = n - at < 16384 ? n - at : 16384;
+
+		z.next_in = in + at, z.avail_in = here;
+		at += here;
+		do
+			ended = lzma_code(&z, at == n ? LZMA_FINISH : LZMA_RUN);
+		while (ended == LZMA_OK && z.avail_in && z.avail_out);
+		if (ended == LZMA_OK && z.avail_out == 0)
+			ended = LZMA_BUF_ERROR;
+		show(doing, n ? (int)((long long)at * 256 / n) : 256);
+	}
+	if (ended == LZMA_STREAM_END) {
+		length = (long)z.total_out;
+		memcpy(out + length, &size, 4);
+		length += 4;
+	}
+	lzma_end(&z);
+	return length;
+}
+
+/* Unpacks what lzmaed made; 0 if it could not. */
+static int
+unlzmaed(const unsigned char *in, long n, unsigned char *out, uint32_t size)
+{
+	lzma_stream z = LZMA_STREAM_INIT;
+	lzma_ret ended = LZMA_OK;
+	int done;
+
+	if (lzma_stream_decoder(&z, DICT_MOST * 2, 0) != LZMA_OK)
+		return 0;
+	z.next_in = in, z.avail_in = 0;
+	z.next_out = out, z.avail_out = size;
+	while (ended == LZMA_OK) {
+		long left = n - (long)z.total_in, here = left < 8192 ? left : 8192;
+
+		z.avail_in = here;
+		ended = lzma_code(&z, here ? LZMA_RUN : LZMA_FINISH);
+		show(doing, (int)((long long)z.total_in * 256 / n));
+	}
+	done = ended == LZMA_STREAM_END && z.total_out == size;
+	lzma_end(&z);
+	return done;
+}
+
 static int
 save(void)
 {
 	FILE *file;
 	unsigned char *raw, *packed;
 	long n, room, length;
-	uint32_t words[3];
+	uint32_t words[3], dict, version = 1;
 	char text[400];
 	int status;
 
@@ -217,11 +285,19 @@ save(void)
 		say("No memory to pack the folder in.", 1);
 		return 1;
 	}
-	/* fast first; harder (a tenth smaller at best) only for a folder that then just fits */
+	/* fast first; LZMA only for a folder that does not fit, with less memory if it cannot have it,
+	   and not for one twice too large: 1.2 MB of OpenTTD's map took 11 minutes at preset 6, to 146 KB */
 	length = deflated(raw, n, packed + HEADER, room, 1);
-	if (HEADER + length > MOST && HEADER + length < MOST + MOST / 7) {
+	if (length == 0 ? n < 2 * MOST : HEADER + length > MOST && HEADER + length < 2 * MOST) {
+		long smaller = 0;
+
 		show("Compressing data harder...", 0);
-		length = deflated(raw, n, packed + HEADER, room, 6);
+		for (dict = n < DICT_MOST ? (n < DICT_LEAST ? DICT_LEAST : (uint32_t)n) : DICT_MOST; !smaller && dict >= DICT_LEAST; dict /= 2)
+			smaller = lzmaed(raw, n, packed + HEADER, room, dict);
+		if (smaller)
+			length = smaller, version = 2;
+		else
+			length = deflated(raw, n, packed + HEADER, room, 9);
 	}
 	if (length == 0 || HEADER + length > MOST) {
 		nftw(FOLDER, measure, 16, FTW_PHYS);
@@ -233,7 +309,7 @@ save(void)
 		return 1;
 	}
 	memcpy(packed, "SEPD", 4);
-	words[0] = 1, words[1] = (uint32_t)length, words[2] = crc32(0, packed + HEADER, length);
+	words[0] = version, words[1] = (uint32_t)length, words[2] = crc32(0, packed + HEADER, length);
 	memcpy(packed + 4, words, 12);
 	show("Handing the data to the host...", 256);
 	/* (after another program's request has been answered: its answer lands in the same memory) */
@@ -272,12 +348,19 @@ load(const char *address)
 		return 1;
 	memcpy(packed, fetched, total);
 	memcpy(words, packed + 4, 12);
-	memcpy(&size, packed + total - 4, 4);	/* a gzip file ends with what it unpacks to */
+	memcpy(&size, packed + total - 4, 4);	/* a gzip file, and what lzmaed makes, ends with what it unpacks to */
 	open_window("Decompressing persistence data...");
-	if (memcmp(packed, "SEPD", 4) || words[0] != 1 || words[1] != total - HEADER || crc32(0, packed + HEADER, total - HEADER) != words[2] ||
+	if (memcmp(packed, "SEPD", 4) || (words[0] != 1 && words[0] != 2) || words[1] != total - HEADER || crc32(0, packed + HEADER, total - HEADER) != words[2] ||
 	    size > RAW_MOST || (raw = malloc(size + 1)) == NULL) {
 		say("The kept data is damaged: not unpacked.", 0);
 		return 1;
+	}
+	if (words[0] == 2) {
+		if (!unlzmaed(packed + HEADER, total - HEADER - 4, raw, size) || (file = fopen(TAR, "wb")) == NULL) {
+			say("The kept data is damaged: not unpacked.", 0);
+			return 1;
+		}
+		goto unpacked;
 	}
 	memset(&z, 0, sizeof z);
 	inflateInit2(&z, 31);
@@ -296,6 +379,7 @@ load(const char *address)
 		say("The kept data is damaged: not unpacked.", 0);
 		return 1;
 	}
+unpacked:
 	fwrite(raw, 1, size, file);
 	fclose(file);
 	status = tar("-xf");
