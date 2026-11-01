@@ -6,7 +6,7 @@ $td = "TDAWN_AUTO=1 TDAWN_SEED=7 TDAWN_NO_DELAY=1 $Env TDAWN_SCEN=3 TDAWN_FRAMES
 $log = Join-Path $env:TEMP ("rvf" + $PID + ".uart")
 $a = & "$main\bin\rvc_cpu.exe" --image $Image --quiet --uart-log $log --expect "/ # " --send "nano-X -p & sleep 2; echo H2H'' A; $td tdawn FROMINSTALL; echo H2H'' B\n" --count-from "H2H A" --until "H2H B" --seconds $Seconds 2>&1
 $a | Select-String 'COUNT' | % { $_.Line.Trim() }
-Select-String -Path $log -Pattern 'done at frame|Oops|panic|Segmentation|unhandled' | % { $_.Line.Trim() }
+Select-String -Path $log -Pattern 'done at frame|looked at again|of them wrong|Oops|panic|Segmentation|unhandled' | % { $_.Line.Trim() }
 if (-not $One) {
     $b = & "$main\bin\rvc_cpu.exe" --image $Image --quiet --expect "/ # " --send "nano-X -p & sleep 2; TDAWN_MARK=1,1299 $td tdawn FROMINSTALL; echo H2H'' B\n" --count-from ": mark begins" --until "H2H B" --seconds $Seconds 2>&1
     $b | Select-String 'COUNT' | % { 'play: ' + $_.Line.Trim() }
