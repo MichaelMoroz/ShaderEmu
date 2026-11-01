@@ -15,7 +15,7 @@ V cvert(uint id : SV_VertexID) {
     uint tag = texel(16 + id / 4)[id & 3];
     // data: DATA0 is in words: texel DATA0 / 4 on
     o.d = texel(DATA0 / 4 + id);
-    float x = (float(tag & 2047) + 0.5) / 2048 * 2 - 1, y = 1 - (float(tag >> 11) + 0.5) / 2048 * 2;
+    float x = (float(tag & 2047) + 0.5) / 2048 * 2 - 1, y = 1 - (float(tag >> 11) + 0.5) / 9216 * 2;
     o.p = tag == EMPTY ? float4(9, 9, 0, 1) : float4(x, y, 0, 1);
     return o;
 }

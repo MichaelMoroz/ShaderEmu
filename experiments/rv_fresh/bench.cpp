@@ -37,7 +37,7 @@ static ID3DBlob* compile(const std::string& file, const char* entry, const char*
 }
 int main(int argc, char** argv) {
     if (argc < 3) { printf("bench SHADER RAM.bin [--core WxH] [--budget N] [--passes N] [--warp] [-D X=V] [--dump N] [--out BLOB]\n"); return 1; }
-    std::string shader = argv[1], ramf = argv[2], out, commitf; int commitN = 0; int cw = 4, ch = 8, budget = 8192, passes = 400, dump = 0; bool warp = false; std::vector<std::string> defs;
+    std::string shader = argv[1], ramf = argv[2], out, commitf; int commitN = 0; std::string snapf, dumpram; int reps = 3, maxpasses = 400; int cw = 4, ch = 8, budget = 8192, passes = 400, dump = 0; bool warp = false; std::vector<std::string> defs;
     for (int i = 3; i < argc; i++) {
         std::string a = argv[i];
         if (a == "--core") sscanf(argv[++i], "%dx%d", &cw, &ch);
@@ -47,13 +47,23 @@ int main(int argc, char** argv) {
         else if (a == "-D") defs.push_back(argv[++i]);
         else if (a == "--dump") dump = atoi(argv[++i]);
         else if (a == "--out") out = argv[++i];
+        else if (a == "--snap") snapf = argv[++i];
+        else if (a == "--dump-ram") dumpram = argv[++i];
+        else if (a == "--reps") reps = atoi(argv[++i]);
+        else if (a == "--max-passes") maxpasses = atoi(argv[++i]);
         else if (a == "--commit") { commitf = argv[++i]; commitN = atoi(argv[++i]); }
     }
     D3D_FEATURE_LEVEL fl = D3D_FEATURE_LEVEL_11_0;
     check(D3D11CreateDevice(nullptr, warp ? D3D_DRIVER_TYPE_WARP : D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, &fl, 1, D3D11_SDK_VERSION, &dev, nullptr, &ctx), "device");
     FILE* f = fopen(ramf.c_str(), "rb"); if (!f) { printf("no %s\n", ramf.c_str()); return 1; }
-    const int RW = 2048, RH = 2048; std::vector<unsigned> ram(RW * RH * 4);
+    const int RW = 2048, RH = 9216; std::vector<unsigned> ram((size_t)RW * RH * 4);
     size_t nw = fread(ram.data(), 4, ram.size(), f); fclose(f);
+    unsigned snapState[64][4] = {};
+    if (!snapf.empty()) {   // a harness snapshot: RAM and the devices from row 64, core 0's texels in rows 0 on
+        FILE* g = fopen(snapf.c_str(), "rb"); if (!g) { printf("no %s\n", snapf.c_str()); return 1; }
+        fseek(g, 32, SEEK_SET); fread(snapState, 16, 64, g);
+        _fseeki64(g, 32 + (long long)64 * 2048 * 16, SEEK_SET); nw = fread(ram.data(), 4, ram.size(), g); fclose(g);
+    }
     Tex R = tex(RW, RH, ram.data(), RW * 16);
     const int SW = 64, SH = 16; Tex S[2][8];
     std::vector<unsigned> zero(SW * SH * 4);
@@ -78,6 +88,64 @@ int main(int argc, char** argv) {
     }
     ID3D11Query* qa, *qb, *qc; qd.Query = D3D11_QUERY_TIMESTAMP; check(dev->CreateQuery(&qd, &qa), "q"); check(dev->CreateQuery(&qd, &qb), "q"); check(dev->CreateQuery(&qd, &qc), "q");
     double tickSum = 0, commitSum = 0; int sampled = 0;
+    if (!snapf.empty()) {
+        // x1 to x31 and the pc in core 0's texels 29 to 36 (experiments/rvc_lean/tick.hlsl, state_out)
+        unsigned xr[32] = {}, pc = 0;
+        for (int l = 29; l < 37; l++) { int k = 4 * (l - 29); xr[k + 1] = snapState[l][0]; xr[k + 2] = snapState[l][1]; xr[k + 3] = snapState[l][2]; if (l == 36) pc = snapState[l][3]; else xr[k + 4] = snapState[l][3]; }
+        D3D11_TEXTURE2D_DESC pd = {}; R.t->GetDesc(&pd); pd.Usage = D3D11_USAGE_DEFAULT; pd.BindFlags = 0; ID3D11Texture2D* pristine; D3D11_SUBRESOURCE_DATA pi = {ram.data(), RW * 16, 0};
+        pd.BindFlags = D3D11_BIND_SHADER_RESOURCE; check(dev->CreateTexture2D(&pd, &pi, &pristine), "pristine");
+        int lastSide = 0;
+        double tick = 0, commit = 0; unsigned long long ins = 0, outs = 0, full = 0, passes = 0; unsigned lastc[4] = {}, lastx[4] = {};
+        for (int rep = 0; rep < reps; rep++) {
+            ctx->CopyResource(R.t, pristine);
+            int c0 = 0;
+            for (int k = 0; k < 8; k++) { D3D11_BOX b = {0, 0, 0, 1, 1, 1}; ctx->UpdateSubresource(S[0][k].t, 0, &b, xr + 4 * k, 16, 0); }
+            { unsigned w[4] = {pc, 0, 0, 0}; D3D11_BOX b = {1, 0, 0, 2, 1, 1}; ctx->UpdateSubresource(S[0][0].t, 0, &b, w, 16, 0); }
+            unsigned prevN = 0, prevO = 0;
+            for (int q = 0; q < maxpasses; q++) {
+                ctx->Begin(dis); ctx->End(qa);
+                ID3D11ShaderResourceView* n[9] = {}; ctx->PSSetShaderResources(0, 9, n);
+                ID3D11RenderTargetView* r[8]; ID3D11ShaderResourceView* sv[9];
+                sv[0] = R.s; for (int k = 0; k < 8; k++) { sv[k + 1] = S[c0][k].s; r[k] = S[1 - c0][k].r; }
+                ctx->OMSetRenderTargets(8, r, nullptr); ctx->PSSetShaderResources(0, 9, sv);
+                D3D11_VIEWPORT vs0 = {0, 0, (float)SW, (float)SH, 0, 1}; ctx->RSSetViewports(1, &vs0); ctx->RSSetScissorRects(1, &sc);
+                ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST); ctx->VSSetShader(v, nullptr, 0); ctx->PSSetShader(p, nullptr, 0);
+                ctx->Draw(3, 0); c0 = 1 - c0; ctx->End(qb);
+                ctx->OMSetRenderTargets(0, nullptr, nullptr);
+                ID3D11ShaderResourceView* n2[9] = {}; ctx->PSSetShaderResources(0, 9, n2);
+                ID3D11ShaderResourceView* s2[8]; for (int k = 0; k < 8; k++) s2[k] = S[c0][k].s;
+                ctx->VSSetShaderResources(1, 8, s2); ctx->PSSetShaderResources(1, 8, s2);
+                ctx->OMSetRenderTargets(1, &R.r, nullptr);
+                D3D11_VIEWPORT vr = {0, 0, (float)RW, (float)RH, 0, 1}; ctx->RSSetViewports(1, &vr); D3D11_RECT rr = {0, 0, RW, RH}; ctx->RSSetScissorRects(1, &rr);
+                ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_POINTLIST); ctx->VSSetShader(cv, nullptr, 0); ctx->PSSetShader(cp, nullptr, 0);
+                ctx->Draw(commitN, 0); ctx->OMSetRenderTargets(0, nullptr, nullptr);
+                ID3D11ShaderResourceView* n3[8] = {}; ctx->VSSetShaderResources(1, 8, n3); ctx->PSSetShaderResources(1, 8, n3);
+                ctx->End(qc); ctx->End(dis);
+                unsigned cw[4], xw[4];
+                ctx->CopyResource(st, S[c0][0].t); D3D11_MAPPED_SUBRESOURCE m; check(ctx->Map(st, 0, D3D11_MAP_READ, 0, &m), "map");
+                memcpy(cw, (char*)m.pData + 16, 16); ctx->Unmap(st, 0);
+                ctx->CopyResource(st, S[c0][1].t); check(ctx->Map(st, 0, D3D11_MAP_READ, 0, &m), "map"); memcpy(xw, (char*)m.pData + 16, 16); ctx->Unmap(st, 0);
+                UINT64 ta, tb, tc; D3D11_QUERY_DATA_TIMESTAMP_DISJOINT dj; while (ctx->GetData(dis, &dj, sizeof dj, 0) != S_OK) {}
+                ctx->GetData(qa, &ta, 8, 0); ctx->GetData(qb, &tb, 8, 0); ctx->GetData(qc, &tc, 8, 0);
+                unsigned did = cw[1] - prevN; prevN = cw[1];
+                if (rep > 0 && did > 0) { tick += (double)(tb - ta) / dj.Frequency; commit += (double)(tc - tb) / dj.Frequency; ins += did; passes++; outs += xw[0]; full += xw[1]; }
+                memcpy(lastc, cw, 16); memcpy(lastx, xw, 16);
+                lastSide = c0;
+                if (cw[2] != 0) break;
+            }
+        }
+        printf("SNAP instructions=%llu passes=%llu a_pass=%.0f tick_ns=%.2f commit_ns=%.2f whole_ns=%.2f ways_out_a_100=%.1f full_passes=%llu stop=%u word=%08x pc=%08x count=%u\n", ins, passes, (double)ins / max(1ull, passes),
+               tick * 1e9 / max(1ull, ins), commit * 1e9 / max(1ull, ins), (tick + commit) * 1e9 / max(1ull, ins), 100.0 * outs / max(1ull, ins), full, lastc[2], lastc[3], lastc[0], lastc[1]);
+        for (int k = 0; k < 8; k++) { unsigned w[4]; ctx->CopyResource(st, S[lastSide][k].t); D3D11_MAPPED_SUBRESOURCE m; check(ctx->Map(st, 0, D3D11_MAP_READ, 0, &m), "map"); memcpy(w, m.pData, 16); ctx->Unmap(st, 0); printf("texel %d: %08x %08x %08x %08x\n", k, w[0], w[1], w[2], w[3]); }
+        if (!dumpram.empty()) {
+            D3D11_TEXTURE2D_DESC rd2 = {}; R.t->GetDesc(&rd2); rd2.Usage = D3D11_USAGE_STAGING; rd2.BindFlags = 0; rd2.CPUAccessFlags = D3D11_CPU_ACCESS_READ; ID3D11Texture2D* rs2; check(dev->CreateTexture2D(&rd2, nullptr, &rs2), "ram staging");
+            ctx->CopyResource(rs2, R.t); D3D11_MAPPED_SUBRESOURCE m; check(ctx->Map(rs2, 0, D3D11_MAP_READ, 0, &m), "map ram");
+            FILE* o = fopen(dumpram.c_str(), "wb");
+            for (int y = 0; y < RH; y++) fwrite((char*)m.pData + (size_t)y * m.RowPitch, 16, RW, o);
+            fclose(o); ctx->Unmap(rs2, 0);
+        }
+        return 0;
+    }
     std::vector<double> times; int cur = 0; LARGE_INTEGER fq, t0, t1; QueryPerformanceFrequency(&fq); QueryPerformanceCounter(&t0);
     const int BATCH = 32;
     unsigned count0 = 0;

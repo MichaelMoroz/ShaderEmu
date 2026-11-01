@@ -136,3 +136,6 @@
 07:13 steps\s11.hlsl mix2 core=8x8 budget=8192  ns=171.84 pass_us=1407.8 tick_ns=161.06 commit_us=115.39 s11
 07:13 steps\s11.hlsl mix core=8x8 budget=8192  ns=163.09 pass_us=668.0 tick_ns=153.84 commit_us=33.12 s11
 07:14 steps\s11.hlsl mix2 core=8x8 budget=2048  ns=165.11 pass_us=338.1 tick_ns=151.84 commit_us=3.55 
+07:17 steps\s12.hlsl real doom  SNAP instructions=4272 passes=3 a_pass=1424 tick_ns=244.73 commit_ns=3.13 whole_ns=247.87 ways_out_a_100=336432.3 full_passes=19934361 stop=2 word=0005af83 pc=864093e0 count=1424 
+07:18 steps\s12.hlsl real doom  SNAP instructions=88434 passes=12 a_pass=7370 tick_ns=196.83 commit_ns=12.55 whole_ns=209.38 ways_out_a_100=64.8 full_passes=3 stop=2 word=000e2f03 pc=86413134 count=29478 
+07:18 steps\s12.hlsl real shell  SNAP instructions=18258 passes=3 a_pass=6086 tick_ns=195.88 commit_ns=10.62 whole_ns=206.50 ways_out_a_100=59.6 full_passes=0 stop=1 word=00000073 pc=84728910 count=6086 
