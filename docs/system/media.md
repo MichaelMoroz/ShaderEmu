@@ -70,7 +70,8 @@ What is parallel in each:
 | JPEG without | the scan in parts, a part a core, read three times over all cores (below, "Without markers"): from a guessed start, from where the part before ended, and for where each piece of an MCU row begins; then the pieces, some four a core, each read and drawn by itself | |
 | progressive JPEG | this core reads every scan into the coefficients; then strips on every core | |
 | PNG in **segments** | every core inflates and unfilters segments of its own, in place; then the pixels over every core | the `mdPR` chunk (below) |
-| PNG in one stream | this core inflates; workers unfilter a band of every row each, one behind the other, and the last writes the pixels | |
+| PNG in one stream, of 64 KB or more | the stream inflated over every core (below, "One deflate stream on many cores": values kept, no second inflate); filters off in up to 16 bands, into the pixels where they are the rows; on any failure, or `MEDIA_PNG_ONE=1`, the line below | |
+| PNG in one stream, smaller | this core inflates; workers unfilter a band of every row each, one behind the other, and the last writes the pixels | |
 | interlaced PNG | this core inflates; the seven passes are unfiltered a core each; the pixels gathered over every core | |
 | GIF | every frame's LZW on a core of its own, all of them ahead; a frame laid on the canvas in rows over every core | a frame stands by itself |
 | BMP, TGA, PNM | rows over every core (runs unpacked on this core first) | |
@@ -482,6 +483,12 @@ A deflate stream someone else made (a `.gz`, a zip's entry) has no pieces, and
 - The CRC-32 is sliced by eight on each part and the parts' sums joined (`media_crc32_join`);
   the texels two parts share are put back as each part made them.
 - Fixed and stored blocks are only followed, never looked for: a stream of those is one part.
+- A PNG's stream (`m_inflate_stream_plain`, `m_png.c`) knows its output's size and wants no CRC. Its parts are 16 KB; a part finds its
+  block and inflates in one go, keeping its values in memory (a ring of twice a part's share, the last four parts twice that, 32 MB at
+  most); windows are made a round per step of the chain over every core, and a part's values become bytes in its place with no second
+  inflate, unless it made more than its ring. On the card, h2h's `png_ns` (the fox, 1 November 2026, three runs a side): 2,574 ms to
+  1,616, 1,977 passes to 1,294. Passes ended full 12 to 33 (0.6% to 2.5%), 22 of them in the kernel's page allocator for 5.7 MB of values:
+  0.12 million instructions lost of 5.7 million. `experiments/rv_play/NOTES.md`.
 
 `media_test gunzip FILE [WORKERS [OUT]]` prints the bytes, the CRC and the FNV-1a sum.
 

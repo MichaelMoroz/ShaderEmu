@@ -2128,7 +2128,7 @@ index f9c20ea..7ba7870 100644
  #endif
 \ No newline at end of file
 diff --git a/tiberiandawn/conquer.cpp b/tiberiandawn/conquer.cpp
-index a8aebd8..2c95ebb 100644
+index a8aebd8..a70b926 100644
 --- a/tiberiandawn/conquer.cpp
 +++ b/tiberiandawn/conquer.cpp
 @@ -98,6 +98,663 @@ extern void Send_Statistics_Packet(void);
@@ -2880,7 +2880,7 @@ index a8aebd8..2c95ebb 100644
          }
  
          Frame_Limiter(FL_NONE);
-@@ -1611,12 +2307,18 @@ bool Main_Loop()
+@@ -1611,20 +2307,47 @@ bool Main_Loop()
      } else {
          FrameTimer.Set(Options.GameSpeed);
      }
@@ -2894,19 +2894,23 @@ index a8aebd8..2c95ebb 100644
      if (!PlaybackGame) {
          if (SpecialDialog == SDLG_NONE && GameInFocus) {
 +#ifdef SHADEREMU
++            void ShaderEmu_Sort_Begin(LayerClass & layer); /* (layer.cpp: a worker sorts from here to the Sort() below) */
++            void ShaderEmu_Sort_Drop(void);
++            ShaderEmu_Sort_Begin(Map.Layer[LAYER_GROUND]);
 +            host_scene_settle(); /* (the objects of the frame before are drawn: the input may move the view) */
 +#endif
  
              WWMouse->Erase_Mouse(&HidPage, true);
              Map.Input(input, x, y);
-@@ -1624,7 +2326,24 @@ bool Main_Loop()
+             if (input) {
++#ifdef SHADEREMU
++                ShaderEmu_Sort_Drop(); /* (a key or a click may reach anything, a dialog that loads a game too) */
++#endif
                  Keyboard_Process(input);
              }
              //			HidPage.Lock();
 -            Map.Render();
 +#ifdef SHADEREMU
-+            void ShaderEmu_Sort_Begin(LayerClass & layer); /* (layer.cpp: a worker sorts while this core draws) */
-+            ShaderEmu_Sort_Begin(Map.Layer[LAYER_GROUND]);
 +            extern bool ShaderEmu_GL_Behind; /* (gl.cpp: the objects drawn by a worker, a frame behind) */
 +            void ShaderEmu_GL_Post(void);
 +            ShaderEmu_GL_Behind = true;
@@ -2925,7 +2929,7 @@ index a8aebd8..2c95ebb 100644
              //			HidPage.Unlock();
          }
      }
-@@ -1650,7 +2369,17 @@ bool Main_Loop()
+@@ -1650,7 +2373,17 @@ bool Main_Loop()
      /*
      **	AI logic operations are performed here.
      */
@@ -2944,7 +2948,7 @@ index a8aebd8..2c95ebb 100644
  
      //	Heap_Dump_Check( "After Logic.AI" );
  
-@@ -1659,8 +2388,24 @@ bool Main_Loop()
+@@ -1659,8 +2392,24 @@ bool Main_Loop()
      **	a message has expired & been removed, and the entire map must be updated.
      */
      if (Messages.Manage()) {
@@ -2971,7 +2975,7 @@ index a8aebd8..2c95ebb 100644
      }
  
      //
-@@ -1710,6 +2455,9 @@ bool Main_Loop()
+@@ -1710,6 +2459,9 @@ bool Main_Loop()
          PlayerRestarts = false;
          Map.Help_Text(TXT_NONE);
          Set_Video_Cursor_Clip(false);
@@ -2981,7 +2985,7 @@ index a8aebd8..2c95ebb 100644
          Do_Win();
          Set_Video_Cursor_Clip(true);
      }
-@@ -1726,6 +2474,9 @@ bool Main_Loop()
+@@ -1726,6 +2478,9 @@ bool Main_Loop()
          PlayerRestarts = false;
          Map.Help_Text(TXT_NONE);
          Set_Video_Cursor_Clip(false);
@@ -2991,7 +2995,7 @@ index a8aebd8..2c95ebb 100644
          Do_Lose();
          Set_Video_Cursor_Clip(true);
      }
-@@ -1736,6 +2487,9 @@ bool Main_Loop()
+@@ -1736,6 +2491,9 @@ bool Main_Loop()
          PlayerRestarts = false;
          Map.Help_Text(TXT_NONE);
          Set_Video_Cursor_Clip(false);
@@ -3001,7 +3005,7 @@ index a8aebd8..2c95ebb 100644
          Do_Restart();
          Set_Video_Cursor_Clip(true);
      }
-@@ -2242,6 +2996,10 @@ void Play_Movie(char const* name, ThemeType theme, bool clrscrn)
+@@ -2242,6 +3000,10 @@ void Play_Movie(char const* name, ThemeType theme, bool clrscrn)
                  InMovie = true;
                  VQA_Play(vqa, VQAMODE_RUN);
                  VQA_Close(vqa);
@@ -3012,7 +3016,7 @@ index a8aebd8..2c95ebb 100644
                  // Resume_Audio_Thread();
                  InMovie = false;
                  Free_Interpolated_Palettes();
-@@ -2642,6 +3400,70 @@ void CC_Draw_Line(int x, int y, int x1, int y1, unsigned char color, int frame,
+@@ -2642,6 +3404,70 @@ void CC_Draw_Line(int x, int y, int x1, int y1, unsigned char color, int frame,
   *   02/21/1995 JLB : Created.                                                                 *
   *=============================================================================================*/
  //#pragma off(unreferenced)
@@ -3083,7 +3087,7 @@ index a8aebd8..2c95ebb 100644
  void CC_Draw_Shape(void const* shapefile,
                     int shapenum,
                     int x,
-@@ -2656,6 +3478,19 @@ void CC_Draw_Shape(void const* shapefile,
+@@ -2656,6 +3482,19 @@ void CC_Draw_Shape(void const* shapefile,
      char* shape_pointer;
      uintptr_t shape_size;
  
@@ -3103,7 +3107,7 @@ index a8aebd8..2c95ebb 100644
      if (shapefile && shapenum != -1) {
  
          /*
-@@ -3976,6 +4811,21 @@ void Shake_The_Screen(int shakes, HousesType house)
+@@ -3976,6 +4815,21 @@ void Shake_The_Screen(int shakes, HousesType house)
      }
  #else
      shakes += shakes;
@@ -4429,10 +4433,10 @@ index f4f1ef3..ea8fa26 100644
      GScreenClass::Decode_Pointers();
  }
 diff --git a/tiberiandawn/layer.cpp b/tiberiandawn/layer.cpp
-index bb688bc..f0d9087 100644
+index bb688bc..1711aa9 100644
 --- a/tiberiandawn/layer.cpp
 +++ b/tiberiandawn/layer.cpp
-@@ -84,8 +84,148 @@ bool LayerClass::Submit(ObjectClass const* object, bool sort)
+@@ -84,8 +84,157 @@ bool LayerClass::Submit(ObjectClass const* object, bool sort)
   *   10/17/1994 JLB : Created.                                                                 *
   *   03/10/1995 JLB : Uses comparison operator.                                                *
   *=============================================================================================*/
@@ -4460,9 +4464,10 @@ index bb688bc..f0d9087 100644
 +#endif
 +
 +/*
-+** The ground layer's pass made by a worker core while this one draws the frame, which moves
-+** nothing (ShaderEmu_Sort_Begin() before Map.Render()): into a list of its own, from where the
-+** objects are, storing nothing else. Sort() then takes that list. TDAWN_CHECK_SORT=1 compares.
++** The ground layer's pass made by a worker core while this one takes the input and draws the
++** frame, which move nothing (ShaderEmu_Sort_Begin() before them; any input drops it): into a list
++** of its own, from where the objects are, storing nothing else. Sort() then takes that list.
++** TDAWN_CHECK_SORT=1 compares.
 +*/
 +#include "common/mcwx.h"
 +alignas(16) static ObjectClass* ShaderEmu_Sorted[1024];
@@ -4512,6 +4517,14 @@ index bb688bc..f0d9087 100644
 +    if (!ShaderEmu_Sorting && layer.Count() > 1 && layer.Count() < 1024) {
 +        ShaderEmu_Sorting = mcw_try_call(ShaderEmu_Sort_Job, (uint32_t)(uintptr_t)&layer, (uint32_t)layer.Count());
 +        ShaderEmu_Sort_Of = &layer;
++    }
++}
++
++void ShaderEmu_Sort_Drop(void)
++{
++    if (ShaderEmu_Sorting) {
++        mcw_join(ShaderEmu_Sorting);
++        ShaderEmu_Sorting = 0;
 +    }
 +}
 +
@@ -4581,7 +4594,7 @@ index bb688bc..f0d9087 100644
      for (int index = 0; index < Count() - 1; index++) {
          if (*(*this)[index + 1] < *(*this)[index]) {
              ObjectClass* temp;
-@@ -138,11 +278,21 @@ int LayerClass::Sorted_Add(ObjectClass const* const object)
+@@ -138,11 +287,21 @@ int LayerClass::Sorted_Add(ObjectClass const* const object)
      **	There is room for the new object now. Add it to the right sorted position.
      */
      int index;
@@ -5484,7 +5497,7 @@ index b8bb9a7..ff78941 100644
              }
          }
 diff --git a/tiberiandawn/techno.cpp b/tiberiandawn/techno.cpp
-index 07b96eb..fad8665 100644
+index 07b96eb..d6b6f93 100644
 --- a/tiberiandawn/techno.cpp
 +++ b/tiberiandawn/techno.cpp
 @@ -492,11 +492,11 @@ TechnoClass::TechnoClass(void)
@@ -5643,10 +5656,10 @@ index 07b96eb..fad8665 100644
 +** scan's box is read from the map's bits of who is occupied (cell.h), a word of 32 cells
 +** at a time, and only the occupied cells are asked, in the order the game's loops ask.
 +*/
-+static inline unsigned Occupied_Span(const unsigned* line, int word, int low, int high)
-+{
-+    unsigned bits = line ? line[word] : 0;
++static const unsigned Occupied_None[8] = {};
 +
++static inline unsigned Occupied_Span(unsigned bits, int word, int low, int high)
++{
 +    if (word == (low >> 5))
 +        bits &= ~0u << (low & 31);
 +    if (word == (high >> 5))
@@ -5682,7 +5695,7 @@ index 07b96eb..fad8665 100644
  TARGET TechnoClass::Greatest_Threat(ThreatType method) const
  {
      ObjectClass const* bestobject = NULL;
-@@ -1681,7 +1766,61 @@ TARGET TechnoClass::Greatest_Threat(ThreatType method) const
+@@ -1681,7 +1766,69 @@ TARGET TechnoClass::Greatest_Threat(ThreatType method) const
          */
          TechnoClass const* object;
          int value;
@@ -5698,12 +5711,16 @@ index 07b96eb..fad8665 100644
 +            */
 +            int low = MAX(cell_x - radius, map_x), high = MIN(cell_x + radius, map_right - 1);
 +            const unsigned* first =
-+                (cell_y - radius) >= map_y ? &ShaderEmu_Occupied_Rows[(cell_y - radius) * OCCUPIED_ROW_WORDS] : NULL;
++                (cell_y - radius) >= map_y ? &ShaderEmu_Occupied_Rows[(cell_y - radius) * OCCUPIED_ROW_WORDS] : Occupied_None;
 +            const unsigned* second =
-+                (cell_y + radius) < map_bottom ? &ShaderEmu_Occupied_Rows[(cell_y + radius) * OCCUPIED_ROW_WORDS] : NULL;
++                (cell_y + radius) < map_bottom ? &ShaderEmu_Occupied_Rows[(cell_y + radius) * OCCUPIED_ROW_WORDS] : Occupied_None;
 +
 +            for (int word = low >> 5; word <= (high >> 5); word++) {
-+                unsigned one = Occupied_Span(first, word, low, high), other = Occupied_Span(second, word, low, high);
++                unsigned one = first[word], other = second[word];
++                if (!(one | other)) {
++                    continue;
++                }
++                one = Occupied_Span(one, word, low, high), other = Occupied_Span(other, word, low, high);
 +
 +                for (unsigned both = one | other; both; both &= both - 1) {
 +                    unsigned bit = both & -both;
@@ -5722,13 +5739,17 @@ index 07b96eb..fad8665 100644
 +            low = MAX(cell_y - (radius - 1), map_y), high = MIN(cell_y + (radius - 1), map_bottom - 1);
 +            first = (cell_x - radius) >= map_x
 +                        ? &ShaderEmu_Occupied_Columns[(cell_x - radius) * OCCUPIED_COLUMN_WORDS]
-+                        : NULL;
++                        : Occupied_None;
 +            second = (cell_x + radius) < map_right
 +                         ? &ShaderEmu_Occupied_Columns[(cell_x + radius) * OCCUPIED_COLUMN_WORDS]
-+                         : NULL;
++                         : Occupied_None;
 +
 +            for (int word = low >> 5; word <= (high >> 5); word++) {
-+                unsigned one = Occupied_Span(first, word, low, high), other = Occupied_Span(second, word, low, high);
++                unsigned one = first[word], other = second[word];
++                if (!(one | other)) {
++                    continue;
++                }
++                one = Occupied_Span(one, word, low, high), other = Occupied_Span(other, word, low, high);
 +
 +                for (unsigned both = one | other; both; both &= both - 1) {
 +                    unsigned bit = both & -both;
@@ -5744,7 +5765,7 @@ index 07b96eb..fad8665 100644
  
              /*
              **	Scan the top and bottom rows of the "box".
-@@ -1742,6 +1881,7 @@ TARGET TechnoClass::Greatest_Threat(ThreatType method) const
+@@ -1742,6 +1889,7 @@ TARGET TechnoClass::Greatest_Threat(ThreatType method) const
                      }
                  }
              }
@@ -5752,7 +5773,7 @@ index 07b96eb..fad8665 100644
  
              /*
              **	Bail early if a target has already been found and the range is at
-@@ -1872,6 +2012,11 @@ void TechnoClass::Clicked_As_Target(HousesType house,
+@@ -1872,6 +2020,11 @@ void TechnoClass::Clicked_As_Target(HousesType house,
                                      int count) // 2019/09/20 JAS - Added record of who clicked on the object
  {
      FlashCount = count;
@@ -5764,7 +5785,7 @@ index 07b96eb..fad8665 100644
  
      // 2019/09/20 JAS - Flashing info needs to exist per player
      if (house < HOUSE_COUNT) {
-@@ -3021,7 +3166,7 @@ bool TechnoClass::Captured(HouseClass* newowner)
+@@ -3021,7 +3174,7 @@ bool TechnoClass::Captured(HouseClass* newowner)
          /*
          **	Change ownership now.
          */
@@ -5773,7 +5794,7 @@ index 07b96eb..fad8665 100644
          IsOwnedByPlayer = (House == PlayerPtr);
  
          return (true);
-@@ -4652,7 +4797,7 @@ void TechnoClass::Set_Discovered_By_Player(HouseClass* player)
+@@ -4652,7 +4805,7 @@ void TechnoClass::Set_Discovered_By_Player(HouseClass* player)
      IsDiscoveredByPlayerMask |= (1 << shift);
  
      if (GameToPlay == GAME_NORMAL && player == PlayerPtr) {
@@ -5782,7 +5803,7 @@ index 07b96eb..fad8665 100644
      }
  }
  
-@@ -4671,7 +4816,7 @@ void TechnoClass::Set_Discovered_By_Player(HouseClass* player)
+@@ -4671,7 +4824,7 @@ void TechnoClass::Set_Discovered_By_Player(HouseClass* player)
  void TechnoClass::Clear_Discovered_By_Players()
  {
      IsDiscoveredByPlayerMask = 0;

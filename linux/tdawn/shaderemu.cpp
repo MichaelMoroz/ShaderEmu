@@ -111,7 +111,6 @@ void Set_DD_Palette(void* palette)
     static const void* last_from;
     static unsigned char few_turn;
     const unsigned char* from = (const unsigned char*)palette;
-    unsigned int* to = host_palette();
 
     // (the game sets it every frame, to cycle a few of its colours: only those are made again)
     const unsigned* whole = ((uintptr_t)from & 3) == 0 && set ? (const unsigned*)palette : NULL;
@@ -137,11 +136,11 @@ void Set_DD_Palette(void* palette)
             continue;
         }
         last[word] = now;
-        host_settle(); // (the frame in flight is looked up in it)
         for (int i = word * 4 / 3; i <= (word * 4 + 3) / 3; i++) {
             const unsigned char* c = from + i * 3;
-            to[i] = (unsigned)(c[0] << 2 | c[0] >> 4) << 16 | (unsigned)(c[1] << 2 | c[1] >> 4) << 8
-                    | (unsigned)(c[2] << 2 | c[2] >> 4);
+            // (the frame in flight is looked up in it: what it must not see waits for it, not the game)
+            host_palette_set(i, (unsigned)(c[0] << 2 | c[0] >> 4) << 16 | (unsigned)(c[1] << 2 | c[1] >> 4) << 8
+                                    | (unsigned)(c[2] << 2 | c[2] >> 4));
         }
     }
     set = true;

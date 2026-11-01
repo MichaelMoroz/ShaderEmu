@@ -410,6 +410,14 @@ Not done: the two `.ini` files read a line at a time in Red Alert, the key arith
 - `prof`'s names by the innermost frame are lines, not calls: `VectorClass::operator[]` and `Cell_Y` there are inlined.
 - Tried and lost: compiler settings (none kept), a list of who is awake in the logic's loop, `Is_Ally` forced inline. Left in on purpose: the fades, which wait by the clock and could go only for the measure's sake under `TDAWN_NO_DELAY`.
 
+## What play waits for, 1 November 2026
+
+`experiments/rv_play/NOTES.md` has the numbers. Play on the card is 17,080 ms to 16,846 (three runs a side), state `1a9a814b`; against 19,626 before the work on instructions that is 1.165x, not the 1.25x asked for. Core 0 is what bounds it: 88.5% of its passes end by the budget, and all that is left of its waits is worth at most 460 ms (inferred).
+
+- A colour set while a list is in flight waits for that list, not the game (`host_palette_set` in `host.c`, stored by `host_settle` or before the next list): 524 passes a run went waiting right after a show. Anything else that stores to the palette goes through it. `TDAWN_HOLD_LATE=600` with `TDAWN_SWAP=wait` and without gives the same picture, 0 pixels.
+- The ground layer's sort starts before the input rather than after (`ShaderEmu_Sort_Begin`), and any input drops it (`ShaderEmu_Sort_Drop`), as a key or a click can reach anything.
+- A word of two empty lines in `Greatest_Threat`'s rings goes on before any mask. Reading the box by rows and asking the occupied cells in the rings' order was tried: core 0's `Greatest_Threat` 6.07 million to 13.2.
+
 ## What the compiler is told
 
 Both games are compiled with counts from played games (profile-guided optimisation): how often every branch was taken, and which function each virtual call reached. On this machine that is all instruction count: which calls are inlined (a virtual call that

@@ -2,7 +2,7 @@
 param([string]$Image)
 $main = (git worktree list --porcelain | Select-Object -First 1).Substring(9)
 $mt = '/home/micha/agents/play/nm/work/src/libmedia/media_test-host'
-wsl -- python3 linux/libmedia/test/check_pictures.py $mt --wsl 2>&1 | Select-Object -Last 3
+python linux/libmedia/test/check_pictures.py $mt --wsl 2>&1 | Select-Object -Last 3
 wsl -- python3 experiments/rv_play/inflate_check.py $mt 2>&1 | Select-Object -Last 3
 $env:RVC_THREADS = '8'
 $r = Join-Path $env:TEMP 'play_races.txt'

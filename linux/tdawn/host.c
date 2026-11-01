@@ -100,6 +100,29 @@ control(int offset)
  */
 static int flight;	/* a list was handed over and may not be drawn yet */
 
+/*
+ * Colours the game set while a list was in flight: that list is looked up in the palette, so they wait for it, and the
+ * next list is not handed over before they are stored. The game does not wait: it sets a few colours after every show.
+ */
+static unsigned short owed_list[256];
+static unsigned int owed_word[256];
+static unsigned char owed_is[256];
+static int owed;
+
+static void
+owed_store(void)
+{
+	unsigned int *to = seglPalette();
+
+	for (int n = 0; n < owed; n++) {
+		int i = owed_list[n];
+
+		to[i] = owed_word[i];
+		owed_is[i] = 0;
+	}
+	owed = 0;
+}
+
 void
 host_settle(void)
 {
@@ -114,6 +137,23 @@ host_settle(void)
 	while (*control(REG_SUBMIT))
 		__asm__ volatile(".word 0x0100000f");	/* pause */
 	flight = 0;
+	owed_store();
+}
+
+void
+host_palette_set(int index, unsigned int word)
+{
+	if (flight && !*control(REG_SUBMIT))
+		host_settle();
+	if (!flight) {
+		seglPalette()[index] = word;
+		return;
+	}
+	if (!owed_is[index]) {
+		owed_is[index] = 1;
+		owed_list[owed++] = index;
+	}
+	owed_word[index] = word;
 }
 
 static unsigned int shows;	/* lists shown: host_event() rests when the game asks again and again between two */
@@ -125,6 +165,8 @@ show(int again)
 	static int waits = -1;
 
 	shows++;
+	if (owed)
+		host_settle();	/* (this list is to see the colours set since the last) */
 
 	if (waits < 0) {
 		const char *how = getenv("TDAWN_SWAP");
@@ -1612,6 +1654,7 @@ host_show_picture(void)
 	whole_window(0, 0);
 	glColorKeySE(0);
 	quad(picture_texture, 0, 0, screen_w, screen_h, 0);
+	host_settle();
 	seglSwap();
 }
 

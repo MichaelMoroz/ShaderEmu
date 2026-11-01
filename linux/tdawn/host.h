@@ -20,6 +20,7 @@ int host_open(int width, int height);
 /* The two 8-bit pages the GPU can show (0 and 1): the game draws straight into them. */
 unsigned char *host_page(int page);
 /* 256 words of 0x00RRGGBB the screen and the cursor are looked up in. */
+void host_palette_set(int index, unsigned int word); /* a colour, stored when the list in flight is drawn */
 unsigned int *host_palette(void);
 /* The pointer's picture (index 0 is a hole); the pixels are copied. */
 void host_cursor(const unsigned char *pixels, int width, int height, int hot_x, int hot_y);
