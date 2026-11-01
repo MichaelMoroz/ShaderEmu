@@ -75,6 +75,14 @@ AOE_PERSON = ('f(){ echo -n "act $1 ";cat /proc/uptime;X=$(($2+OX));Y=$(($3+OY))
               'while [ ! -e /tmp/aoe-ready ];do sleep 1;done;read OX OY </tmp/aoe-ready;sleep 2;echo aoe: play begins;'
               + AOE_ACTS + 'killall -TERM aoe.bin;sleep 60')
 
+# (the log is written at the end and takes minutes of the console: frames and time from its own lines, the acts' span only)
+def AOE_LAT_RATE(log):
+    p = [int(x) for x in re.findall(r'^L (\d+) \d+ \d+ P ', log, re.M)]
+    acts = [int(x) * 1000 for x in re.findall(r'^act \S+ (\d+)\.', log, re.M)]
+    p = [x for x in p if acts and x >= acts[0]]
+    return (len(p), p[-1] - p[0]) if len(p) > 1 else (1, 1)
+AOE_LAT_FRAMES = lambda log: AOE_LAT_RATE(log)[0]
+
 GAMES = {
     'doom': dict(
         what='-timedemo demo1, one tic a frame, from its first rate line to the end',
@@ -147,11 +155,15 @@ GAMES = {
     'aoe-play': dict(
         what='the game on the desktop, each act by nxkey: selecting, ordering, a box dragged, the build menu, scrolling',
         cmd=AOE_PERSON, wall=1000, mark='aoe: play begins', until='aoe: mark over',
-        frames=lambda log: max(1, len(re.findall(r'^L \d+ \d+ \d+ P ', log, re.M)))),
+        frames=AOE_LAT_FRAMES, rate=AOE_LAT_RATE),
     'aoe-play-moving': dict(
         what='the same with the pointer going round all the time, as a hand moves it',
         cmd=AOE_PERSON, wall=1000, mark='aoe: play begins', until='aoe: mark over', more=['--pointer-sweep', '0'],
-        frames=lambda log: max(1, len(re.findall(r'^L \d+ \d+ \d+ P ', log, re.M)))),
+        frames=AOE_LAT_FRAMES, rate=AOE_LAT_RATE),
+    'aoe-play-moving-old': dict(
+        what='the same with every move a message, as before moves were one',
+        cmd='export AOE_MOVES=all;' + AOE_PERSON, wall=1000, mark='aoe: play begins', until='aoe: mark over', more=['--pointer-sweep', '0'],
+        frames=AOE_LAT_FRAMES, rate=AOE_LAT_RATE),
     'halflife': dict(
         what='hldemo1, standing where it starts, the fight at 31 to 45 s of the level (docs/games/halflife.md, "Speed")',
         cmd='nano-X -p & sleep 2; HL_MARK=${HL_MARK:-31,45} halflife +map hldemo1', wall=600,

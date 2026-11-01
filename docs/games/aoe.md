@@ -111,6 +111,64 @@ The way on, not tried, and these are estimates from the table. Drawing the view 
 
 A start, on the card, reached the game screen at about 250 s from the command, where the calibrated clock said 138 s. It was not worked on.
 
+## Playing
+
+The scenes above are a scripted, mostly idle game, and do not show what a person feels. `python tools/game_par.py
+aoe-play` (and `aoe-play-moving`, the pointer going round all the time; `--card` or `--calibrated`) plays on the desktop by
+`nxkey`: select, order, select a building, train, a box dragged, order many, the build menu, scroll. `AOE_LAT=1` keeps what
+became of each input and every picture in memory and writes them at the end, and `python tools/aoe_play.py LOG` gives per
+act the milliseconds to the event's coming to the game, its being taken, the next pictures, and the panel's reply on the
+screen, with the frames a second until the next act. The time starts at the shell's `cat /proc/uptime` before `nxkey`, so
+it holds `nxkey`'s start and its resolution is 10 ms. The fps of `aoe-play` comes from those lines: the log's writing is
+minutes of console after the acts. `rdinstret` reads 0 on the card, so instructions a frame are from `rvc_cpu` only.
+
+On the card, lean tick, 1 November 2026, the pointer moving:
+
+| | Before | After |
+|---|---|---|
+| Acts whose click reached the game within its 5 s | 2 of 12 | 12 of 12 |
+| Input to the game having it | 3.4 and 3.9 s | 44 to 298 ms |
+| To the first picture after it | 3.5 and 4.1 s | 91 to 427 ms |
+| To the panel's reply on the screen | 3.6 and 4.4 s | 246 to 857 ms |
+| Frames a second | 6.0 to 10.6 | 7.6 to 10.0 |
+
+The "before" ran with `AOE_MOVES=all` and already had the other fixes below. What was wrong and what is done:
+
+- **Moves.** Every `WM_MOUSEMOVE` is a call of the game's idle work, a whole frame, and the port kept every move: with the
+  pointer moving the queue stood full at 255, and the window system's events were read only when it was empty. As Windows
+  does, moves not yet taken are now one move (`AOE_MOVES=all` is the way before).
+- **Zone maps.** The first unit to ask for a table's zones flooded the map, a block from `calloc` a tile and double
+  comparisons a neighbour, 11 million instructions: 2 s with the game standing, several times in a game's first minutes.
+  It floods through an array, and all tables are made at the first update. Which tiles a zone gets does not depend on the order.
+- **The screen's picture.** A redraw of the whole screen went through the pictures' rows, 6 million instructions, 1.1 s.
+  It is copied from what was kept: the rows between the two pieces are the view's, which draws them whole.
+- **A selection** waited for the object panel's half-second look. Another object selected passes that gate.
+
+Still there: the first order of a game stops about 1.3 s (`order` above: world 465 ms, then 770 ms with core 0 nearly idle
+waiting for the view's job, then 282 ms), not found. One calibrated run had one more stop of 2.1 s (11.6M instructions in
+a world update), which two other runs and a profile did not have.
+
+## The view on a worker
+
+`RGE_View::draw`, the walk and the raster, is one job on a worker (`port/aoe_view.cpp`). The first core draws the other
+panels beside the walk (both only read the game), waits for "walked" to make the pick, and makes the next world update
+beside the raster: the world runs while a frame is drawn. A frame's end joins the job, draws what was deferred (a message
+over the view), the cursor, and shows the page. `AOE_VIEW=inline` is the same order on the first core, `AOE_VIEW=whole`
+the way before; under `AOE_NOWINDOW` there are no workers.
+
+What the walk sets around a shape and a panel's drawing must not see is one for each core: `fog_next_shape` and
+`SDI_Capture_Info` (`aoe_cores.h`). They were shared at first, and the panels' shapes went into the walk's list: a town
+centre with no picture, found only by comparing pictures. The sprites' state is one for each core too (`aoe_asm.cpp`),
+the view has its own copy of the page's draw area and span list, and what grows in a job comes from a piece of its own
+(`aoe_any_calloc`), never the heap. A view's clock looks do not move `AOE_TICK_MS`'s clock, which moved the state sums of
+script runs on purpose: update 500 `64d33a6f`, 1000 `5032c153`, under qemu and on the machine, inline and on the worker.
+
+`AOE_PICSUM=N` prints sums of a picture's three bands, `AOE_PICDUMP=F` a grid of block hashes of frame F, and
+`AOE_PICROWS=1` the bottom left's pixels. Worker against inline at updates to 500: top and view bands equal; the bottom
+band differs in 4 of 21 pictures, when the panel's half-second look falls on another frame (a percent trained shown a look
+earlier), which was read off the pictures once and not checked for each. `RVC_RACES` with `RVC_RACES_NEAR=4`: 0 undone in
+the game's script run, 2 near places not yet named.
+
 ## What ends a round
 
 A world runs a fixed number of rounds a Unity frame, so a pass that ends early loses the rest of its instructions there; in the harness it costs 0.2 ms, and the card's figures do not show it. `RVC_PASSLOG` on `rvc_cpu` says who ended each pass, and `reached` in `EmuMachine` is the share a round ran in the world.
