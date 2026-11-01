@@ -34,28 +34,63 @@ Lean's own prices for comparison, whole frames with the commit and devices (abou
 `acct/classes_s.c`, two runs each: add 113-120, arithmetic 125-130, load 169, store 197-204, a two-instruction loop 133-136. The
 figure of 55 ns for gpu_vm's add is from its earlier results: this session's `gvm --case` run printed no prices.
 
+The 97 and the 150 and 166 of the table above are not what they seemed: see below.
+
+## The bisect (1 November 2026, card to itself)
+
+- **L4's +48 ns did not reproduce.** All arithmetic is 50.9, 50.8 and 50.7 ns now, from the same code; each piece alone adds 3 ns or less
+  (`LEVEL` 5 to 10). Why that one run read 97 is not known.
+- **The cliff: a register array under 40 elements in a large loop.** With 33 elements, plain operations cost about 1 ns each until the loop
+  is about 40 longer (89.8 ns), then 173.9 at 48: +84 in one step. It goes by code present, not run (64 unrun operations: 135 ns). With no
+  array, or with 40, 48, 56, 64 or 256 elements, there is no cliff (the same loop 114 ns against 191). Code after the loop costs nothing.
+  What the driver does there is not known. Every step since has 64 elements or more. Lean's array has 65.
+- Step 3 at 64 elements: 88 ns with a branch between arithmetic and control, 95 on one path, registers as the model's.
+
+## The steps since (64 elements or more; the draw alone unless it says whole)
+
+| Step | What came in | Program | ns an instruction |
+|---|---|---|---|
+| 5 | One plain loop, all arithmetic | `adds` | 50.4 |
+| 5 | An outer loop, `if (...) break` as the way out | `adds` | 94.9 |
+| 5 | An outer loop, the next word fetched at a trip's end and asked in the loop's own condition (gpu_vm's shape) | `adds` | 62.6 |
+| 6 | Control as a way out to the outer loop | `alu`, `jmp6`, `jmp4`, `blt` (2 in 5) | 64, 72.5, 78, 87 |
+| 6 | Control on the hot path, by selects | the same | 113 on all |
+| 7 | A load in the outer loop, no write cache | `alu`, `loads`, `mix0` | 65, 153, 101 |
+| 7 | A loop of its own for loads | the same | 66, 97, 108 |
+| 7 | The load behind a `[branch]` in the hot loop | the same | 101, 136, 120 |
+| 8 | Stores, write cache of 368 whole texels by probing, a 64-bit filter, the commit | `alu`, `loads`, `stores`, `mix`, `mix2` | 67, 178, 170, 157, 154 |
+| 9 | The load on the hot path by selects, the texture read on every trip | the same | 116, 117, 178, 207, 215: rejected |
+| 10 | Buckets of four by selects in place of probing | the same | 77, 179, 216, 153, 164: not better |
+| 11 | Step 8, RAM read first, one branch to the table | the same | 67, 163, 169, 154, 161 |
+
+A never-taken `if` costs more the further it jumps: about 8, 24 and 45 ns over 8, 32 and 256 operations (no array), but 8.5, 12 and 42 over
+8, 64 and 256 at 64 elements, so this is not a plain line in distance.
+
+Steps 6 to 11's registers equal `sim.py`'s where checked (`mix0` on step 7, `mix` on step 8, `mix2` on steps 9, 10 and 11; memory itself is
+not compared). `fill` on step 10: the cache stopped a pass at 292 stores of 368 entries (79%); step 8's probing has not been measured so.
+
+**Against lean, the same programs, whole frames** (`lean_on.py`, one run each). Lean's has the commit and devices; the fresh tick's has its
+commit and no devices, traps, atomics, multiplication, floats, unaligned accesses or sleeping workers:
+
+| Program | Lean | Step 8 | Step 11 |
+|---|---|---|---|
+| `alu` | 126.3 | 69.8 | 68.9 |
+| `loads` | 175.2 | 190.2 | 168.8 |
+| `stores` | 205.7 | 175.4 | 175.6 |
+| `mix` | 168.1 | 167.6 | 163.1 |
+| `mix2` | 159.9 | 160.2 | 171.8 |
+
 ## What it says so far
 
-- The loop and fetch, the decode, the registers and the choice among most of the ALU come to about 49 ns.
-- One piece doubles that: something among sub and the comparisons of L4. All that is measured is the jump from L3 to L4. Which line, and
-  why, is not known: a compare may be dear on the card, or the jump may be how the driver compiles the larger loop.
-- Control costs as much again (+53), and its code holds more comparisons. That they are the same cause is a guess.
-- A core of 8 x 8 costs at most 6% against 4 x 8 for one core, so two warps do not explain gpu_vm's lower price, and core 0 can keep its
-  large write cache. This agrees with gpu_vm's own row (every shape within 5% on one core).
+- Arithmetic is about half lean's price. The mixes, half of whose instructions leave the hot loop, are level with lean, and the fresh tick
+  still lacks what lean carries. So on these figures it is not yet ahead where it counts, and the target (139 ns on real code) is not shown
+  reached or out of reach.
+- What the fresh tick pays is the way out: by the mixes' figures more than the kinds' tight loops add up to. Why branches and ways out cost
+  what they do is the open question, and the figures above (a jump's price not a line in distance) cannot settle it. A SASS listing would.
+- How often real code leaves the hot loop decides this design. The mixes are made up: 6 of 12 arithmetic. No real program has run.
 
-## Where it stopped (paused for other work on the card)
+## Where it stopped
 
-`steps\s3b.hlsl` has levels 5 to 9 written and **not measured**, each one piece of L4 on L3: 5 sub by `reg && alt`, 6 sub by `alt`,
-7 `a < y`, 8 slt with the sign turned, 9 slt with no compare. Resume:
-
-    pwsh experiments\rv_fresh\batch.ps1 "steps\s3b.hlsl adds -D LEVEL=5 --note L5" ... "steps\s3b.hlsl adds -D LEVEL=9 --note L9"
-
-`adds` has zeros in its registers: use a program with changing data too (`alu` runs only with control, so it needs a level that has it).
-
-Then: control without the dear piece; a load; a store and the write cache, with core 0's 500 texels; a commit. Real code without the whole
-machine: start from a snapshot's RAM and registers and run until the first instruction the tick lacks (not built). The translated form
-(fixed fields, a texel an instruction) is to be measured against RV's decode as a step of its own, not assumed. The redesign's question,
-what a step decodes and how many paths it has, is not answered yet, and no real-use figures exist. gpu_vm's bytecode was read (about 155
-instructions a bundle, against about 100 for lean's add, counted by hand), so its lower price is not fewer bytecode instructions per step.
-
-The head-to-head against lean (shell, gzip, Doom, Quake; flat, World, VR) has not been run again.
+Next: real code without the whole machine (a snapshot's RAM and registers, on to the first instruction the tick lacks), which needs
+multiplication and more; the path out cheaper, with SASS if a trace can be had; the translated form as a step of its own (not begun). The
+head-to-head against gpu_vm (shell, gzip, Doom, Quake; flat, World, VR) has not been run again, and nothing here has had a WARP check.

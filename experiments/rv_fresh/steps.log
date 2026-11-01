@@ -107,3 +107,32 @@
 07:07 steps\s7.hlsl alu core=4x8 budget=8192 LDLOOP ns=65.67 pass_us=538.0 s7_ldloop
 07:07 steps\s7.hlsl alu core=4x8 budget=8192 LDIN ns=101.02 pass_us=827.5 s7_ldin
 07:07 steps\s7.hlsl mix0 core=4x8 budget=2048  ns=104.15 pass_us=213.3 
+07:10 steps\s8.hlsl mix core=8x8 budget=2048  ns=303.42 pass_us=29.4 tick_ns=263.94 commit_us=3.39 
+07:10 steps\s8.hlsl mix core=8x8 budget=2048  ns=151.26 pass_us=309.8 tick_ns=148.50 commit_us=3.55 
+07:10 steps\s8.hlsl alu core=8x8 budget=8192  ns=69.80 pass_us=571.8 tick_ns=67.02 commit_us=2.87 s8
+07:10 steps\s8.hlsl loads core=8x8 budget=8192  ns=190.21 pass_us=1558.2 tick_ns=178.49 commit_us=109.61 s8
+07:10 steps\s8.hlsl stores core=8x8 budget=8192  ns=175.41 pass_us=1436.9 tick_ns=169.55 commit_us=42.55 s8
+07:10 steps\s8.hlsl mix0 core=8x8 budget=8192  ns=114.88 pass_us=941.2 tick_ns=110.59 commit_us=2.88 s8
+07:10 steps\s8.hlsl mix core=8x8 budget=8192  ns=167.61 pass_us=686.5 tick_ns=156.72 commit_us=23.32 s8
+07:10 steps\s8.hlsl mix core=8x8 budget=8192 NOFILTER ns=166.31 pass_us=681.2 tick_ns=154.89 commit_us=29.99 s8_nofilter
+07:11 steps\s8.hlsl mix2 core=8x8 budget=8192  ns=160.17 pass_us=1312.1 tick_ns=153.95 commit_us=85.06 s8
+07:11 steps\s9.hlsl alu core=8x8 budget=8192  ns=124.44 pass_us=1019.4 tick_ns=116.35 commit_us=59.23 s9
+07:11 steps\s9.hlsl loads core=8x8 budget=8192  ns=121.18 pass_us=992.7 tick_ns=117.28 commit_us=2.87 s9
+07:11 steps\s9.hlsl stores core=8x8 budget=8192  ns=189.43 pass_us=1551.8 tick_ns=177.60 commit_us=108.20 s9
+07:11 steps\s9.hlsl mix0 core=8x8 budget=8192  ns=129.91 pass_us=1064.3 tick_ns=125.12 commit_us=82.85 s9
+07:11 steps\s9.hlsl mix core=8x8 budget=8192  ns=224.96 pass_us=921.4 tick_ns=207.02 commit_us=82.79 s9
+07:11 steps\s9.hlsl mix2 core=8x8 budget=8192  ns=229.11 pass_us=1876.9 tick_ns=214.55 commit_us=234.57 s9
+07:11 steps\s9.hlsl mix2 core=8x8 budget=2048  ns=210.94 pass_us=432.0 tick_ns=198.39 commit_us=3.52 
+07:12 steps\s10.hlsl alu core=8x8 budget=8192  ns=68.90 pass_us=564.4 tick_ns=77.31 commit_us=3.14 s10
+07:12 steps\s10.hlsl loads core=8x8 budget=8192  ns=184.78 pass_us=1513.7 tick_ns=179.18 commit_us=65.06 s10
+07:12 steps\s10.hlsl stores core=8x8 budget=8192  ns=230.28 pass_us=1886.5 tick_ns=216.40 commit_us=150.73 s10
+07:12 steps\s10.hlsl mix2 core=8x8 budget=8192  ns=169.32 pass_us=1387.1 tick_ns=164.00 commit_us=92.28 s10
+07:12 steps\s10.hlsl mix core=8x8 budget=8192  ns=162.64 pass_us=571.0 tick_ns=153.08 commit_us=22.91 s10
+07:12 steps\s10.hlsl fill core=8x8 budget=8192  ns=166.81 pass_us=244.0 tick_ns=164.78 commit_us=3.62 
+07:12 steps\s10.hlsl mix2 core=8x8 budget=2048  ns=168.13 pass_us=344.3 tick_ns=157.06 commit_us=3.52 
+07:13 steps\s11.hlsl alu core=8x8 budget=8192  ns=68.92 pass_us=564.5 tick_ns=66.71 commit_us=44.21 s11
+07:13 steps\s11.hlsl loads core=8x8 budget=8192  ns=168.80 pass_us=1382.8 tick_ns=163.45 commit_us=60.29 s11
+07:13 steps\s11.hlsl stores core=8x8 budget=8192  ns=175.59 pass_us=1438.4 tick_ns=169.33 commit_us=3.46 s11
+07:13 steps\s11.hlsl mix2 core=8x8 budget=8192  ns=171.84 pass_us=1407.8 tick_ns=161.06 commit_us=115.39 s11
+07:13 steps\s11.hlsl mix core=8x8 budget=8192  ns=163.09 pass_us=668.0 tick_ns=153.84 commit_us=33.12 s11
+07:14 steps\s11.hlsl mix2 core=8x8 budget=2048  ns=165.11 pass_us=338.1 tick_ns=151.84 commit_us=3.55 

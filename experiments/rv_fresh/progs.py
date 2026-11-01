@@ -96,3 +96,36 @@ def mix0():
     w.insert(-1, slli(11, 5, 0))
     w[-1] = j(-4 * (len(w) - 1 - top), 0)
     return _withdata(w)
+sw = lambda a, d, im: s(im, d, a, 2)
+def stores():
+    "the old classes' stores: 14 sw to four texels, a new value each trip"
+    w = [lui(10, 2), addi(5, 0, 1000)]
+    top = len(w)
+    w += [sw(10, 5, 4 * k) for k in range(14)] + [addi(5, 5, -1), 0]
+    w[-1] = bne(5, 0, -4 * (len(w) - 1 - top))
+    w += [j(-4 * (len(w) - 1), 0)]
+    return _withdata(w)
+def mix():
+    "a mix about as compilers make: 6 arithmetic, 3 loads, a store, a jump and a taken branch in 12, over a walking pointer in 32 KB"
+    w = [lui(10, 2), lui(12, 2), addi(2, 0, 3), lui(13, 8), addi(13, 13, -16)]
+    top = len(w)
+    w += [lw(6, 10, 0), add(7, 6, 2), lw(28, 10, 4), xor(29, 28, 7), sw(10, 29, 8), addi(5, 5, 16), andr(5, 5, 13), lbu(30, 10, 9), add(1, 1, 30), add(10, 5, 12)]
+    w += [b(8, 0, 0, 0), 0x13]    # beq x0, x0 over a nop
+    w += [0]
+    w[-1] = j(-4 * (len(w) - 1 - top), 0)
+    return _withdata(w)
+def mix2():
+    "the mix, its pointer walking 2 KB: most of a pass's stores to texels stored to already"
+    w = [lui(10, 2), lui(12, 2), addi(2, 0, 3), addi(13, 0, 0x7f0)]
+    top = len(w)
+    w += [lw(6, 10, 0), add(7, 6, 2), lw(28, 10, 4), xor(29, 28, 7), sw(10, 29, 8), addi(5, 5, 16), andr(5, 5, 13), lbu(30, 10, 9), add(1, 1, 30), add(10, 5, 12)]
+    w += [b(8, 0, 0, 0), 0x13, 0]
+    w[-1] = j(-4 * (len(w) - 1 - top), 0)
+    return _withdata(w)
+def fill():
+    "a store to a new texel every trip over 64 KB, to see where the write cache stops a pass: instructions a pass say it"
+    w = [lui(10, 2), lui(12, 2), lui(13, 16), addi(13, 13, -16)]
+    top = len(w)
+    w += [sw(10, 5, 0), addi(5, 5, 16), andr(5, 5, 13), add(10, 5, 12), 0]
+    w[-1] = j(-4 * (len(w) - 1 - top), 0)
+    return _withdata(w)

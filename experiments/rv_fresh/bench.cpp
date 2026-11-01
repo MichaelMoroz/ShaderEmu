@@ -37,7 +37,7 @@ static ID3DBlob* compile(const std::string& file, const char* entry, const char*
 }
 int main(int argc, char** argv) {
     if (argc < 3) { printf("bench SHADER RAM.bin [--core WxH] [--budget N] [--passes N] [--warp] [-D X=V] [--dump N] [--out BLOB]\n"); return 1; }
-    std::string shader = argv[1], ramf = argv[2], out; int cw = 4, ch = 8, budget = 8192, passes = 400, dump = 0; bool warp = false; std::vector<std::string> defs;
+    std::string shader = argv[1], ramf = argv[2], out, commitf; int commitN = 0; int cw = 4, ch = 8, budget = 8192, passes = 400, dump = 0; bool warp = false; std::vector<std::string> defs;
     for (int i = 3; i < argc; i++) {
         std::string a = argv[i];
         if (a == "--core") sscanf(argv[++i], "%dx%d", &cw, &ch);
@@ -47,6 +47,7 @@ int main(int argc, char** argv) {
         else if (a == "-D") defs.push_back(argv[++i]);
         else if (a == "--dump") dump = atoi(argv[++i]);
         else if (a == "--out") out = argv[++i];
+        else if (a == "--commit") { commitf = argv[++i]; commitN = atoi(argv[++i]); }
     }
     D3D_FEATURE_LEVEL fl = D3D_FEATURE_LEVEL_11_0;
     check(D3D11CreateDevice(nullptr, warp ? D3D_DRIVER_TYPE_WARP : D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, &fl, 1, D3D11_SDK_VERSION, &dev, nullptr, &ctx), "device");
@@ -70,6 +71,13 @@ int main(int argc, char** argv) {
     D3D11_QUERY_DESC qd = {D3D11_QUERY_TIMESTAMP_DISJOINT, 0}; ID3D11Query* dis; check(dev->CreateQuery(&qd, &dis), "q"); qd.Query = D3D11_QUERY_TIMESTAMP;
     ID3D11Query* q0, *q1; check(dev->CreateQuery(&qd, &q0), "q"); check(dev->CreateQuery(&qd, &q1), "q");
     D3D11_TEXTURE2D_DESC sd = {}; S[0][0].t->GetDesc(&sd); sd.Usage = D3D11_USAGE_STAGING; sd.BindFlags = 0; sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ; ID3D11Texture2D* st; check(dev->CreateTexture2D(&sd, nullptr, &st), "staging");
+    ID3D11VertexShader* cv = nullptr; ID3D11PixelShader* cp = nullptr;
+    if (!commitf.empty()) {
+        ID3DBlob* a = compile(commitf, "cvert", "vs_5_0", defs), *c = compile(commitf, "cfrag", "ps_5_0", defs);
+        check(dev->CreateVertexShader(a->GetBufferPointer(), a->GetBufferSize(), nullptr, &cv), "cvs"); check(dev->CreatePixelShader(c->GetBufferPointer(), c->GetBufferSize(), nullptr, &cp), "cps");
+    }
+    ID3D11Query* qa, *qb, *qc; qd.Query = D3D11_QUERY_TIMESTAMP; check(dev->CreateQuery(&qd, &qa), "q"); check(dev->CreateQuery(&qd, &qb), "q"); check(dev->CreateQuery(&qd, &qc), "q");
+    double tickSum = 0, commitSum = 0; int sampled = 0;
     std::vector<double> times; int cur = 0; LARGE_INTEGER fq, t0, t1; QueryPerformanceFrequency(&fq); QueryPerformanceCounter(&t0);
     const int BATCH = 32;
     unsigned count0 = 0;
@@ -86,14 +94,32 @@ int main(int argc, char** argv) {
             ID3D11RenderTargetView* r[8]; ID3D11ShaderResourceView* s[9];
             s[0] = R.s; for (int k = 0; k < 8; k++) { s[k + 1] = S[cur][k].s; r[k] = S[1 - cur][k].r; }
             ctx->OMSetRenderTargets(8, r, nullptr); ctx->PSSetShaderResources(0, 9, s);
+            D3D11_VIEWPORT vs0 = {0, 0, (float)SW, (float)SH, 0, 1}; ctx->RSSetViewports(1, &vs0); ctx->RSSetScissorRects(1, &sc);
+            ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST); ctx->VSSetShader(v, nullptr, 0); ctx->PSSetShader(p, nullptr, 0);
+            if (i == BATCH - 1) ctx->End(qa);
             ctx->Draw(3, 0); cur = 1 - cur;
+            if (i == BATCH - 1) ctx->End(qb);
             ctx->OMSetRenderTargets(0, nullptr, nullptr);
+            if (cv) {
+                ID3D11ShaderResourceView* n2[9] = {}; ctx->PSSetShaderResources(0, 9, n2);
+                ID3D11ShaderResourceView* s2[8]; for (int k = 0; k < 8; k++) s2[k] = S[cur][k].s;
+                ctx->VSSetShaderResources(1, 8, s2); ctx->PSSetShaderResources(1, 8, s2);
+                ctx->OMSetRenderTargets(1, &R.r, nullptr);
+                D3D11_VIEWPORT vr = {0, 0, (float)RW, (float)RH, 0, 1}; ctx->RSSetViewports(1, &vr); D3D11_RECT rr = {0, 0, RW, RH}; ctx->RSSetScissorRects(1, &rr);
+                ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_POINTLIST); ctx->VSSetShader(cv, nullptr, 0); ctx->PSSetShader(cp, nullptr, 0);
+                ctx->Draw(commitN, 0);
+                ctx->OMSetRenderTargets(0, nullptr, nullptr);
+                ID3D11ShaderResourceView* n3[8] = {}; ctx->VSSetShaderResources(1, 8, n3); ctx->PSSetShaderResources(1, 8, n3);
+            }
+            if (i == BATCH - 1) ctx->End(qc);
         }
         ctx->End(q1); ctx->End(dis); ctx->Flush();
         UINT64 a, c; D3D11_QUERY_DATA_TIMESTAMP_DISJOINT dj;
         while (ctx->GetData(dis, &dj, sizeof dj, 0) != S_OK) {}
         ctx->GetData(q0, &a, 8, 0); ctx->GetData(q1, &c, 8, 0);
-        if (b >= warm && !dj.Disjoint) { times.push_back((double)(c - a) / dj.Frequency / BATCH); measured += BATCH; }
+        if (b >= warm && !dj.Disjoint) { times.push_back((double)(c - a) / dj.Frequency / BATCH); measured += BATCH;
+            UINT64 ta, tb, tc; ctx->GetData(qa, &ta, 8, 0); ctx->GetData(qb, &tb, 8, 0); ctx->GetData(qc, &tc, 8, 0);
+            tickSum += (double)(tb - ta) / dj.Frequency; commitSum += (double)(tc - tb) / dj.Frequency; sampled++; }
     }
     QueryPerformanceCounter(&t1);
     unsigned last[4]; readback(cur, 0, 1, 0, last);
@@ -101,7 +127,7 @@ int main(int argc, char** argv) {
     double med = times.empty() ? 0 : times[times.size() / 2];
     double per = (double)(last[1] - first[1]) / max(1, measured + 0);
     double wall = (double)(t1.QuadPart - t0.QuadPart) / fq.QuadPart / max(1, measured);
-    printf("RESULT core=%dx%d budget=%d pass_us=%.2f wall_us=%.2f instr_a_pass=%.1f ns_a_instr=%.2f pc=%08x count=%u words=%zu\n", cw, ch, budget, med * 1e6, wall * 1e6, per, per > 0 ? med * 1e9 / per : 0.0, last[0], last[1], nw);
+    printf("RESULT core=%dx%d budget=%d pass_us=%.2f wall_us=%.2f instr_a_pass=%.1f ns_a_instr=%.2f pc=%08x count=%u words=%zu tick_us=%.2f commit_us=%.2f tick_ns=%.2f\n", cw, ch, budget, med * 1e6, wall * 1e6, per, per > 0 ? med * 1e9 / per : 0.0, last[0], last[1], nw, tickSum / max(1, sampled) * 1e6, commitSum / max(1, sampled) * 1e6, per > 0 ? tickSum / max(1, sampled) * 1e9 / per : 0.0);
     if (dump) { for (int k = 0; k < dump && k < 8; k++) { unsigned w[4]; readback(cur, k, 0, 0, w); printf("texel %d: %08x %08x %08x %08x\n", k, w[0], w[1], w[2], w[3]); } }
     return 0;
 }
