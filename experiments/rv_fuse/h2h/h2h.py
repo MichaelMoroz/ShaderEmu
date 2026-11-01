@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""gpu_vm's tick and programs against ShaderX86's on this card: the same command, a cold boot each, through the queue.
+"""gpu_vm's tick and programs against ShaderEmu's on this card: the same command, a cold boot each, through the queue.
     python h2h.py MACHINE LOAD [--mode flat|world|vr] [--out results.jsonl]    MACHINE: gvm or rv
 Wall seconds between the guest's own marks (work of a fixed size), each load's own figures, and the console kept.
 world is --unity 11.1,1.4,R (Unity's frame with 9.7 ms for the machine), vr --unity 11.1,7.1,1.0 (4 ms of a 90 Hz frame)."""
@@ -7,7 +7,7 @@ import argparse, json, os, re, subprocess, sys, time
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, '..', '..', '..'))
 GVM = r'D:\Development\GPU-VM'
-RVIMG = r'D:\Development\ShaderX86\build\images\nommu'
+RVIMG = r'D:\Development\ShaderEmu\build\images\nommu'
 PRE = 'nano-X -p & sleep 2; '
 LOADS = {   # the command, seconds at most
     'echo': ('echo H2H"" A; echo H2H"" B', 40),
