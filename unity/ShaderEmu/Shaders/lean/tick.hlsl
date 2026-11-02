@@ -527,19 +527,23 @@ uint fast(uint room) {
                 ok = (va & 3) + (1u << (f3 & 3)) <= 4 && (va ^ 0x80000000) < RAM_MAX;
 #endif
                 // (read whether or not it may be: a read changes nothing, and a load that may not is the general step's)
+#ifdef FAST
                 uint x = ram_word(va & 0x7ffffffc) >> ((va & 3) * 8) << up;
+#else
+                uint x = ram_word(va & 0x7ffffffc) << (up - ((va & 3) << 3));   // (one shift: (va & 3) * 8 is never over up for a load that may be)
+#endif
                 v = (f3 & 4) ? x >> up : asuint(asint(x) >> up);
             }
         } else [branch] if (opc == 0x23 || (w & 0x5f) == 0x07 || opc == 0x53) {
             [branch] if (opc == 0x23) {
                 // sb sh sw, within one word of RAM (funct3 3 to 7 fail the size test)
-                uint sa = a + imm_s(w), off = sa & 3;
+                uint sa = a + ((asuint(asint(w) >> 20) & 0xffffffe0) | rd), off = sa & 3;
 #ifdef FAST
                 ok = (sa ^ 0x80000000) < RAM_MAX;   // (FAST: a store not on its size goes into its word from sa on)
 #else
                 ok = (sa ^ 0x80000000) < RAM_MAX && off + (1u << f3) <= 4;
 #endif
-                [branch] if (ok) ram_store_nc(sa & 0x7ffffffc, b << (off * 8), (f3 == 2 ? 0xffffffff : f3 == 1 ? 0xffff : 0xff) << (off * 8));
+                [branch] if (ok) ram_store_nc(sa & 0x7ffffffc, b << (off * 8), (0xffffffffu >> LOAD_UP(f3)) << (off * 8));
                 dst = 64;
             } else [branch] if (opc == 0x53) {
                 // (opcode 0x53 before flw and fsw: a program has more of them) floats: a sum, a difference, a product, and the light ones; the rest are the general step's
@@ -555,6 +559,11 @@ uint fast(uint room) {
                     precise float x = asfloat(fa), y = asfloat(fb), sum = x + y, dif = x - y, prod = x * y;
                     v = asuint((f7 & 8) ? prod : (f7 & 4) ? dif : sum);   // (a NaN is the card's, 0x7fffffff on NVIDIA's: rvc_cpu's too)
 #endif
+                } else [branch] if (f7 == 0x50) {   // (comparisons by themselves before the light floats: Quake's most common float)
+                    precise float x = asfloat(fa), y = asfloat(fb);
+                    bool nan_ = (fa & 0x7fffffff) > 0x7f800000 || (fb & 0x7fffffff) > 0x7f800000;
+                    v = !nan_ && (f3 == 2 ? x == y : f3 == 1 ? x < y : x <= y) ? 1 : 0;
+                    to_f = false;
                 } else [branch] if (((0x50100030u >> (f7 >> 2)) & 1) != 0 && (f7 & 3) == 0 && (f7 != 0x70 || f3 == 0)) {
                     v = fp_light(w, fa, fb, to_f, ok);
                 } else {
@@ -573,7 +582,7 @@ uint fast(uint room) {
                 dst = 32 + rd;
             } else {
                 // fsw, a word of RAM
-                uint sa = a + imm_s(w);
+                uint sa = a + ((asuint(asint(w) >> 20) & 0xffffffe0) | rd);
 #ifdef FAST
                 ok = f3 == 2 && (sa ^ 0x80000000) < RAM_MAX;
 #else

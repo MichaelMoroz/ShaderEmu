@@ -1242,8 +1242,8 @@ static __declspec(noinline) int general_step(Core& c, u32 ins) {
     case 0x23: {
         u32 va = a + (((i32)ins >> 25 << 5) | rd);
         write = false;
-        if ((tick_fast & 1) && (va ^ 0x80000000u) < FAST_RAM_END) {   // (FAST: into its word from va on; funct3 3 to 7 are sb)
-            u32 bytes = f3 == 2 ? 4 : f3 == 1 ? 2 : 1;
+        if ((tick_fast & 1) && (va ^ 0x80000000u) < FAST_RAM_END) {   // (FAST: into its word from va on; funct3 3 to 7 by their low bits)
+            u32 bytes = (f3 & 3) == 0 ? 1 : (f3 & 3) == 1 ? 2 : 4;
             for (u32 i = 0; i < bytes && (va & 3) + i < 4; i++)
                 if (!store(c, va + i, 1, b >> (8 * i), t)) break;
             break;
