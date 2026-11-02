@@ -17,6 +17,12 @@ if [ ! -d "$SRC" ]; then
     echo "== TinyCC source"
     git clone -q -b riscv32 https://github.com/jrrk2/tinycc "$SRC"
 fi
+# the commit cc-bytes' sums were made with: the branch's 194bf323 (21 October 2026) changes what
+# `tcc -c` writes (its unwind entries), so a fresh clone moved cc-bytes until this was pinned
+TCC_AT=f7e187ef
+if [ "$(git -C "$SRC" rev-parse --short=8 HEAD)" != "$TCC_AT" ]; then
+    git -C "$SRC" checkout -q -- . && git -C "$SRC" clean -qfd && git -C "$SRC" checkout -q "$TCC_AT"
+fi
 git -C "$SRC" log --oneline -1
 # its float instructions as this machine has them: single precision only (docs/machine/fpu.md)
 python3 "$HERE/fpu_hook.py" "$SRC"
