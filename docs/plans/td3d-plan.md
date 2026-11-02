@@ -1,7 +1,7 @@
 # Plan: Tiberian Dawn in 3D, with free models
 
-Written 1 November 2026. On 2 November the host's part was made and tested and the game's part written, not yet compiled for the
-machine ("What came of it", at the end; `docs/games/tdawn.md`, "In 3D"). It comes from reading `docs/games/tdawn.md`, `docs/machine/gpu.md` and OpenCNC3D's README and
+Written 1 November 2026. On 2 November the host's part was made and tested, and the game's part written, built and run on `rvc_cpu` and
+`rvc_harness --cpu --warp` ("What came of it", at the end; `docs/games/tdawn.md`, "In 3D"); nothing has run on the card. It comes from reading `docs/games/tdawn.md`, `docs/machine/gpu.md` and OpenCNC3D's README and
 list of documents. When a page `docs/games/tdawn.md` has on this and this plan differ, the page is right.
 
 The idea is OpenCNC3D's (`github.com/freschism3000/OpenCNC3D`, GPL-3.0): the rules of the 2D game, drawn in 3D as the Nintendo 64's version was. Not its
@@ -78,10 +78,11 @@ Each shows something, and ends with its gate. Stop and report if a gate fails.
 
 ## What came of it
 
-**2 November 2026**, on a computer with no guest toolchain (no WSL at first, then one whose shared home was in use): everything that runs on
-the host was made and tested there; the game's code was written against the fetched tree (commit `ce83b59` plus our patch) and passes a
-syntax check by the host's `gcc`/`g++` (64-bit, the game's defines), but **has not been compiled for the machine nor run**. No gate of a
-step below has been met: each needs the machine.
+**2 November 2026.** Written first with no guest toolchain (the host's part tested, the game's checked by the host's `gcc`), then built
+in a private WSL home and run: `test_all.py tdawn ralert` 21 of 21 (2D unchanged; the 2D lists the same as before, `TDAWN_CHECK_LIST`),
+`tdawn-3d-300` and `tdawn-3d-paths` pass with `--races` too, and pictures of missions 1, 3 and 10 under `rvc_harness --cpu --warp`
+(`tools/td3d_shots.py`) show the tilted map, the models and the soldiers standing. The gates that need the card (frames a second, the
+world's measure, the triangle budget) are not met: the card was another agent's.
 
 - **Step 0.** The tilted matrix over the kept cells is written (`host_scene_tilt`, `td3d_clip_matrix`), and tested on the host against the
   arithmetic it stands for (the matrix's pixel within 0.05 of it, depth inside -1 to 1 and growing away from the eye). No picture, no frames
@@ -105,10 +106,8 @@ step below has been met: each needs the machine.
   Soldiers, aircraft, trees and walls are sprites standing up.
 - **Step 6, in part.** `tools/test_all.py`'s `tdawn-3d-300` and `tdawn-3d-paths` (tag `td3d`) say the 3D view changes no rule.
 
-What needs the machine, in order (`docs/games/tdawn.md`, "In 3D", has the checks): build the game (`linux/tdawn/build.sh` and Red Alert's,
-which shares `host.c`), the image; `tools/test_all.py tdawn ralert` as before (2D unchanged), then `td3d`; captures of `TDAWN_VIEW=3d` on
-missions 1, 3 and 10 under `rvc_harness --cpu --warp`, with and without models and heights; `RVC_RACES` on a 3D run (the objects are drawn
-by a worker: `Model_Begin` stores only to `drawing`); then the card's numbers of step 0.
+What is left: the card's numbers of step 0 (`game_par.py tdawn --card`, `--unity`) with `TDAWN_VIEW=3d`; step 3's 50 tanks; a mission
+played to its end in 3D by hand (clicks, the band) and by script; then the look, decided on pictures.
 
 What `gles.c` would need (its owner's: a change there moves every program's bytes): a sprite with a depth (the blended pass, tested), so
 that sprites and models hide each other rightly; and a quad of four corners with a colour in that pass, for the ground's rectangles over

@@ -1659,7 +1659,9 @@ void DisplayClass::ShaderEmu_GL_Draw(bool forced)
     if (under) {
         host_scene_part(0, 0);
     }
-    for (int cy = Cell_Y(corner); under && cy < MAP_CELL_H && (y = base_y + cy * 24) < high; cy++) {
+    // (the tilted view over hills: raised ground near the eye shows rows below the window's, two more of them)
+    int below = view3d > 0 && heights_now ? 48 : 0;
+    for (int cy = Cell_Y(corner); under && cy < MAP_CELL_H && (y = base_y + cy * 24) < high + below; cy++) {
         int run = -1; // where a run of cells not seen yet began
         for (int cx = Cell_X(corner); cx < MAP_CELL_W && (x = base_x + cx * 24) < wide; cx++) {
             CELL cell = XY_Cell(cx, cy);

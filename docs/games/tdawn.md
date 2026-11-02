@@ -493,9 +493,10 @@ Tiberian Dawn's movies are 320 x 200 in 4x2 blocks (`UnVQ_4x2`; Red Alert's are 
 ## In 3D
 
 `TDAWN_VIEW=3d` draws the map through a tilted camera (`docs/plans/td3d-plan.md`): the game's rules, its cells, its window on the map and
-its order of drawing are as in 2D, which stays the default and is drawn as before. Written on 2 November 2026 and checked on the host only:
-**the game's part has not been compiled for the machine or run yet** (no guest toolchain on the computer it was written on), so nothing
-below has a picture or a number of the machine yet.
+its order of drawing are as in 2D, which stays the default and is drawn as before (2 November 2026: the 2D view's lists of mission 3's 600
+frames are the same before and after, `TDAWN_CHECK_LIST=1` sum `1a2b9cc4` of 455,376 words both). Pictures under `rvc_harness --cpu --warp`:
+`python tools/td3d_shots.py --image build/images/NAME --out DIR` (missions 1, 3 and 10 at frame 300, 2D and 3D, with `--views` for heights
+and sprites only). Nothing of it has been measured on the card yet.
 
 - **The camera** (`linux/tdawn/td3d.h`) looks north, `TDAWN_PITCH` degrees down (60; 35 to 85), and is fitted to the game's window: its
   far row spans the screen's top row at scale 1, the middle of its near row is the screen's bottom middle. So every pixel of the view shows
@@ -515,15 +516,17 @@ below has a picture or a number of the machine yet.
   from its own templates, read against the fetched tree's table of them (`cdata.cpp`, `defines.h`: nothing of the game's table is in this
   repository): water low and flat, beaches and rivers a little under the ground, cliff rock between terraces or a ridge, the rest smoothed
   (`tdawn-heights.dat`). The kept cells' corners, the standing rectangles' and the models' feet and the click's ray follow them; the ground's
-  rectangles (overlays, the shroud) do not yet, which is why they are off.
+  rectangles (overlays, the shroud) do not yet, which is why they are off. Two more rows of cells are drawn below the window, since raised
+  ground near the eye shows them.
 - **Clicks** go through the game's own input: `shaderemu.cpp` gives the game, for the pointer and every button's event, the pixel the 2D
   view has for the point of the ground the ray meets (`ShaderEmu_View_Pick`; over hills in three steps). `Input`, `Click_Cell_Calc`, the
   band and `Close_Object` then make the same orders of the same cells and objects. Only while scenes are being made (250 ms): a dialog
   over the map has the pointer as it is. The band is drawn where the camera has its corners (`ShaderEmu_GL_Band`, called by `display.cpp`)
   and the bars over where it shows the object's middle.
 - **Checks**: `tools/test_all.py`'s `tdawn-3d-300` (state `f7650705`, as in 2D, and `TDAWN_PICK_CHECK=1`: every cell's middle in the
-  window put on the screen as a whole pixel and picked back must be that cell) and `tdawn-3d-paths` (heights on, `1a9a814b`,
-  `TDAWN_CHECK_PATHS` and `TDAWN_CHECK_SCANS` with 0 wrong). On the host: `linux/tdawn/test/td3d_test.c` (the camera there and back
+  window put on the screen as a whole pixel and picked back must be that cell: 93 points, 0 in another cell) and `tdawn-3d-paths` (heights
+  on, `1a9a814b`, `TDAWN_CHECK_PATHS` and `TDAWN_CHECK_SCANS` with 0 wrong); both with `--races`, 0 undone. Missions 1, 3 and 10 held at frame
+  300 have the same state in 2D, 3D, 3D with heights and 3D with sprites only (`f6e24c6c`, `c63742a4`, `f7650705`). On the host: `linux/tdawn/test/td3d_test.c` (the camera there and back
   within a 64th of a pixel, the window's every pixel inside it, the GPU's matrix against the arithmetic, a model's matrix against the same
   turns in doubles: PASS, 1,248,102 checks) and `python linux/tdawn/test/test_td3d_tools.py` (mix files, the templates' table, heights,
   the models' file; with `TDAWN_SOURCE` the demo's own five maps).
