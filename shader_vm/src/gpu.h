@@ -91,7 +91,7 @@
 #define GPU_STATE_ROW 64u   // the state texture's row RAM starts in
 #endif
 uint4 ram(uint index) {
-    return GPU_STATE[uint2(index % 2048, GPU_STATE_ROW + index / 2048)];
+    return GPU_STATE[uint2(index & 2047, GPU_STATE_ROW + (index >> 11))];
 }
 uint texel_of(uint address) {
     return (address & 0x7fffffff) >> 4;

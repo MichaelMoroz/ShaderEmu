@@ -37,8 +37,10 @@ Shader "Nix/shader_vm"
             #pragma vertex vert
             #pragma geometry tick_geom
             #pragma fragment frag
-            #define LANE_FIELD   // the lanes' field (docs/machine/lanes.md): the host draws it where it sees this
             #include "tick.hlsl"
+            #ifdef TICK_UNPACK
+            #include "unpack.hlsl"
+            #endif
             ENDHLSL
         }
 

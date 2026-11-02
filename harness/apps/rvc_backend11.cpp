@@ -330,7 +330,7 @@ public:
         const uint32_t rounds = (!cpuMode && !cs_ && mat.getFloat("_Init") == 0) ? (std::max)(1u, tickRounds) : 1u;
         const float zapKind = mat.getFloat("_ZapKind");
         for (uint32_t round = 0; round < rounds; round++) {
-        if (rounds > 1) { mat.setInt("_TimePass", (int)round); mat.setInt("_TickFull", (int)(tickSplit ? tickSplit : rounds)); mat.setInt("_ZapKind", round == 0 ? (int)zapKind : 0); }
+        if (rounds > 1) mat.setInt("_ZapKind", round == 0 ? (int)zapKind : 0);
         if (cpuMode && mat.getFloat("_Init") == 0) {}   // the processor ran the instructions
         else if (cs_ && mat.getFloat("_Init") == 0) runComputeTick(mat);
         else {
@@ -384,7 +384,7 @@ public:
         crt_.runZone(gpu_, passes_[1], mat, UpdateZone{1024, kHeight / 2.0f, 2048, (float)kHeight, 1}, bands_ ? 6 * kCommitQuads : 6);
         }
         }
-        if (rounds > 1) { mat.setInt("_TimePass", 0); mat.setInt("_ZapKind", (int)zapKind); }
+        if (rounds > 1) mat.setInt("_ZapKind", (int)zapKind);
         if (timeIt) gpu_.ctx->End(tsQuery_[2].Get());
         if (gpuPasses_.size() == 2 && !freeze) {
             bool listDrawn = !listLazy() || listDue > 0;   // (RVC_LIST_LAZY: only while a list is due)
@@ -1085,7 +1085,6 @@ private:
             fieldDraw_ = laneField_ && fieldSeen_ > 0;
         }
         for (uint32_t round = 0; round < rounds; round++) {
-            if (rounds > 1) { mat.setInt("_TimePass", (int)round); mat.setInt("_TickFull", (int)(tickSplit ? tickSplit : rounds)); }
             if (ticks) {
                 bool workers = cores_ > 1 && (workersNow || getenv("RVC_WORKERS_ALWAYS"));
                 activeCores_ = workers ? (UINT)cores_ : 1;

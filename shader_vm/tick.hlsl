@@ -7,34 +7,24 @@
 // (three tables of buckets of three texels), and the commit pass puts it into RAM.
 //
 // A pixel of the tick is eight texels of a core's state, one in each of eight targets; every
-// pixel of a core runs the whole pass and writes its own eight. TICK_UNPACK compiles the pass
-// that copies the targets into the state texture.
+// pixel of a core runs the whole pass and writes its own eight. (TICK_UNPACK: this file without
+// its pass, for unpack.hlsl.)
 
 Texture2D<uint4> _SelfTexture2D;
 Texture2D<float4> _Data_ROM;   // the ROM at 0x40000000
 uniform uint _Init, _Ticks, _PlayerID;
-#ifdef RTC_HALVES   // Unity: a material's numbers are floats, so each clock word comes as two 16-bit halves
+// A material's numbers are floats, so each clock word comes as two 16-bit halves.
 uniform uint _Rtc0Lo, _Rtc0Hi, _Rtc1Lo, _Rtc1Hi;
 #define _RTC0 ((_Rtc0Lo & 0xffff) | (_Rtc0Hi << 16))
 #define _RTC1 ((_Rtc1Lo & 0xffff) | (_Rtc1Hi << 16))
 uniform uint _MtimeLoLo, _MtimeLoHi;   // the timer: the host works it out, a pixel with no doubles (rvc_time.h)
-#define _HostMtimeLo ((_MtimeLoLo & 0xffff) | (_MtimeLoHi << 16))
-#define _HostMtimeHi 0u
-#else
-uniform uint _RTC0, _RTC1;
-uniform uint _HostMtimeLo, _HostMtimeHi;   // the timer: the host works it out, a pixel with no doubles (rvc_time.h)
-#endif
-uniform uint _TimePass;   // this frame's round (--tick-rounds): the clock a tick on for each, as passes are told apart by it
-uniform uint _TickFull;   // the rounds that always run (--tick-split); a later one only for core 0's rest of its frame,
-                          // and for the workers only when core 0 ended the round before early (texel 39.z)
-#define MORE_ROUND (_TimePass >= max(_TickFull, 1) && TEX(uint2(39, 0)).z == 0)
 uniform float4 _Time;
 
 #ifndef CORES
 #define CORES 256
 #endif
 #define TEX(p) _SelfTexture2D[p]
-#define RAM_ADDR(t) uint2((t) % 2048, 64 + (t) / 2048)
+#define RAM_ADDR(t) uint2((t) & 2047, 64 + ((t) >> 11))
 #ifndef STATE_TEX_HEIGHT
 #define STATE_TEX_HEIGHT 9280u   // the state texture's rows: 64 of state, then RAM to 0x92000000
 #endif
@@ -46,13 +36,12 @@ uniform float4 _Time;
 // the write cache (a texel of tags, then three texels, a bucket), then the float registers.
 #define L1_AT 44
 #define FP_AT 492                                    // after core 0's 112 buckets: the numbering's (lin_of)
-#ifndef CORE0_BITS
 #define CORE0_BITS 6                                 // core 0's cache: tables of 2^6 (its floats then right after)
-#endif
-#define CORE0_ROWS ((L1_AT + BUCKETS(CORE0_BITS) * 4 + 8 + 63) / 64)
 #define BUCKETS(bits) ((7u << (bits)) >> 2)          // tables of 2^bits, 2^(bits-1) and 2^(bits-2)
 #define H1(t, n) ((((t) >> 3) ^ ((t) << ((n) - 3)) ^ ((t) >> (n))) & ((1u << (n)) - 1))
 #define H2(t, n) ((((t) >> 2) ^ ((t) << ((n) - 2)) ^ ((t) >> ((n) + 3))) & ((1u << (n)) - 1))
+#define BUCKET2(t, n) ((n) + ((n) >> 1) + (H2(t, bits - 1) & (((n) >> 2) - 1)))   // the third table's bucket of t
+#define LOAD_UP(f3) (24 - 8 * ((f3) & 3) - (((f3) & 3) == 2 ? 8 : 0))         // the shift up that leaves a load's sign at the top
 #define STALL_MEM 3
 #define STALL_FENCE 7
 #define STALL_COPY 8
@@ -64,8 +53,7 @@ uniform float4 _Time;
 #define STALL_LANES_START 13
 #define STALL_LANE_RET 14
 #define STALL_LANE_FAIL 15
-#define MBOX 0x00C00000u
-#ifdef LANE_FIELD
+#define MBOX 0x00C00000u   // the workers' mailboxes, as a RAM offset
 // The field (docs/machine/lanes.md, "The field"): up to FIELD_MAX lanes of no core's, a pixel each in
 // rows 8 and 9 of the targets (under the cores' row), their eight texels in tiles 5 and 6 of the slots
 // from the ninth on, which no worker's reach (a worker has 2^5 or less: five tiles), sixteen lanes a
@@ -77,7 +65,6 @@ uniform uint _LaneField;
 #define FIELD_MAX 3968
 #define FIELD_JOB_T 0x0C0190u
 #define FIELD_STATUS_T 0x0C01A0u
-#endif                             // the workers' mailboxes, as a RAM offset
 #define MC_START 0x5553434du
 #define MC_STOP 0x5453434du
 
@@ -139,10 +126,8 @@ static uint lane_out, lane_T, lane_status, lane_ran;
 static uint lane_job = 0;   // the field's job's number, in a stuck lane's word (a worker's lanes: 0)
 static bool lane_stuck = false;
 static uint budget;           // the fast loop's instructions at most (a store with no room makes it 0)
-static uint used;             // core 0: its instructions in this frame's rounds before this one (texel 39.y)
-static bool early;            // core 0: this round ended before its instructions did (39.z)
 
-// ---- Memory. The cache is a local array of the pixel (), its tags at 4b, its texels after;
+// ---- Memory. The cache is a local array of the pixel, its tags at 4b, its texels after;
 // a bit a bucket says it was written in this pass (it starts undefined otherwise). The bits are a
 // vector in registers: as a local array of four they cost a load what the card's local memory costs.
 #define C_N 448
@@ -156,10 +141,6 @@ static uint4 occv = 0;
 #define OCC_SET(b) occv = put(occv, (b) >> 5, idx(occv, (b) >> 5) | (1u << ((b) & 31)))
 static uint dr_t = 0xffffffff;   // the RAM texel read last for data, as the texture has it
 static uint4 dr_v;
-uint bucket(uint t, uint k) {
-    uint n = 1u << bits;
-    return k == 0 ? t & (n - 1) : k == 1 ? n + H1(t, bits - 1) : n + (n >> 1) + (H2(t, bits - 1) & ((n >> 2) - 1));
-}
 // Most searches are for a texel just used (the next word of a save, a structure, a copy): the two
 // found or made last are remembered with where they are, and the texel looked for last and not found.
 // (A bit a texel by a hash, saying the cache was given it, spared searches and cost more than they
@@ -188,7 +169,7 @@ uint find(uint t) {
             more = e == 0 && tags.z != 0;
         }
         [branch] if (more) {
-            b = n + (n >> 1) + (H2(t, bits - 1) & ((n >> 2) - 1));
+            b = BUCKET2(t, n);
             [branch] if (OCC(b)) {
                 uint e = slot(c[4 * b], t + 1);
                 found = e != 0 ? 4 * b + e : 0;
@@ -233,7 +214,7 @@ void ram_store(uint o, uint v, uint mask) {
             [branch] if (OCC(b1)) tags1 = c[4 * b1];
             e1 = slot(tags1, tag); f1 = slot(tags1, 0);
             [branch] if (e1 == 0 && f1 == 0) {
-                b1 = n + (n >> 1) + (H2(t, bits - 1) & ((n >> 2) - 1));
+                b1 = BUCKET2(t, n);
                 tags1 = 0;
                 [branch] if (OCC(b1)) tags1 = c[4 * b1];
                 e1 = slot(tags1, tag); f1 = slot(tags1, 0);
@@ -379,7 +360,7 @@ uint fp_all(uint w, uint ra, uint rb, out bool to_f, out bool ok) {
 
 // A worker's lanes: the pixels whose eight texels are two whole buckets of its cache, texels
 // 48 + 8 L to 55 + 8 L (the cache from L1_AT, buckets of four texels)
-uint lanes_of(uint b) { return b < 3 ? 0 : (L1_AT + BUCKETS(b) * 4 - 56) / 8 + 1; }
+uint lanes_of(uint b) { return b < 3 ? 0 : ((L1_AT + BUCKETS(b) * 4 - 56) >> 3) + 1; }
 // CSR 0x0b8 read: lanes are built (bit 31), this core's lanes (bits 8-15), how its last job ended
 uint lanes_csr() { return 0x80000000u | ((core == 0 ? 0 : lanes_of(bits)) << 8) | (lane_word < 16 ? lane_word : 0); }
 // CSR 0x0ba read: in a lane, the instructions left of its pass (its clock counts them from 0); elsewhere no end
@@ -394,9 +375,7 @@ uint csr_read(uint n) {
            n == 0x140 ? sscratch : n == 0x141 ? sepc : n == 0x142 ? scause : n == 0x143 ? stval :
            n == 0xc01 ? now_lo : n == 0xb00 || n == 0xc00 ? clock : n == 0xf14 ? core :
            n == 0x0be ? _PlayerID : n == 0x0b8 ? lanes_csr() : n == 0x0ba ? lane_left() :
-#ifdef LANE_FIELD
            n == 0x0b9 ? (_LaneField != 0 ? (uint)FIELD_MAX : 0) :   // the field's lanes, where the host draws it
-#endif
            0;
 }
 void csr_write(uint n, uint v) {
@@ -457,7 +436,7 @@ uint fast(uint room) {
                     ok = (((f7 == 0 ? 0xffffu : f7 == 0x20 ? 0x21fdu : 0x00ddu) >> (((w >> 2) & 8) | f3)) & 1) != 0;
                 } else {
                     // lb lh lw lbu lhu, within one word of RAM
-                    uint va = a + imm_i(w), up = 24 - 8 * (f3 & 3) - ((f3 & 3) == 2 ? 8 : 0);
+                    uint va = a + imm_i(w), up = LOAD_UP(f3);
                     ok = va != 0 && ((0x37u >> f3) & 1) != 0 && (va & 3) + (1u << (f3 & 3)) <= 4 && (va ^ 0x80000000) < RAM_MAX;
                     [branch] if (ok) {
                         uint x = ram_word(va & 0x7ffffffc) >> ((va & 3) * 8) << up;
@@ -578,7 +557,7 @@ void step() {
     } else [branch] if (opc == 0x33) {
         v = op_m(f3, a, b);
     } else [branch] if (opc == 0x03 || opc == 0x07) {
-        uint up = 24 - 8 * (f3 & 3) - ((f3 & 3) == 2 ? 8 : 0), x = mv << up;
+        uint up = LOAD_UP(f3), x = mv << up;
         v = (f3 & 4) ? x >> up : asuint(asint(x) >> up);
         dst = opc == 0x07 ? 32 + rd : dst;
         if (opc == 0x07 ? f3 != 2 : ((0x37u >> f3) & 1) == 0) raise(2, w);
@@ -714,6 +693,7 @@ void load_state() {
     priv = t8.z; ovf_addr = 0xffffffff;
     tcmp_lo = st(10).y; tcmp_hi = st(10).z;
     stall = t28.x; clock = t28.y; lane_word = t28.w;
+    // (one loop for both, pc's word then put right: two loops and no second read of f0 were 2.4 to 3.1% slower on Quake)
     [loop] for (k = 0; k < 8; k++) {
         uint4 r = st(29 + k), f = st(FP_AT + k);
         xr[4 * k + 1] = r.x; xr[4 * k + 2] = r.y; xr[4 * k + 3] = r.z; xr[4 * k + 4] = r.w;
@@ -722,10 +702,7 @@ void load_state() {
     xr[0] = 0; pc = st(36).w; xr[32] = st(FP_AT).x;   // (texel 36's last word is pc, not f0)
     res_en = t37.x; res_addr = t37.y; msrc = t37.z; mdst = t37.w; mn = st(38).z;
     mc_word = st(41).w;
-    used = core == 0 && _TimePass != 0 ? st(39).y : 0;
-    now_lo = _HostMtimeLo; now_hi = _HostMtimeHi;
-    now_lo += _TimePass;
-    now_hi += now_lo < _TimePass ? 1 : 0;
+    now_lo = (_MtimeLoLo & 0xffff) | (_MtimeLoHi << 16); now_hi = 0;
     if (timer_due()) mip |= 0x20;
 }
 // a worker's start, stop or answer, from its mailbox as the last commit left it
@@ -766,7 +743,7 @@ uint4 state_out(uint lin) {
     return lin == 0 ? uint4(mstatus, mie, mip, stvec) : lin == 1 ? uint4(sscratch, sepc, scause, stval) : lin == 2 ? uint4(scounteren, fcsr, 0, 0) :
            lin == 8 ? uint4(ovf_addr, ovf_val, priv, 0) : lin == 10 ? uint4(0, tcmp_lo, tcmp_hi, 0) : lin == 11 ? uint4(0, 0, 0, 0xffffffff) :
            lin == 28 ? uint4(stall, clock, was.z, lane_word) : lin == 37 ? uint4(res_en, res_addr, msrc, mdst) : lin == 38 ? uint4(0, 0, mn, 0) :
-           lin == 39 ? uint4(was.x, used, early ? 1 : 0, 0) : lin == 40 ? uint4(0, 0, stall, 0) : lin == 41 ? uint4(bloom, dirty, was.z, mc_word) : lin < 41 ? (uint4)0 : was;
+           lin == 40 ? uint4(0, 0, stall, 0) : lin == 41 ? uint4(bloom, dirty, was.z, mc_word) : lin < 41 ? (uint4)0 : was;
 }
 
 // ---- Lanes (docs/machine/lanes.md). A job is a function, an index for each call of it, and an
@@ -862,7 +839,8 @@ void lane_output() {
         uint d = ((core == 0xffff ? TEX(RAM_ADDR(FIELD_JOB_T)).x : lane_word) & 0x7fffffff) >> 4;
         uint K = clamp(TEX(RAM_ADDR(d + 2)).w, 1, 64);
         skip = j < 96 * K;
-        uint at = ((lane_status & 0x7fffffff) >> 4) + lane_L * (K + 1) + (skip ? j / 96 : K), b = j % 96;
+        uint q = ((j >> 5) * 0xAAABu) >> 17;   // (j / 96: j is under 96 K where it is used)
+        uint at = ((lane_status & 0x7fffffff) >> 4) + lane_L * (K + 1) + (skip ? q : K), b = j - 96 * q;
         uint4 s = TEX(RAM_ADDR(at));
         if (s.x != (0x80000000u | lane_job)) s = uint4(0x80000000u | lane_job, 0, 0, 0);
         if (!skip) s.y = 0x80000000u | j;
@@ -875,7 +853,6 @@ void lane_output() {
     ot[4].w = lane_ran;
 }
 
-#ifdef LANE_FIELD
 // ---- The field's lanes. Lane pixel F's two tag texels keep its place in its order (A's last word)
 // and the job's number in the top byte of B's, its instructions for the job in sixteens below it.
 static uint field_F, field_seq, field_N, field_cum;
@@ -926,7 +903,6 @@ void field_begin(uint F) {
         return;
     }
     if ((lane_j >> 31) != 0 || lane_L + lanes_n * (lane_j & 0x9fffffff) >= lane_count) return;
-    for (i = 0; i < 65; i++) xr[i] = 0;
     xr[3] = d2.y; xr[4] = d2.z;
     priv = 0; mie = 0; mip = 0; fcsr = 0; res_en = 0; mstatus = 0x6000;
     lane_mode = true; bits = 6;
@@ -949,30 +925,16 @@ void field_output() {
     lane_output();
     ot[4].w = (field_seq << 24) | ((field_cum + (lane_ran >> 4)) & 0xffffff);
 }
-#endif
 
 struct v2f { float4 vertex : SV_POSITION; };
 v2f vert(uint id : SV_VertexID) { v2f o; o.vertex = float4(0, 0, 0, 1); return o; }
-// A quad for core 0's rectangle, and one for each worker with something to run (16 a primitive).
-void quad(inout TriangleStream<v2f> s, float x, float y, float w, float h, float2 size) {
-    for (uint k = 0; k < 4; k++) {
-        float2 p = float2(x + (k & 1) * w, y + (k >> 1) * h) / size;
-        v2f o; o.vertex = float4(p.x * 2.0 - 1.0, 1.0 - p.y * 2.0, 0.0, 1.0);
-        s.Append(o);
-    }
-    s.RestartStrip();
-}
-#ifdef TICK_UNPACK
-[maxvertexcount(128)]
-#else
-[maxvertexcount(64)]
-#endif
+#ifndef TICK_UNPACK
+// one triangle over all the targets: frag discards what no core runs
+[maxvertexcount(3)]
 void tick_geom(triangle v2f IN[3], uint prim : SV_PrimitiveID, inout TriangleStream<v2f> s) {
 #ifdef TICK_GEOM_GUARD
     TICK_GEOM_GUARD
 #endif
-#ifndef TICK_UNPACK
-    // one triangle over all the targets: frag discards what no core runs
     if (prim == 0) {
         v2f o;
         o.vertex = float4(-1, 1, 0, 1); s.Append(o);
@@ -980,103 +942,42 @@ void tick_geom(triangle v2f IN[3], uint prim : SV_PrimitiveID, inout TriangleStr
         o.vertex = float4(-1, -3, 0, 1); s.Append(o);
         s.RestartStrip();
     }
-#else
-    if (prim > (CORES + 15) / 16) return;
-    float2 size; _SelfTexture2D.GetDimensions(size.x, size.y);
-#ifdef LANE_FIELD
-    [branch] if (prim == (CORES + 15) / 16) {
-        if (_Init || _LaneField == 0) return;
-        uint4 job = TEX(RAM_ADDR(FIELD_JOB_T));
-        if (job.x == 0) return;
-        for (uint b = 0; b < 32; b++) quad(s, b * 64 + 40, 0, 16, 64, size);   // (tiles 5 and 6 of every slot: the first eight's are the cores' again)
-        return;
-    }
-#endif
-    geo_read();
-    select_core(0);
-    if (prim == 0) quad(s, 0, 0, 64, rows_now, size);
-    if (_Init) return;
-    if ((g.r & 1) != 0) { if (prim == 0) { quad(s, 64, 0, 1984, 8, size); quad(s, 0, 8, 2048, 56, size); } return; }
-    for (uint n = 0; n < 16; n++) {
-        uint k = prim * 16 + n;
-        if (k == 0 || k > g_count) continue;
-        select_core(k);
-        if (worker_idle() || MORE_ROUND) continue;   // (its state stays as the commit left it)
-        quad(s, (k & 31) << 6, (k >> 5) << 3, rows_now * 8, 8, size);
-    }
-#endif
 }
 
-#ifdef TICK_UNPACK
-Texture2D<uint4> _TickOut0, _TickOut1, _TickOut2, _TickOut3, _TickOut4, _TickOut5, _TickOut6, _TickOut7;
-uint4 frag(v2f i) : SV_Target {
-    uint2 p = uint2(i.vertex.xy);
-    uint k = (p.x >> 6) | ((p.y >> 3) << 5), r = p.y & 7, tile = (p.x & 63) >> 3;
-    uint3 at = uint3((k << 3) + tile, r, 0);
-#ifdef LANE_FIELD
-    [branch] if (k >= 8 && tile >= 5 && tile < 7) {
-        // the field's: lane F's texel, from its pixel in the targets (one of a row the tick did not draw: as it is)
-        uint4 job = TEX(RAM_ADDR(FIELD_JOB_T));
-        uint F = ((k - 8) << 4) | ((tile - 5) << 3) | r;
-        if ((F >> 11) >= (min(job.z, (uint)FIELD_MAX) + 2047) >> 11) return TEX(p);
-        at = uint3(F & 2047, 8 + (F >> 11), 0);
-    } else
-#endif
-    if (k != 0) {
-        geo_read();
-        if (k > g_count) return 0;
-    }
-    k = p.x & 7;
-    [branch] if (k < 4) return k == 0 ? _TickOut0.Load(at) : k == 1 ? _TickOut1.Load(at) : k == 2 ? _TickOut2.Load(at) : _TickOut3.Load(at);
-    return k == 4 ? _TickOut4.Load(at) : k == 5 ? _TickOut5.Load(at) : k == 6 ? _TickOut6.Load(at) : _TickOut7.Load(at);
-}
-#else
 struct tick_out { uint4 t0 : SV_Target0; uint4 t1 : SV_Target1; uint4 t2 : SV_Target2; uint4 t3 : SV_Target3;
                   uint4 t4 : SV_Target4; uint4 t5 : SV_Target5; uint4 t6 : SV_Target6; uint4 t7 : SV_Target7; };
 tick_out frag(v2f i) {
     uint2 p = uint2(i.vertex.xy);
     bool field = false;
-#ifdef LANE_FIELD
     [branch] if (p.y >= 8) {
         // a pixel of the field: lane F, while a job is posted, as many rows as its lanes fill
         uint4 fjob = TEX(RAM_ADDR(FIELD_JOB_T));
         if (_Init || _LaneField == 0 || fjob.x == 0 || p.y - 8 >= (min(fjob.z, (uint)FIELD_MAX) + 2047) >> 11) { discard; }
         field = true;
-        field_F = (p.y - 8) * 2048 + p.x;
+        field_F = ((p.y - 8) << 11) + p.x;
     }
-#else
-    if (p.y >= 8) discard;
-#endif
     geo_read();
     select_core(p.x >> 3);
     uint k, px = p.x & 7;
     uint w0 = core == 0 ? p.y * 64 + px * 8 : (px << 6) + (p.y << 3);   // the pixel's first texel, in its core's numbering
     uint2 own = uint2(((core & 31) << 6) + px * 8, ((core >> 5) << 3) + p.y);   // and where that is in the state texture
-    if (!field && core != 0 && (_Init != 0 || core > g_count || px >= rows_now || worker_idle() || MORE_ROUND)) discard;
-    bool none = false, keep = false;
+    if (!field && core != 0 && (_Init != 0 || core > g_count || px >= rows_now || worker_idle())) discard;
     bool any = field;
     for (k = 0; k < 8; k++) any = any || lin_of(w0 + k) < FP_AT + 8;
-    [branch] if (!none && !keep && any) {
+    [branch] if (any) {
         if (_Init) {
             // as firmware would enter the kernel: supervisor mode, the device tree's address in a1
             stall = 0; clock = 0; priv = 1; pc = 0x82000000; ovf_addr = 0xffffffff;
-            for (k = 0; k < 65; k++) xr[k] = 0;
             xr[11] = 0x83e00000;
         } else {
-#ifdef LANE_FIELD
             [branch] if (field) {
                 field_begin(field_F);
-            } else
-#endif
-            {
+            } else {
                 load_state();
                 if (core != 0) worker_enter();
                 [branch] if (core != 0 && (stall == STALL_LANES || stall == STALL_LANES_START)) lanes_begin(w0);
             }
-            // a round after the first (--tick-rounds) gives core 0 what is left of its frame's instructions,
-            // and the workers all of theirs: core 0 runs as with a round a frame, the workers it waits for more
             uint n = 0, most = max(_Ticks, 2);
-            most = core != 0 ? most : min(most, most * max(_TickFull, 1) - min(used, most * max(_TickFull, 1)));
             // (one loop for a core and for a lane, whose indices are its runs one after another)
             [loop] for (;;) {
                 [loop] while (n < most && stall == 0) {
@@ -1088,18 +989,13 @@ tick_out frag(v2f i) {
                 if (!lane_mode) break;   // (two tests: HLSL makes both sides of an ||, and lane_next changes what it looks at)
                 if (!lane_next(n, most)) break;
             }
-            used += n;
-            early = n < most;
         }
     }
-#ifdef LANE_FIELD
     [branch] if (field) field_output();
-    else
-#endif
-    [branch] if (lane_pixel) lane_output();
+    else [branch] if (lane_pixel) lane_output();
     else for (k = 0; k < 8; k++) {
         uint lin = lin_of(w0 + k);
-        ot[k] = none ? (uint4)0 : keep || lin >= FP_AT + 8 ? TEX(own + uint2(k, 0)) : state_out(lin);
+        ot[k] = lin >= FP_AT + 8 ? TEX(own + uint2(k, 0)) : state_out(lin);
     }
     tick_out r;
     r.t0 = ot[0]; r.t1 = ot[1]; r.t2 = ot[2]; r.t3 = ot[3]; r.t4 = ot[4]; r.t5 = ot[5]; r.t6 = ot[6]; r.t7 = ot[7];

@@ -244,8 +244,8 @@ void ram_quad(inout TriangleStream<ram_v2f> stream, uint x, uint y, uint w, uint
 }
 // `count` texels from the start of row `row`
 void ram_span(inout TriangleStream<ram_v2f> stream, uint row, uint count, uint height, uint4 value, uint4 info) {
-    ram_quad(stream, 0, row, 2048, count / 2048, height, value, info);
-    ram_quad(stream, 0, row + count / 2048, count % 2048, 1, height, value, info);
+    ram_quad(stream, 0, row, 2048, count >> 11, height, value, info);
+    ram_quad(stream, 0, row + (count >> 11), count & 2047, 1, height, value, info);
 }
 #ifdef RAM_AMP
 // One texel as one triangle, three vertices where a quad is four: its corner and 1.5 texels along each side, which
@@ -265,7 +265,7 @@ void ram_tri(inout TriangleStream<ram_v2f> stream, uint x, uint y, uint height, 
 // RAM texels t0 to t1, row by row
 void ram_rows(inout TriangleStream<ram_v2f> stream, uint t0, uint t1, uint4 value, uint4 info) {
     if (t0 > t1) return;
-    uint y0 = t0 / 2048, y1 = t1 / 2048, x0 = t0 % 2048, x1 = t1 % 2048;
+    uint y0 = t0 >> 11, y1 = t1 >> 11, x0 = t0 & 2047, x1 = t1 & 2047;
 #ifdef RAM_AMP
     if (t0 == t1) {
         ram_tri(stream, x0, 64 + y0, STATE_TEX_HEIGHT, value, info);

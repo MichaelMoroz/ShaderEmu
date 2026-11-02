@@ -59,10 +59,8 @@ Shader "ShaderEmu/MachineTickLean"
             #pragma geometry tick_geom
             #pragma fragment frag
             #pragma editor_sync_compilation
-            #define RTC_HALVES
             uniform float4 _ScreenParams;
             #define TICK_GEOM_GUARD if ((uint)_ScreenParams.x != TICK_W || (uint)_ScreenParams.y != TICK_H) return;
-            #define LANE_FIELD   // the lanes' field (docs/machine/lanes.md): the tick mesh's primitive after the cores' draws it
             #include "lean/tick.hlsl"
             ENDHLSL
         }

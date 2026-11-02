@@ -202,7 +202,6 @@ struct Options {
     int tickRounds = 1;       // --tick-rounds N: the tick and its commit N times a frame (the fragment machine)
     double unityMs = 0, unityOverMs = 1.4;   // --unity F[,U[,R]]: a world's frame of F ms, U of them Unity's own (below)
     double unityRoundMs = 0;  // R: Unity's CPU a round (its cameras and blits), which the card's time a round cannot go under
-    int tickSplit = 0;        // --tick-split F: of them the first F always run (0: all), the rest while core 0 rests
     bool noGpu = false;       // --no-gpu: leave out the GPU device's passes (gpu.shader)
     bool noSound = false;     // --no-sound: leave out the sound card (sound.shader)
     bool sound = false;       // play the sound card: the terminal mode, or --sound
@@ -304,8 +303,6 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
   --unity F[,U[,R]]    run as a world does: the guest's clock F ms a frame, and each frame as many rounds as fit
                        F - U ms on the card (U: Unity's own part of a frame, default 1.4), the devices once a frame;
                        R: Unity's CPU a round in ms (default 0): a frame's rounds cost at least R each
-  --tick-split F       of them the first F always run; the others give core 0 the rest of its F x --ticks,
-                       and run the workers only while core 0 rests (shader_vm: 0, all)
   --open ADDRESS       tell the guest to open an address, or a file of this computer (file:// and its path);
                        several are told ten seconds apart (docs/system/open.md)
   --open-after TEXT    not before the console has shown TEXT
@@ -507,7 +504,6 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--net-loss") o.netLoss = atof(next("--net-loss").c_str());
         else if (a == "--net-delay") o.netDelay = atof(next("--net-delay").c_str());
         else if (a == "--cpu") o.cpu = true;
-        else if (a == "--tick-split") o.tickSplit = (std::max)(0, (std::min)(16, atoi(next("--tick-split").c_str())));
         else if (a == "--unity") {
             std::string v = next("--unity");
             o.unityMs = atof(v.c_str());
@@ -1703,13 +1699,15 @@ int main(int argc, char** argv) {
             struct tm lt{};
             localtime_s(&lt, &now);
             int year = lt.tm_year + 1900;
-            mat.setInt("_RTC0", (int64_t)(bcd(year / 100) | bcd(lt.tm_sec) << 8 | bcd(lt.tm_min) << 16 | bcd(lt.tm_hour) << 24));
-            mat.setInt("_RTC1", (int64_t)(bcd(lt.tm_wday + 1) | bcd(lt.tm_mday) << 8 | bcd(lt.tm_mon + 1) << 16 | bcd(year % 100) << 24));
+            mat.setInt("_Rtc0Lo", (int64_t)(bcd(year / 100) | bcd(lt.tm_sec) << 8));
+            mat.setInt("_Rtc0Hi", (int64_t)(bcd(lt.tm_min) | bcd(lt.tm_hour) << 8));
+            mat.setInt("_Rtc1Lo", (int64_t)(bcd(lt.tm_wday + 1) | bcd(lt.tm_mday) << 8));
+            mat.setInt("_Rtc1Hi", (int64_t)(bcd(lt.tm_mon + 1) | bcd(year % 100) << 8));
         }
         uint32_t mtimeLo, mtimeHi;
         rvcMtime(t, mtimeLo, mtimeHi);
-        mat.setInt("_HostMtimeLo", mtimeLo);
-        mat.setInt("_HostMtimeHi", mtimeHi);
+        mat.setInt("_MtimeLoLo", mtimeLo & 0xffff);
+        mat.setInt("_MtimeLoHi", mtimeLo >> 16);
         mat.setVector("_SinTime", sin(t / 8), sin(t / 4), sin(t / 2), sin(t));
         mat.setVector("_CosTime", cos(t / 8), cos(t / 4), cos(t / 2), cos(t));
         mat.setInt("_Init", frame < (uint64_t)opt.initFrames ? 1 : 0);
@@ -1801,7 +1799,7 @@ int main(int argc, char** argv) {
             cpuDisplay[0] = word(CTRL + 4), cpuDisplay[1] = word(CTRL + 8);
         }
 
-        backend.tickRounds = opt.unityMs > 0 ? (uint32_t)unityRounds : (uint32_t)opt.tickRounds; backend.tickSplit = (uint32_t)opt.tickSplit;   // (--tick-rounds: the fragment tick's rounds a frame)
+        backend.tickRounds = opt.unityMs > 0 ? (uint32_t)unityRounds : (uint32_t)opt.tickRounds;   // (--tick-rounds: the fragment tick's rounds a frame)
 
         // Feed one input character per handshake.
         if (frame >= (uint64_t)opt.initFrames && sentTag == consumedTag && !cpuRunning) {

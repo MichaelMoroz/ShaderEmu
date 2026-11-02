@@ -310,8 +310,8 @@ int main(int argc, char** argv) {
         mat.setVector("_Time", t / 20, t, t * 2, t * 3);
         uint32_t mtimeLo, mtimeHi;
         rvcMtime(t, mtimeLo, mtimeHi);
-        mat.setInt("_HostMtimeLo", mtimeLo);
-        mat.setInt("_HostMtimeHi", mtimeHi);
+        mat.setInt("_MtimeLoLo", mtimeLo & 0xffff);
+        mat.setInt("_MtimeLoHi", mtimeLo >> 16);
         mat.setVector("_SinTime", sin(t / 8), sin(t / 4), sin(t / 2), sin(t));
         mat.setVector("_CosTime", cos(t / 8), cos(t / 4), cos(t / 2), cos(t));
 
