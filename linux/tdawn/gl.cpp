@@ -219,6 +219,9 @@ static void ahead_objects(void)
     }
 }
 
+static void View_Tanks(void);
+static void View_Play(void);
+
 void ShaderEmu_GL_Ahead(void)
 {
     static char name[16];
@@ -226,6 +229,8 @@ void ShaderEmu_GL_Ahead(void)
     bool begins = strncmp(name, Scen.ScenarioName, sizeof(name) - 1) || (int)Frame < last;
     int now = Units.Count() + Infantry.Count() + Buildings.Count() + Aircraft.Count();
 
+    View_Tanks(); // (tests: TDAWN_TANKS, TDAWN_PLAY)
+    View_Play();
     last = (int)Frame;
     if (!begins) {
         if (now != objects && ahead_live) {
@@ -768,6 +773,225 @@ bool ShaderEmu_GL_Band(int x0, int y0, int x1, int y1)
         LogicPage->Draw_Line(corner[i][0], corner[i][1], corner[(i + 1) & 3][0], corner[(i + 1) & 3][1], WHITE);
     }
     return true;
+}
+
+/*
+** For tests of the tilted view (tools/test_all.py's td3d cases; docs/games/tdawn.md, "In 3D"), called every
+** frame before its logic:
+**   TDAWN_TANKS=N,F   at frame F, N medium tanks of the player's come round the window's middle (step 3's scene)
+**   TDAWN_PLAY=N      a mission played to its end through the pointer, a round every N frames: the window
+**                     is put over the player's forces, the band is dragged round the window (the ground's
+**                     points of its corners, where the camera shows them), and the enemy nearest to the
+**                     forces that the window shows is clicked, or the ground toward it. Every press, move
+**                     and release is given to the game by shaderemu.cpp at the pixel of the tilted view,
+**                     which picks it back by the ray (ShaderEmu_View_Pick): the game's own band and click.
+** Its line "tdawn: play: ..." says each round, and the mission's end.
+*/
+static struct
+{
+    int every, at, step, start;
+    bool held, said;
+    int x, y;              // the pointer (the tilted view's pixels of the screen)
+    int queue[8][4], head, tail; // (key, down, x, y) not yet given
+} play;
+
+// The pixel where the tilted view shows a coordinate of the map (the screen's, in the game's pixels).
+static void Play_Pixel(COORDINATE coord, int& x, int& y)
+{
+    x = origin_x + Lepton_To_Pixel(Coord_X(coord));
+    y = origin_y + Lepton_To_Pixel(Coord_Y(coord));
+    View_Point(x, y);
+}
+
+static void Play_Put(int key, bool down, int x, int y)
+{
+    if (play.tail - play.head < 8) {
+        int* e = play.queue[play.tail++ & 7];
+        e[0] = key, e[1] = down, e[2] = x, e[3] = y;
+    }
+    play.x = x, play.y = y;
+}
+
+// shaderemu.cpp: a button's event of TDAWN_PLAY's, and where its pointer is (false: none, the window system's)
+bool ShaderEmu_Play_Event(int& key, bool& down, int& x, int& y)
+{
+    if (play.head == play.tail) {
+        return false;
+    }
+    int* e = play.queue[play.head++ & 7];
+    key = e[0], down = e[1] != 0, x = e[2], y = e[3];
+    return true;
+}
+
+bool ShaderEmu_Play_Pointer(int& x, int& y)
+{
+    if (play.every <= 0) {
+        return false;
+    }
+    x = play.x, y = play.y;
+    return true;
+}
+
+static void View_Tanks(void)
+{
+    static int count = -1, frame;
+    if (count < 0) {
+        count = frame = 0;
+        if (getenv("TDAWN_TANKS")) {
+            sscanf(getenv("TDAWN_TANKS"), "%d,%d", &count, &frame);
+        }
+    }
+    if (count <= 0 || (int)Frame != frame || !PlayerPtr) {
+        return;
+    }
+    int cx = Coord_XCell(Map.TacticalCoord) + Lepton_To_Cell(Map.TacLeptonWidth) / 2;
+    int cy = Coord_YCell(Map.TacticalCoord) + Lepton_To_Cell(Map.TacLeptonHeight) / 2;
+    int made = 0;
+    // (round the middle, ring by ring)
+    for (int ring = 0; ring < 12 && made < count; ring++) {
+        for (int dy = -ring; dy <= ring && made < count; dy++) {
+            for (int dx = -ring; dx <= ring && made < count; dx++) {
+                if (MAX(ABS(dx), ABS(dy)) != ring || cx + dx < 1 || cy + dy < 1 || cx + dx >= MAP_CELL_W - 1 || cy + dy >= MAP_CELL_H - 1) {
+                    continue;
+                }
+                UnitClass* unit = new UnitClass(UNIT_MTANK, PlayerPtr->Class->House);
+                if (unit && unit->Unlimbo(Cell_Coord(XY_Cell(cx + dx, cy + dy)), DIR_N)) {
+                    made++;
+                } else if (unit) {
+                    delete unit;
+                }
+            }
+        }
+    }
+    fprintf(stderr, "tdawn: %d tanks at frame %d round cell %d,%d\n", made, (int)Frame, cx, cy);
+    count = 0;
+}
+
+static bool Play_Ours(TechnoClass* t)
+{
+    return t && !t->IsInLimbo && t->Is_Owned_By_Player();
+}
+
+static bool Play_Theirs(TechnoClass* t)
+{
+    return t && !t->IsInLimbo && t->Strength > 0 && !t->House->Is_Ally(PlayerPtr);
+}
+
+static void View_Play(void)
+{
+    if (play.every == 0) {
+        play.every = getenv("TDAWN_PLAY") ? MAX(16, atoi(getenv("TDAWN_PLAY"))) : -1;
+    }
+    if (play.every < 0 || !PlayerPtr || !camera.on || view3d <= 0) {
+        return;
+    }
+    if (!play.start) {
+        play.start = (int)Scen.Scenario;
+    }
+    if (!play.said && (PlayerPtr->IsToWin || PlayerPtr->IsToLose || (int)Scen.Scenario != play.start)) {
+        play.said = true;
+        fprintf(stderr, "tdawn: play: mission %d %s at frame %d\n", play.start,
+                PlayerPtr->IsToLose ? "lost" : "won", (int)Frame);
+    }
+    if (play.said || (int)Frame < play.at) {
+        return;
+    }
+    int tx = Map.TacPixelX, ty = Map.TacPixelY;
+    // the player's forces and the enemy's: their middle, and the enemy nearest to it
+    long sx = 0, sy = 0;
+    int ours = 0, theirs = 0;
+    TechnoClass* nearest = NULL;
+    for (int i = 0; i < Units.Count() + Infantry.Count(); i++) {
+        TechnoClass* t = i < Units.Count() ? (TechnoClass*)Units.Ptr(i) : (TechnoClass*)Infantry.Ptr(i - Units.Count());
+        if (!Play_Ours(t)
+            || (i < Units.Count() && (Units.Ptr(i)->Class->Type == UNIT_HARVESTER || Units.Ptr(i)->Class->Type == UNIT_MCV))) {
+            continue; // (the ones that do not fight stay where they are)
+        }
+        sx += Coord_X(t->Center_Coord()), sy += Coord_Y(t->Center_Coord());
+        ours++;
+    }
+    if (!ours) {
+        return;
+    }
+    COORDINATE middle = XY_Coord((int)(sx / ours), (int)(sy / ours));
+    for (int i = 0; i < Units.Count() + Infantry.Count() + Buildings.Count(); i++) {
+        TechnoClass* t = i < Units.Count() ? (TechnoClass*)Units.Ptr(i)
+                         : i < Units.Count() + Infantry.Count() ? (TechnoClass*)Infantry.Ptr(i - Units.Count())
+                                                                : (TechnoClass*)Buildings.Ptr(i - Units.Count() - Infantry.Count());
+        if (Play_Theirs(t)) {
+            theirs++;
+            if (!nearest || Distance(t->Center_Coord(), middle) < Distance(nearest->Center_Coord(), middle)) {
+                nearest = t;
+            }
+        }
+    }
+    switch (play.step++) {
+    case 0: {
+        // the window over the forces' middle (a scroll: what the game's own scroll does)
+        int x0 = Map.MapCellX * 256, y0 = Map.MapCellY * 256;
+        int x1 = (Map.MapCellX + Map.MapCellWidth) * 256 - Map.TacLeptonWidth;
+        int y1 = (Map.MapCellY + Map.MapCellHeight) * 256 - Map.TacLeptonHeight;
+        int cx = MAX(x0, MIN(x1, Coord_X(middle) - Map.TacLeptonWidth / 2));
+        int cy = MAX(y0, MIN(y1, Coord_Y(middle) - Map.TacLeptonHeight / 2));
+        Map.Set_Tactical_Position(XY_Coord(cx & ~0xff, cy & ~0xff)); // (on a cell's corner, as the game's own
+                                                                     // position was set at the start)
+        play.x = tx + camera.w / 2, play.y = ty + camera.h / 2;
+        break;
+    }
+    case 2: {
+        // the band, from the ground's point at the window's top left to the one at its bottom right
+        int x = tx + 2, y = ty + 2;
+        View_Point(x, y);
+        Play_Put(VK_LBUTTON, true, x, y);
+        break;
+    }
+    case 3:
+    case 4:
+    case 5: {
+        int x = tx + 2 + (camera.w - 5) * (play.step - 3) / 3, y = ty + 2 + (camera.h - 5) * (play.step - 3) / 3;
+        View_Point(x, y);
+        play.x = x, play.y = y;
+        break;
+    }
+    case 6: {
+        int x = tx + camera.w - 3, y = ty + camera.h - 3;
+        View_Point(x, y);
+        play.x = x, play.y = y;
+        break;
+    }
+    case 7:
+        Play_Put(VK_LBUTTON, false, play.x, play.y);
+        break;
+    case 9: {
+        // the enemy nearest to the forces if the window shows it, else the ground toward it
+        int x, y;
+        const char* what = "nothing";
+        if (nearest) {
+            COORDINATE at = nearest->Center_Coord();
+            int px = origin_x + Lepton_To_Pixel(Coord_X(at)), py = origin_y + Lepton_To_Pixel(Coord_Y(at));
+            if (px > tx + 4 && py > ty + 4 && px < tx + camera.w - 4 && py < ty + camera.h - 4
+                && Map[Coord_Cell(at)].IsMapped) {
+                what = "an enemy";
+            } else {
+                // a third of the way there, inside the window
+                long dx = Coord_X(at) - Coord_X(middle), dy = Coord_Y(at) - Coord_Y(middle);
+                long most = MAX(ABS(dx), ABS(dy)), reach = Map.TacLeptonHeight * 2 / 5;
+                if (most > reach) {
+                    dx = dx * reach / most, dy = dy * reach / most;
+                }
+                at = XY_Coord((int)(Coord_X(middle) + dx), (int)(Coord_Y(middle) + dy));
+                what = "toward an enemy";
+            }
+            Play_Pixel(at, x, y);
+            Play_Put(VK_LBUTTON, true, x, y);
+            Play_Put(VK_LBUTTON, false, x, y);
+        }
+        fprintf(stderr, "tdawn: play: frame %d, %d of ours, %d of theirs, %s clicked\n", (int)Frame, ours, theirs, what);
+        play.step = 0;
+        play.at = (int)Frame + play.every;
+        break;
+    }
+    }
 }
 
 // An object about to be drawn: whether it is a model (a unit's or a building's kind that has one, room

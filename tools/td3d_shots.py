@@ -2,7 +2,7 @@
 under rvc_harness --cpu --warp through the queue (no card time): the GPU's lists as drawn, from a snapshot at the end.
 
     python tools/td3d_shots.py --image build/images/NAME --out DIR [--scen 1,3,10] [--views 2d,3d,3d-heights,3d-sprites]
-            [--frame 300] [--pitch 60] [--harness EXE] [--sleep S]
+            [--frame 300] [--pitch 60] [--harness EXE] [--sleep S] [--env NAME=VALUE ...]
 
 Writes DIR/SCEN-VIEW.png (the display) and .log (the console) for each.
 """
@@ -21,7 +21,7 @@ VIEWS = {
 
 
 def shot(a, scen, view, out):
-    env = VIEWS[view] + (f' TDAWN_PITCH={a.pitch}' if a.pitch and view != '2d' else '')
+    env = VIEWS[view] + (f' TDAWN_PITCH={a.pitch}' if a.pitch and view != '2d' else '') + ''.join(' ' + e for e in a.env)
     cmd = (f"nano-X -p & sleep 2; TDAWN_AUTO=1 TDAWN_SEED=7 TDAWN_NO_DELAY=1 TDAWN_STATS_MS=0 {env} TDAWN_SCEN={scen} "
            f"TDAWN_STOP_FRAME={a.frame} tdawn FROMINSTALL & sleep {a.sleep}; echo LX-''DONE\n")
     snap = out + '.snap'
@@ -49,6 +49,7 @@ def main():
     ap.add_argument('--frame', type=int, default=300)
     ap.add_argument('--pitch', type=int, default=0)
     ap.add_argument('--sleep', type=int, default=60)
+    ap.add_argument('--env', action='append', default=[], help='NAME=VALUE for the game too (TDAWN_DRAG=20 moves the view)')
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
     bad = 0

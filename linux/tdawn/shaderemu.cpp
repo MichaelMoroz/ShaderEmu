@@ -74,15 +74,22 @@ void Move_Video_Mouse(float xrel, float yrel)
 
 // The tilted view (gl.cpp, docs/games/tdawn.md "In 3D"): a pixel over the map as the 2D view has that
 // point of the ground, so that the game's own code makes the same clicks of it. Nothing in 2D.
+// TDAWN_PLAY's pointer and buttons (gl.cpp), for a test: a mission played through the tilted view's clicks.
 #ifdef SHADEREMU_RA
 static inline void ShaderEmu_View_Pick(int&, int&) {} // (Red Alert has no tilted view yet)
+static inline bool ShaderEmu_Play_Pointer(int&, int&) { return false; }
+static inline bool ShaderEmu_Play_Event(int&, bool&, int&, int&) { return false; }
 #else
 void ShaderEmu_View_Pick(int& x, int& y);
+bool ShaderEmu_Play_Pointer(int& x, int& y);
+bool ShaderEmu_Play_Event(int& key, bool& down, int& x, int& y);
 #endif
 
 void Get_Video_Mouse(int& x, int& y)
 {
-    host_pointer(&x, &y);
+    if (!ShaderEmu_Play_Pointer(x, y)) {
+        host_pointer(&x, &y);
+    }
     ShaderEmu_View_Pick(x, y);
 }
 
@@ -458,6 +465,14 @@ void WWKeyboardClassShaderEmu::Fill_Buffer_From_System(void)
         Put_Key_Message(VK_RETURN, true);
     }
     Drag_Poll();
+    {
+        int key, x, y;
+        bool down;
+        while (!Is_Buffer_Full() && ShaderEmu_Play_Event(key, down, x, y)) {
+            ShaderEmu_View_Pick(x, y);
+            Put_Mouse_Message(key, x, y, !down);
+        }
+    }
     while (!Is_Buffer_Full() && host_event(&event)) {
         switch (event.type) {
         case HOST_KEY:

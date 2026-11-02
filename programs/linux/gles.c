@@ -1178,6 +1178,69 @@ void seglSprites(const SEGLsprite* s, int count) {
     }
 }
 
+// Sprites of four corners of their own (segl.h): as seglSprites, but each corner's x, y and z are the
+// caller's, and with GL_DEPTH_TEST on they are the blended pass with the depth test (1), not the one on
+// top (5): what lies on a hill, and pictures standing among what pass 0 drew with depth.
+void seglCorners(const SEGLcorners* s, int count) {
+    if (!gpu || count <= 0) return;
+    const uint32_t vertex = VERTEX_CLIP | VERTEX_MODELVIEW | VERTEX_COMPACT | VERTEX_QUADS | NUM_FORMAT;
+    const uint32_t pass = depth_test ? 1u : 5u;
+    uint32_t block = matrices_dirty || !blocks ? matrix_block() : GPU_PHYS + set_at + UNIFORMS_IN + 128 * (blocks - 1);
+    uint32_t top = vertex_top, mesh = mesh_vertices, made = commands, end = set_at + SET_SIZE;
+    uint32_t *first = (uint32_t*)(gpu + set_at), *draw = last_draw;
+    int joins = draw && draw == first + 16 * (made - 1) && last_state[0] == vertex && last_state[2] == block &&
+                last_state[5] == (uint32_t)key_index;
+    uint32_t fragment_was = last_state[1], address_was = last_state[3], colour_was = last_state[4], name_was = ~0u;
+    uint32_t base = 0, address = 0, width = 0, height = 0;
+    int any = 0;
+    for (; count > 0; count--, s++) {
+        if (top + 64 > end || mesh + 6 > MAX_MESH) break;
+        if (s->name != name_was) {
+            const texture* x = &textures[s->name < MAX_TEXTURES ? s->name : 0];
+            base = (x->indexed == 2 ? 3u : x->indexed == 3 ? 5u : (x->indexed == 4 ? 6u : x->indexed ? FRAGMENT_INDEXED : FRAGMENT_TEXTURE) | x->smooth) | pass << 16;
+            address = x->address, width = x->width, height = x->height, name_was = s->name;
+        }
+        uint32_t fragment = base | (s->keyed ? FRAGMENT_KEYED : 0);
+        if (joins && fragment == fragment_was && address == address_was && s->colour == colour_was) {
+            draw[2] += 6;
+            mesh += 6;
+        } else {
+            if (made == MAX_COMMANDS) continue;
+            uint32_t* c = first + 16 * made++;
+            c[0] = CMD_DRAW;
+            c[1] = GPU_PHYS + top;
+            c[2] = 6;
+            c[3] = mesh;
+            c[4] = vertex;
+            c[5] = fragment;
+            c[6] = block;
+            c[7] = GPU_PHYS + address;
+            c[8] = width;
+            c[9] = height;
+            c[10] = (uint32_t)key_index;
+            c[11] = s->colour;
+            mesh += 6;
+            draw = c, joins = 1, any = 1;
+            fragment_was = fragment, address_was = address, colour_was = s->colour;
+        }
+        uint32_t* restrict to = (uint32_t*)(gpu + top);
+        uint32_t u0 = (uint32_t)s->texels[0] & 0xffff, u1 = (uint32_t)s->texels[2] & 0xffff;
+        uint32_t v0 = (uint32_t)s->texels[1] << 16, v1 = (uint32_t)s->texels[3] << 16;
+        const GLfixed* p = s->xyz;
+        to[0] = bits_of(FROM_FIXED(p[0])), to[1] = bits_of(FROM_FIXED(p[1])), to[2] = bits_of(FROM_FIXED(p[2])), to[3] = u0 | v0;
+        to[4] = bits_of(FROM_FIXED(p[3])), to[5] = bits_of(FROM_FIXED(p[4])), to[6] = bits_of(FROM_FIXED(p[5])), to[7] = u1 | v0;
+        to[8] = bits_of(FROM_FIXED(p[6])), to[9] = bits_of(FROM_FIXED(p[7])), to[10] = bits_of(FROM_FIXED(p[8])), to[11] = u1 | v1;
+        to[12] = bits_of(FROM_FIXED(p[9])), to[13] = bits_of(FROM_FIXED(p[10])), to[14] = bits_of(FROM_FIXED(p[11])), to[15] = u0 | v1;
+        top += 64;
+    }
+    vertex_top = top, mesh_vertices = mesh, commands = made, last_draw = draw;
+    if (any) {
+        last_state[0] = vertex, last_state[1] = fragment_was, last_state[2] = block;
+        last_state[3] = address_was, last_state[4] = colour_was, last_state[5] = (uint32_t)key_index;
+        passes_used |= 1u << pass;
+    }
+}
+
 // Sprites a program writes itself (segl.h): the room for them, and the command for those written.
 unsigned int* seglSpriteSpace(GLsizei* room) {
     uint32_t fit = gpu ? (set_at + SET_SIZE - vertex_top) / 64 : 0, mesh = (MAX_MESH - mesh_vertices) / 6;
