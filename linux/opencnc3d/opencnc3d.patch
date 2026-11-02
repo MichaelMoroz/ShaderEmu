@@ -596,3 +596,18 @@ index 9a4c9f4..e1a7215 100644
  int DLL_Startup(const char* command_line_in)
  {
      /* Construct argc and argv from command_line_in. Remaster build requires
+diff --git a/opencnc3d/game/gmwipe_mod.h b/opencnc3d/game/gmwipe_mod.h
+index 858a52a..b1b6334 100644
+--- a/opencnc3d/game/gmwipe_mod.h
++++ b/opencnc3d/game/gmwipe_mod.h
+@@ -876,6 +876,10 @@ static void gmw_prewarm(void)
+         /* THE CHAIN'S SHADERS, the cloud mask and the framebuffers: only Classic never
+            boots them. */
+         if (mode != FX_MODE_ENHANCED && chainWanted) { fx_boot(); what = "post chain"; }
++    } else if (!fx_gl_ready) {
++        /* SHADEREMU: a GL with no shaders (tier 1) never shows Enhanced, so nothing is
++           made ahead for it: on the machine the water field alone was 2,165 s. */
++        return;
+     } else if (f >= 3 && !(done & 2)) {
+         done |= 2;
+         /* THE WATER FIELD, read from the cartridge's own tiles, so it serves every mode;

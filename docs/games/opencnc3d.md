@@ -110,12 +110,16 @@ drawing one. The renderer's loader (`load_pack`, `cnc_eyes.cpp`) was read agains
 
 ### The DOS data
 
-`linux/opencnc3d/data.py` reads the ISO9660 directory of `GDI95.ISO` (archive.org item `gdi-95`, EA's 2007 freeware
-Gold) by HTTP range and fetches each file by its extent: `TEMPERAT.MIX`, `DESERT.MIX`, `WINTER.MIX`, `CONQUER.MIX`,
-`GENERAL.MIX`, `SOUNDS.MIX`, `AUD.MIX` and `INSTALL/CCLOCAL.MIX`, 9.8 MB, each checked against its SHA-256 (the
-first two are OpenCNC3D's `data/dosdata/README.md`'s and matched; the rest pinned at the first fetch). Not fetched
-yet: `MOVIES.MIX` (449 MB), `SCORES.MIX` (39 MB), and `LOCAL.MIX`, `SPEECH.MIX`, `ZOUNDS.MIX`, which this disc keeps
-inside `INSTALL/SETUP.Z`. The brain needs only a theater's palette.
+`linux/opencnc3d/data.py` reads the ISO9660 folders of two disc images on archive.org, the two OpenCNC3D's own launcher
+reads by byte range (its `tools/media/media-sources.txt`), and fetches each file by its extent, checked against its
+SHA-256: from `gdi-95/GDI95.ISO` (EA's 2007 freeware Gold) the three theaters and `AUD.MIX` (`TEMPERAT.MIX` and
+`DESERT.MIX` are OpenCNC3D's `data/dosdata/README.md`'s and matched); from `cc_worldwide_warfare/COVERT.iso` (The Covert
+Operations, the MS-DOS disc, in English) `INSTALL/LOCAL.MIX`, `CONQUER.MIX`, `GENERAL.MIX`, `SOUNDS.MIX`,
+`INSTALL/SPEECH.MIX` and `INSTALL/TRANSIT.MIX`: 19.4 MB in all. Gold is the Windows 95 game at 640 x 400, and its
+fonts and sidebar are drawn for that (its `6POINT.FNT` is 16 rows high, the DOS one 8): OpenCNC3D's menu and sidebar
+draw the DOS game's 320 x 200 art, and with Gold's fonts every label of the menu fell below its button. Gold's English
+`CCLOCAL.MIX` also has no `TITLE.CPS`, whose palette the menu's bake takes. Not fetched: `MOVIES.MIX`, `SCORES.MIX`
+and `ZOUNDS.MIX` (on neither disc).
 
 ## The brain (step 1)
 
@@ -289,6 +293,46 @@ tier 1.
 `bash linux/nommu/build.sh opencnc3d/build.sh` (a private WSL home) makes `/usr/bin/opencnc3d`: 9,135,012 bytes of
 text, 183,384 of data and 17,784,460 of bss (`riscv32-linux-size`), 9.3 MB stripped. The brain inside it is the one
 whose sums are above, built as before.
+
+### The play folder
+
+`python3 linux/opencnc3d/play.py SRC CACHE` makes `CACHE/play`, what OpenCNC3D's `game/make-build.sh` stages beside its
+program, with OpenCNC3D's own bake scripts run in their own folders of the fetched tree: `menu/bake_dosmenu.py`
+(`dosmenu.pack`, the title, the 1995 fonts and the dialog frames), `game/bake_campaign.py`, `bake_dossidebar.py`,
+`tools/sidebar_redesign/bake_pack.py` (`hud640.pack`, the 640 x 480 sidebar; the `hud640_layout.h` it writes is the
+committed one, byte for byte), `bake_dosinfantry.py`, `bake_efx.py`, `bake_logos.py`, `bake_n64infantry.py`,
+`bake_dostiberium.py`, `bake_verdict.py`, `bake_smudges.py` and `bake_doscrate.py`; beside them the scenario packs
+of `bake.py`, `missions/` and `dosdata/` (TRANSIT.MIX in `dosdata/transit/`). The bakers look for the 1995 data in
+three places of their tree (`data/dosdata`, `playable/dosdata`, `dosart/` and `dosart/cd1/`), each made a link to
+the cache. 12 packs, 52 MB with the two scenarios. `overlay.py` copies it to `/usr/share/opencnc3d/play`, and
+`ocnc-play` makes `/tmp/ocnc` of links to it (and to the theaters, which the brain opens where it runs): the program
+runs there and writes its settings there. Not baked: the Enhanced art (the remastered textures, `sky.pack`,
+`tib3d.pack`, `cameos.pack`), which a GL with no shaders does not draw.
+
+### Milestone 2: it starts and reaches its first frame; milestone 3: the menu (2 November 2026)
+
+`nano-X -p & ocnc-play; cd /tmp/ocnc; opencnc3d` on `rvc_cpu`: GL 1.1 from the shim, 24-bit depth, no sound device
+(the program says so and runs silent), the menu's nine buttons from `dosmenu.pack` (`DMBTN` lines), `APP|state|MENU`.
+A capture under `rvc_harness --cpu --warp` (through `tools\gpu_queue.ps1`) shows OpenCNC3D's own DOS menu as its
+build draws it: the title plate with the explosion, the green 1995 buttons (Special Ops, User Maps, Start New Game,
+Load Mission, Skirmish, Multiplayer, Intro & Sneak Peek greyed with no movie, Visuals, Exit Game), its version line,
+the OpenCNC 3D wordmark and the legal lines, in an 800 x 545 window on the desktop. The first capture, with Gold's
+fonts, had every label below its button: hence the DOS disc ("The DOS data").
+
+Two things the program needed of the machine's side: GL_ARB_multitexture in `GL_EXTENSIONS` (the calls are taken,
+and only unit 0's texture and coordinates are drawn; a texture bound on another unit is still filled and set), and
+`-Wl,-u` for each of the brain's 76 `CNC_`/`OpenCNC3D_` entry points at the link: `brain_link.c`'s names are weak,
+and a weak reference pulls no member out of `TiberianDawn.a`, so the first `--flowtest` found no `CNC_Init` (text
+9,135,012 to 10,392,512 bytes with the brain in).
+
+`opencnc3d --classic --flowtest N` (OpenCNC3D's own autopilot: Start New Game, GDI, the briefing, N ticks, a won
+mission) then plays GDI mission 1: the brain is found, `STATICCELLS|verdict=AGREE`, the pack of SCG01EA (339
+textures, 264 meshes), `dosinfantry`, `n64infantry`, effects, verdict, tiberium, crates, smudges, the 640 x 480 HUD
+(39 assets) and the DOS sidebar (72 shapes, 3 fonts), the N64 camera on the scenario's start view, and the mission's
+end, score, fame and map selection. On the way it built, ahead of time, what Enhanced would want (the water field:
+2,165 s of the guest's clock on `rvc_cpu`), though a GL with no shaders never shows Enhanced: our one change to
+OpenCNC3D's program (`game/gmwipe_mod.h`, in `opencnc3d.patch` under `opencnc3d/`) makes nothing ahead when the
+chain cannot boot.
 
 ## Licences
 

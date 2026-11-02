@@ -13,7 +13,10 @@ uint32_t SE_RenderOnCore0(uint32_t (*fn)(void*), void* args) { return fn(args); 
 // (se_asks, which gl_shaderemu.c names in a debugging print, is defined in brain_link.c)
 
 typedef unsigned GLenum_;
-static int unit;   // glActiveTexture: what the shim draws is unit 0's; the others' state is not kept
+static int unit;          // glActiveTexture: what the shim draws is unit 0's; the others' state is not kept
+static int client_unit;   // glClientActiveTexture: unit 0's coordinate array alone reaches the shim
+static unsigned bound_at[8];   // each unit's texture: one bound on another unit is still filled
+#define TEXCOORD_ARRAY 0x8078
 
 static void lacking(const char* name, int* said) {
     if (*said) return;
@@ -24,7 +27,7 @@ static void lacking(const char* name, int* said) {
 
 int ocnc_gl_open(unsigned window) {
     if (!getenv("HLGL_WORKERS")) setenv("HLGL_WORKERS", "0", 0);
-    if (!getenv("HL_POOL_MB")) setenv("HL_POOL_MB", "24", 0);
+    if (!getenv("HL_POOL_MB")) setenv("HL_POOL_MB", "64", 0);   // (24 MB: a mission's textures did not fit)
     if (hlglOpen(window) < 0) return -1;
     seglWorldUp(2);   // y
     return 0;
@@ -33,12 +36,14 @@ void ocnc_gl_swap(void) { hlglSwap(); }
 void ocnc_gl_size(int* w, int* h) { seglSize(w, h); }
 
 // ---- the calls ----
-void ocnc_glActiveTexture(GLenum_ t) { unit = (int)(t - 0x84C0); }
-void ocnc_glClientActiveTexture(GLenum_ t) { (void)t; }
+void ocnc_glActiveTexture(GLenum_ t) { unit = (int)(t - 0x84C0) & 7; }
+void ocnc_glClientActiveTexture(GLenum_ t) { client_unit = (int)(t - 0x84C0) & 7; }
+// a call on the texture another unit has bound: that texture bound for it, unit 0's again after
+#define ON_UNIT(call) do { if (!unit) { call; } else { s_glBindTexture(GL_TEXTURE_2D, bound_at[unit]); call;                                                    s_glBindTexture(GL_TEXTURE_2D, bound_at[0]); } } while (0)
 void ocnc_glAlphaFunc(GLenum_ f, float r) { (void)f, (void)r; }   // the shim keys texels it would drop
 void ocnc_glBegin(GLenum_ m) { s_glBegin(m); }
 void ocnc_glEnd(void) { s_glEnd(); }
-void ocnc_glBindTexture(GLenum_ t, unsigned n) { if (!unit) s_glBindTexture(t, n); }
+void ocnc_glBindTexture(GLenum_ t, unsigned n) { bound_at[unit] = n; if (!unit) s_glBindTexture(t, n); }
 void ocnc_glBlendFunc(GLenum_ s, GLenum_ d) { s_glBlendFunc(s, d); }
 void ocnc_glClear(unsigned m) { s_glClear(m); }
 void ocnc_glClearColor(float r, float g, float b, float a) { s_glClearColor(r, g, b, a); }
@@ -59,12 +64,12 @@ void ocnc_glDeleteTextures(int n, const unsigned* t) { s_glDeleteTextures(n, t);
 void ocnc_glDepthFunc(GLenum_ f) { (void)f; }
 void ocnc_glDepthMask(unsigned char m) { (void)m; }
 void ocnc_glDisable(GLenum_ w) { if (!unit) s_glDisable(w); }
-void ocnc_glDisableClientState(GLenum_ w) { s_glDisableClientState(w); }
+void ocnc_glDisableClientState(GLenum_ w) { if (w != TEXCOORD_ARRAY || !client_unit) s_glDisableClientState(w); }
 void ocnc_glDrawArrays(GLenum_ m, int f, int n) { s_glDrawArrays(m, f, n); }
 void ocnc_glDrawBuffer(GLenum_ b) { (void)b; }
 void ocnc_glDrawElements(GLenum_ m, int n, GLenum_ t, const void* i) { s_glDrawElements(m, n, t, i); }
 void ocnc_glEnable(GLenum_ w) { if (!unit) s_glEnable(w); }
-void ocnc_glEnableClientState(GLenum_ w) { s_glEnableClientState(w); }
+void ocnc_glEnableClientState(GLenum_ w) { if (w != TEXCOORD_ARRAY || !client_unit) s_glEnableClientState(w); }
 void ocnc_glFinish(void) {}
 void ocnc_glFlush(void) {}
 void ocnc_glFrontFace(GLenum_ m) { (void)m; }
@@ -74,7 +79,10 @@ void ocnc_glGetBooleanv(GLenum_ w, unsigned char* o) { s_glGetBooleanv(w, o); }
 unsigned ocnc_glGetError(void) { return 0; }
 void ocnc_glGetFloatv(GLenum_ w, float* o) { s_glGetFloatv(w, o); }
 void ocnc_glGetIntegerv(GLenum_ w, int* o) { s_glGetIntegerv(w, o); }
-const unsigned char* ocnc_glGetString(GLenum_ w) { return s_glGetString(w); }
+// GL_ARB_multitexture: the calls are taken, and what unit 1 adds is not drawn (docs/games/opencnc3d.md, "GL")
+const unsigned char* ocnc_glGetString(GLenum_ w) {
+    return w == GL_EXTENSIONS ? (const unsigned char*)"GL_ARB_texture_non_power_of_two GL_ARB_multitexture" : s_glGetString(w);
+}
 void ocnc_glGetTexEnvfv(GLenum_ t, GLenum_ n, float* o) { (void)t, (void)n; o[0] = o[1] = o[2] = o[3] = 0; }
 void ocnc_glGetTexEnviv(GLenum_ t, GLenum_ n, int* o) { (void)t, o[0] = n == GL_TEXTURE_ENV_MODE ? (replace ? GL_REPLACE : GL_MODULATE) : 0; }
 void ocnc_glGetTexImage(GLenum_ t, int l, GLenum_ f, GLenum_ ty, void* p) { (void)t, (void)l, (void)f, (void)ty, (void)p; LACK(glGetTexImage); }
@@ -116,17 +124,17 @@ void ocnc_glScissor(int x, int y, int w, int h) { (void)x, (void)y, (void)w, (vo
 void ocnc_glShadeModel(GLenum_ m) { (void)m; }
 void ocnc_glTexCoord2f(float s, float t) { s_glTexCoord2f(s, t); }
 void ocnc_glTexCoord2fv(const float* v) { s_glTexCoord2fv(v); }
-void ocnc_glTexCoordPointer(int s, GLenum_ t, int st, const void* p) { s_glTexCoordPointer(s, t, st, p); }
+void ocnc_glTexCoordPointer(int s, GLenum_ t, int st, const void* p) { if (!client_unit) s_glTexCoordPointer(s, t, st, p); }
 void ocnc_glTexEnvf(GLenum_ t, GLenum_ n, float v) { if (!unit) s_glTexEnvf(t, n, v); }
 void ocnc_glTexEnvfv(GLenum_ t, GLenum_ n, const float* v) { if (!unit) s_glTexEnvfv(t, n, v); }
 void ocnc_glTexEnvi(GLenum_ t, GLenum_ n, int v) { if (!unit) s_glTexEnvi(t, n, v); }
 void ocnc_glTexImage2D(GLenum_ t, int l, int i, int w, int h, int b, GLenum_ f, GLenum_ ty, const void* p) {
-    if (!unit) s_glTexImage2D(t, l, i, w, h, b, f, ty, p);
+    ON_UNIT(s_glTexImage2D(t, l, i, w, h, b, f, ty, p));
 }
-void ocnc_glTexParameterf(GLenum_ t, GLenum_ n, float v) { if (!unit) s_glTexParameterf(t, n, v); }
-void ocnc_glTexParameteri(GLenum_ t, GLenum_ n, int v) { if (!unit) s_glTexParameteri(t, n, v); }
+void ocnc_glTexParameterf(GLenum_ t, GLenum_ n, float v) { ON_UNIT(s_glTexParameterf(t, n, v)); }
+void ocnc_glTexParameteri(GLenum_ t, GLenum_ n, int v) { ON_UNIT(s_glTexParameteri(t, n, v)); }
 void ocnc_glTexSubImage2D(GLenum_ t, int l, int x, int y, int w, int h, GLenum_ f, GLenum_ ty, const void* p) {
-    if (!unit) s_glTexSubImage2D(t, l, x, y, w, h, f, ty, p);
+    ON_UNIT(s_glTexSubImage2D(t, l, x, y, w, h, f, ty, p));
 }
 void ocnc_glTranslated(double x, double y, double z) { s_glTranslated(x, y, z); }
 void ocnc_glTranslatef(float x, float y, float z) { s_glTranslatef(x, y, z); }

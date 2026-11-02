@@ -72,7 +72,12 @@ for o in *.o; do
     syms=$(riscv32-linux-nm -u "$o" | awk '$2 ~ /^gl[A-Z]/ {print "--redefine-sym " $2 "=ocnc_" $2}')
     riscv32-linux-objcopy $syms "$o" "renamed/$o"
 done
-ottd-c++ -o opencnc3d renamed/*.o ours/*.o "$BUILD/tiberiandawn/TiberianDawn.a" "$BUILD/common/libcommonr.a" \
+# brain_link.c's names are weak, and a weak reference pulls nothing out of an archive: each the
+# brain defines is asked for by name (-u), so its member comes in and dlsym finds it
+asks=$(riscv32-linux-nm -g --defined-only "$BUILD/tiberiandawn/TiberianDawn.a" 2>/dev/null |
+       awk '$3 ~ /^(CNC_|OpenCNC3D_)/ {print "-Wl,-u," $3}' | sort -u)
+echo "   the brain's entry points asked for: $(echo $asks | wc -w)"
+ottd-c++ -o opencnc3d $asks renamed/*.o ours/*.o "$BUILD/tiberiandawn/TiberianDawn.a" "$BUILD/common/libcommonr.a" \
     "$BUILD/common/libcommon.a" "$S/curl/lib/.libs/libcurl.a" "$S/curl-deps/lib/libmbedtls.a" "$S/curl-deps/lib/libmbedx509.a" \
     "$S/curl-deps/lib/libmbedcrypto.a" "$DEPS/lib/libz.a" "$MW/src/lib/libnano-X.a" -lm
 riscv32-linux-nm -n -C opencnc3d > "$S/opencnc3d.nm"

@@ -102,6 +102,11 @@ resolver had to be written; OpenCNC3D's `bake5.py` runs unchanged over them, ste
      and 36 C files of theirs, unchanged, by OpenTTD's C++ compiler (all of libstdc++), the brain linked in for its
      `dlopen` (`brain_link.c`), 91 SDL2 functions of ours over Nano-X (`sdl_nanox.c`), 91 GL calls onto Half-Life's
      shim (`gl_ocnc.c`): one flat program of 9.1 MB of text, 183 KB of data and 17.8 MB of bss.
+     Milestones 2 and 3, **it starts, reaches its first frame and draws its menu**: the DOS data from the Covert Operations
+     DOS disc (Gold's 640 x 400 fonts put every label below its button), the play folder made by OpenCNC3D's own 12 bake
+     scripts (`play.py`, 52 MB), the brain's 76 entry points pulled into the link (10.4 MB of text), and a capture of
+     OpenCNC3D's own DOS menu under `rvc_harness --cpu --warp`. Its `--flowtest` autopilot goes on into GDI mission 1
+     (Start New Game, GDI, the briefing, the mission with the HUD and the DOS sidebar loaded, a won mission's score).
 3. **Input, sound, the menus, the sidebar, films.** The pointer and keys through the game's own input; sound on the card; the
    sidebar and menus of OpenCNC3D; films through libmedia's VQA. A mission played by script to its end, as a test case of
    `tools/test_all.py` tagged `long` that says `OPENCNC3D-NO-DATA` on an image without the cartridge.

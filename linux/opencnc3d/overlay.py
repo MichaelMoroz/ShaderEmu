@@ -51,7 +51,27 @@ def main():
             if name.endswith(ends):
                 shutil.copyfile(os.path.join(d, name), os.path.join(share, name))
                 n += 1
-    print("overlay: %s and %d files in /usr/share/opencnc3d" % (", ".join(names), n))
+    # the game's folder (play.py makes it in CACHE/play): what OpenCNC3D's make-build.sh stages
+    # beside its program, read from the ROM; ocnc-play makes /tmp/ocnc of links to it, where
+    # the program runs and writes its settings
+    play = os.path.join(cache, "play")
+    m = 0
+    if os.path.isdir(play):
+        dst = os.path.join(share, "play")
+        if os.path.isdir(dst):
+            shutil.rmtree(dst)
+        shutil.copytree(play, dst)
+        m = sum(len(f) for _, _, f in os.walk(dst))
+        starter = os.path.join(root, "usr", "bin", "ocnc-play")
+        with open(starter, "w", newline="\n") as f:
+            f.write("#!/bin/sh\n"
+                    "# OpenCNC3D's folder: links to what it reads (/usr/share/opencnc3d/play), its own files beside\n"
+                    "mkdir -p /tmp/ocnc && cd /tmp/ocnc || exit 1\n"
+                    "for f in /usr/share/opencnc3d/play/*; do [ -e \"$(basename \"$f\")\" ] || ln -s \"$f\" .; done\n"
+                    "# the brain opens the theaters where it runs\n"
+                    "for f in TEMPERAT DESERT WINTER; do [ -e $f.MIX ] || ln -s dosdata/$f.MIX .; done\n")
+        os.chmod(starter, 0o755)
+    print("overlay: %s, %d files in /usr/share/opencnc3d and %d in its play folder" % (", ".join(names), n, m))
 
 
 if __name__ == "__main__":

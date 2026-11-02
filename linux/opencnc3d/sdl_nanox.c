@@ -81,8 +81,24 @@ Uint32 SDL_GetTicks(void) {
     if (!t0) t0 = now_us();
     return (Uint32)((now_us() - t0) / 1000);
 }
-Uint64 SDL_GetPerformanceCounter(void) { return now_us(); }
-Uint64 SDL_GetPerformanceFrequency(void) { return 1000000; }
+// OPENCNC3D_CLOCK=instret: the performance counter is the instructions core 0 has retired, at
+// "1e9 a second", so what the program prints in milliseconds (its FRAMEPROF) is millions of them
+static int clock_instret = -1;
+static int instret_clock(void) {
+    if (clock_instret < 0) clock_instret = getenv("OPENCNC3D_CLOCK") && !strcmp(getenv("OPENCNC3D_CLOCK"), "instret");
+    return clock_instret;
+}
+static Uint64 instret(void) {
+    unsigned lo, hi, again;
+    do {
+        __asm__ volatile("rdinstreth %0" : "=r"(hi));
+        __asm__ volatile("rdinstret %0" : "=r"(lo));
+        __asm__ volatile("rdinstreth %0" : "=r"(again));
+    } while (hi != again);
+    return ((Uint64)hi << 32) | lo;
+}
+Uint64 SDL_GetPerformanceCounter(void) { return instret_clock() ? instret() : now_us(); }
+Uint64 SDL_GetPerformanceFrequency(void) { return instret_clock() ? 1000000000 : 1000000; }
 void SDL_Delay(Uint32 ms) { usleep(ms * 1000); }
 
 // ---- threads, mutexes, atomics: one core, so a thread runs to its end when it is made ----
