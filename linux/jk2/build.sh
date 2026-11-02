@@ -173,10 +173,21 @@ compile renderer \
 # into one object whose names stay inside it, but for its one entry, renamed (sys_shaderemu.cpp finds them). Section
 # groups (C++'s inline functions and templates) are made plain sections first, or the program's link would keep one
 # module's copy and drop the other's that its names point into.
+# The game's variables are two sections of their own, jk2game_data and jk2game_bss, which sys_shaderemu.cpp puts back as
+# they were at its first load each time the engine loads it again (a saved game's load, a new game): a library's were
+# fresh each time, and G_LoadRoff found a table of the last load's freed names (AddressSanitizer, 2 November 2026).
 step "the modules"
+cat > "$BUILD/game.ld.new" <<'EOF'
+SECTIONS {
+    jk2game_data : { *(.data .data.* .sdata .sdata.*) }
+    jk2game_bss : { *(.bss .bss.* .sbss .sbss.* COMMON) }
+}
+EOF
+put "$BUILD/game.ld.new" "$BUILD/game.ld"; rm "$BUILD/game.ld.new"
 module() {   # part, entries
     local part=$1; shift
-    $LD -r --force-group-allocation -o "$BUILD/$part.all.o" "$BUILD/$part"/*.o
+    local script=; [ "$part" = game ] && script="-T $BUILD/game.ld"
+    $LD -r --force-group-allocation $script -o "$BUILD/$part.all.o" "$BUILD/$part"/*.o
     $OBJCOPY $(for e in "$@"; do echo "--keep-global-symbol=$e"; done) "$BUILD/$part.all.o" "$BUILD/$part.o"
     $OBJCOPY $(for e in "$@"; do echo "--redefine-sym $e=se_$e"; done) "$BUILD/$part.o"
 }

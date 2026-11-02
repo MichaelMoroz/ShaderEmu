@@ -81,6 +81,12 @@ untextured points; under `JK2_MODE` a missing picture is now the white one (`tr_
   its entries (`GetGameAPI`, `dllEntry`, `vmMain`; `GetRefAPI`), which become `se_GetGameAPI` and the like and are
   what `Sys_LoadLibrary` and `Sys_LoadFunction` give (`sys_loadlib.h` under `SHADEREMU`). The modules are compiled with
   `-fno-gnu-unique`: a static inside an inline function is otherwise a "unique" name that objcopy leaves global.
+- **The game is loaded again** at every new level, new game or saved game, and a library's variables were then fresh:
+  linked in, a saved game's load read a table of the last load's freed names (`G_LoadRoff`, found by AddressSanitizer)
+  and crashed. The game's variables are two sections of their own (`jk2game_data`, `jk2game_bss`, build.sh's `game.ld`),
+  copied at its first load and put back at every later one (`se_game_fresh`), as Quake III's are: 53 KB and 5.96 MB on
+  the build computer (6 MB more memory on the machine, where a smaller way would zero the second and run the module's
+  constructors again). `JK2_AT="1000:load auto"` loads the autosave: it plays on, clean under AddressSanitizer.
 - `sys_shaderemu.cpp` is what `shared/sdl` was: no window (a 640 x 480 "mode"), no input but the terminal's console
   lines, sound mixed into a buffer nobody hears at the pace of the client's time, and the end (`SE_Exit`: the C
   library's `exit` ran a null destructor of a linked-in module).
@@ -97,6 +103,7 @@ films not played unless `JK2_CINEMATICS=play` (an in-game film pauses the game u
     JK2_FRAMES=N        quit after N frames, with a jk2stat: line
     JK2_STATS=N         a jk2stat: line every N frames: the frames' host time, the zone's bytes and blocks, its peak
     JK2_LAST=CMD        a console command before quitting (zone_details: the zone by kind)
+    JK2_AT=F:CMD;...    console commands at frames F ("1000:load auto")
     JK2_SUM=N           a jk2sum: line every N frames of the game ("Is it the same game")
     JK2_SEED=N          the game's random numbers from N, not the clock
     JK2_SOUND=off       no sound at all (the game then loads none, and a save of the game crashed before nullgl's fix)
@@ -151,7 +158,10 @@ The SP engine has no hunk: everything is `calloc` a block (12,670 blocks). What 
 sound is the card's (from the ROM, as Quake III's), and the level's file, the animations and the meshes can be read
 where they lie in the ROM, not copied: about 12 to 15 MB would be left, and the pictures in GPU memory. Pictures are
 not in the zone here (the null GL keeps nothing); on the machine they are GPU memory. The largest single blocks are
-the level's file (9.5 MB) and `_humanoid.gla` (10 MB): both should be mapped from the ROM.
+the level's file (9.5 MB) and `_humanoid.gla` (10 MB): both should be mapped from the ROM. **But** 1,989 of the pak's
+1,990 files are deflated: a file can be read where it lies only if the pak is stored unpacked (as Quake III's
+`quake3-pak0.pk3` is), and a pak packed again is arguably not "the original form" the licence asks for. Kept as it is,
+the level and the animations are inflated into RAM (19 MB in two blocks), on the workers by libmedia.
 
 ## On the build computer: where a frame goes
 
@@ -216,7 +226,6 @@ Each needs the guest's toolchain (`~/nm`, `linux/openttd/toolchain.sh`), a priva
 
 ## Not done
 
-No picture, sound, input or window; nothing built or run on the machine; films; the second load of the game after a
-saved game is restored (the game's module is not loaded afresh: its statics keep their values, as Quake III's
-`sys_shaderemu.c` had to put right); OpenJK's `alloc-dealloc-mismatch` in `strip.cpp` at shutdown (upstream's, seen
-under AddressSanitizer).
+No picture, sound, input or window; nothing built or run on the machine; films; OpenJK's `alloc-dealloc-mismatch` in
+`strip.cpp` at shutdown (upstream's, seen under AddressSanitizer). The renderer's variables are not put back at a
+`vid_restart` as the game's are.

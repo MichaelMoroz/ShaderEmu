@@ -9,6 +9,7 @@
 //   JK2_FRAMES=N      quit after N frames, with a jk2stat: line (frames, the time they took, the zone's bytes)
 //   JK2_STATS=N       a jk2stat: line every N frames (0: none, the default)
 //   JK2_LAST=CMD      a console command at the end, before quitting (zone_details: the zone's bytes by kind)
+//   JK2_AT=F:CMD;...  console commands at frames F ("900:load auto")
 //   (the engine's own +set fixedtime N makes every frame N ms of the game's time: two runs, and the build computer's
 //   and the machine's, then play the same game)
 //   JK2_SOUND=off     no sound at all (the game then loads none); otherwise mixed into nothing at 22 kHz
@@ -32,10 +33,43 @@ extern "C" intptr_t se_vmMain( int command, intptr_t, intptr_t, intptr_t, intptr
 
 static int se_handles[2];
 
+// The game's variables (build.sh's jk2game_data and jk2game_bss, the linker's __start_ and __stop_ round them): a copy
+// at its first load, put back at every later one, as a library's are fresh when it is loaded again. Its C++ objects'
+// constructors ran at the program's start, so the copy has them made; what they held since is left, not freed.
+extern "C" char __start_jk2game_data[], __stop_jk2game_data[], __start_jk2game_bss[], __stop_jk2game_bss[];
+static char *se_game_image;
+
+#if defined(__SANITIZE_ADDRESS__)
+#define SE_WHOLE __attribute__((no_sanitize("address"), noinline))   // (the sections hold the sanitizer's own red zones too)
+static SE_WHOLE void se_copy( char *to, const char *from, size_t n )
+{
+	for ( volatile size_t i = 0; i < n; i++ )
+		to[i] = from[i];
+}
+#else
+#define se_copy( to, from, n ) memcpy( to, from, n )
+#endif
+
+static void se_game_fresh( void )
+{
+	size_t data = __stop_jk2game_data - __start_jk2game_data, bss = __stop_jk2game_bss - __start_jk2game_bss;
+	if ( !se_game_image ) {
+		se_game_image = (char *)malloc( data + bss );
+		se_copy( se_game_image, __start_jk2game_data, data );
+		se_copy( se_game_image + data, __start_jk2game_bss, bss );
+		Com_Printf( "jk2: the game's variables are %d bytes and %d bytes, kept as they began\n", (int)data, (int)bss );
+		return;
+	}
+	se_copy( __start_jk2game_data, se_game_image, data );
+	se_copy( __start_jk2game_bss, se_game_image + data, bss );
+}
+
 void *SE_LoadLibrary( const char *name )
 {
-	if ( strstr( name, "jospgame" ) )
+	if ( strstr( name, "jospgame" ) ) {
+		se_game_fresh();
 		return &se_handles[0];
+	}
 	if ( strstr( name, "rdjosp-vanilla" ) )
 		return &se_handles[1];
 	return NULL;
@@ -149,6 +183,17 @@ void WIN_Present( window_t *window )
 			Cvar_VariableIntegerValue( "cl_paused" ) ? ", paused" : "", Cvar_VariableIntegerValue( "sv_paused" ) ? ", server paused" : "" );
 		se_window_start = now;
 		se_window_frames = 0;
+	}
+	// JK2_AT="FRAME:COMMAND;FRAME:COMMAND": console commands at those frames (a scripted run: "900:load auto")
+	const char *at = getenv( "JK2_AT" );
+	for ( ; at && *at; at = strchr( at, ';' ) ? strchr( at, ';' ) + 1 : NULL ) {
+		const char *colon = strchr( at, ':' );
+		if ( colon && atoi( at ) == se_frames ) {
+			const char *end = strchr( colon, ';' );
+			int len = end ? (int)( end - colon - 1 ) : (int)strlen( colon + 1 );
+			Com_Printf( "jk2: frame %d: %.*s\n", se_frames, len, colon + 1 );
+			Cbuf_AddText( va( "%.*s\n", len, colon + 1 ) );
+		}
 	}
 	if ( stop ) {
 		const char *last = getenv( "JK2_LAST" );    // console commands before the end (zone_details)
