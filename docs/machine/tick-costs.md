@@ -492,3 +492,134 @@ on rare kinds or folded into tests the loop makes anyway. What is still dear is 
 absent texel +7%) and anything that adds a local array or a second copy of the body (+6 to +8%). On Quake, 45 s runs of
 five ticks moved a copy of the tick by up to 1.4%: a change was believed after three runs with the same sign. The commit
 and the other shaders cannot be timed with `RVC_TICK_ALT`, which swaps the tick pass alone.
+
+## Fourth round: the write cache's searches and reads, and sstatus in the fast loop
+
+The same RTX 3090, D3D11, fxc2 67, `RVC_TICK_ALT` from the snapshots of the rounds before (made with their image), the
+shell loop 35 to 45 s and Quake 45 to 55 s, four to six ticks a run, `af803662` in every run. ms of a frame's tick. A copy
+of the tree against itself moved up to 0.2% on the shell loop and 0.8% on Quake in these runs. The owner's mark: 5% under
+`af803662`.
+
+**The kept set against `af803662` and `15c1e2a7`** (the new tick stamped and primary, the two beside it, one run each line):
+
+| Load | `15c1e2a7` | `af803662` | Now | against `15c1e2a7` | against `af803662` |
+|---|---|---|---|---|---|
+| Shell loop (40 s) | 1.7671 | 1.6318 | 1.5627 | -11.57% | -4.23% |
+| Shell loop, again | 1.7674 | 1.6311 | 1.5623 | -11.60% | -4.22% |
+| Quake, e1m1 (50 s) | 1.8996 | 1.7646 | 1.6862 | -11.23% | -4.44% |
+| Quake, again | 1.8994 | 1.7573 | 1.7056 | -10.20% | -2.94% |
+| Quake III (40 s) | 1.9693 | 1.8350 | 1.7456 | -11.36% | -4.87% |
+| `nxphys` (30 s) | 0.4145 | 0.3967 | 0.3681 | -11.19% | -7.21% (it moves 2 to 5% between runs) |
+
+Short of the mark of 5%: 4.2% on the shell loop, 2.9 to 4.4% on Quake (the kept set's runs this round against `af803662`
+ranged from -2.4 to -5.1%), 4.9% on Quake III. On the card `test_card.py machine fptest nxpath-balls nxpaint` 11 of 11,
+and WARP's mctest-3 in parts.
+
+What it is, four commits (`rvc_cpu` unchanged: the machine is the same):
+
+- **A store of the fast loop is not under `if (ok)`.** `ram_store_nc` is called with a mask of 0 when the store may not
+  be (out of RAM or across its word), and a mask of 0 changes nothing: the value is the word's own, so nothing is
+  stored; what it may do is ask the texel and search the cache, which is the cache's own bookkeeping. One level fewer
+  for every store, with the call's blocks behind it: shell -0.7 to -0.9%, Quake -1.5%.
+- **sstatus while no interrupt is pending, timeh and instret are the fast loop's CSRs.** The kernel turns interrupts
+  off and on around every lock (`csrci sstatus, 2`, `csrs sstatus, a5`, `csrrc`, `csrw`): 12 of the shell loop's 15
+  general steps a pass (`RVC_PROF`'s pcs), each 1,640 cycles (a frozen pass of nothing else). With `mip & mie` 0 no
+  write of sstatus can let an interrupt in, and nothing else makes one pending within a pass. Level alone; with the
+  store, shell -1.0 to -1.3% and Quake -1.6%.
+- **A store's RAM texel is asked at the start of its search**, not after it: a store to a texel the two remembered ones
+  are not (the first store to a texel in a pass, a new entry) needs the texel's other words, and the read then runs while
+  the buckets are looked in. Shell -1.6%, Quake -1.0%. With it the store's partial word takes its texel by a select, and
+  `ram_store` is `ram_store_nc` behind its range test (its own copy gone): shell level, Quake -0.8%.
+- **A load searches the cache only where a 16 KB region of RAM has a texel of it** (`regs`, bit `(o >> 14) & 31`, set
+  where a texel enters the cache), not where the bloom lets it: the bloom, the stored addresses or-ed, let nearly every
+  load through once a pass had stored to the stack and the heap, and a texel looked for and not there is a search. Shell
+  -0.6%, Quake -1.3 and -1.5%. 4, 8 and 16 KB were alike, 32 and 64 KB a little worse on the shell loop.
+
+**Experiments**, ms of the tick before and after in the same run (b1: the store and the CSRs; b2: and the read at the
+search; b3: and the select and the wrapper; b4: and the regions, the kept set). Kept rows are in bold.
+
+| What | Shell | Quake | Verdict |
+|---|---|---|---|
+| A branch's and a jump's target texel read where it is decoded, the fetch taking it | 1.6049 to 1.7752 | | lost, +10.6% |
+| The same for branches alone | 1.6049 to 1.7587 | | lost, +9.6% |
+| The two remembered texels' values in registers: a load reads no `c[]`, a store writes the whole texel | 1.6166 to 1.6429 | | lost, +1.6% (frozen lw 1.432 to 1.455, sw 1.749 to 1.899) |
+| One test at a turn's end for an instruction left to the general step, the budget and a fetch (the write, pc and the count by selects) | 1.6002 to 1.6842 | 1.7448 to 1.8326 | lost, +5% (frozen addi 0.921 to 0.880, lw 1.447 to 1.398) |
+| Arithmetic's next word too, when it is arithmetic of the texel, past the loop's tests | 1.5995 to 1.6045 | | lost |
+| The same as an inner loop over arithmetic of the texel | 1.5995 to 1.6229 | | lost, +1.5% |
+| `same` from `pc & 12` | 1.5995 to 1.5994 | | level |
+| A store: a whole word into a remembered texel tested first, the search in its else | 1.5977 to 1.6131 | | lost, +1.0% |
+| add and addi one select from their sum | 1.5977 to 1.6091 | | lost, +0.7% |
+| A load's data texel's test and its search's under one test | 1.5977 to 1.6125 | | lost, +0.9% |
+| **A store not under `if (ok)`, a mask of 0 when it may not** | 1.6020 to 1.5882; 1.6049 to 1.5937 | 1.7513 to 1.7255 | **kept** |
+| The same with the whole-word test first | 1.5977 to 1.5966 | | level |
+| The same and fsw likewise | 1.6020 to 1.5892 | | as the store alone |
+| **sstatus while nothing is pending, timeh and instret in the fast loop** | 1.6049 to 1.6022 | 1.7513 to 1.7526 | level alone; **kept** with the store |
+| **Both (b1)** | 1.6049 to 1.5889; 1.6127 to 1.5916; 1.6263 to 1.6068 | 1.7513 to 1.7240; 1.7539 to 1.7260; 1.7406 to 1.7433 | **kept** |
+| b1, fp's rs1 read by a select, not an `if` | 1.5916 to 1.5920 | 1.7260 to 1.7218 | level (on b3 Quake 1.7147 to 1.6941, on b4 1.7024 to 1.7115, Quake III level) |
+| b1, a whole word into the cache's texel by `put` (read and written back) | 1.5916 to 1.6131 | 1.7260 to 1.7522 | lost, +1.4% |
+| b1, fsw not under `if (ok)` | 1.5916 to 1.5943 | 1.7260 to 1.7423 | level or lost (on b4 level) |
+| b1, flw a load (`(w & 0x7b) == 3`, its funct3 in `ok`) | 1.6068 to 1.6310 | 1.7433 to 1.7256 | lost: shell +1.5% |
+| b1, the load's search and the fetch's inner test without `[branch]` | 1.5905 to 1.5900; 1.5927 | | level |
+| **b1, a store's RAM texel asked at the start of its search (b2)** | 1.5905 to 1.5652 | 1.7339 to 1.7157 | **kept**, -1.6% and -1.0% |
+| **b2, the partial word's texel by a select; `ram_store` a wrapper of `ram_store_nc` (b3)** | 1.5718 to 1.5719, 1.5747; both 1.5721 | both 1.7126 to 1.6993 | **kept** |
+| b2, a load's RAM texel asked inside its search's block (and in its else) | 1.5718 to 1.5824 | | lost, +0.7% |
+| b3, atomics not under `if (ok)` | 1.5688 to 1.5808 | 1.7122 to 1.7013 | mixed (on b4: lost +0.9%, +1.8%) |
+| b3, branches before stores and floats | 1.5688 to 1.5585 | 1.7122 to 1.7216 | mixed (on b4: shell -0.2%, Quake +1.6%) |
+| b3, the store's word by a `[forcecase] switch` | 1.5688 to 1.5922 | 1.7122 to 1.7295 | lost |
+| b3, a load's search with no branches: the three tables' tags read together, chosen by selects; a store's; both | 1.5745 to 1.6381; 1.6880; 1.7291 | 1.7087 to 1.7736; 1.7942; 1.8085 | lost, +4 to +10% |
+| b3, a load's RAM texel not asked for a remembered texel | 1.5663 to 1.5719 | 1.7147 to 1.7133 | lost |
+| b3, a load's `maybe` also asking its first table's bucket's bit | 1.5657 to 1.5722 | 1.6930 to 1.7308 | lost, +2.2% Quake |
+| b3, the write cache as words with the tags apart (a whole word stored by index, no branches) | 1.5660 to 1.5645 | 1.6888 to 1.7020 | level |
+| b3, a store's new texel tested before a part into a cached one | 1.5739 to 1.5817 | 1.6943 to 1.7170 | lost |
+| b3, a straight run reading two code texels every other crossing; with jumps reading three | 1.5739 to 1.6717; 1.6157 | 1.6943 to 1.7731; 1.7232 | lost, +3 to +6% |
+| b3, the store's first bucket's tags by a select | 1.5695 to 1.5704 | 1.7035 to 1.7186 | level or lost |
+| b3, the budget's test and the fetch's under one at a turn's top | 1.5695 to 1.5932 | 1.7035 to 1.7172 | lost, +1.5% |
+| b3, two loops: an outer turn a texel entered, an inner one an instruction | 1.5684 to 1.6421 | 1.7032 to 1.7724 | lost, +4.7% |
+| b3, the write cache zeroed at a pass's start; no `static_noinit` at all | 1.5588 to 1.5661; 1.5572 | 1.7044 to 1.6965; 1.7134 | level |
+| b3, a load searching where a 64 KB region has a texel of the cache, not by the bloom | 1.5571 to 1.5538; 1.5798 to 1.5762 | 1.7172 to 1.6898; 1.7330 to 1.7067 | shell -0.2%, Quake -1.5% |
+| The same with the bloom too | 1.5571 to 1.5586 | 1.7172 to 1.6974 | Quake -1.2% |
+| **By 16 KB regions (b4)** | 1.5571 to 1.5476; 1.5798 to 1.5706 | 1.7172 to 1.6949; 1.7330 to 1.7068 | **kept**, shell -0.6%, Quake -1.4% |
+| By 4 KB; 8 KB; 32 KB | 1.5798 to 1.5693; b4 1.5710 to 1.5685; 1.5743 | 1.7330 to 1.7072; b4 1.7100 to 1.6987; 1.7129 | as 16 KB, 32 KB a little worse |
+| By 16 KB, 64 regions in a `uint2`; a second word by 512 KB regions | 1.5798 to 1.6583; b4 1.5532 to 1.5624 | 1.7330 to 1.8316; b4 1.6820 to 1.7067 | lost, +5%; +0.6% and +1.5% |
+| b4 without the absent texel | 1.5560 to 1.5672 | 1.7024 to 1.7263 | lost |
+| b4, lw's word as it is (no shifts) | 1.5691 to 1.5733 | 1.7049 to 1.7039 | level |
+
+**Probes**, frozen passes (`RVC_FREEZE=1 --bench`, a copy of the tick given its own `warp_ok`, the word made one instruction
+for every turn), ms a pass of 8,192:
+
+| Probe (on the tree of 16d32ca7) | ms a pass |
+|---|---|
+| addi, the code texels read at crossings as the tree does; a fixed texel read instead; none read | 0.994; 0.969; 0.909 |
+| No code read, kinds: addi, add, lw 0(sp), sw 0(sp), bne not taken, lui | 0.911, 0.909, 1.432, 1.749, 1.162, 1.263 |
+| addi: no register reads; no register write; neither; arithmetic one add | 0.867; 0.900; 0.845; 0.792 |
+| addi: the fetch's block gone; never entered (no crossing); never entered and no texture read in it | 0.750; 0.879; 0.852 |
+| addi: the code read ahead at the top of every turn | 1.090 |
+| sw: the word's two branches gone (`.x` always); no `ram_store_nc` | 1.624; 1.106 |
+| lw: no `ram_word`; no data texel test; the data texel read always; no search block; no cache select; `idx` gone; no `ok`; no sign shift | 0.929; 1.338; 1.733; 1.439; 1.397; 1.354; 1.403; 1.395 |
+| A general step every instruction (csrr sstatus) | about 6.9 (1,640 cycles a step) |
+| addi, lw: `discard` as an early return | 0.921 to 0.929, 1.429 to 1.447 |
+| `--ticks 2`: the tree; a fragment shader that returns at once | 0.040; 0.045 |
+
+**What was learnt.**
+
+- The fetch's read ahead is not free: a crossing that reads the next code texel and does not use it until four
+  instructions later costs about 80 cycles (frozen addi with the reads 0.994 ms, without 0.909), a read of a fixed texel 57;
+  read at the top of every turn, 40 cycles an instruction. Every way tried of reading code earlier or less often lost:
+  a branch's or jump's target read where it is decoded (+10%), two texels ahead every other crossing (+3 to +6%), the
+  fetch at a turn's end under one test with the budget and an instruction left to the general step (+5%; frozen -4%),
+  two loops, a texel an outer turn (+4.7%), the budget's test and the fetch's under one (+1.5%).
+- A read the block it is in can run beside pays: the store's texel asked before its search (-1.6%). The same for a load,
+  the texel asked inside the search's block, lost (+0.7%): a load's read is already asked before its search.
+- Local memory read that is not needed is dear: the three tables' tags read together and chosen by selects, no branches,
+  +4 to +10%; a whole word stored by reading the texel and writing it back +1.4%; the cache as words with the tags apart
+  level.
+- A test with a call behind it is more than a level: the store's `if (ok)` (-0.9 to -1.5% without it), where the same for
+  the atomics and fsw were level or lost (they are rare).
+- What a search is asked for matters more than how it is made: the bloom let most loads through; a bit a 16 KB region
+  spares them (-0.6% shell, -1.4% Quake). A finer filter in a uint2 (+5%) or a second word by another region size (+1.5%)
+  cost more than they spared; the first table's bucket's bit (`OCC`) as the filter +2.2% on Quake.
+- The general step is 1,640 cycles: worth taking out of it what is common, when the fast loop can make it the same.
+- The pass's fixed part is the draw's: a frozen pass of two instructions is 0.040 ms, a fragment shader that returns at
+  once 0.045. `discard` costs nothing (an early return instead: level).
+- Quake's tick is its drawing worker's (core 1, 7,088 instructions a pass to core 0's 3,362): what workers do (loads of
+  textures, stores of new texels) is what moves it.
