@@ -210,9 +210,9 @@ only those), `root.sh`, the icons and fonts, `image.py` and `test.py`. A change 
     pwsh tools\make_image.ps1
 
 WSL's `python3` wants numpy (Quake III's level, ClassiCube's sound) and `ffmpeg` is wanted once, for
-ClassiCube's tune, and for Half-Life's data. The address the path tracer's teapot is fetched from no
-longer answers: before the first build, `mkdir -p ~/nm/work/src/pathtrace-data` and copy
-`linux/prebuilt/root/root/Models/teapot.obj` there. Desktop pictures are `python tools\make_wallpaper.py`
+ClassiCube's tune, and for Half-Life's data. The addresses the path tracer's teapot and rabbit are fetched from
+no longer answer (graphics.stanford.edu, 3 November 2026): before the first build, `mkdir -p ~/nm/work/src/pathtrace-data` and copy
+`linux/prebuilt/root/root/Models/teapot.obj` and `bunny.ply` there. Desktop pictures are `python tools\make_wallpaper.py`
 (fetched, not kept here).
 
 `python tools\test_all.py` is the test set (152 cases on `rvc_cpu`, about two minutes; `--list` names them).
