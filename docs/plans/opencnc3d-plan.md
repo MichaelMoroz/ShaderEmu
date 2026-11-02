@@ -90,9 +90,21 @@ resolver had to be written; OpenCNC3D's `bake5.py` runs unchanged over them, ste
      the Remaster is off (4.97 million with it; the sums are the same either way). Of a tick, **427 thousand are
      `MapClass::Clean`**, the Remaster's check of all 16,384 MEGAMAP cells at every tick, and **71 thousand the game's
      logic** (`LogicClass::AI`), about Tiberian Dawn's. The next step is that scan, with the sums, before the eyes.
+   - *Past the gate, 2 November 2026, at the owner's word.* `Clean` walks only the cells that ever held an occupier or an
+     overlapper, in the same order (`OPENCNC3D_CLEAN=check`: 0 cells missed in 3,000 ticks of both missions), and the
+     file search is `linux/tdawn`'s: **a tick 74,346 instructions (`SCG01EA`) and 83,762 (`SCB01EA`), the load 54.0 and
+     58.8 million**, the 11 sums of both missions and 60 of 60 and 73 of 73 objects as before on both machines.
 2. **The eyes.** `cnc_eyes.cpp` over the GL shim in a Nano-X window: the mission's terrain, water, models and the 2D seen in
    captures under `rvc_harness --cpu --warp` against the native build's pictures. Its packs and textures held in RAM within a
    budget measured here; models and terrain go to the ROM if they must.
+   - *Begun 2 November 2026, the smallest picture (`docs/games/opencnc3d.md`, "The picture").* `cnc_eyes.cpp` is
+     not ported: 47,617 lines with 128 headers of its own, all of libstdc++, zlib, SDL2 and a dozen packs of DOS art, far
+     more than a day. `eyes.c`, ours, draws `SCG01EA` from its pack over Half-Life's GL shim in a Nano-X window: terrain
+     on its heights, the sea floor and the sea, every building, vehicle and tree by its cartridge mesh, the infantry's
+     strips; looked at in captures under `rvc_harness --cpu --warp`, none kept. A frame 1.05 million instructions of
+     core 0 (89 thousand the game, 965 thousand the drawing of 6,081 vertices); textures 5,749 KB in a 12 MB pool,
+     1,002 KB of meshes, cells and heights. Not done: OpenCNC3D's renderer, the sidebar, menus, GDI colours, animation,
+     shadows of vehicles, shade and shroud.
 3. **Input, sound, the menus, the sidebar, films.** The pointer and keys through the game's own input; sound on the card; the
    sidebar and menus of OpenCNC3D; films through libmedia's VQA. A mission played by script to its end, as a test case of
    `tools/test_all.py` tagged `long` that says `OPENCNC3D-NO-DATA` on an image without the cartridge.

@@ -1,6 +1,6 @@
 # OpenCNC3D: Command & Conquer of the Nintendo 64, on the PC's code
 
-Begun 2 November 2026, by `docs/plans/opencnc3d-plan.md` (its steps 0 and 1). OpenCNC3D
+Begun 2 November 2026, by `docs/plans/opencnc3d-plan.md` (its steps 0, 1 and the start of 2). OpenCNC3D
 (`github.com/freschism3000/OpenCNC3D`, GPL-3.0, pinned at its v0.9.0, commit `248233af`) is a PC version of the N64
 Command & Conquer: EA's GPL Tiberian Dawn logic as a library behind the Remaster's `CNC_*` interface (its "brain"),
 the cartridge's models and terrain baked into one pack a mission, and an OpenGL renderer (its "eyes"). What there is
@@ -11,8 +11,13 @@ here:
   own checks; the 1995 DOS data of the freeware Gold disc is fetched by range and checked.
 - **Step 1, the brain on the machine, no picture.** One flat program, `SCG01EA` loaded through `CNC_*`: 60 of 60
   objects as the cartridge's INI says (73 of 73 for `SCB01EA`), 3,000 ticks with the **same sums on the build computer
-  and `rvc_cpu`**. A tick is **503 thousand instructions** of core 0 and the load 331 million: the gate of the plan
-  (Tiberian Dawn's 2D logic is about 80 thousand a frame) is not met, and the work stopped there ("The gate").
+  and `rvc_cpu`**. A tick was 503 thousand instructions of core 0 and the load 331 million, over the plan's gate
+  (Tiberian Dawn's 2D logic is about 80 thousand a frame); with `MapClass::Clean` on the cells that hold something and
+  `linux/tdawn`'s file search, **a tick is 74 thousand and the load 54 million**, the sums as they were ("The gate").
+- **Step 2, begun: a picture, not OpenCNC3D's eyes.** `eyes.c` draws `SCG01EA`'s terrain with its heights, the sea,
+  the cartridge's models of every building, vehicle and tree, and the infantry's strips, from the pack, over Half-Life's
+  GL shim in a Nano-X window: 1.05 million instructions of core 0 a frame (89 thousand the game, 965 thousand the
+  drawing). OpenCNC3D's own renderer, the sidebar and the menus are not here ("The picture", "What is left").
 
 Nothing of the cartridge or the DOS data is in the repository, `linux/prebuilt` or the shared image, and the port is
 not in `ALL` of `linux/nommu/build.sh`: a plain build downloads nothing of it and changes no byte.
@@ -25,8 +30,11 @@ not in `ALL` of `linux/nommu/build.sh`: a plain build downloads nothing of it an
     wsl -- python3 linux/opencnc3d/overlay.py ROOT CACHE PROGRAM             program and data into a private image's root
     python linux\nommu\image.py ocnc ROOT KERNEL                             the private image (HALFLIFE_DATA=0)
 
-In the guest: `opencnc3d-brain /usr/share/opencnc3d/ /usr/share/opencnc3d/ SCG01EA 3000 300` (content folder, mission
-folder, mission, ticks, a sum every that many ticks, and a seed: 0, the game's own, by default). `ROM` is the dump, or
+`overlay.py ROOT CACHE OUT` takes `build.sh`'s `OPENCNC3D_OUT` folder: both programs, the MIX files, the missions and the
+packs. In the guest: `opencnc3d-brain /usr/share/opencnc3d/ /usr/share/opencnc3d/ SCG01EA 3000 300` (content folder,
+mission folder, mission, ticks, a sum every that many ticks, and a seed: 0, the game's own, by default), and with the
+window system up `opencnc3d /usr/share/opencnc3d/ /usr/share/opencnc3d/ SCG01EA /usr/share/opencnc3d/SCG01EA.pack
+[FRAMES]` for the picture. `ROM` is the dump, or
 `OPENCNC3D_ROM`; `CACHE` a folder outside the tree (here `~/agents/ocnc/cache` in WSL).
 
 ## The data (step 0)
@@ -187,15 +195,104 @@ on 1,000 ticks of `SCG01EA`, 504,637 a tick inside `CNC_Advance_Instance`):
   Dawn's 2D logic costs (`docs/games/tdawn.md`).
 - The rest, 6 thousand: the input, the layer's sort.
 
-So the brain is about 6.3 times the plan's budget of 80 thousand, and nearly all of the excess is one scan; the game
-itself is within it. Making `Clean` cheap (only the cells a map has, or only cells something left) is the obvious first
-change and was not tried: it is a change to what the game does, to be made with the sums, and the plan says to stop at
-the gate and say so first.
+So the brain was about 6.3 times the plan's budget of 80 thousand, and nearly all of the excess was one scan; the game
+itself is within it.
+
+### Clean on the cells that hold something
+
+`Clean` (the Remaster's, `map.cpp`) changes a cell only through a non-null pointer: an occupier that is no longer live
+(`Cell_Occupier` then clears it), or an overlapper no longer live or in limbo. A cell is given a pointer in four places
+only: `Occupy_Down`, `Occupy_Up` (its next), `Overlap_Down`, and a saved game's `Decode_Pointers`. Our patch marks the
+cell there in a bitmap of 16,384 bits (and a bitmap of its 512 words), and `Clean` walks the marked cells in the same
+ascending order as before, since its `active_fail` and `limbo_fail` carry from one cell to the next; a cell it finds
+with no pointer left is unmarked. Whatever it does is then what the full walk did. `OPENCNC3D_CLEAN=full` is the
+Remaster's walk, and `=check` the marked walk with a count, before each `Clean`, of unmarked cells that have a
+pointer: **0 in 3,000 ticks of both missions**. The lowest set bit is found by a multiply (de Bruijn): the machine has
+no count of trailing zeros, and GCC's `__ctzsi2` was 8% of a tick.
+
+### The file search
+
+`linux/tdawn`'s answer, taken whole from its `vanilla-conquer.patch` (`common/file.cpp`, `file_posix.cpp`,
+`rawfile.cpp`, `rawfile.h`, under `SHADEREMU_BRAIN` here): a file's own name looked for in any case but not each folder
+above it, a folder's names read once and kept, a name with no wildcard compared rather than `fnmatch`ed, and an open of
+a name the folder does not have answered without the kernel.
+
+### Before and after (`rvc_cpu`, 2 November 2026)
+
+| | SCG01EA before | after | SCB01EA before | after |
+|---|---:|---:|---:|---:|
+| the load | 331,359,550 | 53,978,630 | 336,116,522 | 58,759,921 |
+| a tick, mean of 3,000 | 503,226 | 74,346 | 515,421 | 83,762 |
+| the 11 sums | | the same | | the same |
+
+Both missions' 11 sums are the build computer's and the table's above, 60 of 60 and 73 of 73 objects, with `Clean`
+marked, full and checked. The tick's next items now (`tools/prof.py`, 3,000 ticks of `SCG01EA`, 71,179 a tick in
+`CNC_Advance_Instance`): `LogicClass::AI` 52,254 (infantry's AI 1,039 a call, 18 a tick; units' 5,096, 3 a tick; the
+`Mark`s of moving objects 2,291 a call), `Clean` 13,452 (the cells with trees, walls and buildings stay marked),
+`HouseClass::Adjust_Threat` 4,835 and `HouseClass::As_Pointer` 4,707 (259,164 calls in 3,000 ticks), `MapClass::Logic`
+3,940, `LayerClass::Sort` 2,292.
 
 The load's 331 million: 43% is case-insensitive file searches (`Resolve_File` lists a folder and `fnmatch`es every
 name, 3,822 times, 37 thousand instructions each, 42.7% of it in the kernel's directory reads), 20% the scenario
 descriptions (`Read_Scenario_Descriptions`, 68 million), the same two things `docs/games/tdawn.md` found in Tiberian
 Dawn's start and cut there ("A folder's names read once").
+
+## The picture (step 2, begun)
+
+**OpenCNC3D's own renderer is far more than a day's work here, and is not ported.** `game/cnc_eyes.cpp` is 47,617 lines
+and includes 128 headers of its own (110 thousand lines more: effects, remastered art, the editor, Red Alert in 3D,
+the sidebar, the menus, audio, network), uses `std::map`, `std::string` and `std::unordered_map` (all of libstdc++, which
+the flat C++ driver here has not: OpenTTD's toolchain would be needed), zlib, `dlopen` of the brain, SDL2 for its
+window, events and sound, and a dozen packs of its own beside the mission's (`dossidebar.pack`, `cameos.pack`, the
+DOS art packs the DOS data's bakers make). So the smallest picture was made instead, as the coordinator's brief
+allowed: `linux/opencnc3d/eyes.c`, ours, about 400 lines, which reads the mission's pack and the brain's objects and
+draws them with `cnc_eyes.cpp`'s conventions (a cell is a unit, a model unit 1/1024 of a cell, a height step 1/64, a
+facing turning a model by `-face * 2 pi / 256`, the cartridge's 50 degrees of field and a camera pitched down 55
+degrees at 16 cells). It is OpenCNC3D's data and the cartridge's models; it is not OpenCNC3D's picture.
+
+What it draws: the terrain's cells in the view (the atlas, keyed where the cartridge punched the sea out) on the PK9
+heights; under the cells with holes the sea floor (`BOTTOM`) and the sea (`WATER1` at 170/255); every building,
+vehicle, aircraft and tree by its pack mesh (solid and cutout first, then the shadows and translucent faces blended),
+a turret turned about its pivot by its own facing; every soldier as his set's `STAND` frame for his facing in his
+house's palette, upright to the camera. The GL is Half-Life's shim (`linux/halflife/gl_shaderemu.c` over
+`linux/quake3/gpu_shaderemu.c` on `gles.c`), included as `linux/jk2/gl_jk2.c` does, in a 640 x 480 Nano-X window;
+`build.sh` links it with the brain into `/usr/bin/opencnc3d` (1.65 MB). `OPENCNC3D_LOOK=X,Y`, `OPENCNC3D_DIST`,
+`OPENCNC3D_PITCH` move the camera; `OPENCNC3D_TICKS=N` plays N ticks before the first picture.
+
+Looked at (captures under `rvc_harness --cpu --warp` through `tools\gpu_queue.ps1`, 2 November 2026, kept in no
+repository): GDI 1's grass, roads, the cliff with its height, the beach and the sea with its rocks, the trees with
+their blended shadows, the MCV, the boat, a Nod gun turret and four GDI riflemen in tan where they stand. Wrong or
+missing in them: GDI's models are drawn in the Nod/neutral colours (the pack's GDI variants are not used yet), no
+building's or tree's animation plays (PKB), the tree clumps `TC01`..`TC05` have no mesh (the cartridge has none, as
+OpenCNC3D's `unit_models.json` says) and are not drawn, the soldiers stand (no `RUN` or `DETH1`), no vehicle shadow
+quads (PKD), no shroud, no terrain shade (the console's per-corner light and the CM tint), no sidebar, no cursor.
+
+Measured on `rvc_cpu` (90 frames of `SCG01EA`, the camera on the MCV, the game a tick a frame):
+
+| | instructions of core 0 |
+|---|---:|
+| a frame | 1,050,949 to 1,062,200 |
+| the game's tick in it | 87,912 to 91,312 |
+| the drawing | 961,824 to 974,288, for 6,081 vertices and 33 objects |
+| the load (`CNC_*` start) | 54,312,086 |
+| the pack read and its textures put in the GPU's pool | 38,143,637 |
+
+Memory: the pack (8.2 MB) is read whole and freed once its 339 textures are in the GPU's pool, which holds them in
+5,749 KB of a 12 MB pool (`HL_POOL_MB=12`, 0 left out; the soldiers' strips among them, the GDI variants not
+put there); 1,002 KB of meshes, cells and heights stay in the heap. The drawing is a vertex at a time through
+`glBegin` (`s_glVertex3f` 47 instructions, the shim's `draw_vertices` 2,576 a call over 7,380 calls in 60 frames, and
+`main`'s own loops 29%): the terrain is three quarters of the vertices and does not change, so it is the first thing
+to keep in the GPU's memory (`seglKeep`, as Doom and Quake do).
+
+## What is left
+
+- OpenCNC3D's renderer itself, at tier 1: a port of `cnc_eyes.cpp` and its modules needs OpenTTD's full C++ toolchain
+  (or the STL replaced), SDL's window, events, timer and sound replaced by a host of ours, its `dlopen` of the brain
+  turned into a link, its packs of DOS art baked (`game/bake_dos*.py` over the DOS data), and the optional shader chain
+  left out at compile time. Its tier-1 contract (`docs/tier1-gap.md`) says which paths a fixed-function GL keeps.
+- The sidebar and the menus, which come from the DOS data's SHP art through those packs.
+- In `eyes.c`, if it stays: the GDI variants, animation, the vehicle shadows, the terrain's shade and tint, the
+  shroud, and the terrain kept in the GPU's memory.
 
 ## Licences
 
@@ -207,8 +304,7 @@ the DOS data stay in a cache outside the tree and in private images; `bake.py` c
 ## Not done
 
 - The native reference build of OpenCNC3D's renderer, and a pack drawn by it ("The pack baker, ours").
-- Any change for speed: the gate stopped the work at 503 thousand instructions a tick.
 - A `--opencnc3d` switch on `linux/nommu/image.py` and a `tools/test_all.py` case: the private image was made by hand
   (`overlay.py`, then `image.py ocnc ROOT KERNEL` on a copy of the shared root), and the sums are in this document.
-- No card run: `rvc_cpu` only, no worker cores.
+- No card run: `rvc_cpu` and `rvc_harness --cpu --warp` only, no worker cores, no frames a second on the card.
 - The movies, music and the DOS data inside `SETUP.Z`.

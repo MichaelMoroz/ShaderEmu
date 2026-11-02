@@ -119,4 +119,22 @@ else
     mkdir -p "$OUT/usr/bin"
     $STRIP -o "$OUT/usr/bin/opencnc3d-brain" "$BUILD/opencnc3d-brain"
     ls -l "$OUT/usr/bin/opencnc3d-brain"
+
+    # The picture (eyes.c): the brain and the pack drawn through Half-Life's GL shim over Quake III's draws
+    # on gles.c, in a Nano-X window, as linux/jk2 does (docs/games/opencnc3d.md, "The picture")
+    step "the picture"
+    PROGRAMS=$REPO/programs
+    MW=$WORK/src/microwindows
+    [ -f "$MW/src/lib/libnano-X.a" ] || { echo "run linux/nanox/build.sh first"; exit 1; }
+    WF="$OPT -fno-pie -w"
+    rv32-cc $WF -DSEGL_FLOAT -DMAX_TEXTURES=64 -idirafter $PROGRAMS/linux/include -I$MW/src/include -I$PROGRAMS/linux \
+        -I$REPO/linux/quake3 -c "$REPO/linux/quake3/gpu_shaderemu.c" -o "$BUILD/gpu_shaderemu.o"
+    rv32-cc $WF -I$REPO/linux/quake3 -I$PROGRAMS/mc -I$MW/src/include -c "$HERE/eyes.c" -o "$BUILD/eyes.o"
+    rv32-cc -O2 -fno-common -fdata-sections -w -I$PROGRAMS/mc -c "$PROGRAMS/mc/mcw.c" -o "$BUILD/mcw.o"
+    rv32-cc -O2 -fno-common -fdata-sections -w -I$PROGRAMS/mc -c "$PROGRAMS/mc/mcwx.c" -o "$BUILD/mcwx.o"
+    $CXX "$BUILD/eyes.o" "$BUILD/gpu_shaderemu.o" "$BUILD/mcw.o" "$BUILD/mcwx.o" "$BUILD/cxxrt.o" $LIBS \
+        "$MW/src/lib/libnano-X.a" -lm -o "$BUILD/opencnc3d"
+    riscv32-linux-nm -n "$BUILD/opencnc3d" > "$WORK/src/opencnc3d.nm"
+    $STRIP -o "$OUT/usr/bin/opencnc3d" "$BUILD/opencnc3d"
+    ls -l "$OUT/usr/bin/opencnc3d"
 fi
