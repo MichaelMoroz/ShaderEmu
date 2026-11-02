@@ -223,32 +223,34 @@ void ram_store(uint o, uint v, uint mask) {
         bloom |= o;
         [branch] if (wi < 2) { if (wi == 0) c[at].x = v; else c[at].y = v; }
         else { if (wi == 2) c[at].z = v; else c[at].w = v; }
-        return;
-    }
-    uint4 texel;
-    [branch] if (at != 0) texel = c[at];
-    else {
-        [branch] if (t != dr_t) { dr_v = TEX(RAM_ADDR(t)); dr_t = t; }
-        texel = dr_v;
-    }
-    uint cur = at == 0 && ovf_addr == o && (o & bloom) == o ? ovf_val : idx(texel, wi);
-    uint val = (cur & ~mask) | (v & mask);
-    if (val == cur) return;
-    bloom |= o;
-    dirty |= 1u << ((o >> 22) & 31);
-    texel = put(texel, wi, val);
-    [branch] if (at != 0) {
-        c[at] = texel;
-    } else if (f0 != 0 || f1 != 0) {
-        uint b = f0 != 0 ? b0 : b1, f = f0 != 0 ? f0 : f1;
-        c[4 * b] = put(f0 != 0 ? tags0 : tags1, f - 1, tag);
-        c[4 * b + f] = texel;
-        OCC_SET(b);
-        remember(t, 4 * b + f);
-        absent_t = 0xffffffff;
     } else {
-        ovf_addr = o; ovf_val = val;   // made by the commit, which ends the pass here
-        stall = STALL_MEM; budget = 0;
+        // (no return in it: a return in a function inlined in the loop is a flag tested after it)
+        uint4 texel;
+        [branch] if (at != 0) texel = c[at];
+        else {
+            [branch] if (t != dr_t) { dr_v = TEX(RAM_ADDR(t)); dr_t = t; }
+            texel = dr_v;
+        }
+        uint cur = at == 0 && ovf_addr == o && (o & bloom) == o ? ovf_val : idx(texel, wi);
+        uint val = (cur & ~mask) | (v & mask);
+        [branch] if (val != cur) {
+            bloom |= o;
+            dirty |= 1u << ((o >> 22) & 31);
+            texel = put(texel, wi, val);
+            [branch] if (at != 0) {
+                c[at] = texel;
+            } else if (f0 != 0 || f1 != 0) {
+                uint b = f0 != 0 ? b0 : b1, f = f0 != 0 ? f0 : f1;
+                c[4 * b] = put(f0 != 0 ? tags0 : tags1, f - 1, tag);
+                c[4 * b + f] = texel;
+                OCC_SET(b);
+                remember(t, 4 * b + f);
+                absent_t = 0xffffffff;
+            } else {
+                ovf_addr = o; ovf_val = val;   // made by the commit, which ends the pass here
+                stall = STALL_MEM; budget = 0;
+            }
+        }
     }
 }
 void ram_store_nc(uint o, uint v, uint mask) {   // ram_store for an o known to be in RAM
@@ -278,32 +280,34 @@ void ram_store_nc(uint o, uint v, uint mask) {   // ram_store for an o known to 
         bloom |= o;
         [branch] if (wi < 2) { if (wi == 0) c[at].x = v; else c[at].y = v; }
         else { if (wi == 2) c[at].z = v; else c[at].w = v; }
-        return;
-    }
-    uint4 texel;
-    [branch] if (at != 0) texel = c[at];
-    else {
-        [branch] if (t != dr_t) { dr_v = TEX(RAM_ADDR(t)); dr_t = t; }
-        texel = dr_v;
-    }
-    uint cur = at == 0 && ovf_addr == o && (o & bloom) == o ? ovf_val : idx(texel, wi);
-    uint val = (cur & ~mask) | (v & mask);
-    if (val == cur) return;
-    bloom |= o;
-    dirty |= 1u << ((o >> 22) & 31);
-    texel = put(texel, wi, val);
-    [branch] if (at != 0) {
-        c[at] = texel;
-    } else if (f0 != 0 || f1 != 0) {
-        uint b = f0 != 0 ? b0 : b1, f = f0 != 0 ? f0 : f1;
-        c[4 * b] = put(f0 != 0 ? tags0 : tags1, f - 1, tag);
-        c[4 * b + f] = texel;
-        OCC_SET(b);
-        remember(t, 4 * b + f);
-        absent_t = 0xffffffff;
     } else {
-        ovf_addr = o; ovf_val = val;   // made by the commit, which ends the pass here
-        stall = STALL_MEM; budget = 0;
+        // (no return in it: a return in a function inlined in the loop is a flag tested after it)
+        uint4 texel;
+        [branch] if (at != 0) texel = c[at];
+        else {
+            [branch] if (t != dr_t) { dr_v = TEX(RAM_ADDR(t)); dr_t = t; }
+            texel = dr_v;
+        }
+        uint cur = at == 0 && ovf_addr == o && (o & bloom) == o ? ovf_val : idx(texel, wi);
+        uint val = (cur & ~mask) | (v & mask);
+        [branch] if (val != cur) {
+            bloom |= o;
+            dirty |= 1u << ((o >> 22) & 31);
+            texel = put(texel, wi, val);
+            [branch] if (at != 0) {
+                c[at] = texel;
+            } else if (f0 != 0 || f1 != 0) {
+                uint b = f0 != 0 ? b0 : b1, f = f0 != 0 ? f0 : f1;
+                c[4 * b] = put(f0 != 0 ? tags0 : tags1, f - 1, tag);
+                c[4 * b + f] = texel;
+                OCC_SET(b);
+                remember(t, 4 * b + f);
+                absent_t = 0xffffffff;
+            } else {
+                ovf_addr = o; ovf_val = val;   // made by the commit, which ends the pass here
+                stall = STALL_MEM; budget = 0;
+            }
+        }
     }
 }
 // a word anywhere (a on a word): RAM, the ROM, the clock chip, the timer
