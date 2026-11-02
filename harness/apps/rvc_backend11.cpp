@@ -236,8 +236,9 @@ public:
     bool loadPayload(Material& mat, const std::string& dir, const std::string& prefix, const std::string& propBase,
                      std::string& err) override {
         if (prefix == "none") return true;
-        if (propBase == "_Data_MTD") {
-            // the ROM: one texture of 16-byte texels, RGBAFloat read by its bits (as the world's importer makes it,
+        const bool ramImage = propBase == "_Data_RAM";
+        if (propBase == "_Data_MTD" || ramImage) {
+            // the ROM and RAM's start image: one texture of 16-byte texels, RGBAFloat read by its bits (as the world's importer makes it,
             // docs/machine/gpu.md "The ROM as one texture")
             std::string bin;
             fs::path base = prefix.find_first_of("/\\") == std::string::npos ? fs::u8path(dir) / prefix : fs::u8path(prefix);
@@ -246,18 +247,18 @@ public:
                 return false;
             }
             // RVC_CODE_FILE: rows under the ROM's, from the texture's first
-            if (const char* cf = getenv("RVC_CODE_FILE"); cf && *cf) {
+            if (const char* cf = getenv("RVC_CODE_FILE"); cf && *cf && !ramImage) {
                 std::string code;
                 if (!readFileBinary(cf, code)) { err = std::string(cf) + ": cannot read"; return false; }
                 bin.resize((bin.size() + 2048 * 16 - 1) / (2048 * 16) * (2048 * 16));
                 bin += code;
             }
             UINT height = 0;
-            auto srv = createTextureTexels(gpu_.device.Get(), bin, 2048, /*flipY=*/true, height, err);
+            auto srv = createTextureTexels(gpu_.device.Get(), bin, 2048, /*flipY=*/false, height, err);
             if (!srv) return false;
-            mat.setTexture("_Data_ROM", srv.Get(), 2048, height);
+            mat.setTexture(ramImage ? "_Data_RAM" : "_Data_ROM", srv.Get(), 2048, height);
             keep_.push_back(srv);
-            fprintf(stderr, "[harness] _Data_ROM <- %s (2048x%u, RGBAFloat)\n", prefix.c_str(), height);
+            fprintf(stderr, "[harness] %s <- %s (2048x%u, RGBAFloat)\n", ramImage ? "_Data_RAM" : "_Data_ROM", prefix.c_str(), height);
             return true;
         }
         const char* lanes[4] = {"r", "g", "b", "a"};
@@ -329,7 +330,7 @@ public:
         const uint32_t rounds = (!cpuMode && !cs_ && mat.getFloat("_Init") == 0) ? (std::max)(1u, tickRounds) : 1u;
         const float zapKind = mat.getFloat("_ZapKind");
         for (uint32_t round = 0; round < rounds; round++) {
-        if (rounds > 1) { mat.setInt("_TimePass", (int)round); mat.setInt("_TickFull", (int)(tickSplit ? tickSplit : rounds)); mat.setInt("_ZapKind", round == 0 ? (int)zapKind : 0); }
+        if (rounds > 1) mat.setInt("_ZapKind", round == 0 ? (int)zapKind : 0);
         if (cpuMode && mat.getFloat("_Init") == 0) {}   // the processor ran the instructions
         else if (cs_ && mat.getFloat("_Init") == 0) runComputeTick(mat);
         else {
@@ -383,7 +384,7 @@ public:
         crt_.runZone(gpu_, passes_[1], mat, UpdateZone{1024, kHeight / 2.0f, 2048, (float)kHeight, 1}, bands_ ? 6 * kCommitQuads : 6);
         }
         }
-        if (rounds > 1) { mat.setInt("_TimePass", 0); mat.setInt("_ZapKind", (int)zapKind); }
+        if (rounds > 1) mat.setInt("_ZapKind", (int)zapKind);
         if (timeIt) gpu_.ctx->End(tsQuery_[2].Get());
         if (gpuPasses_.size() == 2 && !freeze) {
             bool listDrawn = !listLazy() || listDue > 0;   // (RVC_LIST_LAZY: only while a list is due)
@@ -1084,7 +1085,6 @@ private:
             fieldDraw_ = laneField_ && fieldSeen_ > 0;
         }
         for (uint32_t round = 0; round < rounds; round++) {
-            if (rounds > 1) { mat.setInt("_TimePass", (int)round); mat.setInt("_TickFull", (int)(tickSplit ? tickSplit : rounds)); }
             if (ticks) {
                 bool workers = cores_ > 1 && (workersNow || getenv("RVC_WORKERS_ALWAYS"));
                 activeCores_ = workers ? (UINT)cores_ : 1;
@@ -1267,12 +1267,12 @@ private:
     Gpu gpu_;
     std::vector<GpuPass> passes_, gpuPasses_, soundPasses_, unpackPasses_, pointPasses_, copyPasses_;
     bool scatter_ = true;   // the cores' stores committed as points (with the tick in eight targets; --define NO_SCATTER: as bands)
-    // TICK_MRT: the tick's eight targets (types.h: TICK_MRT_W wide, a band of rows for 128 workers)
+    // TICK_MRT: the tick's eight targets
     bool mrt_ = false;
     UINT mrtLoad_ = 1;   // TICK_LOAD: the workers' quads drawn so many times (a measurement)
     UINT activeCores_ = 1;   // the cores whose pixels are drawn this frame: all, or core 0 alone (workersNow)
-    UINT tickWidth() const { return 1040; }   // TICK_MRT_W
-    UINT tickHeight() const { return (UINT)tickRows_ * (((UINT)cores_ + 126) / 128); }   // TICK_BANDS
+    UINT tickWidth() const { return 2048; }   // TICK_W, a block of 8 x 8 for each core
+    UINT tickHeight() const { return 16; }   // TICK_H: the cores' row, and the lanes' field under it
     ComPtr<ID3D11Texture2D> mrtTex_[8];
     ComPtr<ID3D11RenderTargetView> mrtRtv_[8];
     ComPtr<ID3D11ShaderResourceView> mrtSrv_[8];

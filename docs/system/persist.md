@@ -8,8 +8,7 @@ world, so the folder is for settings and small saved games.
 
 Saving is asked for, never done by itself: with the SAVE button of the sign on the computer,
 with Settings' Storage tab, or with `nxpersist save`. Loading is done once a session, when
-the desktop starts (on a machine whose worker cores `geotune` lays out, at boot, just before
-that: `docs/machine/multicore.md`, "Packing the small workers"), and can be switched off. What is in
+the desktop starts, and can be switched off. What is in
 the folder and not saved is lost with the rest.
 
     nxpersist load | save | clear | auto 0|1 | state        (load!: though loading at start is off)
@@ -61,7 +60,6 @@ the session only when the folder is saved.
 | `pathtrace.detail`, `.samples`, `.turns`, `.background`, `.background.colour`, `.live` | `nxpath` | the picture's settings |
 | `micropolis.speed`, `.autobudget`, `.disasters` | `nxmicropolis` | the speed (1 to 3), "Budget by itself", disasters on |
 | `web.home`, `web.pictures`, `web.bookmarks`, `web.bookmark.N` | the browser | its home page, whether pictures are loaded, and up to 24 bookmarks, `ADDRESS TITLE` each (`docs/apps/web.md`) |
-| `geotune.width`, `.workers`, `.iterations`, `.us`, `.ratio`, `.force` | `geotune`, at boot | the small workers' blocks' width, and what it was chosen by (`docs/machine/multicore.md`, "Packing the small workers"); `.force` 2, 4 or 8 is a width with nothing measured |
 
 Not in it: the games' own settings and saved games (their files, in their folders above),
 where the desktop's icons stand (a file of lines), and whether the folder is loaded at start
@@ -101,8 +99,7 @@ wrote. The host's SAVE button reaches the guest as an address to open (`docs/sys
 `open persist:save` runs `nxpersist save`, so it needs the desktop's bar.
 
 The `nx` script runs `nxpersist load` after the window system and before the desktop and the
-bar, once a session (`/tmp/nxpersist.loaded`), unless `geotune` loaded it at boot
-(`/tmp/nxpersist.early`); a kept screen size other than the running one
+bar, once a session (`/tmp/nxpersist.loaded`); a kept screen size other than the running one
 starts the desktop over once. With a window system `nxpersist` shows a window with what it is
 doing and a bar; without one it prints lines.
 

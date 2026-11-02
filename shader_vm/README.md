@@ -30,8 +30,8 @@ made from (`ShaderEmu/Sync shader sources from the repository`).
 
 ## What it is
 
-The state texture is the machine's (docs/machine/multicore.md): RAM from row 64, core 0's block
-and the workers' strip in rows 0-63, the worker geometry geotune lays out, the write cache of
+The state texture is the machine's (docs/machine/multicore.md): RAM from row 64, a slot of 64 x 8
+for each core in rows 0-63 and a block of 8 x 8 pixels in the targets, all found by shifts, the write cache of
 three tables of buckets of three texels, the mailboxes of `src/mc.h`. A core's texels are where
 `tick.hlsl`'s comment at `L1_AT` says, so the control pass, the host's reads
 and the GPU device's passes are as they were.
@@ -62,13 +62,9 @@ The tick:
   byte at a time when not one whole word, the CSRs, SBI, `sret`, the traps and interrupts, and a
   worker's fault record.
 
-## Rounds a frame (`--tick-rounds`, `--tick-split`)
+## Rounds a frame (`--tick-rounds`)
 
 `--tick-rounds N` draws the tick and its commit N times a frame before the devices' passes, the
-clock a tick on for each (`_TimePass`) and the host's zap in the first only. `--tick-split F`: the
-first F always run; a later one gives core 0 what is left of its F x `--ticks` (texel 39.y, its
-instructions in this frame) and draws a worker only when core 0 ended the round before early
-(39.z), with
-no readback, the tick's geometry shader leaving the workers out. Off by default: four rounds with
-one always run made nxray 2.4 times as fast (47.3 to 19.5 ms a picture) and Quake, Quake III and
-Red Alert 5 to 15% slower, a round costing its draws whether anything runs in it or not.
+host's zap in the first only, as the world does. (A switch that ran later rounds only for core 0's rest of its frame
+and for workers while core 0 rested went on 2 November 2026: four rounds with one always run made nxray 2.4 times as fast,
+47.3 to 19.5 ms a picture, and Quake, Quake III and Red Alert 5 to 15% slower; the world never had it.)

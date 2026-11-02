@@ -77,7 +77,7 @@ Keep a change only if the three loads say so. Write "level" when it is level. `d
 
 ## 7. Changing fxc2
 
-The source is `C:\Users\micha\Documents\FXC2`; the DLL lives in `tools\fxc2\d3dcompiler_47.dll`, and the build copies it next to the harness. `src/fxc2_check.h` refuses a build older than patch 65; raise it when the tick comes to need a patch. After a change: compile the tick (`__FXC2__`), `python tools\test_card.py mctest-3 fptest`, and FXC2's `tools/shaderbench.py` with the shaders its README measures. Then fit the calibrated model again if the cost moved (`calibrated-measurements`).
+fxc2 is the submodule `tools/fxc2` (branch `master`); its DLL is `tools\fxc2\bin\d3dcompiler_47.dll`, and the build copies it next to the harness. A new compiler is a commit here that moves the submodule. `src/fxc2_check.h` refuses a build older than patch 65; raise it when the tick comes to need a patch. After a change: compile the tick (`__FXC2__`), `python tools\test_card.py mctest-3 fptest`, and FXC2's `tools/shaderbench.py` with the shaders its README measures. Then fit the calibrated model again if the cost moved (`calibrated-measurements`).
 
 To see what the driver made of a shader: the user-level skill `nsight-gpu-trace` (D3D12 only, DXBC by `dxilconv`).
 

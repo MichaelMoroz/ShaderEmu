@@ -301,8 +301,8 @@ public static partial class ShaderEmuBuilder
         machine.stage = StateTexture("Stage", 2048, 21);     // STAGE_ROWS (src/ram.cginc)
         machine.window = StateTexture("Window", 2048, 11);   // WINDOW_ROWS (MachineWindow.cginc)
         machine.tickTargets = new RenderTexture[8];
-        for (int i = 0; i < 8; i++) machine.tickTargets[i] = StateTexture("TickOut" + i, 1040, 32);   // TICK_MRT_W x TICK_STATE_ROWS x TICK_MRT_BANDS
-        machine.tickDepth = Target("TickDepth", 1040, 32, 16);
+        for (int i = 0; i < 8; i++) machine.tickTargets[i] = StateTexture("TickOut" + i, 2048, 16);   // TICK_W x TICK_H, formerly TICK_STATE_ROWS x TICK_MRT_BANDS
+        machine.tickDepth = Target("TickDepth", 2048, 16, 16);
         machine.readbackTexture = Target("Readback", 1032, 32, 0);
         RenderTexture gpuTarget = AssetDatabase.LoadAssetAtPath<RenderTexture>(Generated + "/GpuTarget.renderTexture");
         pointsMat.SetTexture("_TickState", tickState);
@@ -1125,11 +1125,9 @@ public static partial class ShaderEmuBuilder
 
         List<Texture2D> textures = new List<Texture2D>();
         ShaderEmuImages.BootImage boot = ShaderEmuImages.Images[0];
-        foreach (string part in new[] { "ram", "rom", "tree" })
-            for (int lane = 0; lane < 4; lane++)
-                // (the ROM is one texture, in place 4: ShaderEmuTexelsImporter)
-                textures.Add(part != "rom" ? AssetDatabase.LoadAssetAtPath<Texture2D>(ShaderEmuImages.LanePath(boot.name, part, lane))
-                             : lane == 0 ? AssetDatabase.LoadAssetAtPath<Texture2D>(ShaderEmuImages.RomPath(boot.name)) : null);
+        // (one texture each: ShaderEmuTexelsImporter)
+        textures.Add(AssetDatabase.LoadAssetAtPath<Texture2D>(ShaderEmuImages.RamPath(boot.name)));
+        textures.Add(AssetDatabase.LoadAssetAtPath<Texture2D>(ShaderEmuImages.RomPath(boot.name)));
         if (textures[0] == null) Debug.LogError("[ShaderEmu] no boot image: run ShaderEmu/Import boot images first");
         machine.imageTextures = textures.ToArray();
 
@@ -1199,7 +1197,6 @@ public static partial class ShaderEmuBuilder
         PhysicalSwitch(panel, pointer);   // and the steady pointer's (ShaderEmuTouch.cs)
         Sharing(world, computer, panel, machine, new Vector3(1.28f, 1.82f, screenZ));
         Sound(world, panel, machine);
-        WorkersPanel(computer, machine);
         UnityEventTools.AddStringPersistentListener(slider.onValueChanged,
             UdonSharpEditorUtility.GetBackingUdonBehaviour(machine).SendCustomEvent, "SpeedChanged");
         UnityEventTools.AddStringPersistentListener(machine.tickSlider.onValueChanged,

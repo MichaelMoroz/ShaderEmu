@@ -30,7 +30,11 @@
 #include "amp.h"
 #endif
 #ifdef LANE_FIELD
-#define LANE_FIELD_ROW 48   // the lanes' field's texels: state rows 48 to 63 (FIELD_STATE_ROW, shader_vm's tick)
+// Texel w of the lanes' field's state (field_st in shader_vm's tick): tiles 5 and 6 of the slots from the ninth on.
+uint2 ram_field_at(uint w) {
+    uint F = w >> 3, k = 8 + (F >> 4), i = F & 15;
+    return uint2(((k & 31) << 6) + 40 + ((i >> 3) << 3) + (w & 7), ((k >> 5) << 3) + (i & 7));
+}
 #endif
 
 // RAM as the commit's passes other than the gather have it: the control words alone.
@@ -41,7 +45,7 @@ uint4 ram_stage_read(uint2 pos) {
 // Texel w of a core's state as the tick left it, in the layout of its own rows.
 uint4 tick_state(uint core, uint w) {
 #if CORES > 1
-    if (core != 0) return _TickState[mc_tile_at(mc_tile_of(core) + (w >> 6)) + uint2(w & 7, (w & 63) >> 3)];
+    if (core != 0) return _TickState[mc_slot_of(core) + uint2(((w >> 6) << 3) + (w & 7), (w >> 3) & 7)];
 #endif
     return _TickState[uint2(w & 63, w >> 6)];
 }
@@ -240,8 +244,8 @@ void ram_quad(inout TriangleStream<ram_v2f> stream, uint x, uint y, uint w, uint
 }
 // `count` texels from the start of row `row`
 void ram_span(inout TriangleStream<ram_v2f> stream, uint row, uint count, uint height, uint4 value, uint4 info) {
-    ram_quad(stream, 0, row, 2048, count / 2048, height, value, info);
-    ram_quad(stream, 0, row + count / 2048, count % 2048, 1, height, value, info);
+    ram_quad(stream, 0, row, 2048, count >> 11, height, value, info);
+    ram_quad(stream, 0, row + (count >> 11), count & 2047, 1, height, value, info);
 }
 #ifdef RAM_AMP
 // One texel as one triangle, three vertices where a quad is four: its corner and 1.5 texels along each side, which
@@ -261,7 +265,7 @@ void ram_tri(inout TriangleStream<ram_v2f> stream, uint x, uint y, uint height, 
 // RAM texels t0 to t1, row by row
 void ram_rows(inout TriangleStream<ram_v2f> stream, uint t0, uint t1, uint4 value, uint4 info) {
     if (t0 > t1) return;
-    uint y0 = t0 / 2048, y1 = t1 / 2048, x0 = t0 % 2048, x1 = t1 % 2048;
+    uint y0 = t0 >> 11, y1 = t1 >> 11, x0 = t0 & 2047, x1 = t1 & 2047;
 #ifdef RAM_AMP
     if (t0 == t1) {
         ram_tri(stream, x0, 64 + y0, STATE_TEX_HEIGHT, value, info);
@@ -357,7 +361,6 @@ void ram_gather_amp_geom(point amp_d I[1], inout TriangleStream<ram_v2f> stream,
 uint4 ram_gather_texel(ram_v2f i) {
     uint2 pos = (uint2)i.vertex.xy;
     s_dim = uint2(2048, STATE_TEX_HEIGHT);
-    _Data_ROM.GetDimensions(m_dim.x, m_dim.y);
 #if CORES > 1
     MC_GEO_READ
 #endif
@@ -398,12 +401,6 @@ uint4 ram_gather_texel(ram_v2f i) {
 #endif
 
 // The 64 state rows after the commit.
-uint4 ram_init_raw(uint2 pos) {
-    float3 raw[6];
-    for (uint off = 0; off < 6; off++)
-        raw[off] = _Data_RAM_RAW[pos + uint2((off * 2048u) % (2048u * 3), (off / 3) * STATE_TEX_HEIGHT)].rgb;
-    return unpack_uint4(raw);
-}
 // A staged copy's place in what its core keeps: the stall stays until its last chunk is made,
 // and its addresses and length move on by a chunk when one is.
 uint4 ram_progress(uint core, uint x, uint4 result) {
@@ -430,26 +427,20 @@ uint4 ram_progress(uint core, uint x, uint4 result) {
 }
 uint4 ram_state_texel(uint2 pos) {
     s_dim = uint2(2048, STATE_TEX_HEIGHT);
-    _Data_ROM.GetDimensions(m_dim.x, m_dim.y);
-    if (_Init && _InitRaw) return ram_init_raw(pos);
     uint4 own = _TickState[pos], result;
+#if CORES > 1
+    uint hb = (pos.x >> 6) | ((pos.y >> 3) << 5);
 #ifdef LANE_FIELD
     // the lanes' field (shader_vm/tick.hlsl): of a lane's texels its place and its count,
     // the last words of its buckets' tags; the buckets themselves emptied, their points made
-    if (pos.y >= LANE_FIELD_ROW) return _Init || ((pos.x & 7) != 0 && (pos.x & 7) != 4) ? (uint4)0 : uint4(0, 0, 0, own.w);
+    if (hb >= 8 && (pos.x & 63) >= 40 && (pos.x & 63) < 56) return _Init || ((pos.x & 7) != 0 && (pos.x & 7) != 4) ? (uint4)0 : uint4(0, 0, 0, own.w);
 #endif
-#if CORES > 1
     MC_GEO_READ
-    uint hb = 0;
-    mc_select(0);
-    if (pos.x >= MC_STRIP_X) {
-        uint tile = ((pos.x - MC_STRIP_X) >> 3) + MC_STRIP_TILES * (pos.y >> 3);
-        hb = mc_core_at(tile);
-        if (hb == 0) return (uint4)0;
-        uint w = ((tile - mc_tile0) << 6) + ((pos.y & 7) << 3) + (pos.x & 7);
-        pos = uint2(w & 63, w >> 6);
-    }
-    pos = mc_texel_of(pos);
+    if (hb > mc_count) return (uint4)0;
+    mc_select(hb);
+    // (a worker's texels are in tiles of 8 x 8, core 0's in rows)
+    uint w = hb == 0 ? ((pos.y & 7) << 6) + (pos.x & 63) : (((pos.x & 63) >> 3) << 6) + ((pos.y & 7) << 3) + (pos.x & 7);
+    pos = mc_texel_of(uint2(w & 63, w >> 6));
     // (of a worker's state the commit changes five texels: the rest is as it is)
     if (hb != 0 && (pos.y != 0 || (pos.x != 8 && pos.x != 28 && pos.x != 37 && pos.x != 38 && pos.x != 41))) return own;
     decode_for_commit();
@@ -493,10 +484,10 @@ void ram_commit_point(uint id, inout TriangleStream<ram_v2f> stream) {
     // the field's buckets, two a lane: the points before the picture's (as many as _FieldPoints)
     if (_FieldPoints != 0 && id + 1 < _CommitPoints && id + 1 + _FieldPoints >= _CommitPoints) {
         uint f = id + 1 + _FieldPoints - _CommitPoints, w = (f >> 1) * 8 + (f & 1) * 4;
-        uint4 tags = _TickState[uint2(w & 2047, LANE_FIELD_ROW + (w >> 11))];
+        uint4 tags = _TickState[ram_field_at(w)];
         for (uint n = 0; n < 3; n++) {
             uint tag = idx_uint4(tags, n), v = w + 1 + n;
-            if (tag != 0 && tag - 1 < RAM_TEXELS) ram_rows(stream, tag - 1, tag - 1, _TickState[uint2(v & 2047, LANE_FIELD_ROW + (v >> 11))], uint4(RK_VALUE, 0, 0, 0));
+            if (tag != 0 && tag - 1 < RAM_TEXELS) ram_rows(stream, tag - 1, tag - 1, _TickState[ram_field_at(v)], uint4(RK_VALUE, 0, 0, 0));
         }
         return;
     }
@@ -584,21 +575,13 @@ void ram_commit_amp_geom(point amp_d I[1], inout TriangleStream<ram_v2f> stream,
 #endif
 
 uint4 ram_init_texel(uint2 pos) {
-    if (_InitRaw) return ram_init_raw(pos);
     uint lin = RAM_LIN(pos.x, pos.y - 64);
-    uint2 ram_dim;
-    _Data_RAM_A.GetDimensions(ram_dim.x, ram_dim.y);
-    uint2 pos2 = uint2(lin % 2048, lin / 2048);   // the payload image is row-major, rows bottom up
-    pos2.y = ram_dim.y - pos2.y - 1;
-    if (pos2.y >= ram_dim.y) return (uint4)0;
-    return uint4(unpack_raw_float4(_Data_RAM_R[pos2]), unpack_raw_float4(_Data_RAM_G[pos2]),
-                 unpack_raw_float4(_Data_RAM_B[pos2]), unpack_raw_float4(_Data_RAM_A[pos2]));
+    return asuint(_Data_RAM[uint2(lin & 2047, lin >> 11)]);   // (the start image as the ROM: a texel a pixel; past it, zeros)
 }
 
 uint4 ram_commit_texel(ram_v2f i) {
     uint2 pos = (uint2)i.vertex.xy;
     s_dim = uint2(2048, STATE_TEX_HEIGHT);
-    _Data_ROM.GetDimensions(m_dim.x, m_dim.y);
     uint kind = i.info.x, t = (pos.y - 64) * 2048 + pos.x;
     [branch]
     if (kind == RK_SLOT) return _Stage[i.info.yz];

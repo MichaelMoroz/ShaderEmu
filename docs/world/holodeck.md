@@ -127,7 +127,7 @@ side (400 m both, or 0 and 25 m); nothing is synced.
   turn about up), as Doom lays it on its flat picture.
 - A program sends only what its own camera sees. Behind the seat there is usually nothing.
 - A program's textures, light maps and vertices may be files in the ROM (Quake III Arena's all
-  are, `docs/games/quake3.md`): the pass reads the ROM's four textures as the GPU's does, and the
+  are, `docs/games/quake3.md`): the pass reads the ROM's texture as the GPU's does, and the
   two materials are given them by "ShaderEmu/Give the holodecks' world the ROM" (the first
   image's; a second boot image would need them set when it is chosen).
 

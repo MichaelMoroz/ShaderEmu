@@ -44,7 +44,9 @@ public static partial class ShaderEmuBuilder
         EmuUdonCpu drv = Udon<EmuUdonCpu>(root);
         drv.cpu = cpu;
         drv.machine = machine;
-        drv.ramLanes = new Texture2D[] { machine.imageTextures[0], machine.imageTextures[1], machine.imageTextures[2], machine.imageTextures[3] };
+        drv.ramLanes = new Texture2D[4];
+        for (int lane = 0; lane < 4; lane++)
+            drv.ramLanes[lane] = AssetDatabase.LoadAssetAtPath<Texture2D>(ShaderEmuImages.LanePath(ShaderEmuImages.Images[0].name, "ram", lane));
         // (the machine's ROM is one RGBAFloat texture; the Udon model reads lanes: ShaderEmu/Import the ROM's lanes for the Udon model)
         drv.romLanes = new Texture2D[4];
         for (int lane = 0; lane < 4; lane++)

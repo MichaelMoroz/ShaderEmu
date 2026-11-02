@@ -106,16 +106,6 @@ int main(void) {
     setenv("PATH", "/usr/bin:/bin:/sbin:/usr/sbin:/usr/local/bin", 1);
     setenv("HOME", "/root", 1);   // not "/": the shell would show the prompt there as "~ # "
     setenv("TERM", "vt100", 0);
-    /* how the worker cores are laid out on this card (geotune.c), before any program has one */
-    if (access("/usr/bin/geotune", X_OK) == 0) {
-        pid_t tune = vfork();
-        if (tune == 0) {
-            execl("/usr/bin/geotune", "geotune", (char*)NULL);
-            _exit(127);
-        }
-        while (tune > 0 && waitpid(tune, NULL, 0) < 0) {
-        }
-    }
     int wants = host_wants();
     const char* shell = wants & 2 && access("/usr/bin/emumux", X_OK) == 0 ? "/usr/bin/emumux" : "/bin/sh";
     if (wants & 1 && access("/usr/bin/nx", X_OK) == 0 && vfork() == 0) {

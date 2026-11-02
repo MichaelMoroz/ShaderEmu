@@ -27,7 +27,7 @@ public class EmuMachine : UdonSharpBehaviour
     // The tick is a camera's pass into eight targets, eight state texels a pixel, and what the
     // cores stored is committed as points by another camera (docs/machine/multicore.md, "In Unity").
     public Camera tickCamera;               // disabled: rendered from here, once a round
-    public RenderTexture[] tickTargets;     // eight of 1040 x 32
+    public RenderTexture[] tickTargets;     // eight of 2048 x 16
     public RenderTexture tickDepth;         // the depth buffer a camera with several targets must be given
     public Camera pointsCamera;             // disabled: rendered from here, twice a round (Commit)
     public Material pointsMaterial;         // MachineCommitPoints.shader, on the points camera's mesh
@@ -98,11 +98,6 @@ public class EmuMachine : UdonSharpBehaviour
     public TextMeshProUGUI modeLabel;  // on the button that picks how the slider is read
     public Slider tickSlider;          // instructions a tick (a round's pass): 1,024 doubled per step
     public TextMeshProUGUI tickLabel;  // and how much of it core 0 really runs, lately
-    // The workers' layout geotune makes at boot (docs/machine/multicore.md, "Packing the small workers"):
-    // its own pick, or 2, 4 or 8 columns a small worker; the keys, and what it picked and runs.
-    public Image[] workerPlates;
-    public Color workerPlain, workerPicked;
-    public TextMeshProUGUI workersLabel;
     public float minFrameRate = 45f;   // "steady" gives up instructions before frames come slower than this
     public bool powerOnAtStart;        // off until someone presses Power
     // A real client's test (docs/system/fetch.md, "Hosts"): with fetchTest on, the
@@ -182,8 +177,6 @@ public class EmuMachine : UdonSharpBehaviour
     private float reached = 1f;             // of a pass's instructions, what core 0 ran, lately
     // Steady: so many instructions a second, however long a frame is, as far as the frame rate allows.
     private bool steady;
-    private int workerPreset, workerPresetBooted, geoBits;   // 0 geotune's pick, 1-3 blocks of 2, 4, 8 columns
-    private uint geoFirst, geoHybrid;
     private float targetIps = 2000000f;
     private int roundCap = MaxRounds, guardWait, steadyRounds = 1;
     private float smoothDt = 0.011f, carry;
@@ -333,41 +326,6 @@ public class EmuMachine : UdonSharpBehaviour
         SpeedChanged();
     }
 
-    public void WorkersAuto() { PickWorkers(0); }
-    public void WorkersDense() { PickWorkers(1); }
-    public void WorkersMedium() { PickWorkers(2); }
-    public void WorkersWide() { PickWorkers(3); }
-
-    // Asked for at the next power-on: the layout may change only while no program has workers.
-    private void PickWorkers(int preset)
-    {
-        workerPreset = preset;
-        ShowWorkers();
-    }
-
-    private static string PresetName(int preset)
-    {
-        return preset == 1 ? "Dense" : preset == 2 ? "Medium" : preset == 3 ? "Wide" : "Auto";
-    }
-
-    // What geotune laid out (the geometry texel at 0x810003d0): its pick and ratio in the first
-    // word's high bits, the small workers' cache bits and block width.
-    private void ShowWorkers()
-    {
-        if (workerPlates != null)
-            for (int i = 0; i < workerPlates.Length; i++)
-                if (workerPlates[i] != null) workerPlates[i].color = i == workerPreset ? workerPicked : workerPlain;
-        if (workersLabel == null) return;
-        int picked = (int)((geoFirst >> 8) & 0xff), ratio = (int)(geoFirst >> 16), width = (int)((geoHybrid >> 16) & 0xff);
-        string auto = picked == 0 ? "Auto: measured at power-on"
-                    : "Auto picked " + PresetName(picked == 2 ? 1 : picked == 4 ? 2 : 3) + ", " + (ratio / 100) + "." + (ratio % 100).ToString("00") + " times";
-        string running = !powered || picked == 0 ? "" : "\nRunning " + PresetName(width == 2 ? 1 : width == 4 ? 2 : 3);
-        if (running != "")
-            running += workerPreset != workerPresetBooted ? "; Reset applies " + PresetName(workerPreset)
-                     : width == 8 ? ", all workers 2^" + geoBits : ", small workers 2^" + geoBits;
-        workersLabel.text = auto + running;
-    }
-
     public void SpeedMode()
     {
         steady = !steady;
@@ -435,7 +393,6 @@ public class EmuMachine : UdonSharpBehaviour
         if (powerSays != null) powerSays.text = powered ? "Running. Press to switch off." : "Off. Press to start.";
         if (pauseLabel != null) pauseLabel.text = paused ? "Resume" : "Pause";
         displayMaterial.SetFloat("_Power", powered ? 1f : 0f);
-        ShowWorkers();
         ShowDisplay();
     }
 
@@ -486,40 +443,27 @@ public class EmuMachine : UdonSharpBehaviour
 
     private void ApplyImage()
     {
-        machineMaterial.SetTexture("_Data_RAM_R", Pick(0));
-        machineMaterial.SetTexture("_Data_RAM_G", Pick(1));
-        machineMaterial.SetTexture("_Data_RAM_B", Pick(2));
-        machineMaterial.SetTexture("_Data_RAM_A", Pick(3));
-        machineMaterial.SetTexture("_Data_ROM", Pick(4));
-        tickMaterial.SetTexture("_Data_ROM", Pick(4));
-        tickMaterial.SetTexture("_Data_DTB_R", Pick(8));
-        tickMaterial.SetTexture("_Data_DTB_G", Pick(9));
-        tickMaterial.SetTexture("_Data_DTB_B", Pick(10));
-        tickMaterial.SetTexture("_Data_DTB_A", Pick(11));
+        machineMaterial.SetTexture("_Data_RAM", Pick(0));
+        machineMaterial.SetTexture("_Data_ROM", Pick(1));
+        tickMaterial.SetTexture("_Data_ROM", Pick(1));
         // (a copy out of the ROM is committed as points, and its edges gathered; RAM starts as points)
-        pointsMaterial.SetTexture("_Data_ROM", Pick(4));
-        gatherMaterial.SetTexture("_Data_ROM", Pick(4));
-        pointsMaterial.SetTexture("_Data_RAM_R", Pick(0));
-        pointsMaterial.SetTexture("_Data_RAM_G", Pick(1));
-        pointsMaterial.SetTexture("_Data_RAM_B", Pick(2));
-        pointsMaterial.SetTexture("_Data_RAM_A", Pick(3));
-        gpuMaterial.SetTexture("_Data_ROM", Pick(4));
+        pointsMaterial.SetTexture("_Data_ROM", Pick(1));
+        gatherMaterial.SetTexture("_Data_ROM", Pick(1));
+        pointsMaterial.SetTexture("_Data_RAM", Pick(0));
+        gpuMaterial.SetTexture("_Data_ROM", Pick(1));
         if (pointsBlitMaterial != null)
         {
-            pointsBlitMaterial.SetTexture("_Data_ROM", Pick(4));
-            gatherBlitMaterial.SetTexture("_Data_ROM", Pick(4));
-            pointsBlitMaterial.SetTexture("_Data_RAM_R", Pick(0));
-            pointsBlitMaterial.SetTexture("_Data_RAM_G", Pick(1));
-            pointsBlitMaterial.SetTexture("_Data_RAM_B", Pick(2));
-            pointsBlitMaterial.SetTexture("_Data_RAM_A", Pick(3));
+            pointsBlitMaterial.SetTexture("_Data_ROM", Pick(1));
+            gatherBlitMaterial.SetTexture("_Data_ROM", Pick(1));
+            pointsBlitMaterial.SetTexture("_Data_RAM", Pick(0));
         }
-        if (gpuBlitMaterial != null) gpuBlitMaterial.SetTexture("_Data_ROM", Pick(4));
-        if (volumeMaterial != null) volumeMaterial.SetTexture("_Data_ROM", Pick(4));   // the holodeck's light maps
-        if (romViewMaterial != null) romViewMaterial.SetTexture("_Data_ROM", Pick(4));
+        if (gpuBlitMaterial != null) gpuBlitMaterial.SetTexture("_Data_ROM", Pick(1));
+        if (volumeMaterial != null) volumeMaterial.SetTexture("_Data_ROM", Pick(1));   // the holodeck's light maps
+        if (romViewMaterial != null) romViewMaterial.SetTexture("_Data_ROM", Pick(1));
         if (sound != null)
         {
             // samples are played from where they lie in the ROM
-            sound.mixMaterial.SetTexture("_Data_ROM", Pick(4));
+            sound.mixMaterial.SetTexture("_Data_ROM", Pick(1));
         }
     }
 
@@ -592,11 +536,6 @@ public class EmuMachine : UdonSharpBehaviour
         pointsMaterial.SetInt("_Init", 1);
         gatherMaterial.SetInt("_Init", 1);
         BlitsInt("_Init", 1);
-        machineMaterial.SetInt("_InitRaw", 0);
-        tickMaterial.SetInt("_InitRaw", 0);
-        pointsMaterial.SetInt("_InitRaw", 0);
-        BlitsInt("_InitRaw", 0);
-        tickMaterial.SetInt("_DoTick", 0);
         tickMaterial.SetInt("_Ticks", ticks);
         machineMaterial.SetInt("_UartInLo", 0);
         machineMaterial.SetInt("_UartInHi", 0);
@@ -605,10 +544,7 @@ public class EmuMachine : UdonSharpBehaviour
         // the host flags: the desktop at boot, and the largest screen the GPU's target can show
         // (in 16s of pixels: the word must stay within what a material's number holds exactly)
         RenderTexture target = gpuCamera.targetTexture;
-        // (bits 2-3: the workers' preset, read by geotune)
-        workerPresetBooted = workerPreset;
-        geoFirst = geoHybrid = 0;
-        machineMaterial.SetInt("_HostFlags", 3 | workerPreset << 2 | (target.width / 16) << 8 | (target.height / 16) << 16);
+        machineMaterial.SetInt("_HostFlags", 3 | (target.width / 16) << 8 | (target.height / 16) << 16);
         VRCPlayerApi player = Networking.LocalPlayer;
         tickMaterial.SetInt("_PlayerID", player != null ? player.playerId : 0);
         if (consoleKeyboard != null) consoleKeyboard.Flush();
@@ -1509,6 +1445,11 @@ public class EmuMachine : UdonSharpBehaviour
         frameMs = Time.timeSinceLevelLoad * 1000f;
         frameLength += (Mathf.Min(Time.unscaledDeltaTime, 0.1f) * 1000f - frameLength) * 0.2f;
 
+        // The timer, worked out as the harness's rvc_time.h does: the tick has no doubles. A material's numbers are floats, so in halves.
+        long mtime = (long)((double)(Time.timeSinceLevelLoad / 20f) * 100000.0);
+        tickMaterial.SetInt("_MtimeLoLo", (int)(mtime & 0xffff));
+        tickMaterial.SetInt("_MtimeLoHi", (int)((mtime >> 16) & 0xffff));
+
         // The clock chip (DS1742): local time as BCD, century in the control byte.
         DateTime now = DateTime.Now;
         if (now.Second != rtcSecond)
@@ -1879,15 +1820,6 @@ public class EmuMachine : UdonSharpBehaviour
             workerClock[c] = now;
         }
         haveWorkerClock = cores > 1;
-        // the geometry: what geotune picked and laid out, shown when it changes
-        uint first = Word(64 + 0x3d, 0), hybrid = Word(64 + 0x3d, 3);
-        if (first != geoFirst || hybrid != geoHybrid)
-        {
-            geoFirst = first;
-            geoHybrid = hybrid;
-            geoBits = (int)Word(64 + 0x3d, 2);
-            ShowWorkers();
-        }
     }
 
     // What the guest printed in the round at rowAt: the console ring's bytes since the last round.

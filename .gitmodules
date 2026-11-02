@@ -1,0 +1,4 @@
+[submodule "tools/fxc2"]
+	path = tools/fxc2
+	url = https://github.com/MichaelMoroz/FXC2.git
+	branch = master

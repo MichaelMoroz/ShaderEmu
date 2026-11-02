@@ -48,7 +48,6 @@ struct Options {
     double fixedDt = 0.004;
     double seconds = 0;  // > 0: keep running until this much wall time has passed
     std::string dumpState;
-    bool noDoubles = false;  // NVIDIA's D3D12 path miscomputes rvc's double math; see README
     std::vector<std::string> defines;
     bool dxc = false;        // compile with DXC to DXIL: seconds instead of minutes, for prototyping
     std::string dxcOpt = "-O3";  // DXC optimisation flags, space separated
@@ -87,12 +86,11 @@ int main(int argc, char** argv) {
         else if (a == "--dxc-opt") opt.dxcOpt = next();
         else if (a == "--dxc-dump") opt.dxcDump = next();
         else if (a == "--dxc-sm") opt.dxcSm = next();
-        else if (a == "--no-doubles") opt.noDoubles = true;
         else if (a == "--define") opt.defines.push_back(next());
         else {
             fprintf(stderr, "usage: rvc_trace12 [--rvc DIR] [--payload DIR] [--load-state FILE | --cold] [--ticks N]\n"
                             "                   [--frames N | --seconds S] [--bench WARMUP] [--fixed-dt S] [--cache DIR] [--dump-state FILE]\n"
-                            "                   [--dxc [--dxc-dir DIR] [--dxc-opt \"FLAGS\"] [--dxc-sm 6_x]] [--no-doubles] [--define NAME[=V]] [--warp] [--debug]\n");
+                            "                   [--dxc [--dxc-dir DIR] [--dxc-opt \"FLAGS\"] [--dxc-sm 6_x]] [--define NAME[=V]] [--warp] [--debug]\n");
             return a == "--help" ? 0 : 1;
         }
     }
@@ -147,7 +145,6 @@ int main(int argc, char** argv) {
     cs.cacheDir = opt.cacheDir;
     cs.includeDirs = {SHADEREMU_UNITY_INCLUDE_DIR};
     cs.defines = {{"SHADER_API_D3D11", "1"}, {"SHADER_TARGET", "50"}, {"UNITY_COMPILER_HLSL", "1"}, {"UNITY_VERSION", "202235"}};
-    if (opt.noDoubles) cs.defines.push_back({"NO_DOUBLES", "1"});
     for (auto& d : opt.defines) {  // NAME or NAME=VALUE
         size_t eq = d.find('=');
         cs.defines.push_back({d.substr(0, eq), eq == std::string::npos ? "1" : d.substr(eq + 1)});
@@ -187,7 +184,7 @@ int main(int argc, char** argv) {
                                                     D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     const char* lanes[4] = {"r", "g", "b", "a"};
     const char* props[4] = {"_R", "_G", "_B", "_A"};
-    std::vector<std::pair<const char*, const char*>> payloads = {{"rootfs", "_Data_MTD"}, {"dts", "_Data_DTB"}};
+    std::vector<std::pair<const char*, const char*>> payloads = {{"rootfs", "_Data_MTD"}};
     if (opt.cold) payloads.push_back({"linux_payload", "_Data_RAM"});
     for (auto& pr : payloads) {
         if (std::string(pr.second) == "_Data_MTD") {   // the ROM: one RGBAFloat texture, a 16-byte texel a pixel
@@ -202,9 +199,9 @@ int main(int argc, char** argv) {
             }
             const UINT w = 2048, h = (std::max)(1u, (UINT)((bin.size() / 16 + w - 1) / w));
             const size_t pitch = (size_t)w * 16;
-            std::vector<uint8_t> rows((size_t)h * pitch, 0);   // row 0 = the bottom: texel 0 in the last row
+            std::vector<uint8_t> rows((size_t)h * pitch, 0);   // texel 0 in the first row
             for (UINT y = 0; y < h && (size_t)y * pitch < bin.size(); ++y)
-                memcpy(rows.data() + (size_t)(h - 1 - y) * pitch, bin.data() + (size_t)y * pitch, (std::min)(pitch, bin.size() - (size_t)y * pitch));
+                memcpy(rows.data() + (size_t)y * pitch, bin.data() + (size_t)y * pitch, (std::min)(pitch, bin.size() - (size_t)y * pitch));
             textures["_Data_ROM"] = uploadTexture(dx, w, h, DXGI_FORMAT_R32G32B32A32_FLOAT, 16, rows.data(), D3D12_RESOURCE_FLAG_NONE,
                                                   D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             continue;
@@ -277,10 +274,7 @@ int main(int argc, char** argv) {
     Material mat;
     mat.applyDefaults(shader);
     mat.setInt("_Ticks", opt.ticks);
-    mat.setInt("_TicksDivisor", 1);
-    mat.setInt("_DoTick", 0);
     mat.setInt("_Init", 0);
-    mat.setInt("_InitRaw", 0);
     mat.setInt("_UdonUARTInChar", (int)hdr.sentChar);
     mat.setInt("_UdonUARTInTag", (int)hdr.sentTag);
     mat.setVector("unity_OrthoParams", 1, 1, 0, 1);
@@ -316,8 +310,8 @@ int main(int argc, char** argv) {
         mat.setVector("_Time", t / 20, t, t * 2, t * 3);
         uint32_t mtimeLo, mtimeHi;
         rvcMtime(t, mtimeLo, mtimeHi);
-        mat.setInt("_HostMtimeLo", mtimeLo);
-        mat.setInt("_HostMtimeHi", mtimeHi);
+        mat.setInt("_MtimeLoLo", mtimeLo & 0xffff);
+        mat.setInt("_MtimeLoHi", mtimeLo >> 16);
         mat.setVector("_SinTime", sin(t / 8), sin(t / 4), sin(t / 2), sin(t));
         mat.setVector("_CosTime", cos(t / 8), cos(t / 4), cos(t / 2), cos(t));
 

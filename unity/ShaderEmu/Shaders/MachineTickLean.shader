@@ -8,7 +8,6 @@ Shader "ShaderEmu/MachineTickLean"
         _SelfTexture2D ("State before the pass", 2D) = "black" {}
         _TickState ("CPU state area after the tick", 2D) = "black" {}
         [ToggleUI] _Init ("Init", Int) = 0
-        [ToggleUI] _InitRaw ("Init directly from _Data_RAM_RAW", Int) = 0
         _Ticks ("Ticks per Frame", Int) = 2048
 
         _UartInLo ("UART input, characters 1-2", Int) = 0
@@ -20,19 +19,12 @@ Shader "ShaderEmu/MachineTickLean"
         _Rtc0Hi ("RTC0 high half", Int) = 0
         _Rtc1Lo ("RTC1 low half", Int) = 0
         _Rtc1Hi ("RTC1 high half", Int) = 0
-        _DoTick ("DEBUG: Perform single step", Int) = 0
+        _MtimeLoLo ("The timer, low half", Int) = 0
+        _MtimeLoHi ("The timer, high half", Int) = 0
         _LaneField ("The lanes' field drawn (docs/machine/lanes.md)", Int) = 1
 
-        _Data_RAM_R ("RAM Texture R", 2D) = "black" {}
-        _Data_RAM_G ("RAM Texture G", 2D) = "black" {}
-        _Data_RAM_B ("RAM Texture B", 2D) = "black" {}
-        _Data_RAM_A ("RAM Texture A", 2D) = "black" {}
-        _Data_RAM_RAW ("RAM Texture RAW", 2D) = "black" {}
+        _Data_RAM ("The start image, a 16-byte texel a pixel (RGBAFloat, read by its bits)", 2D) = "black" {}
 
-        _Data_DTB_R ("Device Tree Binary Texture R", 2D) = "black" {}
-        _Data_DTB_G ("Device Tree Binary Texture G", 2D) = "black" {}
-        _Data_DTB_B ("Device Tree Binary Texture B", 2D) = "black" {}
-        _Data_DTB_A ("Device Tree Binary Texture A", 2D) = "black" {}
 
         _Data_ROM ("ROM, a 16-byte texel a pixel (RGBAFloat, read by its bits)", 2D) = "black" {}
 
@@ -67,10 +59,8 @@ Shader "ShaderEmu/MachineTickLean"
             #pragma geometry tick_geom
             #pragma fragment frag
             #pragma editor_sync_compilation
-            #define RTC_HALVES
             uniform float4 _ScreenParams;
-            #define TICK_GEOM_GUARD if ((uint)_ScreenParams.x != TICK_W || (uint)_ScreenParams.y != STATE_ROWS * TICK_BANDS) return;
-            #define LANE_FIELD   // the lanes' field (docs/machine/lanes.md): the tick mesh's primitive after the cores' draws it
+            #define TICK_GEOM_GUARD if ((uint)_ScreenParams.x != TICK_W || (uint)_ScreenParams.y != TICK_H) return;
             #include "lean/tick.hlsl"
             ENDHLSL
         }

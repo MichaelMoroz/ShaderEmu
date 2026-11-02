@@ -63,11 +63,9 @@ static void cpuConsoleHook(char c) { g_cpuConsole.push_back(c); }
 // `data` is the state texture as drawn, W texels wide: the GPU's memory and the control words are kept as
 // they are there; Linux's RAM (shown four times a second) is the processor's, and every core's state is
 // written where the shader keeps it (src/types.h: decode, encode_l1, mc_geo_read, mc_state_at; src/mc.h),
-// with empty write caches. The interpreter knows only the geometry of workers all alike, so geotune leaves
-// that one there; `width` (2, 4 or 8) lays them out as geotune does on the card instead (its hybrid: 16 big
-// workers, the rest small in blocks of `width` columns), which the empty caches allow. Returns how many
-// workers it wrote; -1 when a core is in a state the shader cannot be given (a copy still being made).
-static int cpuSnapshotCores(std::vector<uint8_t>& data, uint32_t W, uint32_t width) {
+// with empty write caches. Returns how many workers it wrote; -1 when a core is in a state the shader cannot
+// be given (a copy still being made).
+static int cpuSnapshotCores(std::vector<uint8_t>& data, uint32_t W) {
     using namespace cpuemu;
     auto tex = [&](uint32_t x, uint32_t y) { return (uint32_t*)&data[((size_t)y * W + x) * 16]; };
     for (uint32_t a = RAM_BASE; a - RAM_BASE < RAM_SIZE; a += 0x400000u) {
@@ -75,46 +73,21 @@ static int cpuSnapshotCores(std::vector<uint8_t>& data, uint32_t W, uint32_t wid
         uint32_t lin = (a - RAM_BASE) / 16;
         memcpy(tex(lin % 2048, 64 + lin / 2048), &ram[a - RAM_BASE], 0x400000);
     }
-    // the workers' geometry (MC_HYBRID; STATE_ROWS 16, MC_STRIP_TILES 248, TICK_COLS 1024, 6 strip bands, 2 tick bands)
-    const uint32_t L1_AT = 44, TILES = 248, COLS = 1024, SBANDS = 6, TBANDS = 2, LAST = 255;
+    // the workers' geometry (src/types.h): a slot of 64 x 8 texels for each core, the workers all alike
+    const uint32_t L1_AT = 44, LAST = 255;
     auto buckets = [](uint32_t bits) { return (7u << bits) >> 2; };
-    auto rowsOf = [&](uint32_t bits) { return bits == 0 ? 0u : (L1_AT + 8 + buckets(bits) * 4 + 63) / 64; };
-    auto wide = [](uint32_t rows, uint32_t block, uint32_t pad) { return (rows + pad + block - 1) / block * block; };
     uint32_t geo[4];
     memcpy(geo, &ram[rvlayout::kCtrl + 0x3d0u - RAM_BASE], 16);
-    // (none yet, where no program has asked for workers: geotune lays it out at boot on the card, all 255)
-    if (width && (geo[1] > 16 || geo[1] == 0) && geo[3] == 0 && (geo[0] & 1) == 0) {
-        uint32_t laid[4] = {width << 8, geo[1] ? geo[1] : 255u, width == 8 ? 5u : 3u, 16u | 5u << 8 | width << 16 | 8u << 24};   // (geotune.c: hybrid(1, width, WIDE))
-        memcpy(geo, laid, 16);
-        memcpy(tex(rvlayout::devT(0x10003du) % 2048, 64 + rvlayout::devT(0x10003du) / 2048), laid, 16);
-    }
-    uint32_t ws = (geo[3] >> 16) & 0xff, wb = geo[3] >> 24;
-    uint32_t rows = geo[2] < 3 || geo[2] > 6 ? 0 : rowsOf(geo[2]);
-    uint32_t cols = ws != 0 && ws <= 64 ? wide(rows, ws, 0) : wide(rows, 4, 2);
-    uint32_t nb = 0, per0 = 0, count = 0, bb = (geo[3] >> 8) & 0xff, rowsB = 0;
-    if ((geo[3] & 0xff) != 0 && bb >= 3 && bb <= 6 && rows != 0) {
-        rowsB = rowsOf(bb);
-        uint32_t colsB = wb != 0 && wb <= 64 ? wide(rowsB, wb, 0) : wide(rowsB, 8, 0);
-        nb = (std::min)({geo[3] & 0xff, TILES / rowsB, COLS / colsB, geo[1], LAST});
-        if (nb != 0) per0 = (COLS - nb * colsB) / cols;
-    }
-    uint32_t sb0 = nb != 0 ? 1 : 0;
-    if (rows != 0 && (geo[0] & 1) == 0)
-        count = nb + (std::min)((std::min)(geo[1], LAST) - nb, (std::min)((SBANDS - sb0) * (TILES / rows), (TBANDS - sb0) * (COLS / cols) + per0));
+    uint32_t count = (geo[0] & 1) == 0 && geo[2] >= 3 && geo[2] <= 5 ? (std::min)(geo[1], LAST) : 0;
     for (uint32_t core = 0; core <= count && core < cores.size(); core++) {
         Core& c = cores[core];
         if (c.copying) return -1;
-        uint32_t bits = core == 0 ? 6 : core <= nb ? bb : geo[2];
-        uint32_t cacheEnd = L1_AT + buckets(bits) * 4, tile0 = 0;
-        if (core != 0) {
-            uint32_t j = core - 1 - nb, per = TILES / (std::max)(rows, 1u);
-            tile0 = core <= nb ? (core - 1) * rowsB : (sb0 + j / per) * TILES + (j % per) * rows;
-        }
+        uint32_t bits = core == 0 ? 6 : geo[2];
+        uint32_t cacheEnd = L1_AT + buckets(bits) * 4;
         // texel lin as core 0 numbers them (its float registers' 8 from cacheEnd on), where this core keeps it
         auto at = [&](uint32_t lin) {
             if (core == 0) return tex(lin % 64, lin / 64);
-            uint32_t t = tile0 + (lin >> 6);
-            return tex(64 + 8 * (t % TILES) + (lin & 7), 8 * (t / TILES) + ((lin >> 3) & 7));
+            return tex(((core & 31) << 6) + ((lin >> 6) << 3) + (lin & 7), ((core >> 5) << 3) + ((lin >> 3) & 7));
         };
         auto put = [&](uint32_t lin, uint32_t r, uint32_t g, uint32_t b, uint32_t a) {
             uint32_t* p = at(lin);
@@ -156,7 +129,7 @@ namespace {
 struct Options {
     std::string rvcDir = "shader_vm";
     std::string payloadDir;  // default <rvc>/data-net
-    std::string ramPrefix = "linux_payload", mtdPrefix = "rootfs", dtbPrefix = "dts";
+    std::string ramPrefix = "linux_payload", mtdPrefix = "rootfs";
     std::string cacheDir = "build/shadercache";
     std::string uartLog;
     std::string dumpState;
@@ -186,10 +159,9 @@ struct Options {
     bool profile = false;
     bool present = false;
     bool viz = false;         // memory view window
-    int uartBurst = 0;        // input characters per handshake; 0 = what the shader declares
+    int uartBurst = 0;        // input characters per handshake; 0: 4
     bool resume = false;      // with no other arguments: resume the shell snapshot instead of booting
     bool tabs = false;        // ask the guest for its console as several terminals (docs/machine/console.md)
-    int workers = 0;          // --workers: the small workers' blocks geotune lays out (0 its own pick; 1-3: 2, 4, 8 columns)
     bool desktop = false;     // ask the guest to start its desktop: the terminal mode, unless --no-desktop
     std::string kernel;       // Linux's: "mmu" or "nommu" (docs/system/nommu.md); unset, nommu once its image is made
     std::string isa = "base"; // "base" RV32IMAF, or "zb" with Zba and Zbb (the shader's ZB)
@@ -202,7 +174,6 @@ struct Options {
     std::string l1Log;        // per frame: instructions, last stall, a count, then the RAM texels its write cache held
     std::string statsFrom;    // --stats-from TEXT: the STATS line is for the run from where the console says TEXT (no GPU timing)
     double statsAfter = -1;   // >= 0: print a STATS line for the part of the run after this many seconds
-    bool noDoubles = false;
     bool holodeck = false;    // --holodeck: tell the guest its owner sits in a holodeck's seat (docs/world/holodeck.md)
     double holodeckAim = 0;   // --holodeck-aim DEGREES: with it, a tracked right hand that points up by so much
     bool holodeckHands = false;
@@ -231,13 +202,11 @@ struct Options {
     int tickRounds = 1;       // --tick-rounds N: the tick and its commit N times a frame (the fragment machine)
     double unityMs = 0, unityOverMs = 1.4;   // --unity F[,U[,R]]: a world's frame of F ms, U of them Unity's own (below)
     double unityRoundMs = 0;  // R: Unity's CPU a round (its cameras and blits), which the card's time a round cannot go under
-    int tickSplit = 0;        // --tick-split F: of them the first F always run (0: all), the rest while core 0 rests
     bool noGpu = false;       // --no-gpu: leave out the GPU device's passes (gpu.shader)
     bool noSound = false;     // --no-sound: leave out the sound card (sound.shader)
     bool sound = false;       // play the sound card: the terminal mode, or --sound
     std::string soundCapture; // WAV of what the sound card played, written at exit
     int volume = 10;          // --volume: how loud the host plays it, in percent
-    bool doubles = false;     // --doubles: keep the shader's double math under DXC too
 #ifdef RVC_DEFAULT_DXC
     bool dxc = true;          // D3D12 + DXC instead of D3D11 + FXC
 #else
@@ -260,7 +229,7 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
 
   --rvc DIR            rvc shader folder (default rvc/_Nix/rvc)
   --payload DIR        folder with the payload PNGs (default <rvc>/data-net)
-  --ram/--mtd/--dtb P  PNG name prefixes in the payload folder (default linux_payload, rootfs, dts;
+  --ram/--mtd P        PNG name prefixes in the payload folder (default linux_payload, rootfs;
                        "none" leaves that texture black)
   --ticks N            emulated instructions per tick pass (default 8192; upstream uses 2048). Large values on a real
                        GPU can trigger a driver timeout (TDR); WARP has no timeout.
@@ -293,14 +262,12 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
                        ends) and print a BENCH line with IPS and a hash of the state area
   --present            present each frame to a hidden 64x64 swapchain, so tools that define a frame
                        by Present (Nsight GPU Trace) can see frame boundaries
-  --no-doubles         compile with NO_DOUBLES (shader must support it): timer value from the host,
-                       exact integer MULH. Not bit-identical to the double build.
   --define NAME        add a preprocessor define to the shader build (repeatable)
-  --uart-burst N       input characters per handshake (default: the shader's _UartBurst property, else 1)
+  --uart-burst N       input characters per handshake (default 4)
   --viz                open a window showing memory live (writes glow); --no-viz turns it off
   --viz-capture FILE   save the memory view as a BMP at exit
   --resume             when started without other arguments: resume the shell snapshot instead of booting
-  --image NAME|DIR     boot a named image instead of --payload/--ram/--mtd/--dtb; --image list shows them
+  --image NAME|DIR     boot a named image instead of --payload/--ram/--mtd; --image list shows them
                        (shader_vm's tick runs linux-net only; on --cpu the display's shader is all it compiles).
                        DIR: a folder of our Linux without an MMU (a private image, build\\images\\NAME)
                        Without it (and without --payload, --ram or --load-state) a menu asks at start
@@ -336,8 +303,6 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
   --unity F[,U[,R]]    run as a world does: the guest's clock F ms a frame, and each frame as many rounds as fit
                        F - U ms on the card (U: Unity's own part of a frame, default 1.4), the devices once a frame;
                        R: Unity's CPU a round in ms (default 0): a frame's rounds cost at least R each
-  --tick-split F       of them the first F always run; the others give core 0 the rest of its F x --ticks,
-                       and run the workers only while core 0 rests (shader_vm: 0, all)
   --open ADDRESS       tell the guest to open an address, or a file of this computer (file:// and its path);
                        several are told ten seconds apart (docs/system/open.md)
   --open-after TEXT    not before the console has shown TEXT
@@ -362,11 +327,9 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
   --isa base|zb        (zb: not on shader_vm's tick) RV32IMAF, or with Zba and Zbb (the shader's ZB; without an MMU build\\images\\nommu-zb,
                        whose programs use them)
   --tabs               the console as four terminals: 0x1e and a digit, either way, says whose bytes follow
-  --workers auto|2|4|8 how geotune lays out the workers at boot (docs/machine/multicore.md, "Packing the small workers")
   --dxc / --d3d11      backend: D3D12 with DXC-compiled DXIL, or D3D11 with FXC bytecode (what VRChat
-                       runs). rvc_harness_dxc.exe defaults to --dxc. DXC implies NO_DOUBLES. shader_vm
+                       runs). rvc_harness_dxc.exe defaults to --dxc. shader_vm
                        has no tick for D3D12 (eight targets only): --dxc needs another --rvc.
-  --doubles            with --dxc: keep the shader's double math (about 15 percent slower)
   --dxc-opt "FLAGS"    DXC optimisation flags (default -O3)   --dxc-sm 6_x   --dxc-dir DIR
   --profile            (not on shader_vm's tick) compile with PROFILE defined and print the shader's PROF() event counters at
                        exit (names from <rvc>/src/prof.h; with --bench, counted after the warm-up)
@@ -436,13 +399,11 @@ bool parseArgs(int argc, char** argv, Options& o) {
         }
         else if (a == "--dxc") o.dxc = true;
         else if (a == "--d3d11") o.dxc = false;
-        else if (a == "--doubles") o.doubles = true;
         else if (a == "--dxc-opt") o.dxcOpt = next("--dxc-opt");
         else if (a == "--dxc-sm") o.dxcSm = next("--dxc-sm");
         else if (a == "--dxc-dir") o.dxcDir = next("--dxc-dir");
         else if (a == "--ram") { o.ramPrefix = next("--ram"); o.payloadSet = true; }
         else if (a == "--mtd") o.mtdPrefix = next("--mtd");
-        else if (a == "--dtb") o.dtbPrefix = next("--dtb");
         else if (a == "--ticks") { o.ticks = atoi(next("--ticks").c_str()); o.ticksSet = true; }
         else if (a == "--frames") o.maxFrames = strtoull(next("--frames").c_str(), nullptr, 10);
         else if (a == "--seconds") o.maxSeconds = atof(next("--seconds").c_str());
@@ -508,12 +469,10 @@ bool parseArgs(int argc, char** argv, Options& o) {
         }
         else if (a == "--desktop") o.desktop = true;
         else if (a == "--tabs") o.tabs = true;
-        else if (a == "--workers") { std::string w = next("--workers"); o.workers = w == "2" ? 1 : w == "4" ? 2 : w == "8" ? 3 : 0; }
         else if (a == "--open") o.open.push_back(next("--open"));
         else if (a == "--open-after") o.openAfter = unescape(next("--open-after"));
         else if (a == "--persist") o.persist = next("--persist");
         else if (a == "--viz-capture") { o.vizCapture = next("--viz-capture"); o.viz = true; }
-        else if (a == "--no-doubles") o.noDoubles = true;
         else if (a == "--no-gpu") o.noGpu = true;
         else if (a == "--gpu-capture") o.gpuCapture = next("--gpu-capture");
         else if (a == "--cpu-fresh") o.cpuFresh = true;
@@ -545,7 +504,6 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--net-loss") o.netLoss = atof(next("--net-loss").c_str());
         else if (a == "--net-delay") o.netDelay = atof(next("--net-delay").c_str());
         else if (a == "--cpu") o.cpu = true;
-        else if (a == "--tick-split") o.tickSplit = (std::max)(0, (std::min)(16, atoi(next("--tick-split").c_str())));
         else if (a == "--unity") {
             std::string v = next("--unity");
             o.unityMs = atof(v.c_str());
@@ -563,7 +521,6 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else { fprintf(stderr, "unknown option %s\n", a.c_str()); usage(); return false; }
     }
     if (havePendingExpect) { fprintf(stderr, "--expect without --send\n"); return false; }
-    if (o.dxc && !o.doubles) o.noDoubles = true;
     return true;
 }
 
@@ -660,24 +617,23 @@ struct BootImage {
     const char* dir;
     const char* ram;
     const char* mtd;
-    const char* dtb;
     int machine;   // the smallest machine it runs on: 0 full, 1 no paging, 2 machine mode only
 };
 const BootImage kImages[] = {
-    {"linux-net", "Linux with a shell; glxgears runs on the GPU device", "data-net", "linux_payload", "rootfs", "dts", 0},
-    {"linux", "Linux, kernel with built-in initramfs", "data", "linux_payload", "none", "dts", 0},
-    {"micropython", "MicroPython on OpenSBI (bare metal REPL)", "data", "mprv_payload", "none", "dts", 1},
-    {"rust", "Rust test payload on OpenSBI (bare metal)", "data", "rust_payload", "none", "dts", 1},
-    {"gears", "Gears: three lit, textured gears drawn by the GPU device (bare metal C)", nullptr, "gears", "none", "none", 2},
-    {"rects", "GPU test card: 3,600 rectangles in one list, written back to RAM (bare metal C)", nullptr, "rects", "none", "none", 2},
-    {"blend", "GPU test card: the eight passes, blending with and without depth (bare metal C)", nullptr, "blend", "none", "none", 2},
-    {"sound", "Sound test card: every kind of voice for half a second (bare metal C)", nullptr, "sound", "none", "none", 2},
-    {"raycast", "Raycaster: walk a textured maze on the display (bare metal C)", nullptr, "raycast", "none", "none", 2},
-    {"raytrace", "Raytracer drawing to the display (bare metal C)", nullptr, "raytrace", "none", "none", 2},
-    {"classes", "What each kind of instruction costs: loops of one kind, a mark between them (bare metal C)", nullptr, "classes", "none", "none", 0},
-    {"fpcheck", "Float instructions on the fast path: prints a sum to compare between shader builds (bare metal C)", nullptr, "fpcheck", "none", "none", 0},
-    {"rvc-raytrace", "rvc's Rust raytracer, drawing into raw memory", "data", "rust_raytrace", "none", "dts", 1},
-    {"bare", "C bare-metal test (no firmware)", "data", "bare", "none", "dts", 1},
+    {"linux-net", "Linux with a shell; glxgears runs on the GPU device", "data-net", "linux_payload", "rootfs", 0},
+    {"linux", "Linux, kernel with built-in initramfs", "data", "linux_payload", "none", 0},
+    {"micropython", "MicroPython on OpenSBI (bare metal REPL)", "data", "mprv_payload", "none", 1},
+    {"rust", "Rust test payload on OpenSBI (bare metal)", "data", "rust_payload", "none", 1},
+    {"gears", "Gears: three lit, textured gears drawn by the GPU device (bare metal C)", nullptr, "gears", "none", 2},
+    {"rects", "GPU test card: 3,600 rectangles in one list, written back to RAM (bare metal C)", nullptr, "rects", "none", 2},
+    {"blend", "GPU test card: the eight passes, blending with and without depth (bare metal C)", nullptr, "blend", "none", 2},
+    {"sound", "Sound test card: every kind of voice for half a second (bare metal C)", nullptr, "sound", "none", 2},
+    {"raycast", "Raycaster: walk a textured maze on the display (bare metal C)", nullptr, "raycast", "none", 2},
+    {"raytrace", "Raytracer drawing to the display (bare metal C)", nullptr, "raytrace", "none", 2},
+    {"classes", "What each kind of instruction costs: loops of one kind, a mark between them (bare metal C)", nullptr, "classes", "none", 0},
+    {"fpcheck", "Float instructions on the fast path: prints a sum to compare between shader builds (bare metal C)", nullptr, "fpcheck", "none", 0},
+    {"rvc-raytrace", "rvc's Rust raytracer, drawing into raw memory", "data", "rust_raytrace", "none", 1},
+    {"bare", "C bare-metal test (no firmware)", "data", "bare", "none", 1},
 };
 
 // dir = nullptr: one of our programs.
@@ -714,14 +670,12 @@ void applyImage(Options& o, const BootImage& im) {
     o.payloadDir = imageDir(im);
     o.ramPrefix = im.ram;
     o.mtdPrefix = im.mtd;
-    o.dtbPrefix = im.dtb;
     // Our build of the Linux image (tools/make_linux_image.py): upstream's root filesystem with
     // our programs added, and a device tree that keeps the kernel out of the GPU's memory.
     std::error_code ec;
     std::string dir = linuxDir(o);
     if (o.image == "linux-net" && fs::exists(dir + "/rootfs.bin", ec) && fs::exists(dir + "/dts.bin", ec)) {
         o.mtdPrefix = dir + "/rootfs";
-        o.dtbPrefix = dir + "/dts";
         // and our kernel, if it has been built (linux/kernel/build.sh)
         if (fs::exists(dir + "/linux_payload.bin", ec)) {
             o.ramPrefix = dir + "/linux_payload";
@@ -1013,7 +967,6 @@ int main(int argc, char** argv) {
     bo.compile.defines = {{"SHADER_API_D3D11", "1"}, {"SHADER_TARGET", "50"}, {"UNITY_COMPILER_HLSL", "1"},
                           {"UNITY_VERSION", "202235"}};
     if (opt.profile) bo.compile.defines.push_back({"PROFILE", "1"});
-    if (opt.noDoubles) bo.compile.defines.push_back({"NO_DOUBLES", "1"});
     for (auto& d : opt.defines) {  // NAME or NAME=VALUE
         size_t eq = d.find('=');
         bo.compile.defines.push_back({d.substr(0, eq), eq == std::string::npos ? "1" : d.substr(eq + 1)});
@@ -1093,15 +1046,11 @@ int main(int argc, char** argv) {
     std::vector<uint64_t> altN(altDirs.size() + 1), altPicked(altDirs.size() + 1);
     uint64_t altSeen = 0;
     if (!backend.loadPayload(mat, opt.payloadDir, opt.ramPrefix, "_Data_RAM", err) ||
-        !backend.loadPayload(mat, opt.payloadDir, opt.mtdPrefix, "_Data_MTD", err) ||
-        !backend.loadPayload(mat, opt.payloadDir, opt.dtbPrefix, "_Data_DTB", err)) {
+        !backend.loadPayload(mat, opt.payloadDir, opt.mtdPrefix, "_Data_MTD", err)) {
         fprintf(stderr, "[harness] %s\n", err.c_str());
         return 1;
     }
     mat.setInt("_Ticks", opt.ticks);
-    mat.setInt("_TicksDivisor", 1);
-    mat.setInt("_DoTick", 0);
-    mat.setInt("_InitRaw", 0);
     mat.setInt("_UdonUARTInChar", 0);
     mat.setInt("_UdonUARTInTag", 0);
     mat.setVector("unity_OrthoParams", 1, 1, 0, 1);
@@ -1123,6 +1072,51 @@ int main(int argc, char** argv) {
             fprintf(stderr, "[harness] %s is a snapshot of the layout before 28 October 2026 (the devices at 0x86000000): make it again\n",
                     opt.loadState.c_str());
             return 1;
+        }
+        if (ok && memcmp(hdr.magic, rvlayout::kSnapshotBefore, 8) == 0 && hdr.width == W && snap.size() == sizeof hdr + (size_t)W * hdr.height * 16) {
+            // the workers' state from the strips of before into the slots; the lanes' field's texels were rows 48 to 63
+            uint32_t* tx = (uint32_t*)(snap.data() + sizeof hdr);
+            std::vector<uint32_t> was(tx, tx + 2048 * 64 * 4);
+            auto from = [&](uint32_t x, uint32_t y) { return &was[((size_t)y * 2048 + x) * 4]; };
+            auto to = [&](uint32_t x, uint32_t y) { return &tx[((size_t)y * 2048 + x) * 4]; };
+            uint32_t* geo = tx + ((size_t)(64 + rvlayout::devT(0x10003d) / 2048) * 2048 + rvlayout::devT(0x10003d) % 2048) * 4;
+            // the geometry of before, big workers and small ones (geotune), and how many workers it gave
+            const uint32_t L1 = 44, LAST = 255, COLS = 1024;
+            auto buckets = [](uint32_t b) { return (7u << b) >> 2; };
+            auto rowsOf = [&](uint32_t b) { return b == 0 ? 0u : (L1 + 8 + buckets(b) * 4 + 63) / 64; };
+            auto wide = [](uint32_t r, uint32_t block, uint32_t pad) { return (r + pad + block - 1) / block * block; };
+            uint32_t ws = (geo[3] >> 16) & 0xff, wb = geo[3] >> 24, bb = (geo[3] >> 8) & 0xff;
+            uint32_t bits = geo[2] >= 3 && geo[2] <= 6 ? geo[2] : 0, rows = rowsOf(bits), nb = 0, rowsB = 0, per0 = 0, count = 0;
+            uint32_t cols = rows ? (ws != 0 && ws <= 64 ? wide(rows, ws, 0) : wide(rows, 4, 2)) : 1;
+            if ((geo[3] & 0xff) != 0 && bb >= 3 && bb <= 6 && rows != 0) {
+                rowsB = rowsOf(bb);
+                uint32_t colsB = wb != 0 && wb <= 64 ? wide(rowsB, wb, 0) : wide(rowsB, 8, 0);
+                nb = (std::min)({geo[3] & 0xff, 248 / rowsB, COLS / colsB, geo[1], LAST});
+                if (nb != 0) per0 = (COLS - nb * colsB) / cols;
+            }
+            uint32_t sb0 = nb != 0 ? 1 : 0;
+            if (rows != 0 && (geo[0] & 1) == 0)
+                count = nb + (std::min)((std::min)(geo[1], LAST) - nb, (std::min)((6 - sb0) * (248 / rows), (2 - sb0) * (COLS / cols) + (nb != 0 ? per0 : 0)));
+            for (uint32_t i = 64 * 4; i < 8 * 2048 * 4; i++) tx[i] = 0;   // (core 0's slot stays)
+            memset(tx + 8 * 2048 * 4, 0, (2048 * 64 * 4 - 8 * 2048 * 4) * 4);
+            for (uint32_t y = 0; y < 8; y++) memcpy(tx + (size_t)y * 2048 * 4, &was[(size_t)y * 2048 * 4], 64 * 16);
+            // each worker's registers and CSRs where a worker of 2^5 has them. Its write cache is of its last pass, committed: not kept.
+            for (uint32_t c = 1; c <= count; c++) {
+                uint32_t old = c <= nb ? bb : bits, end0 = L1 + buckets(old) * 4, end1 = L1 + buckets(5) * 4;
+                uint32_t per = 248 / (std::max)(rows, 1u), tile0 = c <= nb ? (c - 1) * rowsB : (sb0 + (c - 1 - nb) / per) * 248 + (c - 1 - nb) % per * rows;
+                auto src = [&](uint32_t w) { uint32_t tile = tile0 + (w >> 6); return from(64 + ((tile % 248) << 3) + (w & 7), ((tile / 248) << 3) + ((w >> 3) & 7)); };
+                auto dst = [&](uint32_t w) { return to(((c & 31) << 6) + ((w >> 6) << 3) + (w & 7), ((c >> 5) << 3) + ((w >> 3) & 7)); };
+                for (uint32_t w = 0; w < L1; w++) memcpy(dst(w), src(w), 16);
+                for (uint32_t w = 0; w < 8; w++) memcpy(dst(end1 + w), src(end0 + w), 16);
+            }
+            if (count) { geo[1] = count; geo[2] = 5; geo[3] = 0; }
+            for (uint32_t F = 0; F < 3968; F++)
+                for (uint32_t j = 0; j < 8; j++) {
+                    uint32_t w = F * 8 + j, k = 8 + (F >> 4), i = F & 15;
+                    memcpy(to(((k & 31) << 6) + 40 + ((i >> 3) << 3) + j, ((k >> 5) << 3) + (i & 7)), from(w & 2047, 48 + (w >> 11)), 16);
+                }
+            memcpy(hdr.magic, rvlayout::kSnapshotMagic, 8);
+            fprintf(stderr, "[harness] %s: laid out anew from the strips of before\n", opt.loadState.c_str());
         }
         if (!ok || memcmp(hdr.magic, rvlayout::kSnapshotMagic, 8) != 0 || hdr.width != W || hdr.height > H ||
             snap.size() != sizeof hdr + (size_t)W * hdr.height * 16) {
@@ -1159,7 +1153,7 @@ int main(int argc, char** argv) {
     // A resumed guest is sitting at its prompt; a newline makes it print one.
     if (g_rawConsole && !opt.loadState.empty() && scriptQueue.empty()) scriptQueue.push_back('\r');
 
-    int uartBurst = opt.uartBurst > 0 ? opt.uartBurst : (int)mat.getFloat("_UartBurst", 1);
+    int uartBurst = opt.uartBurst > 0 ? opt.uartBurst : 4;
     if (uartBurst < 1) uartBurst = 1;
     if (uartBurst > 4) uartBurst = 4;
 
@@ -1705,13 +1699,15 @@ int main(int argc, char** argv) {
             struct tm lt{};
             localtime_s(&lt, &now);
             int year = lt.tm_year + 1900;
-            mat.setInt("_RTC0", (int64_t)(bcd(year / 100) | bcd(lt.tm_sec) << 8 | bcd(lt.tm_min) << 16 | bcd(lt.tm_hour) << 24));
-            mat.setInt("_RTC1", (int64_t)(bcd(lt.tm_wday + 1) | bcd(lt.tm_mday) << 8 | bcd(lt.tm_mon + 1) << 16 | bcd(year % 100) << 24));
+            mat.setInt("_Rtc0Lo", (int64_t)(bcd(year / 100) | bcd(lt.tm_sec) << 8));
+            mat.setInt("_Rtc0Hi", (int64_t)(bcd(lt.tm_min) | bcd(lt.tm_hour) << 8));
+            mat.setInt("_Rtc1Lo", (int64_t)(bcd(lt.tm_wday + 1) | bcd(lt.tm_mday) << 8));
+            mat.setInt("_Rtc1Hi", (int64_t)(bcd(lt.tm_mon + 1) | bcd(year % 100) << 8));
         }
         uint32_t mtimeLo, mtimeHi;
         rvcMtime(t, mtimeLo, mtimeHi);
-        mat.setInt("_HostMtimeLo", mtimeLo);
-        mat.setInt("_HostMtimeHi", mtimeHi);
+        mat.setInt("_MtimeLoLo", mtimeLo & 0xffff);
+        mat.setInt("_MtimeLoHi", mtimeLo >> 16);
         mat.setVector("_SinTime", sin(t / 8), sin(t / 4), sin(t / 2), sin(t));
         mat.setVector("_CosTime", cos(t / 8), cos(t / 4), cos(t / 2), cos(t));
         mat.setInt("_Init", frame < (uint64_t)opt.initFrames ? 1 : 0);
@@ -1803,7 +1799,7 @@ int main(int argc, char** argv) {
             cpuDisplay[0] = word(CTRL + 4), cpuDisplay[1] = word(CTRL + 8);
         }
 
-        backend.tickRounds = opt.unityMs > 0 ? (uint32_t)unityRounds : (uint32_t)opt.tickRounds; backend.tickSplit = (uint32_t)opt.tickSplit;   // (--tick-rounds: the fragment tick's rounds a frame)
+        backend.tickRounds = opt.unityMs > 0 ? (uint32_t)unityRounds : (uint32_t)opt.tickRounds;   // (--tick-rounds: the fragment tick's rounds a frame)
 
         // Feed one input character per handshake.
         if (frame >= (uint64_t)opt.initFrames && sentTag == consumedTag && !cpuRunning) {
@@ -1877,7 +1873,7 @@ int main(int argc, char** argv) {
                 mat.setInt("_ZapZones", z[7]);
             }
             // bit 0: start the desktop at boot; then the largest screen this host shows, in 16s of pixels
-            mat.setInt("_HostFlags", (opt.desktop ? 1 : 0) | (opt.tabs ? 2 : 0) | opt.workers << 2 | (kGpuTarget / 16) << 8 | (kGpuTarget / 16) << 16);
+            mat.setInt("_HostFlags", (opt.desktop ? 1 : 0) | (opt.tabs ? 2 : 0) | (kGpuTarget / 16) << 8 | (kGpuTarget / 16) << 16);
             // the host's words: the harness, one visitor (number 1); a head that looks straight on from the seat's eye point
             mat.setInt("_HostState0", 1 | (opt.holodeck ? 16 : 0) | (opt.holodeckHands ? 32 : 0) | 1 << 8 | 1 << 16);
             mat.setInt("_HostState1", 0);
@@ -2338,7 +2334,7 @@ int main(int argc, char** argv) {
         if (ok && cpuRunning) {
             // (--cpu: the processor's state put where the shader machine keeps it, its clock the guest's)
             if (cpuemu::prof::on) cpuemu::prof::report();
-            int workers = cpuSnapshotCores(data, W, opt.workers ? 1u << opt.workers : 2u);   // (2: geotune's pick on this card)
+            int workers = cpuSnapshotCores(data, W);
             hdr.time = cpuemu::guest_seconds;
             hdr.sentTag = cpuemu::word(rvlayout::kCon);
             hdr.sentChar = cpuemu::word(rvlayout::kCon + 4);
@@ -2374,22 +2370,19 @@ int main(int argc, char** argv) {
                     timeSum[1] / timeSamples, timeSum[2] / timeSamples, 1000.0 * secs / (double)frames);
     }
     if (opt.cores > 1) {
-        // each core's state: what it is doing as the run ends. Core 0's is at the left; a
-        // worker's rows of the strip beside it are where the geometry (control texel 0x3d) puts them.
+        // each core's state: what it is doing as the run ends, in its slot
         std::vector<uint8_t> blocks;
         if (backend.readState(2048, 64, blocks) && blocks.size() >= (size_t)2048 * 64 * 16 && row.size() >= (64 + 0x40) * 16) {
             const uint32_t* all = (const uint32_t*)blocks.data();
             const uint32_t* geo = (const uint32_t*)row.data() + (64 + 0x3d) * 4;
             // the geometry: how many workers, and their caches' size (all alike)
-            unsigned workers = geo[1], bits = geo[2] >= 3 && geo[2] <= 6 ? geo[2] : 0;
-            unsigned rows = bits ? (44 + 8 + ((7u << bits) >> 2) * 4 + 63) / 64 : 0, per = rows ? 248 / rows : 1;
+            unsigned workers = geo[1], bits = geo[2] >= 3 && geo[2] <= 5 ? geo[2] : 0;
             uint64_t workersRan = 0;
             for (int c = 0; c < opt.cores; ++c) {
-                if (c != 0 && (!rows || (unsigned)c > workers)) continue;
-                // texel w (below 64) of the core's state: a worker's is in the first 8 x 8 tile of its strip
-                unsigned band = (unsigned)(c - 1) / per, at = (unsigned)(c - 1) % per * rows;
+                if (c != 0 && (!bits || (unsigned)c > workers)) continue;
+                // texel w (below 64) of the core's state: core 0's first row, or a worker's first tile
                 auto texel = [&](unsigned w) {
-                    size_t x = c == 0 ? w : 64 + at * 8 + (w & 7), y = c == 0 ? 0 : band * 8 + (w >> 3);
+                    size_t x = c == 0 ? w : ((c & 31) << 6) + (w & 7), y = c == 0 ? 0 : ((size_t)(c >> 5) << 3) + (w >> 3);
                     return all + (y * 2048 + x) * 4;
                 };
                 uint32_t word = texel(41)[3];

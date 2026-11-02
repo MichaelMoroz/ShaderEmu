@@ -89,8 +89,7 @@ kind and a seed each. What it shows, and what the machine's layout is made from:
 - **Idle pixels of a warp take their share.** A line a pixel high costs about twice its pixels; the state is kept as
   whole tiles.
 - **There is a number of pixels the card runs at full speed, and past it the time is the pixels'.** The number falls
-  with what a pixel keeps in registers, and the size of the local array does not matter. It differs from card to card,
-  which is why `geotune` measures it ("Packing the small workers").
+  with what a pixel keeps in registers, and the size of the local array does not matter. It differs from card to card.
 
 So a worker keeps only what it must. A worker keeps the CPU's 44 texels, its write cache and the float registers'
 8: core 0 on this machine keeps the same (`CORE0_ROWS`, 500 texels; no TLBs, no CSR rows in the tick:
@@ -98,29 +97,25 @@ So a worker keeps only what it must. A worker keeps the CPU's 44 texels, its wri
 
 ## The geometry
 
-Which pixel of the tick is which texel of which core is only a function, so how many workers
-there are and how large each is need not be compiled in. The workers' state is bands of the
-state rows beside core 0's block, eight texels high and 248 tiles of 8 x 8 long, one under another
-(`MC_STRIP_BANDS`, six), a worker's tiles side by side in one band (`mc_tile_of()`, `mc_core_at()`,
-`mc_texel_of()` in `src/types.h` and `main.shader`). Nearly all of a worker is its cache, so the cache's size is the
-worker's size:
+Which pixel of the tick is which texel of which core is only a function, and all of it is shifts. Every core has a slot of
+64 x 8 texels in the state's rows, core k's at `((k & 31) * 64, (k >> 5) * 8)`, and a block of 8 x 8 pixels in the tick's targets, at
+`(8 k, 0)`: one row of cores (2 November 2026; before, bands and strips by divisions). Nearly all of a worker is its cache:
 
-| Tables of 2^bits buckets | New stores a pass | Texels | Tiles | Fit in a band |
-|---|---|---|---|---|
-| 6 (core 0's) | 5.25 KB | 500 | 8 | 31 |
-| 5 (a big worker's) | 2.6 KB | 276 | 5 | 49 |
-| 4 | 1.3 KB | 164 | 3 | 82 |
-| 3 (a small worker's) | 0.66 KB | 108 | 2 | 124 |
+| Tables of 2^bits buckets | New stores a pass | Texels | Tiles |
+|---|---|---|---|
+| 6 (core 0's) | 5.25 KB | 500 | 8 |
+| 5 (every worker's, as the kernel lays them out) | 2.6 KB | 276 | 5 |
+| 4 | 1.3 KB | 164 | 3 |
+| 3 | 0.66 KB | 108 | 2 |
 
-The tables are 2^bits buckets, half and a quarter of that, three entries a bucket. It is few workers that store much
-in a pass or many that store little, or a mix ("Packing the small workers"). A worker whose cache is full ends its pass
+The tables are 2^bits buckets, half and a quarter of that, three entries a bucket. Core 0's texels are in rows of 64. A worker's are
+in whole tiles of 8 x 8, texel w at `((w >> 6) * 8 + (w & 7), (w >> 3) & 7)` of its slot: in rows of 64 its loads cost Quake 50%. Tiles 5
+and 6 of the slots from the ninth on are the lanes' field's, so a worker has 2^5 at most. A worker whose cache is full ends its pass
 there, as any core does, and goes on in the next.
 
 The geometry is the texel of the control words at `0x810003d0`: `.r` bit 0 while it is laid out anew; `.g` how many
-workers; `.b` the size of their write caches (3 to 6); `.a` the hybrid's word ("Packing the small workers"). Where a
-worker's state and its pixels are is arithmetic from its number, with no loop over the workers before it (`mc_tile_of`,
-`mc_block_of`, `mc_core_at`, `mc_core_in`). **It is set while every worker is parked, and at no other time**: a worker's
-registers and cache are those pixels. While the bit is set every pixel of the band is zero and the commit takes no
+workers; `.b` the size of their write caches (3 to 5). **It is set while every worker is parked, and at no other time**: a worker's
+registers and cache are those pixels. While the bit is set every pixel of the slots is zero and the commit takes no
 worker's stores (a worker with no state is a parked one). The control pass says in `0x810003c0` how many cores there
 are now, and in the word at `0x810003cc` how many there could be (256).
 
@@ -128,30 +123,26 @@ Programs do not lay workers out: the `SHAPE` calls of `/dev/gpu` do nothing. The
 core but the first at size 5, in a delayed work of the driver's at boot, or in the first `WORKERS` call if nothing has
 laid them out by then.
 
-**The tick's geometry shader draws the strips** (`tick_geom` in `main.shader`). The pass is handed a primitive for every
-sixteen cores; the shader reads the geometry and puts out a quad for core 0 and one for each worker that has something to
-run. A worker that is parked, asleep or stopped gets none (`mc_idle()`, asked there), so it costs no pixel. While the band
-is laid out anew the shader draws all of it, as zeros. The host knows none of this: before the pass it copies core 0's
-rectangle and the band into the buffer the pass draws into, so that what is not drawn stays what it was, and copies
-both back afterwards (`CustomRenderTexture::copyIn`, `rvc_backend11.cpp`).
+**One triangle draws the tick** (`tick_geom` in `tick.hlsl`), over all the targets, and `frag` discards at its top what no core
+runs: a worker parked, asleep or stopped, past the geometry's count, or a column past a worker's last tile. Its unpack still draws a
+quad for each slot with something to run. The host knows none of this.
 
 ## Eight texels a pixel
 
 A pixel of the tick is eight texels of state: with eight render targets the pass runs an eighth of the pixels. The D3D11
-harness does that (`TICK_MRT`) and so does the world ("In Unity"): the tick
-draws into eight targets 1,040 wide (`TICK_MRT_W`: core 0's eight columns, eight empty, 128 blocks of eight) and 16 rows
-for every 128 workers, 32 in all. Core 0's pixel (x, y) keeps texels 8x to 8x + 7 of row y. A worker's tile of 8 x 8 is a
-column of eight pixels, in a block of columns that is the worker's own. The same pass compiled with `TICK_UNPACK` then
+harness does that (`TICK_MRT`) and so does the world ("In Unity"): the tick draws into eight targets of 2048 x 16 (`TICK_W`, `TICK_H`: a block of
+eight columns for each core, in rows 0 to 7; the lanes' field under them). Core 0's pixel (x, y) keeps
+texels 8x to 8x + 7 of row y. A worker's tile of 8 x 8 is a column of eight pixels in its block. The same pass compiled with `TICK_UNPACK` then
 draws the state's quads into the state texture and copies each texel from its target, so the commit, the control pass
-and every reader find the state where it was.
+and every reader find the state where it is.
 
-Where the pixels are matters more than how many there are:
+Where the pixels are matters more than how many there are (2 November 2026, RTX 3090, wall a frame):
 
-- A block is the worker's columns and two more, rounded up to four (`TICK_BLOCK`, `TICK_PAD`), or the widths the
-  geometry's word gives. Of a block of eight, up to six columns may run before a worker shares with its neighbour.
-- Core 0's pixels want eight empty columns between them and the first worker's (`TICK_GAP`).
-- Blocks in bands 16 rows apart do not share. The card does not run aligned 8 x 4 groups the other way up: a tile is a
-  column, not a row.
+- **A warp is 4 x 8 pixels of one core**, seen by `InterlockedAdd` on a shared counter (each pixel takes a number; a wave's are consecutive). Under one triangle a block of
+  8 x 8 is exactly two warps of 32 lanes, a worker's five columns one of 32 and one of 8, and no two cores share one.
+- A quad for each core was worse: each triangle of a quad runs apart, and blocks in a tile 16 wide interleave, so core 0 beside worker 1 lost 26% of Quake (hence an empty `TICK_GAP` then) and a quad as narrow as a worker's tiles 18%. One triangle against quads: Quake -0.5%, `nxphys` -2.7%, `nxray` -5.7%; with it no gap is needed (Quake +0.4% without).
+- Where a worker's block lies in the row did not matter under quads: placed by the core's number with its bits reversed they were level.
+- The row of quads against the bands of before: shell -1.7%, Quake -2.5%, `nxray` -11.6%, `nxphys` -11.7%, the commit a third cheaper. The dense layouts of before, workers of 2^3 in two columns, are gone with the program that made them.
 - `mctest`'s bench, the same primes on every worker, hides sharing: cores that run the same instructions pay nothing for
   it. Judge a layout by a program in which no two cores do the same (`nxray`). `TICK_LOAD=N` draws every worker's quad
   N times, read by nothing: what the tick would cost with N times the busy workers.
@@ -165,81 +156,6 @@ the number of tiles). The path tracer's share is every sample of its tiles, one 
 into 16 bytes of its own, ends early when the kernel wants its core (`mcw_recalled`) and is posted again for the rest.
 Core 0 only shows the picture as it fills. Handing out a tile at a time would have core 0 walk every worker to give the
 next, and a worker wait some passes between tiles.
-
-## Packing the small workers (`geotune`)
-
-The geometry is hybrid: workers 1 to 16 big (caches of 2^5 buckets), which keeps a game's few workers at full speed,
-and the rest small (2^3) or, on a card that can run them all, big too. How the small ones' blocks lie in the tick's targets
-depends on the card, and `geotune again` measures it. `--define MC_UNIFORM` compiles the uniform geometry.
-
-**The field.** The geometry's texel (`0x810003d0`) says the rest in `.a`:
-
-| Bits of `.a` | What |
-|---|---|
-| 0-7 | how many big workers (0: the uniform geometry, every worker as `.b` says) |
-| 8-15 | the big ones' bits (3 to 6) |
-| 16-23 | the small ones' blocks' width in columns (0: `TICK_BLOCK` with `TICK_PAD`, as compiled) |
-| 24-31 | the big ones' (0: `TICK_BLOCK_BIG` with `TICK_PAD_BIG`) |
-
-A width the field gives is the worker's tiles rounded up to a multiple of it, with no column
-more: a small worker (2 tiles) is 2 columns at width 2, 4 at width 4, 8 at width 8. The big
-workers have the first band of the state strip and of the targets; the small ones the bands
-after, and those the targets' later bands do not hold go after the big ones' blocks in the
-first band. `mc_geo_read()` in `src/types.h` reads it for the tick and the commit, and `mc_geo_count()` in `src/gpu.h` the
-same for the control pass, whose count of cores (`0x810003c0`) is what the kernel shares out: a worker the targets have no
-block for is no worker.
-
-**Who sets it.** `geotune` (`linux/userland/geotune.c`), which the init runs before any program asks for workers (the layout
-may only change while every worker is parked). It does nothing if a layout is set already, the kernel's at boot too, and the kernel's work comes first: at a boot `geotune` says nothing and the workers are alike. `geotune again` lays its own out (about 6.5 s). Which is faster depends on the program (the card, an RTX 5070 laptop, 31 October 2026, two boots each, means; every sum as ever):
-
-| | The kernel's (all 2^5, 8 columns) | 2 columns, 2^3 | 4 columns, 2^3 | 8 columns, 2^5 |
-|---|---|---|---|---|
-| `nxray`, a picture | 93 ms | 58 | 64 | 94 |
-| `nxpath`, its picture | 256 ms | 197 | 200 | 243 |
-| `nxpath`, its tree | 208 ms | 330 | 316 | 201 |
-| `nxphys` wall, 120 substeps on 255 | 1,207 ms | 1,500 | 1,374 | 1,195 |
-| `play-test.mp3`, 63 workers | 4.03 s | 7.08 | 6.62 | 3.87 |
-| `play-test.mp3`, 255 workers | 4.17 s | 7.33 | 6.79 | 4.09 |
-| `mctest`'s fill, 64 KB a worker | 12 passes | 41 | 41 | 12 |
-
-Reading work gains from dense blocks and storing work loses by its small cache. With 16 big workers or fewer (15 for the MP3, 7 for `nxphys`, `play-test.flac`) the four are level.
- It
-first lays out a geometry that only a tick with `MC_HYBRID` gives 47 cores (small blocks 64 columns wide); one that gives
-every core is a tick without it, and `geotune` leaves the layout to the kernel. Then:
-
-1. **Capacity, not a race.** Every worker small and in eight columns of its own, the same job
-   (a loop whose branches go by the worker's number, so no two run the same instructions) on
-   an eighth of them and on all of them, in turn, three times each; the medians are compared.
-   A card that runs every block side by side takes as long for all as for the eighth; one that
-   does not takes longer, and all over the time is roughly how many it runs at once. The job is
-   sized to some 200 ms for the eighth.
-2. Under 1.5 times: eight-column blocks, and the small workers get the big ones' caches (2^5),
-   so every worker is alike: a card that runs them all at once gains nothing from small caches. Otherwise two columns at
-   2^3. If either set of three times is more than 30% apart (the world's frames come unevenly), three rounds more are run
-   and the middle of six decides.
-3. The registry keeps the choice (`geotune.width`, `.workers`, `.iterations`, `.us`, `.ratio`;
-   `geotune.force` 2, 4 or 8 is a width with nothing measured: `docs/system/persist.md`). So that a
-   kept registry is there to be read, `geotune` loads the kept folder itself when the desktop
-   is to start (`nxpersist load`, and `/tmp/nxpersist.early` tells the `nx` script it is done).
-   On a later boot only the eighth's job is timed again (three times, the median): within 25%
-   of the kept time it is the same card and the kept width is laid out; otherwise it measures
-   again. The host does not say which GPU it has, so another card is told by its speed.
-
-`geotune again` measures though a choice is kept (before the desktop, when no program has workers).
-
-**What it says and who may choose.** At boot it prints each step on the console: what it
-measures, each round's times, the ratio and its pick, and the layout it made. The
-host may ask for a layout in bits 2-3 of the host flags (`0x8100003c`: 0 the pick, 1, 2, 3 the
-small workers in 2, 4 or 8 columns; the harness's `--workers auto|2|4|8`); `geotune` still
-measures, lays out what was asked and says both. Its pick and ratio are then in the geometry
-texel's first word, which the tick reads only bit 0 of: bits 8-15 the width it picked, 16-31
-the ratio in hundredths. The world's "Worker cores" strip under the control panel has the four
-choices (Auto, Dense, Medium, Wide), takes effect at the next Reset, and shows what Auto picked
-and what runs.
-
-A small cache costs a program whose workers store much, and two columns are the dense width for a laptop's card; a
-game's work is on the big workers and the first core, and does not care. `rvc_cpu`'s write caches under `RVC_WCACHE` go by
-the geometry it was given; `RVC_WC_BITS` sets core 0's.
 
 ## The commit as points
 
@@ -555,7 +471,7 @@ program links (`programs/mc/mcw.c`) does its part, and no program has to do anyt
   it is alive for it, and `look()` checks the core's owner word before its answer numbers. A
   team round's worker with no core (`post_team` in `mcwx.c`) has its share run by the first
   core, never in the job a post of the round runs inline.
-- **One layout, the kernel's or `geotune`'s** ("The geometry"). Two layouts cannot be at once, and one
+- **One layout, the kernel's** ("The geometry"). Two layouts cannot be at once, and one
   program's would be every other's too, so no program has one: all 255 are anybody's.
 - `serve()` looks only at a core that is the program's still, and a worker still on its way when its first job was posted
   is served by `look()`.
@@ -714,7 +630,7 @@ own write cache (336 texels: 64 + 32 + 16 buckets of three) and passes of 8,192 
 
 - **The tick is a camera's pass.** The tick's shader is on a mesh of seventeen triangles (one for every sixteen cores and one
   for the lanes' field) that only the tick's camera sees (a layer of its own); `EmuMachine` gives the
-  camera eight targets of 1040 x 32 once (`Camera.SetTargetBuffers`, which Udon has) and renders it once a round.
+  camera eight targets of 2048 x 16 once (`Camera.SetTargetBuffers`, which Udon has) and renders it once a round.
   `tick_geom` draws core 0's pixels and a block of columns for each worker with something to
   run, as the harness's does, and draws nothing for any other camera (it looks at the target's size).
 - **The unpack** (`Machine.shader`'s third pass, a Blit into the 2048 x 64 texture the commit
@@ -769,4 +685,3 @@ building the world again.
     --count-from T        rvc_cpu: every core's instructions from when the console said T
     --until-times N       rvc_cpu: stop at the Nth --until after that ("Every core's share")
     --pass-model A,B,C,D  rvc_cpu: a pass as long as a card's ("A game's speed")
-    --workers auto|2|4|8  rvc_harness: how geotune lays out the workers ("Packing the small workers")

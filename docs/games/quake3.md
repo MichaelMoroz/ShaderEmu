@@ -471,7 +471,7 @@ cores into GPU memory when the game registers what draws with them, and drawn fr
   (`QUAKE3_DECODERS`), and a sheet is decoded on all that have no job out (`mcw_for`'s teams).
   They are not parked in a game: a call goes to the lowest free worker of the large write caches
   (`call_pick` in `mcwx.c`), so the game's jobs keep to the big cores by themselves
-  (`docs/machine/multicore.md`, "Packing the small workers"). `QUAKE3_CORES=1` prints each worker's
+  (`docs/machine/multicore.md`, "The geometry"). `QUAKE3_CORES=1` prints each worker's
   core and instructions a pass with every `q3stat` (the geometry's words first), and
   `QUAKE3_SERVER_LOG`'s lines say the server job's worker and core.
 - **The game's workers are lent to libmedia**, and the server's may be making the bots' routes:

@@ -134,9 +134,7 @@ clock goes on from the processor's. So a moment reached here in seconds is measu
         --input "nano-X -p & sleep 10; quake +timedemo demo1\n" --until "You got the nails" --save-state Q.snap
     bin\rvc_harness.exe --d3d11 --rvc shader_vm --define NO_PAGING --image linux-net --no-desktop --load-state Q.snap
 
-The interpreter knows only the geometry of workers all alike, which geotune then leaves; the
-snapshot lays them out as geotune does on the card (16 big, the rest small in blocks of 2, or as
-`--workers` says), or nxray draws 12.9 lists a second where it draws 19.2. A program's state that
+A snapshot of the geometry of before 2 November 2026 (`SX86SNP2`) is laid out anew as it loads. A program's state that
 goes by the guest's clock is not the card's at the same line (Quake III's frame 200 is 16 s in
 here), and a part measured just after `nano-X` starts is not settled: give it 10 s. Checked on the
 card against states reached there (card, 26 October 2026): Quake's timedemo 66.3 against 67.2 fps, nxray with its scene

@@ -1,5 +1,5 @@
-// rvc's timer value for a given _Time.y, computed on the host the way the shader does it
-// (including its float round trips), for shaders built with NO_DOUBLES.
+// rvc's timer value for a given _Time.y, computed on the host the way the shader
+// did (including its float round trips): the tick has no doubles.
 #pragma once
 
 #include <cmath>

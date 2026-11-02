@@ -2,16 +2,12 @@
 // under RAM_INPLACE; src/ram.cginc, docs/machine/gpu.md "RAM in one texture"), for Machine.shader's
 // Commit (the state rows), MachineGather.shader and MachineCommitPoints.shader (RAM). Include
 // after UnityCG.cginc and MachineBlit.cginc; MachineGather.shader defines COMMIT_GATHER first.
-float _Init, _InitRaw;
+float _Init;
 // MachineTickLean.shader's machine: its CSRs are fields of the state, with no table to commit
 #define SBI_HLE
 #define NO_PAGING
 
-Texture2D<float4> _Data_RAM_R;
-Texture2D<float4> _Data_RAM_G;
-Texture2D<float4> _Data_RAM_B;
-Texture2D<float4> _Data_RAM_A;
-Texture2D<float4> _Data_RAM_RAW;
+Texture2D<float4> _Data_RAM;   // the start image: as the ROM
 
 Texture2D<float4> _Data_ROM;   // the ROM: a 16-byte texel a pixel, read by its bits (asuint)
 
@@ -32,20 +28,18 @@ static uint2 state_off = uint2(0, 0);
 static uint mc_core = 0;
 static uint mc_bits_now = 6;    // the write cache's size of the core looked at
 static uint mc_size_now = 4096; // and how many texels of state it has
-static uint mc_tile0 = 0;       // and, a worker's, the first of its tiles
+static uint2 mc_slot = uint2(0, 0);   // and where its slot is
 static uint4 mc_geo;            // the geometry's texel
 uint4 mc_state_read(uint2 pos) {
     if (mc_core == 0) return _TickState[pos + state_off];
     uint w = pos.y * 64 + pos.x;
     if (w >= mc_size_now) return (uint4)0;
-    uint t = mc_tile0 + (w >> 6), i = w & 63;
-    return _TickState[uint2(64 + ((t % 248) << 3) + (i & 7), ((t / 248) << 3) + (i >> 3))];
+    return _TickState[mc_slot + uint2(((w >> 6) << 3) + (w & 7), (w >> 3) & 7)];
 }
 #define STATE_TEX_HART(pos, hartidx) mc_state_read(uint2(pos))
 #define STATE_TEX(pos) mc_state_read(uint2(pos))
 
 static uint2 s_dim;
-static uint2 m_dim;
 
 #include "helpers.cginc"
 #include "src/types.cginc" // includes fb.h
