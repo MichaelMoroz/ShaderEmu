@@ -37,6 +37,7 @@ nxmicropolis            micropolis
 openttd,openttd.bin     openttd
 aoe,aoe.bin             aoe
 jk2,jk2.bin             jk2
+opencnc3d               opencnc3d
 nes,nes.bin             devices/input-gaming
 imdemo                  apps/desktop-effects apps/glade
 nxray                   apps/multimedia-photo-manager

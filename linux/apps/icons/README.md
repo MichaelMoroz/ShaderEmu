@@ -16,3 +16,4 @@
 | `quake3.png` | ioquake3 (GPL-2.0) | `misc/quake3.png` at the commit `linux/quake3/build.sh` names |
 | `aoe.png` | this project's | a temple on its steps with the sun behind, drawn for it (nothing of the game's) |
 | `jk2.png` | this project's | a blue light sword up the diagonal, drawn by `python tools/draw_icons.py` (nothing of Jedi Outcast's) |
+| `opencnc3d.png` | this project's | three green crystals on a tilted tile of ground, drawn by `python tools/draw_icons.py` (nothing of OpenCNC3D's or the cartridge's) |

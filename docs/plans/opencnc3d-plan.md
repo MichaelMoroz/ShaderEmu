@@ -117,6 +117,8 @@ resolver had to be written; OpenCNC3D's `bake5.py` runs unchanged over them, ste
    worker stores is its core's, `RVC_RACES` 0 undone), the frame drawn a frame behind where it pays; then the card's frames a
    second with `tools/game_par.py --card`.
 5. **The desktop.** A Start menu entry only in an image with the cartridge, an icon, a game id for the gamepad, the holodeck's seat.
+   - *Begun 2 November 2026 (`docs/games/opencnc3d.md`, "On the desktop"):* the entry, its starter and an icon of ours, in
+     the private image `overlay.py` makes; not yet the game id or the seat.
 
 ## Licences
 

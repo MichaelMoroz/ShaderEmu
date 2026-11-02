@@ -366,6 +366,16 @@ scenario pack among it), 68,496 kB free.
 bytes are as at the sums above (MD5 `6a5b3221...` before and after this work), so its 11 sums of both missions stand;
 nothing of the brain was changed for the program.
 
+## On the desktop (step 5, begun 2 November 2026)
+
+`overlay.py` puts the Start menu's entry `Games/OpenCNC3D` (`/usr/share/nxapps.78-opencnc3d`) and its starter
+`opencnc3d-start` (`ocnc-play`, then `opencnc3d` in `/tmp/ocnc`) into a private image only when it has both the program
+and the cartridge's play folder: the shared image has neither. The icon is ours, three green crystals on a tilted tile
+(`tools/draw_icons.py`, `linux/apps/icons/opencnc3d.png`), on the program's name `opencnc3d` in both looks' lists. A
+private image made so (`build/images/ocnc3`), its desktop started by `nx` and `opencnc3d-start` run from the shell,
+captured under `rvc_harness --cpu --warp`: OpenCNC3D's DOS menu in an 806 x 574 window, the crystals in its caption and
+on the bar's button. The Start menu itself was not opened in that capture.
+
 ## Licences
 
 OpenCNC3D is GPL-3.0 and its brain carries EA's GPL with the Section 7 terms of `brain/vanilla/License.txt`; its code

@@ -10,7 +10,8 @@ dos/, missions/ and packs/); OUT build.sh's OPENCNC3D_OUT, whose usr/bin/opencnc
 usr/bin/opencnc3d are made flat here with linux/nommu/flat.py. Into ROOT: the two programs, and
 in /usr/share/opencnc3d the DOS theaters' MIX files (their palettes are all the brain reads of the
 1995 data), every mission bake.py made (the cartridge's .INI and its .MAP as a .BIN) and every
-pack it baked.
+pack it baked; with the play folder `ocnc-play`, and with the program too the Start menu's entry
+(`nxapps.78-opencnc3d`) and its starter `opencnc3d-start`.
 """
 import os
 import shutil
@@ -71,6 +72,17 @@ def main():
                     "# the brain opens the theaters where it runs\n"
                     "for f in TEMPERAT DESERT WINTER; do [ -e $f.MIX ] || ln -s dosdata/$f.MIX .; done\n")
         os.chmod(starter, 0o755)
+        # the desktop's entry, only in an image that has the program and the cartridge's play folder:
+        # the bar runs a command's words with no shell, so a starter of its own
+        if "opencnc3d" in names:
+            start = os.path.join(root, "usr", "bin", "opencnc3d-start")
+            with open(start, "w", newline="\n") as f:
+                f.write("#!/bin/sh\n"
+                        "# OpenCNC3D from the Start menu: its folder made, then the program there\n"
+                        "ocnc-play && cd /tmp/ocnc && exec opencnc3d \"$@\"\n")
+            os.chmod(start, 0o755)
+            with open(os.path.join(root, "usr", "share", "nxapps.78-opencnc3d"), "w", newline="\n") as f:
+                f.write("Games/OpenCNC3D=opencnc3d-start\n")
     print("overlay: %s, %d files in /usr/share/opencnc3d and %d in its play folder" % (", ".join(names), n, m))
 
 
