@@ -441,62 +441,60 @@ uint fast(uint room) {
         uint w = cur.x, opc = w & 0x7f, f3 = (w >> 12) & 7, rd = (w >> 7) & 31, rs1 = (w >> 15) & 31, rs2 = (w >> 20) & 31;
         uint a = xr[rs1], b = xr[rs2], next = pc + 4, v = 0, dst = rd == 0 ? 64 : rd;
         bool ok = true;
-        // arithmetic, loads, stores and floats a group, in it arithmetic and loads one
+        // arithmetic and loads a group, stores and floats the next (each test passed is a level of every kind after it)
         bool alu = (w & 0x5f) == 0x13 && (w & 0xfe00007f) != 0x02000033, ld = opc == 0x03;   // (flw and fsw are the floats')
-        [branch] if (alu || ld || opc == 0x23 || (w & 0x5f) == 0x07 || opc == 0x53) {
-            [branch] if (alu || ld) {
-                [branch] if (alu) {
-                    // op-imm and op: every result made, one chosen; signed is unsigned with the signs turned over
-                    bool reg = (w & 0x20) != 0, alt = (w & 0x40000000) != 0;
-                    uint y = reg ? b : imm_i(w), s = y & 31, turn = (f3 & 1) ? 0 : 0x80000000, f7 = w >> 25;
-                    uint r01 = (f3 & 1) ? a << s : ((reg && alt) ? a - y : a + y), r23 = (a ^ turn) < (y ^ turn) ? 1 : 0;
-                    uint r45 = (f3 & 1) ? (alt ? asuint(asint(a) >> s) : a >> s) : a ^ y, r67 = (f3 & 1) ? a & y : a | y;
-                    v = (f3 & 4) ? ((f3 & 2) ? r67 : r45) : ((f3 & 2) ? r23 : r01);
-                    ok = (((f7 == 0 ? 0xffffu : f7 == 0x20 ? 0x21fdu : 0x00ddu) >> (((w >> 2) & 8) | f3)) & 1) != 0;
-                } else {
-                    // lb lh lw lbu lhu, within one word of RAM
-                    uint va = a + imm_i(w), up = LOAD_UP(f3);
-                    ok = va != 0 && ((0x37u >> f3) & 1) != 0 && (va & 3) + (1u << (f3 & 3)) <= 4 && (va ^ 0x80000000) < RAM_MAX;
-                    [branch] if (ok) {
-                        uint x = ram_word(va & 0x7ffffffc) >> ((va & 3) * 8) << up;
-                        v = (f3 & 4) ? x >> up : asuint(asint(x) >> up);
-                    }
-                }
+        [branch] if (alu || ld) {
+            [branch] if (alu) {
+                // op-imm and op: every result made, one chosen; signed is unsigned with the signs turned over
+                bool reg = (w & 0x20) != 0, alt = (w & 0x40000000) != 0;
+                uint y = reg ? b : imm_i(w), s = y & 31, turn = (f3 & 1) ? 0 : 0x80000000, f7 = w >> 25;
+                uint r01 = (f3 & 1) ? a << s : ((reg && alt) ? a - y : a + y), r23 = (a ^ turn) < (y ^ turn) ? 1 : 0;
+                uint r45 = (f3 & 1) ? (alt ? asuint(asint(a) >> s) : a >> s) : a ^ y, r67 = (f3 & 1) ? a & y : a | y;
+                v = (f3 & 4) ? ((f3 & 2) ? r67 : r45) : ((f3 & 2) ? r23 : r01);
+                ok = (((f7 == 0 ? 0xffffu : f7 == 0x20 ? 0x21fdu : 0x00ddu) >> (((w >> 2) & 8) | f3)) & 1) != 0;
             } else {
-                [branch] if (opc == 0x23) {
-                    // sb sh sw, within one word of RAM
-                    uint sa = a + imm_s(w), off = sa & 3;
-                    ok = f3 < 3 && (sa & 0x80000000) != 0 && off + (1u << f3) <= 4;
-                    [branch] if (ok) ram_store(sa & 0x7ffffffc, b << (off * 8), (f3 == 2 ? 0xffffffff : f3 == 1 ? 0xffff : 0xff) << (off * 8));
-                    dst = 64;
-                } else [branch] if (opc == 0x53) {
-                    // (opcode 0x53 before flw and fsw: a program has more of them) floats: a sum, a difference, a product, and the light ones; the rest are the general step's
-                    uint f7 = w >> 25, fa = a, fb = xr[32 + rs2];
-                    [branch] if ((f7 & 0x68) != 0x68) fa = xr[32 + rs1];   // (an if: a ?: read the register either way)
-                    bool to_f = true;
-                    [branch] if ((f7 & 0x73) == 0 && f7 != 0x0c) {
-                        precise float x = asfloat(fa), y = asfloat(fb), sum = x + y, dif = x - y, prod = x * y;
-                        v = asuint(f7 == 0 ? sum : f7 == 4 ? dif : prod);
-                        v = (v & 0x7fffffff) > 0x7f800000 ? 0x7fc00000 : v;
-                    } else [branch] if (((0x50100030u >> (f7 >> 2)) & 1) != 0 && (f7 & 3) == 0 && (f7 != 0x70 || f3 == 0)) {
-                        v = fp_light(w, fa, fb, to_f, ok);
-                    } else {
-                        v = fp_all(w, fa, fb, to_f, ok);   // the divisions, roots and conversions too: a float never leaves the loop
-                    }
-                    dst = to_f ? 32 + rd : dst;
-                } else [branch] if (opc == 0x07) {
-                    // flw, a word of RAM
-                    uint va = a + imm_i(w);
-                    ok = va != 0 && f3 == 2 && (va & 0x80000003) == 0x80000000 && (va & 0x7ffffffc) < RAM_MAX;
-                    [branch] if (ok) v = ram_word(va & 0x7ffffffc);
-                    dst = 32 + rd;
-                } else {
-                    // fsw, a word of RAM
-                    uint sa = a + imm_s(w);
-                    ok = f3 == 2 && (sa & 0x80000003) == 0x80000000;
-                    [branch] if (ok) ram_store(sa & 0x7ffffffc, xr[32 + rs2], 0xffffffff);
-                    dst = 64;
+                // lb lh lw lbu lhu, within one word of RAM
+                uint va = a + imm_i(w), up = LOAD_UP(f3);
+                ok = va != 0 && ((0x37u >> f3) & 1) != 0 && (va & 3) + (1u << (f3 & 3)) <= 4 && (va ^ 0x80000000) < RAM_MAX;
+                [branch] if (ok) {
+                    uint x = ram_word(va & 0x7ffffffc) >> ((va & 3) * 8) << up;
+                    v = (f3 & 4) ? x >> up : asuint(asint(x) >> up);
                 }
+            }
+        } else [branch] if (opc == 0x23 || (w & 0x5f) == 0x07 || opc == 0x53) {
+            [branch] if (opc == 0x23) {
+                // sb sh sw, within one word of RAM
+                uint sa = a + imm_s(w), off = sa & 3;
+                ok = f3 < 3 && (sa & 0x80000000) != 0 && off + (1u << f3) <= 4;
+                [branch] if (ok) ram_store(sa & 0x7ffffffc, b << (off * 8), (f3 == 2 ? 0xffffffff : f3 == 1 ? 0xffff : 0xff) << (off * 8));
+                dst = 64;
+            } else [branch] if (opc == 0x53) {
+                // (opcode 0x53 before flw and fsw: a program has more of them) floats: a sum, a difference, a product, and the light ones; the rest are the general step's
+                uint f7 = w >> 25, fa = a, fb = xr[32 + rs2];
+                [branch] if ((f7 & 0x68) != 0x68) fa = xr[32 + rs1];   // (an if: a ?: read the register either way)
+                bool to_f = true;
+                [branch] if ((f7 & 0x73) == 0 && f7 != 0x0c) {
+                    precise float x = asfloat(fa), y = asfloat(fb), sum = x + y, dif = x - y, prod = x * y;
+                    v = asuint(f7 == 0 ? sum : f7 == 4 ? dif : prod);
+                    v = (v & 0x7fffffff) > 0x7f800000 ? 0x7fc00000 : v;
+                } else [branch] if (((0x50100030u >> (f7 >> 2)) & 1) != 0 && (f7 & 3) == 0 && (f7 != 0x70 || f3 == 0)) {
+                    v = fp_light(w, fa, fb, to_f, ok);
+                } else {
+                    v = fp_all(w, fa, fb, to_f, ok);   // the divisions, roots and conversions too: a float never leaves the loop
+                }
+                dst = to_f ? 32 + rd : dst;
+            } else [branch] if (opc == 0x07) {
+                // flw, a word of RAM
+                uint va = a + imm_i(w);
+                ok = va != 0 && f3 == 2 && (va & 0x80000003) == 0x80000000 && (va & 0x7ffffffc) < RAM_MAX;
+                [branch] if (ok) v = ram_word(va & 0x7ffffffc);
+                dst = 32 + rd;
+            } else {
+                // fsw, a word of RAM
+                uint sa = a + imm_s(w);
+                ok = f3 == 2 && (sa & 0x80000003) == 0x80000000;
+                [branch] if (ok) ram_store(sa & 0x7ffffffc, xr[32 + rs2], 0xffffffff);
+                dst = 64;
             }
         } else [branch] if (opc == 0x63) {
             bool lt = (f3 & 2) ? a < b : asint(a) < asint(b);
