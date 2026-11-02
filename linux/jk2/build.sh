@@ -177,14 +177,16 @@ compile renderer \
 # into one object whose names stay inside it, but for its one entry, renamed (sys_shaderemu.cpp finds them). Section
 # groups (C++'s inline functions and templates) are made plain sections first, or the program's link would keep one
 # module's copy and drop the other's that its names point into.
-# The game's variables are two sections of their own, jk2game_data and jk2game_bss, which sys_shaderemu.cpp puts back as
-# they were at its first load each time the engine loads it again (a saved game's load, a new game): a library's were
-# fresh each time, and G_LoadRoff found a table of the last load's freed names (AddressSanitizer, 2 November 2026).
+# The game's variables are two sections of their own, jk2game_data and jk2game_bss, and its constructors a third,
+# jk2game_init, out of the program's: sys_shaderemu.cpp makes them fresh at each load as a library's were (the data as
+# it began, the rest zero, the constructors run): a saved game's load found a table of the last load's freed names
+# (G_LoadRoff, AddressSanitizer, 2 November 2026).
 step "the modules"
 cat > "$BUILD/game.ld.new" <<'EOF'
 SECTIONS {
     jk2game_data : { *(.data .data.* .sdata .sdata.*) }
     jk2game_bss : { *(.bss .bss.* .sbss .sbss.* COMMON) }
+    jk2game_init : { *(SORT_BY_INIT_PRIORITY(.init_array.*) SORT_BY_INIT_PRIORITY(.ctors.*) .init_array .ctors) }
 }
 EOF
 put "$BUILD/game.ld.new" "$BUILD/game.ld"; rm "$BUILD/game.ld.new"

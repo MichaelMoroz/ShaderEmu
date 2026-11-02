@@ -53,7 +53,7 @@ One file per subject. A doc names another by its file name, which is unique acro
 - [classicube.md](games/classicube.md) – ClassiCube
 - [doom.md](games/doom.md) – Doom
 - [halflife.md](games/halflife.md) – Half-Life: Uplink
-- [jk2.md](games/jk2.md) – Jedi Knight II: Jedi Outcast, the 2002 demo (begun: the build computer only, private images only)
+- [jk2.md](games/jk2.md) – Jedi Knight II: Jedi Outcast, the 2002 demo (begun: no picture yet, on rvc_cpu; private images only)
 - [micropolis.md](games/micropolis.md) – Micropolis
 - [nes.md](games/nes.md) – A NES
 - [openttd.md](games/openttd.md) – OpenTTD

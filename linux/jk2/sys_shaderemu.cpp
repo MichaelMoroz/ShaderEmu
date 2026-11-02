@@ -33,10 +33,13 @@ extern "C" intptr_t se_vmMain( int command, intptr_t, intptr_t, intptr_t, intptr
 
 static int se_handles[2];
 
-// The game's variables (build.sh's jk2game_data and jk2game_bss, the linker's __start_ and __stop_ round them): a copy
-// at its first load, put back at every later one, as a library's are fresh when it is loaded again. Its C++ objects'
-// constructors ran at the program's start, so the copy has them made; what they held since is left, not freed.
+// The game's variables (build.sh's jk2game_data and jk2game_bss, the linker's __start_ and __stop_ round them) and its
+// constructors (jk2game_init, which the program's start does not run): at every load the data as it began (a copy
+// of 30 KB, made at the first), the rest zero, and the constructors run, as a library's are when it is loaded again.
+// What the objects of the load before held is left, not freed. (A copy of both, kept before, was 5.5 MB more.)
 extern "C" char __start_jk2game_data[], __stop_jk2game_data[], __start_jk2game_bss[], __stop_jk2game_bss[];
+typedef void ( *se_constructor_t )( void );
+extern "C" se_constructor_t __start_jk2game_init[], __stop_jk2game_init[];
 static char *se_game_image;
 
 #if defined(__SANITIZE_ADDRESS__)
@@ -44,24 +47,32 @@ static char *se_game_image;
 static SE_WHOLE void se_copy( char *to, const char *from, size_t n )
 {
 	for ( volatile size_t i = 0; i < n; i++ )
-		to[i] = from[i];
+		to[i] = from ? from[i] : 0;
 }
 #else
-#define se_copy( to, from, n ) memcpy( to, from, n )
+static void se_copy( char *to, const char *from, size_t n )
+{
+	if ( from )
+		memcpy( to, from, n );
+	else
+		memset( to, 0, n );
+}
 #endif
 
 static void se_game_fresh( void )
 {
 	size_t data = __stop_jk2game_data - __start_jk2game_data, bss = __stop_jk2game_bss - __start_jk2game_bss;
 	if ( !se_game_image ) {
-		se_game_image = (char *)malloc( data + bss );
+		se_game_image = (char *)malloc( data );
 		se_copy( se_game_image, __start_jk2game_data, data );
-		se_copy( se_game_image + data, __start_jk2game_bss, bss );
-		Com_Printf( "jk2: the game's variables are %d bytes and %d bytes, kept as they began\n", (int)data, (int)bss );
-		return;
+		Com_Printf( "jk2: the game's variables are %d bytes and %d bytes, %d constructors\n", (int)data, (int)bss,
+			(int)( __stop_jk2game_init - __start_jk2game_init ) );
+	} else {
+		se_copy( __start_jk2game_data, se_game_image, data );
+		se_copy( __start_jk2game_bss, NULL, bss );
 	}
-	se_copy( __start_jk2game_data, se_game_image, data );
-	se_copy( __start_jk2game_bss, se_game_image + data, bss );
+	for ( se_constructor_t *c = __start_jk2game_init; c < __stop_jk2game_init; c++ )
+		( *c )();
 }
 
 void *SE_LoadLibrary( const char *name )

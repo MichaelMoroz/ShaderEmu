@@ -104,6 +104,14 @@ Each ends with what it must show. If a gate fails, stop and report before going 
    A state sum for the same run under the native build, as in `linux/openttd/host_sum.sh`. *Gate: the same sum on both; peak memory, the level's load in instructions
    and a game frame's instructions are written down. **If the frame alone is over about 400 thousand instructions on core 0, or memory over about 150 MB, stop and say so.**
    (About 5 frames a second at 2 MIPS, leaving nothing for the rest. A first figure to be argued with, not a measure.)*
+   *2 November 2026: the same sums on both (nine lines over 4,000 frames, after three causes of difference were put
+   right: arguments drawn in another order, the `.nav` file read with 64-bit longs, the client's game's draws). **The gate
+   stops it**: a frame of core 0 is 7.6 to 7.7 million instructions (19 times 400 thousand) with rd-vanilla's front end,
+   a null GL and sound mixed on the CPU; the load 28.6 billion (11.5 of them pictures decoded, 9.9 the snow's "outside"
+   cache); 167 MB taken of 246 free, 56 of it the pak's page cache, about 111 the program's (`docs/games/jk2.md`, "On the
+   machine"). Of a busy frame's 9.0 million, the game itself is 1.05 million each 50 ms of the game's time: about 21
+   million instructions a second before anything is drawn, against Quake III's server, which a worker kept at 26 frames
+   a second. Waiting for the owner.*
 2. **The level drawn, no characters.** `tr_shaderemu`'s method behind OpenJK's renderer interface: the BSP, its shaders' first stages, light maps, the 2D of the HUD and the menus. *Gate: a flight through the
    level with a picture you would recognise, and a frame rate on the calibrated clock with Quake III's as its comparison.*
 3. **Ghoul2.** The three ways above on one character, then the most the demo's busiest room has, on the calibrated clock and the card. *Gate: one way chosen on numbers; the first person's hands and saber are drawn right.*
