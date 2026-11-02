@@ -16,8 +16,6 @@ rv32-cc -Os -Wall "$HERE/emumux.c" -o "$WORK/src/emumux"
 riscv32-linux-strip -o "$OUT/usr/bin/emumux" "$WORK/src/emumux"
 # how the worker cores are packed on the card (docs/machine/multicore.md, "Packing the small workers"):
 # the init runs it before any program has workers
-rv32-cc -O2 -Wall -I"$REPO/programs/mc" -I"$REPO/linux/apps" "$HERE/geotune.c" "$REPO/programs/mc/mcw.c" -o "$WORK/src/geotune"
-riscv32-linux-strip -o "$OUT/usr/bin/geotune" "$WORK/src/geotune"
 # busybox's network tools the ROM has no name for (docs/system/lan.md)
 for applet in nc telnetd; do
     printf '#!/bin/sh\nexec busybox %s "$@"\n' "$applet" > "$OUT/usr/bin/$applet"

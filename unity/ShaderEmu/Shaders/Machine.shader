@@ -209,14 +209,13 @@ Shader "ShaderEmu/Machine"
             static uint mc_core = 0;
             static uint mc_bits_now = 6;
             static uint mc_size_now = 4096;
-            static uint mc_tile0 = 0;
+            static uint2 mc_slot = uint2(0, 0);   // and where its slot is
             static uint4 mc_geo;
             uint4 mc_state_read(uint2 pos) {
                 if (mc_core == 0) return _SelfTexture2D[pos + state_off];
                 uint w = pos.y * 64 + pos.x;
                 if (w >= mc_size_now) return (uint4)0;
-                uint t = mc_tile0 + (w >> 6), i = w & 63;
-                return _SelfTexture2D[uint2(64 + ((t % 248) << 3) + (i & 7), ((t / 248) << 3) + (i >> 3))];
+                return _SelfTexture2D[mc_slot + uint2(((w >> 6) << 3) + (w & 7), (w >> 3) & 7)];
             }
             #define STATE_TEX_HART(pos, hartidx) mc_state_read(uint2(pos))
             #define STATE_TEX(pos) mc_state_read(uint2(pos))
@@ -243,24 +242,25 @@ Shader "ShaderEmu/Machine"
 
             uint4 frag(blit_v2f i) : SV_Target {
                 uint2 pos = (uint2)i.vertex.xy;
-                // the lanes' field (lean/tick.hlsl, docs/machine/lanes.md): rows 48 to 63, lane F's texel from its
-                // pixel in the targets (rows 8 to 15 of the bands, from column 16), while a job is posted
-                [branch] if (pos.y >= WORKER_BAND_ROWS) {
+                uint k = (pos.x >> 6) | ((pos.y >> 3) << 5), r = pos.y & 7, tile = (pos.x & 63) >> 3;
+                // the lanes' field (lean/tick.hlsl, docs/machine/lanes.md): tiles 5 and 6 of the slots from the ninth on,
+                // lane F's texel from its pixel in the targets (rows 8 and 9), while a job is posted
+                [branch] if (k >= 8 && tile >= 5 && tile < 7) {
                     uint4 job = _SelfTexture2D[uint2(0x0C0190u % 2048u, 64u + 0x0C0190u / 2048u)];
-                    uint F = ((pos.y - WORKER_BAND_ROWS) * 2048u + pos.x) >> 3, r = F / 248u;
-                    if (_Init || job.x == 0 || F >= (min(job.z, 3968u) + 247u) / 248u * 248u) return _SelfTexture2D[pos];
-                    return tick_out(pos.x & 7, uint2(16u + F % 248u, (r >> 3) * TICK_STATE_ROWS + 8u + (r & 7u)));
+                    uint F = ((k - 8) << 4) | ((tile - 5) << 3) | r;
+                    if (_Init || job.x == 0 || (F >> 11) >= (min(job.z, 3968u) + 2047u) >> 11) return _SelfTexture2D[pos];
+                    return tick_out(pos.x & 7, uint2(F & 2047u, 8u + (F >> 11)));
                 }
-                if (pos.x < 64) return pos.y < TICK_STATE_ROWS ? tick_out(pos.x & 7, uint2(pos.x >> 3, pos.y)) : _SelfTexture2D[pos];
-                if (pos.y >= WORKER_BAND_ROWS) return _SelfTexture2D[pos];
+                if (k == 0) return r < 8 ? tick_out(pos.x & 7, uint2(pos.x >> 3, r)) : _SelfTexture2D[pos];
                 if (_Init) return _SelfTexture2D[pos];
                 MC_GEO_READ
                 if ((mc_geo.r & 1) != 0) return (uint4)0;   // being laid out anew
-                uint tile = ((pos.x - MC_STRIP_X) >> 3) + MC_STRIP_TILES * (pos.y >> 3);
-                hart = mc_core_at(tile);
-                if (hart == 0 || mc_idle()) return _SelfTexture2D[pos];
-                // a worker's texel: in its block's column for this tile
-                return tick_out(pos.x & 7, mc_block_of(hart) + uint2(tile - mc_tile0, pos.y & 7));
+                if (k > mc_count) return _SelfTexture2D[pos];
+                mc_select(k);
+                hart = k;
+                if (mc_idle()) return _SelfTexture2D[pos];
+                // a worker's texel: in its block of the targets
+                return tick_out(pos.x & 7, uint2((k << 3) + tile, r));
             }
             ENDCG
         }

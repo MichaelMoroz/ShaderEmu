@@ -118,7 +118,7 @@ for tests (`nxkey`) are the desktop's parts: `docs/system/nanox.md`.
 | `hlslc`, `hlslview` | HLSL compiled in the machine to steps on the lanes | `docs/system/hlsl.md` |
 | `qjs`, `qjsc`, `micropython` | QuickJS and MicroPython | `docs/system/scripts.md` |
 | `nano`, `mg`, `mc`, `htop`, `dialog`, `file`, `sl` | upstream's terminal programs, built flat | `docs/system/terminal.md` |
-| `mctest`, `lanetest`, `steptest`, `fptest`, `sndtest`, `media_test`, `hlsl_bench`, `nxbench`, `geotune`, `handoff`, `printf_check` | the machine's own tests and benchmarks | `docs/machine/multicore.md`, `docs/machine/lanes.md`, `docs/machine/cpu-harness.md` |
+| `mctest`, `lanetest`, `steptest`, `fptest`, `sndtest`, `media_test`, `hlsl_bench`, `nxbench`, `handoff`, `printf_check` | the machine's own tests and benchmarks | `docs/machine/multicore.md`, `docs/machine/lanes.md`, `docs/machine/cpu-harness.md` |
 
 ### Ports
 

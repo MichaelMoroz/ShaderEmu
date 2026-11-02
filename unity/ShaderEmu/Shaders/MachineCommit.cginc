@@ -31,14 +31,13 @@ static uint2 state_off = uint2(0, 0);
 static uint mc_core = 0;
 static uint mc_bits_now = 6;    // the write cache's size of the core looked at
 static uint mc_size_now = 4096; // and how many texels of state it has
-static uint mc_tile0 = 0;       // and, a worker's, the first of its tiles
+static uint2 mc_slot = uint2(0, 0);   // and where its slot is
 static uint4 mc_geo;            // the geometry's texel
 uint4 mc_state_read(uint2 pos) {
     if (mc_core == 0) return _TickState[pos + state_off];
     uint w = pos.y * 64 + pos.x;
     if (w >= mc_size_now) return (uint4)0;
-    uint t = mc_tile0 + (w >> 6), i = w & 63;
-    return _TickState[uint2(64 + ((t % 248) << 3) + (i & 7), ((t / 248) << 3) + (i >> 3))];
+    return _TickState[mc_slot + uint2(((w >> 6) << 3) + (w & 7), (w >> 3) & 7)];
 }
 #define STATE_TEX_HART(pos, hartidx) mc_state_read(uint2(pos))
 #define STATE_TEX(pos) mc_state_read(uint2(pos))

@@ -30,7 +30,11 @@
 #include "amp.h"
 #endif
 #ifdef LANE_FIELD
-#define LANE_FIELD_ROW 48   // the lanes' field's texels: state rows 48 to 63 (FIELD_STATE_ROW, shader_vm's tick)
+// Texel w of the lanes' field's state (field_st in shader_vm's tick): tiles 5 and 6 of the slots from the ninth on.
+uint2 ram_field_at(uint w) {
+    uint F = w >> 3, k = 8 + (F >> 4), i = F & 15;
+    return uint2(((k & 31) << 6) + 40 + ((i >> 3) << 3) + (w & 7), ((k >> 5) << 3) + (i & 7));
+}
 #endif
 
 // RAM as the commit's passes other than the gather have it: the control words alone.
@@ -41,7 +45,7 @@ uint4 ram_stage_read(uint2 pos) {
 // Texel w of a core's state as the tick left it, in the layout of its own rows.
 uint4 tick_state(uint core, uint w) {
 #if CORES > 1
-    if (core != 0) return _TickState[mc_tile_at(mc_tile_of(core) + (w >> 6)) + uint2(w & 7, (w & 63) >> 3)];
+    if (core != 0) return _TickState[mc_slot_of(core) + uint2(((w >> 6) << 3) + (w & 7), (w >> 3) & 7)];
 #endif
     return _TickState[uint2(w & 63, w >> 6)];
 }
@@ -426,23 +430,19 @@ uint4 ram_state_texel(uint2 pos) {
     s_dim = uint2(2048, STATE_TEX_HEIGHT);
     _Data_ROM.GetDimensions(m_dim.x, m_dim.y);
     uint4 own = _TickState[pos], result;
+#if CORES > 1
+    uint hb = (pos.x >> 6) | ((pos.y >> 3) << 5);
 #ifdef LANE_FIELD
     // the lanes' field (shader_vm/tick.hlsl): of a lane's texels its place and its count,
     // the last words of its buckets' tags; the buckets themselves emptied, their points made
-    if (pos.y >= LANE_FIELD_ROW) return _Init || ((pos.x & 7) != 0 && (pos.x & 7) != 4) ? (uint4)0 : uint4(0, 0, 0, own.w);
+    if (hb >= 8 && (pos.x & 63) >= 40 && (pos.x & 63) < 56) return _Init || ((pos.x & 7) != 0 && (pos.x & 7) != 4) ? (uint4)0 : uint4(0, 0, 0, own.w);
 #endif
-#if CORES > 1
     MC_GEO_READ
-    uint hb = 0;
-    mc_select(0);
-    if (pos.x >= MC_STRIP_X) {
-        uint tile = ((pos.x - MC_STRIP_X) >> 3) + MC_STRIP_TILES * (pos.y >> 3);
-        hb = mc_core_at(tile);
-        if (hb == 0) return (uint4)0;
-        uint w = ((tile - mc_tile0) << 6) + ((pos.y & 7) << 3) + (pos.x & 7);
-        pos = uint2(w & 63, w >> 6);
-    }
-    pos = mc_texel_of(pos);
+    if (hb > mc_count) return (uint4)0;
+    mc_select(hb);
+    // (a worker's texels are in tiles of 8 x 8, core 0's in rows)
+    uint w = hb == 0 ? ((pos.y & 7) << 6) + (pos.x & 63) : (((pos.x & 63) >> 3) << 6) + ((pos.y & 7) << 3) + (pos.x & 7);
+    pos = mc_texel_of(uint2(w & 63, w >> 6));
     // (of a worker's state the commit changes five texels: the rest is as it is)
     if (hb != 0 && (pos.y != 0 || (pos.x != 8 && pos.x != 28 && pos.x != 37 && pos.x != 38 && pos.x != 41))) return own;
     decode_for_commit();
@@ -486,10 +486,10 @@ void ram_commit_point(uint id, inout TriangleStream<ram_v2f> stream) {
     // the field's buckets, two a lane: the points before the picture's (as many as _FieldPoints)
     if (_FieldPoints != 0 && id + 1 < _CommitPoints && id + 1 + _FieldPoints >= _CommitPoints) {
         uint f = id + 1 + _FieldPoints - _CommitPoints, w = (f >> 1) * 8 + (f & 1) * 4;
-        uint4 tags = _TickState[uint2(w & 2047, LANE_FIELD_ROW + (w >> 11))];
+        uint4 tags = _TickState[ram_field_at(w)];
         for (uint n = 0; n < 3; n++) {
             uint tag = idx_uint4(tags, n), v = w + 1 + n;
-            if (tag != 0 && tag - 1 < RAM_TEXELS) ram_rows(stream, tag - 1, tag - 1, _TickState[uint2(v & 2047, LANE_FIELD_ROW + (v >> 11))], uint4(RK_VALUE, 0, 0, 0));
+            if (tag != 0 && tag - 1 < RAM_TEXELS) ram_rows(stream, tag - 1, tag - 1, _TickState[ram_field_at(v)], uint4(RK_VALUE, 0, 0, 0));
         }
         return;
     }

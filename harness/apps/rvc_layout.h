@@ -23,7 +23,9 @@ constexpr uint32_t kCon = dev(0x16b8280u);          // the console's words: the 
 constexpr uint32_t kStatsAll = dev(0x16ba000u);     // every core's count (MC_STATS_ALL)
 constexpr uint32_t kFetchData = dev(0x16c0000u);    // what the host fetched (FETCH_DATA)
 constexpr uint32_t kCountTotal = dev(0xc10000u);    // the counters' totals (MC_COUNT_PHYS)
-// A snapshot of this layout is marked so (rvc_harness --save-state); one marked SX86SNAP is of the layout
-// before (devices at 0x86000000) and is refused.
-constexpr char kSnapshotMagic[9] = "SX86SNP2";
+// A snapshot of this layout is marked so (rvc_harness --save-state). SX86SNP2 has the workers' state in the strips
+// of before (docs/machine/multicore.md, "The geometry"), and is laid out anew as it loads; SX86SNAP is of the layout
+// before that (devices at 0x86000000) and is refused.
+constexpr char kSnapshotMagic[9] = "SX86SNP3";
+constexpr char kSnapshotBefore[9] = "SX86SNP2";
 }  // namespace rvlayout

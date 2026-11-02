@@ -2,8 +2,8 @@
 // (README.md). Written as one loop that
 // tests the kinds of instruction most common first, arithmetic as one test with the result
 // chosen by selects, one indexed register write; a general step of its own for the rest. The
-// state texture is the machine's as before (docs/machine/multicore.md): RAM from row 64, and in
-// rows 0-63 core 0's block and the workers' strip; what a core stores goes into its write cache
+// state texture is the machine's (docs/machine/multicore.md): RAM from row 64, and in rows 0-63 a
+// slot of 64 x 8 texels for each core; what a core stores goes into its write cache
 // (three tables of buckets of three texels), and the commit pass puts it into RAM.
 //
 // A pixel of the tick is eight texels of a core's state, one in each of eight targets; every
@@ -50,7 +50,6 @@ uniform float4 _Time;
 #define CORE0_BITS 6                                 // core 0's cache: tables of 2^6 (its floats then right after)
 #endif
 #define CORE0_ROWS ((L1_AT + BUCKETS(CORE0_BITS) * 4 + 8 + 63) / 64)
-#define STATE_ROWS 16
 #define BUCKETS(bits) ((7u << (bits)) >> 2)          // tables of 2^bits, 2^(bits-1) and 2^(bits-2)
 #define H1(t, n) ((((t) >> 3) ^ ((t) << ((n) - 3)) ^ ((t) >> (n))) & ((1u << (n)) - 1))
 #define H2(t, n) ((((t) >> 2) ^ ((t) << ((n) - 2)) ^ ((t) >> ((n) + 3))) & ((1u << (n)) - 1))
@@ -68,114 +67,50 @@ uniform float4 _Time;
 #define MBOX 0x00C00000u
 #ifdef LANE_FIELD
 // The field (docs/machine/lanes.md, "The field"): up to FIELD_MAX lanes of no core's, a pixel each in
-// rows 8-15 of the targets' two bands (no core's block is there), their texels in rows 48-63 of the
-// state (no core's tiles reach them). A program posts a job in the mailboxes' page (FIELD_JOB_T: the
+// rows 8 and 9 of the targets (under the cores' row), their eight texels in tiles 5 and 6 of the slots
+// from the ninth on, which no worker's reach (a worker has 2^5 or less: five tiles), sixteen lanes a
+// slot. A program posts a job in the mailboxes' page (FIELD_JOB_T: the
 // descriptor's address, the job's number, how many lanes it wants). The first pixel of every 64 is a
 // group's leader, which runs no index and puts how its 63 lanes stand in FIELD_STATUS_T + its group.
 // The host draws it (_LaneField) while a job is posted, and the commit has a point a bucket of it.
 uniform uint _LaneField;
 #define FIELD_MAX 3968
-#define FIELD_W 248
-#define FIELD_X 16
-#define FIELD_STATE_ROW 48
 #define FIELD_JOB_T 0x0C0190u
 #define FIELD_STATUS_T 0x0C01A0u
 #endif                             // the workers' mailboxes, as a RAM offset
 #define MC_START 0x5553434du
 #define MC_STOP 0x5453434du
 
-// ---- The geometry (docs/machine/multicore.md, "The geometry"): the workers' state is tiles of
-// 8 x 8 texels in the strip right of core 0's block, 248 to a band; in the targets a worker is
-// a block of columns. Workers 1 to g_nb are big (caches of g_bb bits); the rest have .b's.
+// ---- The geometry (docs/machine/multicore.md, "The geometry"): every core has a slot of 64 x 8 texels in
+// the state's rows, core k's at ((k & 31) * 64, (k >> 5) * 8), and a block of 8 x 8 pixels in the targets,
+// at (k * 8, 0): one row of cores, all found by shifts. Core 0's texels are in rows; a worker's in whole tiles
+// of 8 x 8, a tile a column of its block (rows of 64 cost its loads: Quake 50%), a pixel eight texels of a tile's row.
 #define GEO_TEXEL 0x10003du
-#define STRIP_TILES 248
-#define STRIP_BANDS ((CORES + 47) / 49)
-#define TICK_W 1040
-#define TICK_GAP 8
-#define TICK_COLS (TICK_W - 8 - TICK_GAP)
-#define TICK_BANDS ((CORES + 126) / 128)
+#ifndef TICK_GAP
+#define TICK_GAP 8   // empty columns between core 0's block and the workers'
+#endif
+#define TICK_W 2056
+#define TICK_H 16
 static uint4 g;
-static uint g_count, g_rows, g_cols, g_nb, g_bb, g_rows_b, g_cols_b, g_per0;
-static uint core, bits, tile0, rows_now, cols_now;   // the core whose state is read
+static uint g_count;
+static uint core, bits, rows_now;   // the core whose state is read
 
-uint rows_of(uint b) { return b == 0 ? 0 : (L1_AT + 8 + BUCKETS(b) * 4 + 63) / 64; }
-uint cols_wide(uint rows, uint block, uint pad) { return (rows + pad + block - 1) / block * block; }
+uint rows_of(uint b) { return (L1_AT + 8 + BUCKETS(b) * 4 + 63) >> 6; }
 void geo_read() {
     g = TEX(RAM_ADDR(GEO_TEXEL));
-    uint ws = (g.a >> 16) & 0xff, wb = g.a >> 24;
-    g_rows = g.b < 3 || g.b > 6 ? 0 : rows_of(g.b);
-    g_cols = ws != 0 && ws <= 64 ? cols_wide(g_rows, ws, 0) : cols_wide(g_rows, 4, 2);
-    g_count = 0; g_nb = 0; g_per0 = 0;
-    g_bb = (g.a >> 8) & 0xff;
-    if ((g.a & 0xff) != 0 && g_bb >= 3 && g_bb <= 6 && g_rows != 0) {
-        g_rows_b = rows_of(g_bb);
-        g_cols_b = wb != 0 && wb <= 64 ? cols_wide(g_rows_b, wb, 0) : cols_wide(g_rows_b, 8, 0);
-        g_nb = min(min(min(g.a & 0xff, STRIP_TILES / g_rows_b), TICK_COLS / g_cols_b), min(g.g, (uint)CORES - 1));
-        if (g_nb != 0) g_per0 = (TICK_COLS - g_nb * g_cols_b) / g_cols;
-    }
-    uint sb0 = g_nb != 0 ? 1 : 0;
-    if (g_rows != 0 && (g.r & 1) == 0)
-        g_count = g_nb + min(min(g.g, (uint)CORES - 1) - g_nb,
-                             min((STRIP_BANDS - sb0) * (STRIP_TILES / g_rows), (TICK_BANDS - sb0) * (TICK_COLS / g_cols) + g_per0));
+    g_count = (g.r & 1) == 0 && g.b >= 3 && g.b <= 5 ? min(g.g, (uint)CORES - 1) : 0;
 }
 void select_core(uint k) {
     core = k;
-    bool big = k != 0 && k <= g_nb;
-    bits = k == 0 ? CORE0_BITS : big ? g_bb : k <= g_count ? g.b : 0;
-    rows_now = big ? g_rows_b : g_rows;
-    cols_now = big ? g_cols_b : g_cols;
-    uint j = k - 1 - g_nb, per = STRIP_TILES / max(g_rows, 1);
-    tile0 = k == 0 ? 0 : big ? (k - 1) * g_rows_b : ((g_nb != 0 ? 1 : 0) + j / per) * STRIP_TILES + (j % per) * g_rows;
-}
-uint2 tile_at(uint t) { return uint2(64 + 8 * (t % STRIP_TILES), 8 * (t / STRIP_TILES)); }
-uint2 block_of(uint k) {
-    if (k <= g_nb) return uint2(8 + TICK_GAP + (k - 1) * g_cols_b, 0);
-    uint j = k - 1 - g_nb, per = TICK_COLS / max(g_cols, 1), sb0 = g_nb != 0 ? 1 : 0, below = (TICK_BANDS - sb0) * per;
-    if (j >= below) return uint2(8 + TICK_GAP + g_nb * g_cols_b + (j - below) * g_cols, 0);
-    return uint2(8 + TICK_GAP + (j % per) * g_cols, (sb0 + j / per) * STATE_ROWS);
-}
-// the worker whose block holds the targets' pixel, selected, and which of its tiles that is; 0: none
-uint core_in(uint2 p, out uint tile) {
-    tile = 0;
-    if (p.x < 8 + TICK_GAP || (p.y % STATE_ROWS) >= 8 || g_count == 0) return 0;
-    uint band = p.y / STATE_ROWS, xx = p.x - 8 - TICK_GAP, per = TICK_COLS / g_cols, sb0 = g_nb != 0 ? 1 : 0, k;
-    if (g_nb != 0 && band == 0 && xx / g_cols_b < g_nb) {
-        k = xx / g_cols_b + 1; tile = xx % g_cols_b;
-    } else {
-        if (g_nb != 0 && band == 0) xx -= g_nb * g_cols_b;
-        uint i = xx / g_cols;
-        if (i >= (g_nb != 0 && band == 0 ? g_per0 : per)) return 0;
-        k = g_nb + (g_nb != 0 && band == 0 ? (TICK_BANDS - sb0) * per : (band - sb0) * per) + i + 1;
-        tile = xx % g_cols;
-    }
-    if (k > g_count) return 0;
-    select_core(k);
-    return k;
-}
-// the worker whose tiles the strip's tile t is one of, selected (the unpack's question); 0: none
-uint core_at(uint t) {
-    uint band = t / STRIP_TILES, i, k;
-    if (g_nb != 0 && band == 0) {
-        i = (t % STRIP_TILES) / max(g_rows_b, 1);
-        if (i >= g_nb) return 0;
-        k = i + 1;
-    } else {
-        uint per = STRIP_TILES / max(g_rows, 1);
-        i = (t % STRIP_TILES) / max(g_rows, 1);
-        if (i >= per) return 0;
-        k = g_nb + (band - (g_nb != 0 ? 1 : 0)) * per + i + 1;
-    }
-    if (k > g_count) return 0;
-    select_core(k);
-    return k;
+    bits = k == 0 ? CORE0_BITS : k <= g_count ? g.b : 0;
+    rows_now = rows_of(bits);
 }
 // Texel lin (core 0's numbering) of the selected core: a worker keeps its floats after its cache.
 uint4 st(uint lin) {
     uint end = L1_AT + BUCKETS(bits) * 4, w = lin >= FP_AT ? end + lin - FP_AT : lin;
     if (lin >= end && lin < FP_AT) return 0;
     if (core == 0) return TEX(uint2(w & 63, w >> 6));
-    uint t = tile0 + (w >> 6), i = w & 63;
-    return TEX(tile_at(t) + uint2(i & 7, i >> 3));
+    return TEX(uint2(((core & 31) << 6) + ((w >> 6) << 3) + (w & 7), ((core >> 5) << 3) + ((w >> 3) & 7)));
 }
 // which texel (core 0's numbering) texel w of the selected core's rows is; 4095 for none
 uint lin_of(uint w) {
@@ -949,7 +884,11 @@ void lane_output() {
 static uint field_F, field_seq, field_N, field_cum;
 static uint4 field_was_a, field_was_b, field_status;
 static bool field_on = false, field_lead = false;
-uint4 field_st(uint w) { return TEX(uint2(w & 2047, FIELD_STATE_ROW + (w >> 11))); }   // texel w of the field's state
+// texel w of the field's state (lane F's are 8 F to 8 F + 7)
+uint4 field_st(uint w) {
+    uint F = w >> 3, k = 8 + (F >> 4), i = F & 15;
+    return TEX(uint2(((k & 31) << 6) + 40 + ((i >> 3) << 3) + (w & 7), ((k >> 5) << 3) + (i & 7)));
+}
 // Pixel F of the field before anything runs: a leader looks at its lanes; a lane with indices left
 // of the job posted is set to run its first, its registers those of a call from nowhere (the
 // program's global and thread pointers, every other register 0).
@@ -1026,7 +965,11 @@ void quad(inout TriangleStream<v2f> s, float x, float y, float w, float h, float
     }
     s.RestartStrip();
 }
+#ifdef TICK_UNPACK
+[maxvertexcount(128)]
+#else
 [maxvertexcount(64)]
+#endif
 void tick_geom(triangle v2f IN[3], uint prim : SV_PrimitiveID, inout TriangleStream<v2f> s) {
 #ifdef LANE_FIELD
     if (prim > (CORES + 15) / 16) return;
@@ -1036,36 +979,36 @@ void tick_geom(triangle v2f IN[3], uint prim : SV_PrimitiveID, inout TriangleStr
 #ifdef TICK_GEOM_GUARD
     TICK_GEOM_GUARD   // Unity: only the tick's own camera draws it
 #endif
+#ifdef TICK_UNPACK
+    float2 size; _SelfTexture2D.GetDimensions(size.x, size.y);
+#else
+    float2 size = float2(TICK_W, TICK_H);
+#endif
 #ifdef LANE_FIELD
     // the primitive after the cores' is the field's: as many of its rows as the posted job's lanes fill
     [branch] if (prim == (CORES + 15) / 16) {
         if (_Init || _LaneField == 0) return;
         uint4 job = TEX(RAM_ADDR(FIELD_JOB_T));
-        uint rows = job.x == 0 ? 0 : (min(job.z, (uint)FIELD_MAX) + FIELD_W - 1) / FIELD_W;
+        uint rows = job.x == 0 ? 0 : (min(job.z, (uint)FIELD_MAX) + 2047) >> 11;
         if (rows == 0) return;
 #ifdef TICK_UNPACK
-        float2 fsize; _SelfTexture2D.GetDimensions(fsize.x, fsize.y);
-        quad(s, 0, FIELD_STATE_ROW, 2048, (rows * FIELD_W * 8 + 2047) / 2048, fsize);
+        for (uint b = 0; b < 32; b++) quad(s, b * 64 + 40, 0, 16, 64, size);   // (tiles 5 and 6 of every slot: the first eight's are the cores' again)
 #else
-        float2 fsize = float2(TICK_W, STATE_ROWS * TICK_BANDS);
-        quad(s, FIELD_X, 8, FIELD_W, min(rows, 8u), fsize);
-        if (rows > 8) quad(s, FIELD_X, STATE_ROWS + 8, FIELD_W, rows - 8, fsize);
+        quad(s, 0, 8, TICK_W, rows, size);
 #endif
         return;
     }
 #endif
+    geo_read();
+    select_core(0);
 #ifdef TICK_UNPACK
-    float2 size; _SelfTexture2D.GetDimensions(size.x, size.y);
-    if (prim == 0) quad(s, 0, 0, 64, CORE0_ROWS, size);
+    if (prim == 0) quad(s, 0, 0, 64, rows_now, size);
     if (_Init) return;
-    geo_read();
-    if ((g.r & 1) != 0) { if (prim == 0) quad(s, 64, 0, 8 * STRIP_TILES, 8 * STRIP_BANDS, size); return; }
+    if ((g.r & 1) != 0) { if (prim == 0) { quad(s, 64, 0, 1984, 8, size); quad(s, 0, 8, 2048, 56, size); } return; }
 #else
-    float2 size = float2(TICK_W, STATE_ROWS * TICK_BANDS);
-    if (prim == 0) quad(s, 0, 0, 8, CORE0_ROWS, size);
+    if (prim == 0) quad(s, 0, 0, 8, rows_now, size);
     if (_Init) return;
-    geo_read();
-    if ((g.r & 1) != 0) { if (prim == 0) quad(s, 8, 0, TICK_W - 8, STATE_ROWS * TICK_BANDS, size); return; }
+    if ((g.r & 1) != 0) { if (prim == 0) quad(s, 8 + TICK_GAP, 0, TICK_W - 8 - TICK_GAP, 8, size); return; }
 #endif
     for (uint n = 0; n < 16; n++) {
         uint k = prim * 16 + n;
@@ -1073,11 +1016,9 @@ void tick_geom(triangle v2f IN[3], uint prim : SV_PrimitiveID, inout TriangleStr
         select_core(k);
         if (worker_idle() || MORE_ROUND) continue;   // (its state stays as the commit left it)
 #ifdef TICK_UNPACK
-        uint2 at = tile_at(tile0);
-        quad(s, at.x, at.y, 8 * rows_now, 8, size);
+        quad(s, (k & 31) << 6, (k >> 5) << 3, rows_now * 8, 8, size);
 #else
-        uint2 at = block_of(k);
-        quad(s, at.x, at.y, cols_now, 8, size);
+        quad(s, TICK_GAP + (k << 3), 0, 8, 8, size);   // (the whole block: a narrower quad's diagonal cost Quake 18%)
 #endif
     }
 }
@@ -1086,23 +1027,22 @@ void tick_geom(triangle v2f IN[3], uint prim : SV_PrimitiveID, inout TriangleStr
 Texture2D<uint4> _TickOut0, _TickOut1, _TickOut2, _TickOut3, _TickOut4, _TickOut5, _TickOut6, _TickOut7;
 uint4 frag(v2f i) : SV_Target {
     uint2 p = uint2(i.vertex.xy);
-    uint3 at = uint3(p.x >> 3, p.y, 0);
+    uint k = (p.x >> 6) | ((p.y >> 3) << 5), r = p.y & 7, tile = (p.x & 63) >> 3;
+    uint3 at = uint3((k << 3) + tile + (k != 0 ? TICK_GAP : 0), r, 0);
 #ifdef LANE_FIELD
-    [branch] if (p.y >= FIELD_STATE_ROW) {
+    [branch] if (k >= 8 && tile >= 5 && tile < 7) {
         // the field's: lane F's texel, from its pixel in the targets (one of a row the tick did not draw: as it is)
         uint4 job = TEX(RAM_ADDR(FIELD_JOB_T));
-        uint F = ((p.y - FIELD_STATE_ROW) * 2048 + p.x) >> 3, r = F / FIELD_W;
-        if (F >= (min(job.z, (uint)FIELD_MAX) + FIELD_W - 1) / FIELD_W * FIELD_W) return TEX(p);
-        at = uint3(FIELD_X + F % FIELD_W, (r >> 3) * STATE_ROWS + 8 + (r & 7), 0);
+        uint F = ((k - 8) << 4) | ((tile - 5) << 3) | r;
+        if ((F >> 11) >= (min(job.z, (uint)FIELD_MAX) + 2047) >> 11) return TEX(p);
+        at = uint3(F & 2047, 8 + (F >> 11), 0);
     } else
 #endif
-    if (p.x >= 64) {
+    if (k != 0) {
         geo_read();
-        uint tile = ((p.x - 64) >> 3) + STRIP_TILES * (p.y >> 3);
-        if ((g.r & 1) != 0 || core_at(tile) == 0) return 0;
-        at = uint3(block_of(core) + uint2(tile - tile0, p.y & 7), 0);
+        if (k > g_count) return 0;
     }
-    uint k = p.x & 7;
+    k = p.x & 7;
     [branch] if (k < 4) return k == 0 ? _TickOut0.Load(at) : k == 1 ? _TickOut1.Load(at) : k == 2 ? _TickOut2.Load(at) : _TickOut3.Load(at);
     return k == 4 ? _TickOut4.Load(at) : k == 5 ? _TickOut5.Load(at) : k == 6 ? _TickOut6.Load(at) : _TickOut7.Load(at);
 }
@@ -1111,24 +1051,19 @@ struct tick_out { uint4 t0 : SV_Target0; uint4 t1 : SV_Target1; uint4 t2 : SV_Ta
                   uint4 t4 : SV_Target4; uint4 t5 : SV_Target5; uint4 t6 : SV_Target6; uint4 t7 : SV_Target7; };
 tick_out frag(v2f i) {
     uint2 p = uint2(i.vertex.xy);
-    
-    uint k, w0 = p.y * 64 + p.x * 8;   // the pixel's first texel, in its core's rows
-    uint2 own = uint2(p.x * 8, p.y);   // and where that is in the state texture
     geo_read();
-    select_core(0);
+    select_core(p.x < 8 ? 0 : (p.x - TICK_GAP) >> 3);
+    uint k, px = (p.x < 8 ? p.x : p.x - TICK_GAP) & 7;
+    uint w0 = core == 0 ? p.y * 64 + px * 8 : (px << 6) + (p.y << 3);   // the pixel's first texel, in its core's numbering
+    uint2 own = uint2(((core & 31) << 6) + px * 8, ((core >> 5) << 3) + p.y);   // and where that is in the state texture
     bool none = false, field = false;
 #ifdef LANE_FIELD
-    [branch] if (_LaneField != 0 && p.x >= FIELD_X && p.x < FIELD_X + FIELD_W && (p.y % STATE_ROWS) >= 8) {
+    [branch] if (p.y >= 8) {
         field = true;   // a pixel of the field: lane F (the geometry draws it only with a job posted)
-        field_F = ((p.y / STATE_ROWS) * 8 + (p.y % STATE_ROWS) - 8) * FIELD_W + p.x - FIELD_X;
+        field_F = (p.y - 8) * 2048 + p.x;
     } else
 #endif
-    [branch] if (p.x >= 8 || p.y >= STATE_ROWS) {
-        uint tile;
-        none = _Init != 0 || core_in(p, tile) == 0 || tile >= rows_now;
-        w0 = (tile << 6) + ((p.y & 7) << 3);
-        own = tile_at(tile0 + tile) + uint2(0, p.y & 7);
-    } else none = p.y >= CORE0_ROWS;
+    none = core != 0 && (_Init != 0 || core > g_count || px >= rows_now);
     bool keep = !field && !none && !_Init && core != 0 && (worker_idle() || MORE_ROUND);
     bool any = field;
     for (k = 0; k < 8; k++) any = any || lin_of(w0 + k) < FP_AT + 8;

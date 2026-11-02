@@ -1267,12 +1267,12 @@ private:
     Gpu gpu_;
     std::vector<GpuPass> passes_, gpuPasses_, soundPasses_, unpackPasses_, pointPasses_, copyPasses_;
     bool scatter_ = true;   // the cores' stores committed as points (with the tick in eight targets; --define NO_SCATTER: as bands)
-    // TICK_MRT: the tick's eight targets (types.h: TICK_MRT_W wide, a band of rows for 128 workers)
+    // TICK_MRT: the tick's eight targets
     bool mrt_ = false;
     UINT mrtLoad_ = 1;   // TICK_LOAD: the workers' quads drawn so many times (a measurement)
     UINT activeCores_ = 1;   // the cores whose pixels are drawn this frame: all, or core 0 alone (workersNow)
-    UINT tickWidth() const { return 1040; }   // TICK_MRT_W
-    UINT tickHeight() const { return (UINT)tickRows_ * (((UINT)cores_ + 126) / 128); }   // TICK_BANDS
+    UINT tickWidth() const { return 2056; }   // TICK_W, a block of 8 x 8 for each core
+    UINT tickHeight() const { return 16; }   // TICK_H: the cores' row, and the lanes' field under it
     ComPtr<ID3D11Texture2D> mrtTex_[8];
     ComPtr<ID3D11RenderTargetView> mrtRtv_[8];
     ComPtr<ID3D11ShaderResourceView> mrtSrv_[8];

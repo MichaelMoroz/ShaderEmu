@@ -63,11 +63,9 @@ static void cpuConsoleHook(char c) { g_cpuConsole.push_back(c); }
 // `data` is the state texture as drawn, W texels wide: the GPU's memory and the control words are kept as
 // they are there; Linux's RAM (shown four times a second) is the processor's, and every core's state is
 // written where the shader keeps it (src/types.h: decode, encode_l1, mc_geo_read, mc_state_at; src/mc.h),
-// with empty write caches. The interpreter knows only the geometry of workers all alike, so geotune leaves
-// that one there; `width` (2, 4 or 8) lays them out as geotune does on the card instead (its hybrid: 16 big
-// workers, the rest small in blocks of `width` columns), which the empty caches allow. Returns how many
-// workers it wrote; -1 when a core is in a state the shader cannot be given (a copy still being made).
-static int cpuSnapshotCores(std::vector<uint8_t>& data, uint32_t W, uint32_t width) {
+// with empty write caches. Returns how many workers it wrote; -1 when a core is in a state the shader cannot
+// be given (a copy still being made).
+static int cpuSnapshotCores(std::vector<uint8_t>& data, uint32_t W) {
     using namespace cpuemu;
     auto tex = [&](uint32_t x, uint32_t y) { return (uint32_t*)&data[((size_t)y * W + x) * 16]; };
     for (uint32_t a = RAM_BASE; a - RAM_BASE < RAM_SIZE; a += 0x400000u) {
@@ -75,46 +73,21 @@ static int cpuSnapshotCores(std::vector<uint8_t>& data, uint32_t W, uint32_t wid
         uint32_t lin = (a - RAM_BASE) / 16;
         memcpy(tex(lin % 2048, 64 + lin / 2048), &ram[a - RAM_BASE], 0x400000);
     }
-    // the workers' geometry (MC_HYBRID; STATE_ROWS 16, MC_STRIP_TILES 248, TICK_COLS 1024, 6 strip bands, 2 tick bands)
-    const uint32_t L1_AT = 44, TILES = 248, COLS = 1024, SBANDS = 6, TBANDS = 2, LAST = 255;
+    // the workers' geometry (src/types.h): a slot of 64 x 8 texels for each core, the workers all alike
+    const uint32_t L1_AT = 44, LAST = 255;
     auto buckets = [](uint32_t bits) { return (7u << bits) >> 2; };
-    auto rowsOf = [&](uint32_t bits) { return bits == 0 ? 0u : (L1_AT + 8 + buckets(bits) * 4 + 63) / 64; };
-    auto wide = [](uint32_t rows, uint32_t block, uint32_t pad) { return (rows + pad + block - 1) / block * block; };
     uint32_t geo[4];
     memcpy(geo, &ram[rvlayout::kCtrl + 0x3d0u - RAM_BASE], 16);
-    // (none yet, where no program has asked for workers: geotune lays it out at boot on the card, all 255)
-    if (width && (geo[1] > 16 || geo[1] == 0) && geo[3] == 0 && (geo[0] & 1) == 0) {
-        uint32_t laid[4] = {width << 8, geo[1] ? geo[1] : 255u, width == 8 ? 5u : 3u, 16u | 5u << 8 | width << 16 | 8u << 24};   // (geotune.c: hybrid(1, width, WIDE))
-        memcpy(geo, laid, 16);
-        memcpy(tex(rvlayout::devT(0x10003du) % 2048, 64 + rvlayout::devT(0x10003du) / 2048), laid, 16);
-    }
-    uint32_t ws = (geo[3] >> 16) & 0xff, wb = geo[3] >> 24;
-    uint32_t rows = geo[2] < 3 || geo[2] > 6 ? 0 : rowsOf(geo[2]);
-    uint32_t cols = ws != 0 && ws <= 64 ? wide(rows, ws, 0) : wide(rows, 4, 2);
-    uint32_t nb = 0, per0 = 0, count = 0, bb = (geo[3] >> 8) & 0xff, rowsB = 0;
-    if ((geo[3] & 0xff) != 0 && bb >= 3 && bb <= 6 && rows != 0) {
-        rowsB = rowsOf(bb);
-        uint32_t colsB = wb != 0 && wb <= 64 ? wide(rowsB, wb, 0) : wide(rowsB, 8, 0);
-        nb = (std::min)({geo[3] & 0xff, TILES / rowsB, COLS / colsB, geo[1], LAST});
-        if (nb != 0) per0 = (COLS - nb * colsB) / cols;
-    }
-    uint32_t sb0 = nb != 0 ? 1 : 0;
-    if (rows != 0 && (geo[0] & 1) == 0)
-        count = nb + (std::min)((std::min)(geo[1], LAST) - nb, (std::min)((SBANDS - sb0) * (TILES / rows), (TBANDS - sb0) * (COLS / cols) + per0));
+    uint32_t count = (geo[0] & 1) == 0 && geo[2] >= 3 && geo[2] <= 5 ? (std::min)(geo[1], LAST) : 0;
     for (uint32_t core = 0; core <= count && core < cores.size(); core++) {
         Core& c = cores[core];
         if (c.copying) return -1;
-        uint32_t bits = core == 0 ? 6 : core <= nb ? bb : geo[2];
-        uint32_t cacheEnd = L1_AT + buckets(bits) * 4, tile0 = 0;
-        if (core != 0) {
-            uint32_t j = core - 1 - nb, per = TILES / (std::max)(rows, 1u);
-            tile0 = core <= nb ? (core - 1) * rowsB : (sb0 + j / per) * TILES + (j % per) * rows;
-        }
+        uint32_t bits = core == 0 ? 6 : geo[2];
+        uint32_t cacheEnd = L1_AT + buckets(bits) * 4;
         // texel lin as core 0 numbers them (its float registers' 8 from cacheEnd on), where this core keeps it
         auto at = [&](uint32_t lin) {
             if (core == 0) return tex(lin % 64, lin / 64);
-            uint32_t t = tile0 + (lin >> 6);
-            return tex(64 + 8 * (t % TILES) + (lin & 7), 8 * (t / TILES) + ((lin >> 3) & 7));
+            return tex(((core & 31) << 6) + ((lin >> 6) << 3) + (lin & 7), ((core >> 5) << 3) + ((lin >> 3) & 7));
         };
         auto put = [&](uint32_t lin, uint32_t r, uint32_t g, uint32_t b, uint32_t a) {
             uint32_t* p = at(lin);
@@ -189,7 +162,6 @@ struct Options {
     int uartBurst = 0;        // input characters per handshake; 0: 4
     bool resume = false;      // with no other arguments: resume the shell snapshot instead of booting
     bool tabs = false;        // ask the guest for its console as several terminals (docs/machine/console.md)
-    int workers = 0;          // --workers: the small workers' blocks geotune lays out (0 its own pick; 1-3: 2, 4, 8 columns)
     bool desktop = false;     // ask the guest to start its desktop: the terminal mode, unless --no-desktop
     std::string kernel;       // Linux's: "mmu" or "nommu" (docs/system/nommu.md); unset, nommu once its image is made
     std::string isa = "base"; // "base" RV32IMAF, or "zb" with Zba and Zbb (the shader's ZB)
@@ -358,7 +330,6 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
   --isa base|zb        (zb: not on shader_vm's tick) RV32IMAF, or with Zba and Zbb (the shader's ZB; without an MMU build\\images\\nommu-zb,
                        whose programs use them)
   --tabs               the console as four terminals: 0x1e and a digit, either way, says whose bytes follow
-  --workers auto|2|4|8 how geotune lays out the workers at boot (docs/machine/multicore.md, "Packing the small workers")
   --dxc / --d3d11      backend: D3D12 with DXC-compiled DXIL, or D3D11 with FXC bytecode (what VRChat
                        runs). rvc_harness_dxc.exe defaults to --dxc. shader_vm
                        has no tick for D3D12 (eight targets only): --dxc needs another --rvc.
@@ -501,7 +472,6 @@ bool parseArgs(int argc, char** argv, Options& o) {
         }
         else if (a == "--desktop") o.desktop = true;
         else if (a == "--tabs") o.tabs = true;
-        else if (a == "--workers") { std::string w = next("--workers"); o.workers = w == "2" ? 1 : w == "4" ? 2 : w == "8" ? 3 : 0; }
         else if (a == "--open") o.open.push_back(next("--open"));
         else if (a == "--open-after") o.openAfter = unescape(next("--open-after"));
         else if (a == "--persist") o.persist = next("--persist");
@@ -1106,6 +1076,51 @@ int main(int argc, char** argv) {
             fprintf(stderr, "[harness] %s is a snapshot of the layout before 28 October 2026 (the devices at 0x86000000): make it again\n",
                     opt.loadState.c_str());
             return 1;
+        }
+        if (ok && memcmp(hdr.magic, rvlayout::kSnapshotBefore, 8) == 0 && hdr.width == W && snap.size() == sizeof hdr + (size_t)W * hdr.height * 16) {
+            // the workers' state from the strips of before into the slots; the lanes' field's texels were rows 48 to 63
+            uint32_t* tx = (uint32_t*)(snap.data() + sizeof hdr);
+            std::vector<uint32_t> was(tx, tx + 2048 * 64 * 4);
+            auto from = [&](uint32_t x, uint32_t y) { return &was[((size_t)y * 2048 + x) * 4]; };
+            auto to = [&](uint32_t x, uint32_t y) { return &tx[((size_t)y * 2048 + x) * 4]; };
+            uint32_t* geo = tx + ((size_t)(64 + rvlayout::devT(0x10003d) / 2048) * 2048 + rvlayout::devT(0x10003d) % 2048) * 4;
+            // the geometry of before, big workers and small ones (geotune), and how many workers it gave
+            const uint32_t L1 = 44, LAST = 255, COLS = 1024;
+            auto buckets = [](uint32_t b) { return (7u << b) >> 2; };
+            auto rowsOf = [&](uint32_t b) { return b == 0 ? 0u : (L1 + 8 + buckets(b) * 4 + 63) / 64; };
+            auto wide = [](uint32_t r, uint32_t block, uint32_t pad) { return (r + pad + block - 1) / block * block; };
+            uint32_t ws = (geo[3] >> 16) & 0xff, wb = geo[3] >> 24, bb = (geo[3] >> 8) & 0xff;
+            uint32_t bits = geo[2] >= 3 && geo[2] <= 6 ? geo[2] : 0, rows = rowsOf(bits), nb = 0, rowsB = 0, per0 = 0, count = 0;
+            uint32_t cols = rows ? (ws != 0 && ws <= 64 ? wide(rows, ws, 0) : wide(rows, 4, 2)) : 1;
+            if ((geo[3] & 0xff) != 0 && bb >= 3 && bb <= 6 && rows != 0) {
+                rowsB = rowsOf(bb);
+                uint32_t colsB = wb != 0 && wb <= 64 ? wide(rowsB, wb, 0) : wide(rowsB, 8, 0);
+                nb = (std::min)({geo[3] & 0xff, 248 / rowsB, COLS / colsB, geo[1], LAST});
+                if (nb != 0) per0 = (COLS - nb * colsB) / cols;
+            }
+            uint32_t sb0 = nb != 0 ? 1 : 0;
+            if (rows != 0 && (geo[0] & 1) == 0)
+                count = nb + (std::min)((std::min)(geo[1], LAST) - nb, (std::min)((6 - sb0) * (248 / rows), (2 - sb0) * (COLS / cols) + (nb != 0 ? per0 : 0)));
+            for (uint32_t i = 64 * 4; i < 8 * 2048 * 4; i++) tx[i] = 0;   // (core 0's slot stays)
+            memset(tx + 8 * 2048 * 4, 0, (2048 * 64 * 4 - 8 * 2048 * 4) * 4);
+            for (uint32_t y = 0; y < 8; y++) memcpy(tx + (size_t)y * 2048 * 4, &was[(size_t)y * 2048 * 4], 64 * 16);
+            // each worker's registers and CSRs where a worker of 2^5 has them. Its write cache is of its last pass, committed: not kept.
+            for (uint32_t c = 1; c <= count; c++) {
+                uint32_t old = c <= nb ? bb : bits, end0 = L1 + buckets(old) * 4, end1 = L1 + buckets(5) * 4;
+                uint32_t per = 248 / (std::max)(rows, 1u), tile0 = c <= nb ? (c - 1) * rowsB : (sb0 + (c - 1 - nb) / per) * 248 + (c - 1 - nb) % per * rows;
+                auto src = [&](uint32_t w) { uint32_t tile = tile0 + (w >> 6); return from(64 + ((tile % 248) << 3) + (w & 7), ((tile / 248) << 3) + ((w >> 3) & 7)); };
+                auto dst = [&](uint32_t w) { return to(((c & 31) << 6) + ((w >> 6) << 3) + (w & 7), ((c >> 5) << 3) + ((w >> 3) & 7)); };
+                for (uint32_t w = 0; w < L1; w++) memcpy(dst(w), src(w), 16);
+                for (uint32_t w = 0; w < 8; w++) memcpy(dst(end1 + w), src(end0 + w), 16);
+            }
+            if (count) { geo[1] = count; geo[2] = 5; geo[3] = 0; }
+            for (uint32_t F = 0; F < 3968; F++)
+                for (uint32_t j = 0; j < 8; j++) {
+                    uint32_t w = F * 8 + j, k = 8 + (F >> 4), i = F & 15;
+                    memcpy(to(((k & 31) << 6) + 40 + ((i >> 3) << 3) + j, ((k >> 5) << 3) + (i & 7)), from(w & 2047, 48 + (w >> 11)), 16);
+                }
+            memcpy(hdr.magic, rvlayout::kSnapshotMagic, 8);
+            fprintf(stderr, "[harness] %s: laid out anew from the strips of before\n", opt.loadState.c_str());
         }
         if (!ok || memcmp(hdr.magic, rvlayout::kSnapshotMagic, 8) != 0 || hdr.width != W || hdr.height > H ||
             snap.size() != sizeof hdr + (size_t)W * hdr.height * 16) {
@@ -1860,7 +1875,7 @@ int main(int argc, char** argv) {
                 mat.setInt("_ZapZones", z[7]);
             }
             // bit 0: start the desktop at boot; then the largest screen this host shows, in 16s of pixels
-            mat.setInt("_HostFlags", (opt.desktop ? 1 : 0) | (opt.tabs ? 2 : 0) | opt.workers << 2 | (kGpuTarget / 16) << 8 | (kGpuTarget / 16) << 16);
+            mat.setInt("_HostFlags", (opt.desktop ? 1 : 0) | (opt.tabs ? 2 : 0) | (kGpuTarget / 16) << 8 | (kGpuTarget / 16) << 16);
             // the host's words: the harness, one visitor (number 1); a head that looks straight on from the seat's eye point
             mat.setInt("_HostState0", 1 | (opt.holodeck ? 16 : 0) | (opt.holodeckHands ? 32 : 0) | 1 << 8 | 1 << 16);
             mat.setInt("_HostState1", 0);
@@ -2321,7 +2336,7 @@ int main(int argc, char** argv) {
         if (ok && cpuRunning) {
             // (--cpu: the processor's state put where the shader machine keeps it, its clock the guest's)
             if (cpuemu::prof::on) cpuemu::prof::report();
-            int workers = cpuSnapshotCores(data, W, opt.workers ? 1u << opt.workers : 2u);   // (2: geotune's pick on this card)
+            int workers = cpuSnapshotCores(data, W);
             hdr.time = cpuemu::guest_seconds;
             hdr.sentTag = cpuemu::word(rvlayout::kCon);
             hdr.sentChar = cpuemu::word(rvlayout::kCon + 4);
@@ -2357,22 +2372,19 @@ int main(int argc, char** argv) {
                     timeSum[1] / timeSamples, timeSum[2] / timeSamples, 1000.0 * secs / (double)frames);
     }
     if (opt.cores > 1) {
-        // each core's state: what it is doing as the run ends. Core 0's is at the left; a
-        // worker's rows of the strip beside it are where the geometry (control texel 0x3d) puts them.
+        // each core's state: what it is doing as the run ends, in its slot
         std::vector<uint8_t> blocks;
         if (backend.readState(2048, 64, blocks) && blocks.size() >= (size_t)2048 * 64 * 16 && row.size() >= (64 + 0x40) * 16) {
             const uint32_t* all = (const uint32_t*)blocks.data();
             const uint32_t* geo = (const uint32_t*)row.data() + (64 + 0x3d) * 4;
             // the geometry: how many workers, and their caches' size (all alike)
-            unsigned workers = geo[1], bits = geo[2] >= 3 && geo[2] <= 6 ? geo[2] : 0;
-            unsigned rows = bits ? (44 + 8 + ((7u << bits) >> 2) * 4 + 63) / 64 : 0, per = rows ? 248 / rows : 1;
+            unsigned workers = geo[1], bits = geo[2] >= 3 && geo[2] <= 5 ? geo[2] : 0;
             uint64_t workersRan = 0;
             for (int c = 0; c < opt.cores; ++c) {
-                if (c != 0 && (!rows || (unsigned)c > workers)) continue;
-                // texel w (below 64) of the core's state: a worker's is in the first 8 x 8 tile of its strip
-                unsigned band = (unsigned)(c - 1) / per, at = (unsigned)(c - 1) % per * rows;
+                if (c != 0 && (!bits || (unsigned)c > workers)) continue;
+                // texel w (below 64) of the core's state: core 0's first row, or a worker's first tile
                 auto texel = [&](unsigned w) {
-                    size_t x = c == 0 ? w : 64 + at * 8 + (w & 7), y = c == 0 ? 0 : band * 8 + (w >> 3);
+                    size_t x = c == 0 ? w : ((c & 31) << 6) + (w & 7), y = c == 0 ? 0 : ((size_t)(c >> 5) << 3) + (w >> 3);
                     return all + (y * 2048 + x) * 4;
                 };
                 uint32_t word = texel(41)[3];

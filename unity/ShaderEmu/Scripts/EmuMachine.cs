@@ -27,7 +27,7 @@ public class EmuMachine : UdonSharpBehaviour
     // The tick is a camera's pass into eight targets, eight state texels a pixel, and what the
     // cores stored is committed as points by another camera (docs/machine/multicore.md, "In Unity").
     public Camera tickCamera;               // disabled: rendered from here, once a round
-    public RenderTexture[] tickTargets;     // eight of 1040 x 32
+    public RenderTexture[] tickTargets;     // eight of 2048 x 16
     public RenderTexture tickDepth;         // the depth buffer a camera with several targets must be given
     public Camera pointsCamera;             // disabled: rendered from here, twice a round (Commit)
     public Material pointsMaterial;         // MachineCommitPoints.shader, on the points camera's mesh
@@ -98,11 +98,6 @@ public class EmuMachine : UdonSharpBehaviour
     public TextMeshProUGUI modeLabel;  // on the button that picks how the slider is read
     public Slider tickSlider;          // instructions a tick (a round's pass): 1,024 doubled per step
     public TextMeshProUGUI tickLabel;  // and how much of it core 0 really runs, lately
-    // The workers' layout geotune makes at boot (docs/machine/multicore.md, "Packing the small workers"):
-    // its own pick, or 2, 4 or 8 columns a small worker; the keys, and what it picked and runs.
-    public Image[] workerPlates;
-    public Color workerPlain, workerPicked;
-    public TextMeshProUGUI workersLabel;
     public float minFrameRate = 45f;   // "steady" gives up instructions before frames come slower than this
     public bool powerOnAtStart;        // off until someone presses Power
     // A real client's test (docs/system/fetch.md, "Hosts"): with fetchTest on, the
@@ -182,8 +177,6 @@ public class EmuMachine : UdonSharpBehaviour
     private float reached = 1f;             // of a pass's instructions, what core 0 ran, lately
     // Steady: so many instructions a second, however long a frame is, as far as the frame rate allows.
     private bool steady;
-    private int workerPreset, workerPresetBooted, geoBits;   // 0 geotune's pick, 1-3 blocks of 2, 4, 8 columns
-    private uint geoFirst, geoHybrid;
     private float targetIps = 2000000f;
     private int roundCap = MaxRounds, guardWait, steadyRounds = 1;
     private float smoothDt = 0.011f, carry;
@@ -333,41 +326,6 @@ public class EmuMachine : UdonSharpBehaviour
         SpeedChanged();
     }
 
-    public void WorkersAuto() { PickWorkers(0); }
-    public void WorkersDense() { PickWorkers(1); }
-    public void WorkersMedium() { PickWorkers(2); }
-    public void WorkersWide() { PickWorkers(3); }
-
-    // Asked for at the next power-on: the layout may change only while no program has workers.
-    private void PickWorkers(int preset)
-    {
-        workerPreset = preset;
-        ShowWorkers();
-    }
-
-    private static string PresetName(int preset)
-    {
-        return preset == 1 ? "Dense" : preset == 2 ? "Medium" : preset == 3 ? "Wide" : "Auto";
-    }
-
-    // What geotune laid out (the geometry texel at 0x810003d0): its pick and ratio in the first
-    // word's high bits, the small workers' cache bits and block width.
-    private void ShowWorkers()
-    {
-        if (workerPlates != null)
-            for (int i = 0; i < workerPlates.Length; i++)
-                if (workerPlates[i] != null) workerPlates[i].color = i == workerPreset ? workerPicked : workerPlain;
-        if (workersLabel == null) return;
-        int picked = (int)((geoFirst >> 8) & 0xff), ratio = (int)(geoFirst >> 16), width = (int)((geoHybrid >> 16) & 0xff);
-        string auto = picked == 0 ? "Auto: measured at power-on"
-                    : "Auto picked " + PresetName(picked == 2 ? 1 : picked == 4 ? 2 : 3) + ", " + (ratio / 100) + "." + (ratio % 100).ToString("00") + " times";
-        string running = !powered || picked == 0 ? "" : "\nRunning " + PresetName(width == 2 ? 1 : width == 4 ? 2 : 3);
-        if (running != "")
-            running += workerPreset != workerPresetBooted ? "; Reset applies " + PresetName(workerPreset)
-                     : width == 8 ? ", all workers 2^" + geoBits : ", small workers 2^" + geoBits;
-        workersLabel.text = auto + running;
-    }
-
     public void SpeedMode()
     {
         steady = !steady;
@@ -435,7 +393,6 @@ public class EmuMachine : UdonSharpBehaviour
         if (powerSays != null) powerSays.text = powered ? "Running. Press to switch off." : "Off. Press to start.";
         if (pauseLabel != null) pauseLabel.text = paused ? "Resume" : "Pause";
         displayMaterial.SetFloat("_Power", powered ? 1f : 0f);
-        ShowWorkers();
         ShowDisplay();
     }
 
@@ -596,10 +553,7 @@ public class EmuMachine : UdonSharpBehaviour
         // the host flags: the desktop at boot, and the largest screen the GPU's target can show
         // (in 16s of pixels: the word must stay within what a material's number holds exactly)
         RenderTexture target = gpuCamera.targetTexture;
-        // (bits 2-3: the workers' preset, read by geotune)
-        workerPresetBooted = workerPreset;
-        geoFirst = geoHybrid = 0;
-        machineMaterial.SetInt("_HostFlags", 3 | workerPreset << 2 | (target.width / 16) << 8 | (target.height / 16) << 16);
+        machineMaterial.SetInt("_HostFlags", 3 | (target.width / 16) << 8 | (target.height / 16) << 16);
         VRCPlayerApi player = Networking.LocalPlayer;
         tickMaterial.SetInt("_PlayerID", player != null ? player.playerId : 0);
         if (consoleKeyboard != null) consoleKeyboard.Flush();
@@ -1875,15 +1829,6 @@ public class EmuMachine : UdonSharpBehaviour
             workerClock[c] = now;
         }
         haveWorkerClock = cores > 1;
-        // the geometry: what geotune picked and laid out, shown when it changes
-        uint first = Word(64 + 0x3d, 0), hybrid = Word(64 + 0x3d, 3);
-        if (first != geoFirst || hybrid != geoHybrid)
-        {
-            geoFirst = first;
-            geoHybrid = hybrid;
-            geoBits = (int)Word(64 + 0x3d, 2);
-            ShowWorkers();
-        }
     }
 
     // What the guest printed in the round at rowAt: the console ring's bytes since the last round.
