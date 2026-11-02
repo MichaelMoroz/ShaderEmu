@@ -1,0 +1,296 @@
+diff --git a/code/client/cl_cin.cpp b/code/client/cl_cin.cpp
+index 7cf2db8c..e8dc8ba1 100644
+--- a/code/client/cl_cin.cpp
++++ b/code/client/cl_cin.cpp
+@@ -1846,6 +1846,16 @@ static void PlayCinematic(const char *arg, const char *s, qboolean qbInGame)
+ 	arg = &sTemp[0];
+ 
+ 	extern qboolean S_FileExists( const char *psFilename );
++#ifdef SHADEREMU
++	// no films yet (docs/games/jk2.md): JK2_CINEMATICS=play plays them; otherwise one is as a film that could not be
++	// opened, and the game goes on at once (an in-game film pauses the game until it ends or a key is pressed)
++	const char *se_cin = getenv( "JK2_CINEMATICS" );
++	if (!( se_cin && !strcmp( se_cin, "play" ) ))
++	{
++		bFailed = qtrue;
++	}
++	else
++#endif
+ 	if (S_FileExists( arg ))
+ 	{
+ 		SCR_StopCinematic();
+@@ -1883,7 +1893,10 @@ static void PlayCinematic(const char *arg, const char *s, qboolean qbInGame)
+ 		{
+ 			psAudioFile = "music/cinematic_1";
+ #ifdef JK2_MODE
+-			hCrawl = re.RegisterShaderNoMip( va("menu/video/tc_%d", sp_language->integer) );
++			if ( Cvar_VariableIntegerValue( "com_demo" ) )
++				hCrawl = re.RegisterShaderNoMip( "menu/video/tc_demo" );	// the demo's crawl
++			else
++				hCrawl = re.RegisterShaderNoMip( va("menu/video/tc_%d", sp_language->integer) );
+ 			if(!hCrawl)
+ 			{
+ 				// failed, so go back to english
+diff --git a/code/qcommon/common.cpp b/code/qcommon/common.cpp
+index aeaff246..187184e5 100644
+--- a/code/qcommon/common.cpp
++++ b/code/qcommon/common.cpp
+@@ -1133,7 +1133,14 @@ void Com_Init( char *commandLine ) {
+ 		com_speedslog = Cvar_Get ("speedslog", "0", CVAR_TEMP );
+ 
+ 		com_timescale = Cvar_Get ("timescale", "1", CVAR_CHEAT );
++#ifdef SHADEREMU
++		// not a cheat here: a frame of N ms whatever it took is how two runs, and the build computer's program and
++		// the machine's, play the same game (linux/jk2/sys_shaderemu.cpp, JK2_SUM); a map started without cheats
++		// would otherwise put it back to 0
++		com_fixedtime = Cvar_Get ("fixedtime", "0", 0);
++#else
+ 		com_fixedtime = Cvar_Get ("fixedtime", "0", CVAR_CHEAT);
++#endif
+ 		com_showtrace = Cvar_Get ("com_showtrace", "0", CVAR_CHEAT);
+ 		com_speeds = Cvar_Get ("com_speeds", "0", 0);
+ 
+diff --git a/code/qcommon/z_memman_pc.cpp b/code/qcommon/z_memman_pc.cpp
+index d0051ed6..79a87628 100644
+--- a/code/qcommon/z_memman_pc.cpp
++++ b/code/qcommon/z_memman_pc.cpp
+@@ -627,6 +627,16 @@ int Z_MemSize(memtag_t eTag)
+ 	return TheZone.Stats.iSizesPerTag[eTag];
+ }
+ 
++#ifdef SHADEREMU
++// the zone's bytes now and at most, and its blocks (linux/jk2/sys_shaderemu.cpp's jk2stat: line)
++int SE_ZoneBytes( int *peak, int *blocks )
++{
++	*peak = TheZone.Stats.iPeak;
++	*blocks = TheZone.Stats.iCount;
++	return TheZone.Stats.iCurrent;
++}
++#endif
++
+ // Frees all blocks with the specified tag...
+ //
+ void Z_TagFree(memtag_t eTag)
+diff --git a/code/rd-vanilla/tr_WorldEffects.cpp b/code/rd-vanilla/tr_WorldEffects.cpp
+index 5464b70b..29de8e86 100644
+--- a/code/rd-vanilla/tr_WorldEffects.cpp
++++ b/code/rd-vanilla/tr_WorldEffects.cpp
+@@ -1035,7 +1035,13 @@ public:
+ 		mImage = R_FindImageFile(texturePath, qfalse, qfalse, qfalse, GL_CLAMP);
+ 		if (!mImage)
+ 		{
++#ifdef JK2_MODE
++			// Jedi Outcast's snow was untextured points (jk2-1.04-src's CSnowSystem), and its demo has no picture
++			// of a snowflake (fx_snow): a white one, not the end of the level
++			mImage = tr.whiteImage;
++#else
+ 			Com_Error(ERR_DROP, "CParticleCloud: Could not texture %s", texturePath);
++#endif
+ 		}
+ 
+ 		GL_Bind(mImage);
+diff --git a/code/server/sv_game.cpp b/code/server/sv_game.cpp
+index 8cd596fb..b8e4be48 100644
+--- a/code/server/sv_game.cpp
++++ b/code/server/sv_game.cpp
+@@ -1084,7 +1084,21 @@ void SV_InitGameProgs (void) {
+ 
+ 	// use the current msec count for a random seed
+ 	Z_TagFree(TAG_G_ALLOC);
++#ifdef SHADEREMU
++	// JK2_SEED: the game's random numbers from it, not from the clock (linux/jk2/sys_shaderemu.cpp: two runs compared)
++	const char *se_seed = getenv( "JK2_SEED" );
++	ge->Init( sv_mapname->string, sv_spawntarget->string, sv_mapChecksum->integer, CM_EntityString(), sv.time,
++		se_seed && *se_seed ? atoi( se_seed ) : com_frameTime, Com_Milliseconds(), eSavedGameJustLoaded, qbLoadTransition );
++#else
++#ifdef SHADEREMU
++	// JK2_SEED: the game's random numbers from it, not from the clock (linux/jk2/sys_shaderemu.cpp: two runs compared)
++	const char *se_seed = getenv( "JK2_SEED" );
++	ge->Init( sv_mapname->string, sv_spawntarget->string, sv_mapChecksum->integer, CM_EntityString(), sv.time,
++		se_seed && *se_seed ? atoi( se_seed ) : com_frameTime, Com_Milliseconds(), eSavedGameJustLoaded, qbLoadTransition );
++#else
+ 	ge->Init( sv_mapname->string, sv_spawntarget->string, sv_mapChecksum->integer, CM_EntityString(), sv.time, com_frameTime, Com_Milliseconds(), eSavedGameJustLoaded, qbLoadTransition );
++#endif
++#endif
+ 
+ 	// clear all gentity pointers that might still be set from
+ 	// a previous level
+diff --git a/code/ui/ui_main.cpp b/code/ui/ui_main.cpp
+index 4a20f0ee..bc231fa6 100644
+--- a/code/ui/ui_main.cpp
++++ b/code/ui/ui_main.cpp
+@@ -1061,7 +1061,7 @@ static qboolean UI_RunMenuScript ( const char **args )
+ 		{
+ 			Menus_CloseAll();
+ #ifdef JK2_MODE
+-			ui.Cmd_ExecuteText( EXEC_APPEND, "map kejim_post\n" );
++			ui.Cmd_ExecuteText( EXEC_APPEND, Cvar_VariableIntegerValue( "com_demo" ) ? "map demo\n" : "map kejim_post\n" );
+ #else
+ 			ui.Cmd_ExecuteText( EXEC_APPEND, "map yavin1\n");
+ #endif
+diff --git a/codeJK2/cgame/cg_info.cpp b/codeJK2/cgame/cg_info.cpp
+index bdb72696..0919f611 100644
+--- a/codeJK2/cgame/cg_info.cpp
++++ b/codeJK2/cgame/cg_info.cpp
+@@ -417,7 +417,7 @@ void CG_DrawInformation( void ) {
+ 		CG_DrawPic( 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, levelshot );
+ 	}
+ 
+-	if ( g_eSavedGameJustLoaded != eFULL && !strcmp(s,"kejim_post") )//special case for first map!
++	if ( g_eSavedGameJustLoaded != eFULL && (!strcmp(s,"kejim_post") || !strcmp(s,"demo")) )//special case for first map! (the demo's too)
+ 	{
+ 		char	text[1024]={0};
+ 		cgi_SP_GetStringTextString( "INGAME_ALONGTIME", text, sizeof(text) );
+diff --git a/codeJK2/game/g_main.cpp b/codeJK2/game/g_main.cpp
+index 671b309a..8401b9ba 100644
+--- a/codeJK2/game/g_main.cpp
++++ b/codeJK2/game/g_main.cpp
+@@ -1482,8 +1482,70 @@ void G_RunFrame( int levelTime ) {
+ 		ValidateInUseBits();
+ 	}
+ #endif
++#ifdef SHADEREMU
++	extern void SE_GameSum( void );
++	SE_GameSum();
++#endif
++}
++
++#ifdef SHADEREMU
++// JK2_SUM=N: a jk2sum: line every N frames of the game, a sum over every entity in use (what it is, its health, where
++// it is and faces, a client's place, speed and weapon, an NPC's behaviour), its places to an eighth of a unit (the
++// build computer's libm and the machine's may differ in the last bit), and the game's random state: the build
++// computer's program and the machine's must print the same lines (docs/games/jk2.md, "Is it the same game")
++static unsigned se_mix( unsigned h, int v )
++{
++	h ^= (unsigned)v;
++	return h * 16777619u;
++}
++
++static int se_eighth( float f )
++{
++	return (int)( f * 8.0f + ( f < 0 ? -0.5f : 0.5f ) );
+ }
+ 
++extern "C" unsigned se_rand_state;    // (linux/jk2/se_rand.c)
++
++void SE_GameSum( void )
++{
++	static int every = -1;
++	if ( every < 0 ) {
++		const char *s = getenv( "JK2_SUM" );
++		every = s && *s ? atoi( s ) : 0;
++	}
++	if ( every <= 0 || level.framenum % every )
++		return;
++	unsigned h = 2166136261u;
++	int count = 0;
++	for ( int i = 0; i < globals.num_entities; i++ ) {
++		gentity_t *e = &g_entities[i];
++		if ( !e->inuse )
++			continue;
++		count++;
++		h = se_mix( h, i );
++		h = se_mix( h, e->s.eType );
++		h = se_mix( h, e->health );
++		for ( int k = 0; k < 3; k++ ) {
++			h = se_mix( h, se_eighth( e->currentOrigin[k] ) );
++			h = se_mix( h, se_eighth( e->currentAngles[k] ) );
++		}
++		if ( e->client ) {
++			for ( int k = 0; k < 3; k++ ) {
++				h = se_mix( h, se_eighth( e->client->ps.origin[k] ) );
++				h = se_mix( h, se_eighth( e->client->ps.velocity[k] ) );
++			}
++			h = se_mix( h, e->client->ps.weapon );
++			h = se_mix( h, e->client->ps.legsAnim );
++			h = se_mix( h, e->client->ps.torsoAnim );
++		}
++		if ( e->NPC )
++			h = se_mix( h, e->NPC->behaviorState );
++	}
++	h = se_mix( h, (int)se_rand_state );
++	gi.Printf( "jk2sum: frame %d time %d entities %d sum %08x\n", level.framenum, level.time, count, h );
++}
++#endif
++
+ 
+ 
+ extern qboolean player_locked;
+diff --git a/shared/sys/sys_loadlib.h b/shared/sys/sys_loadlib.h
+index 97d2ef4f..1588a702 100644
+--- a/shared/sys/sys_loadlib.h
++++ b/shared/sys/sys_loadlib.h
+@@ -35,6 +35,15 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
+ #		define Sys_LoadFunction(h,fn) dlsym(h,fn)
+ #		define Sys_LibraryError() dlerror()
+ #	endif
++#elif defined(SHADEREMU)
++	// the game and the renderer are linked in (linux/jk2/sys_shaderemu.cpp), and there is no SDL
++	void *SE_LoadLibrary( const char *name );
++	void SE_UnloadLibrary( void *handle );
++	void *SE_LoadFunction( void *handle, const char *name );
++#	define Sys_LoadLibrary(f) SE_LoadLibrary(f)
++#	define Sys_UnloadLibrary(h) SE_UnloadLibrary(h)
++#	define Sys_LoadFunction(h,fn) SE_LoadFunction(h,fn)
++#	define Sys_LibraryError() "not linked in"
+ #else
+ #	include <SDL.h>
+ #	include <SDL_loadso.h>
+diff --git a/shared/sys/sys_main.cpp b/shared/sys/sys_main.cpp
+index 16be5458..d88df943 100644
+--- a/shared/sys/sys_main.cpp
++++ b/shared/sys/sys_main.cpp
+@@ -101,7 +101,7 @@ Sys_GetClipboardData
+ ==================
+ */
+ char *Sys_GetClipboardData( void ) {
+-#ifdef DEDICATED
++#if defined(DEDICATED) || defined(SHADEREMU)
+ 	return NULL;
+ #else
+ 	if ( !SDL_HasClipboardText() )
+@@ -171,7 +171,7 @@ void Sys_Init( void ) {
+ 
+ static void NORETURN Sys_Exit( int ex ) {
+ 	IN_Shutdown();
+-#ifndef DEDICATED
++#if !defined(DEDICATED) && !defined(SHADEREMU)
+ 	SDL_Quit();
+ #endif
+ 
+@@ -184,10 +184,16 @@ static void NORETURN Sys_Exit( int ex ) {
+ 
+ 	CON_Shutdown();
+ 
++#ifdef SHADEREMU
++	// (the C library's exit runs the linked-in modules' destructors, one of which is a null pointer: what was to be
++	// written is written by now)
++	extern void NORETURN SE_Exit( int code );
++	SE_Exit( ex );
++#endif
+     exit( ex );
+ }
+ 
+-#if !defined(DEDICATED)
++#if !defined(DEDICATED) && !defined(SHADEREMU)
+ static void Sys_ErrorDialog( const char *error )
+ {
+ 	time_t rawtime;
+@@ -247,7 +253,7 @@ void NORETURN QDECL Sys_Error( const char *error, ... )
+ 	// Only print Sys_ErrorDialog for client binary. The dedicated
+ 	// server binary is meant to be a command line program so you would
+ 	// expect to see the error printed.
+-#if !defined(DEDICATED)
++#if !defined(DEDICATED) && !defined(SHADEREMU)
+ 	Sys_ErrorDialog( string );
+ #endif
+ 
+@@ -779,7 +785,7 @@ int main ( int argc, char* argv[] )
+ 
+ 	Com_Init (commandLine);
+ 
+-#ifndef DEDICATED
++#if !defined(DEDICATED) && !defined(SHADEREMU)
+ 	SDL_version compiled;
+ 	SDL_version linked;
+ 

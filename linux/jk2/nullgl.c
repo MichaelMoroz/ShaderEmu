@@ -1,0 +1,83 @@
+/* The OpenGL 1.1 calls OpenJK's renderer (code/rd-vanilla) makes, doing nothing: the "null" picture of the plan's
+   steps 0 and 1 (docs/games/jk2.md), on the build computer and on the machine. Everything the renderer does but
+   draw still happens: the level, shaders, images and Ghoul2 models are loaded, the scene is built and sorted, the
+   models' bones and vertices are made. What a call answers is what the renderer needs to take its plain paths: no
+   extension, one texture unit, textures up to 2048 texels. The list is what `nm -u` gives for the renderer's objects. */
+#include <string.h>
+
+typedef unsigned int GLenum;
+typedef int GLint;
+typedef float GLfloat;
+typedef unsigned char GLubyte;
+typedef unsigned int GLuint;
+
+#define NOTHING(name) void name(void) {}
+NOTHING(glAlphaFunc) NOTHING(glArrayElement) NOTHING(glBegin) NOTHING(glBindTexture) NOTHING(glBlendFunc)
+NOTHING(glCallList) NOTHING(glClear) NOTHING(glClearColor) NOTHING(glClearDepth) NOTHING(glClearStencil)
+NOTHING(glClipPlane) NOTHING(glColor3f) NOTHING(glColor4f) NOTHING(glColor4ub) NOTHING(glColor4ubv)
+NOTHING(glColorMask) NOTHING(glColorPointer) NOTHING(glCopyTexImage2D) NOTHING(glCopyTexSubImage2D)
+NOTHING(glCullFace) NOTHING(glDeleteLists) NOTHING(glDeleteTextures) NOTHING(glDepthFunc) NOTHING(glDepthMask)
+NOTHING(glDepthRange) NOTHING(glDisable) NOTHING(glDisableClientState) NOTHING(glDrawArrays) NOTHING(glDrawBuffer)
+NOTHING(glDrawElements) NOTHING(glEnable) NOTHING(glEnableClientState) NOTHING(glEnd) NOTHING(glEndList)
+NOTHING(glFinish) NOTHING(glLineWidth) NOTHING(glLoadIdentity) NOTHING(glLoadMatrixf) NOTHING(glMatrixMode)
+NOTHING(glNewList) NOTHING(glOrtho) NOTHING(glPolygonMode) NOTHING(glPolygonOffset) NOTHING(glPopMatrix)
+NOTHING(glPushMatrix) NOTHING(glScissor) NOTHING(glShadeModel) NOTHING(glStencilFunc) NOTHING(glStencilMask)
+NOTHING(glStencilOp) NOTHING(glTexCoord2f) NOTHING(glTexCoord2fv) NOTHING(glTexCoordPointer) NOTHING(glTexEnvf)
+NOTHING(glTexImage2D) NOTHING(glTexParameterf) NOTHING(glTexParameterfv) NOTHING(glTexParameteri)
+NOTHING(glTexSubImage2D) NOTHING(glTranslatef) NOTHING(glVertex2f) NOTHING(glVertex3f) NOTHING(glVertex3fv)
+NOTHING(glVertexPointer) NOTHING(glViewport)
+
+static GLuint lists = 1;
+
+GLuint glGenLists(int range)
+{
+    GLuint first = lists;
+    lists += range;
+    return first;
+}
+
+GLenum glGetError(void)
+{
+    return 0;
+}
+
+unsigned char glIsEnabled(GLenum cap)
+{
+    (void)cap;
+    return 0;
+}
+
+const GLubyte *glGetString(GLenum name)
+{
+    switch (name) {
+    case 0x1F00: return (const GLubyte *)"ShaderEmu";       /* GL_VENDOR */
+    case 0x1F01: return (const GLubyte *)"null";            /* GL_RENDERER */
+    case 0x1F02: return (const GLubyte *)"1.1";             /* GL_VERSION */
+    default: return (const GLubyte *)"";                    /* GL_EXTENSIONS: none */
+    }
+}
+
+void glGetIntegerv(GLenum name, GLint *v)
+{
+    switch (name) {
+    case 0x0D33: *v = 2048; break;      /* GL_MAX_TEXTURE_SIZE */
+    case 0x84E2: *v = 1; break;         /* GL_MAX_TEXTURE_UNITS_ARB */
+    case 0x0D05: case 0x0CF5: *v = 4; break;   /* GL_PACK_ALIGNMENT, GL_UNPACK_ALIGNMENT (0 made the screenshot of a save divide by it) */
+    case 0x0BA2: v[0] = v[1] = 0; v[2] = 640; v[3] = 480; break;  /* GL_VIEWPORT */
+    default: *v = 0; break;
+    }
+}
+
+void glGetFloatv(GLenum name, GLfloat *v)
+{
+    (void)name;
+    memset(v, 0, 16 * sizeof(GLfloat));   /* (the largest answer is a matrix) */
+}
+
+/* a black picture, for a saved game's screenshot (the rows padded to 4 bytes) */
+void glReadPixels(GLint x, GLint y, int width, int height, GLenum format, GLenum type, void *pixels)
+{
+    int bytes = format == 0x1907 ? 3 : 4;      /* GL_RGB, else GL_RGBA */
+    (void)x; (void)y; (void)type;
+    memset(pixels, 0, (size_t)((width * bytes + 3) & ~3) * height);
+}

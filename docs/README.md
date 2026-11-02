@@ -53,6 +53,7 @@ One file per subject. A doc names another by its file name, which is unique acro
 - [classicube.md](games/classicube.md) – ClassiCube
 - [doom.md](games/doom.md) – Doom
 - [halflife.md](games/halflife.md) – Half-Life: Uplink
+- [jk2.md](games/jk2.md) – Jedi Knight II: Jedi Outcast, the 2002 demo (begun: the build computer only, private images only)
 - [micropolis.md](games/micropolis.md) – Micropolis
 - [nes.md](games/nes.md) – A NES
 - [openttd.md](games/openttd.md) – OpenTTD
@@ -78,6 +79,7 @@ One file per subject. A doc names another by its file name, which is unique acro
 - [aoe-plan.md](plans/aoe-plan.md) – Plan: Age of Empires, the 1997 trial
 - [blitter-plan.md](plans/blitter-plan.md) – Plan: a blitter in the commit pass
 - [cpu-benchmarks-plan.md](plans/cpu-benchmarks-plan.md) – Plan: the benchmarks of the era, on the machine
+- [jk2-plan.md](plans/jk2-plan.md) – Plan: Star Wars Jedi Knight II: Jedi Outcast, the 2002 demo
 - [simd-lanes-plan.md](plans/simd-lanes-plan.md) – Plan: lanes, a worker's pixels each on an index of their own
 - [original-x86-plan.md](plans/original-x86-plan.md) – Windows in a VRChat Shader — Project Handoff
 - [riscv-backport-plan.md](plans/riscv-backport-plan.md) – What gpu_vm's week can give the RISC-V machine (28 October 2026)

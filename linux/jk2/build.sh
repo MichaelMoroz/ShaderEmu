@@ -1,0 +1,197 @@
+#!/usr/bin/env bash
+# Builds Star Wars Jedi Knight II: Jedi Outcast's single player (OpenJK's JK2 code, GPL-2.0) as one program: the engine
+# (code/ with JK2_MODE), the game with its client's game (codeJK2/) and the renderer with Ghoul2 (code/rd-vanilla) linked
+# in, and a platform layer of our own (sys_shaderemu.cpp). docs/games/jk2.md.
+#   JK2_HOST=1 bash linux/jk2/build.sh     the build computer's own program, with no window, no picture and no sound
+#                                          (WSL; a folder of its own, $JK2_WORK or ~/jk2-host): the demo's level loads
+#                                          and plays there, and its sums are the machine's to match
+#   bash linux/jk2/build.sh                for the machine, with OpenTTD's C++ compiler (linux/openttd/toolchain.sh):
+#                                          written, not yet built (docs/games/jk2.md, "What is left")
+# Nothing of the demo is here: linux/jk2/data.py fetches it, and puts it into an image only when asked.
+#   JK2_TREE=keep          the tree as it stands, for writing the patch: (cd TREE && git diff -- code codeJK2 shared) > linux/jk2/jk2.patch
+#   JK2_OUT=DIR            where the program goes (usr/bin/jk2.bin), for the machine; the host's stays in its folder
+#   JK2_JOBS=N             compilers at once (4)
+#   JK2_CFLAGS=, JK2_LINK= more flags for every compile, for the link (-fsanitize=address on the host, with JK2_WORK=DIR
+#                          and JK2_SRC=the tree: a build of its own)
+set -euo pipefail
+HERE=$(cd "$(dirname "$0")" && pwd)
+REPO=$(cd "$HERE/../.." && pwd)
+COMMIT=260c59c2907187af555a676fe0cc798893bf7757
+JOBS=${JK2_JOBS:-4}
+T0=$(date +%s); step() { echo "== [$(( $(date +%s) - T0 )) s] $*"; }
+
+if [ "${JK2_HOST:-}" = 1 ]; then
+    WORK=${JK2_WORK:-$HOME/jk2-host}
+    mkdir -p "$WORK"
+    CC=gcc; CXX=g++; LD=ld; OBJCOPY=objcopy; NM=nm; ARCH=x86_64
+    # the machine's float flags (below), so that the game computes the same: its sums are compared
+    OPT="-O2 -g -fno-strict-aliasing -fno-math-errno -fsingle-precision-constant -ffp-contract=off ${JK2_CFLAGS:-}"
+    LIBS="-lm ${JK2_LINK:-}"
+    BUILD=$WORK/build
+    OUT=$WORK
+else
+    source "$HERE/../openttd/toolchain.sh"      # ottd-cc, ottd-c++ ($WORK, $CXXTC)
+    CC=ottd-cc; CXX=ottd-c++; T=riscv32-linux-musl
+    LD=$CXXTC/bin/$T-ld; OBJCOPY=$CXXTC/bin/$T-objcopy; NM=$CXXTC/bin/$T-nm; ARCH=riscv32
+    # Quake's flags (linux/quake/build.sh): floats only, a variable a section of its own on 16 bytes
+    OPT="-O2 -fno-strict-aliasing -fno-math-errno -fsingle-precision-constant -fno-common -fdata-sections ${JK2_CFLAGS:-}"
+    LIBS="-lm ${JK2_LINK:-}"
+    BUILD=$WORK/src/jk2-build
+    OUT=${JK2_OUT:-$REPO/build/jk2/out}
+fi
+SRC=${JK2_SRC:-$WORK/src/openjk}
+mkdir -p "$WORK/src" "$BUILD"
+
+if [ ! -d "$SRC/.git" ]; then
+    step "OpenJK ${COMMIT:0:8}"
+    git clone -q https://github.com/JACoders/OpenJK.git "$SRC"
+fi
+# the tree is OpenJK's commit plus our patch, put there again on every build; only files whose text changes are
+# written, so that a header the patch touches does not build everything again (OpenTTD's way)
+put() { cmp -s "$1" "$2" || cp "$1" "$2"; }
+if [ "${JK2_TREE:-}" != keep ]; then
+    git -C "$SRC" cat-file -e "$COMMIT^{commit}" 2>/dev/null || git -C "$SRC" fetch -q origin
+    P=$(mktemp -d); OLD=$SRC/.shaderemu-files
+    : > "$P.files"
+    if [ -s "$HERE/jk2.patch" ]; then
+        git -C "$SRC" apply --numstat "$HERE/jk2.patch" | cut -f3 > "$P.files"
+        while read -r f; do mkdir -p "$P/$(dirname "$f")"; git -C "$SRC" show "$COMMIT:$f" > "$P/$f"; done < "$P.files"
+        (cd "$P" && git apply "$HERE/jk2.patch")
+        while read -r f; do put "$P/$f" "$SRC/$f"; done < "$P.files"
+    fi
+    for f in $( [ -f "$OLD" ] && grep -vxFf "$P.files" "$OLD" ); do git -C "$SRC" checkout -q "$COMMIT" -- "$f"; done
+    mv "$P.files" "$OLD"; rm -rf "$P"
+fi
+S=$SRC
+
+# q_version.h, which CMake would make: one date, so that the same sources are the same program
+mkdir -p "$BUILD/shared/qcommon"
+printf '#define SOURCE_DATE "2026-11-02"\n#define GIT_TAG "%s-shaderemu"\n' "${COMMIT:0:8}" > "$BUILD/shared/qcommon/q_version.h.new"
+put "$BUILD/shared/qcommon/q_version.h.new" "$BUILD/shared/qcommon/q_version.h"; rm "$BUILD/shared/qcommon/q_version.h.new"
+# GL's declarations, for the renderer: the Mesa header SDL carries (MIT), without SDL's own configuration; the GL calls
+# themselves are nullgl.c's (no picture) or, later, the machine's
+mkdir -p "$BUILD/include/GL"
+printf '#pragma once\n#define SDL_config_h_\n#define GL_GLEXT_LEGACY\n#include "%s/lib/SDL2/include/SDL_opengl.h"\n' "$S" > "$BUILD/include/GL/gl.h.new"
+put "$BUILD/include/GL/gl.h.new" "$BUILD/include/GL/gl.h"; rm "$BUILD/include/GL/gl.h.new"
+[ -f "$BUILD/include/GL/glx.h" ] || printf '#pragma once\n' > "$BUILD/include/GL/glx.h"    # (qgl.h asks for it on Linux, and uses none of it)
+
+printf '#define ARCH_STRING "%s"\n' "$ARCH" > "$BUILD/shared/se_arch.h.new"; put "$BUILD/shared/se_arch.h.new" "$BUILD/shared/se_arch.h"; rm "$BUILD/shared/se_arch.h.new"
+COMMON="-include $BUILD/shared/se_arch.h -DFINAL_BUILD -DSHADEREMU -DNDEBUG -fsigned-char -w -I$BUILD/shared -I$S/shared -I$S/lib/gsl-lite/include"
+CXXSTD="-std=c++14"
+
+ENGINE="client/cl_cgame client/cl_cin client/cl_console client/cl_input client/cl_keys client/cl_main client/cl_mp3
+    client/cl_parse client/cl_scrn client/cl_ui client/snd_ambient client/snd_dma client/snd_mem client/snd_mix client/snd_music
+    client/vmachine qcommon/cm_load qcommon/cm_patch qcommon/cm_polylib qcommon/cm_test qcommon/cm_trace qcommon/cmd
+    qcommon/common qcommon/cvar qcommon/files qcommon/md4 qcommon/msg qcommon/net_chan qcommon/q_shared
+    qcommon/stringed_ingame qcommon/stringed_interface qcommon/strip qcommon/persistence qcommon/z_memman_pc
+    qcommon/ojk_saved_game server/exe_headers server/sv_ccmds server/sv_client server/sv_game server/sv_init server/sv_main
+    server/sv_savegame server/sv_snapshot server/sv_world game/genericparser2 ui/ui_atoms ui/ui_connect ui/ui_main
+    ui/ui_saber ui/ui_shared ui/ui_syscalls"
+MP3="cdct csbt csbtb csbtl3 cup cupini cupl1 cupl3 cwin cwinb cwinm hwin l3dq l3init mdct mhead msis towave uph upsf wavep"
+SHARED_C="qcommon/q_color qcommon/q_math qcommon/q_string"
+SHARED_CXX="qcommon/safe/files qcommon/safe/string"
+ZLIB="adler32 compress crc32 deflate inffast inflate inftrees trees uncompr zutil"
+GAME="AI_Atst AI_Default AI_Droid AI_GalakMech AI_Grenadier AI_Howler AI_ImperialProbe AI_Interrogator AI_Jedi AI_Mark1
+    AI_Mark2 AI_MineMonster AI_Remote AI_Seeker AI_Sentry AI_Sniper AI_Stormtrooper AI_Utils G_Timer NPC NPC_behavior
+    NPC_combat NPC_goal NPC_misc NPC_move NPC_reactions NPC_senses NPC_sounds NPC_spawn NPC_stats NPC_utils Q3_Interface
+    Q3_Registers bg_misc bg_pangles bg_panimate bg_pmove bg_slidemove g_ICARUS g_active g_breakable g_camera g_client
+    g_cmds g_combat g_functions g_fx g_inventory g_itemLoad g_items g_main g_mem g_misc g_misc_model g_missile g_mover
+    g_nav g_navnew g_navigator g_object g_objectives g_ref g_roff g_savegame g_session g_spawn g_svcmds g_target
+    g_trigger g_turret g_usable g_utils g_weapon g_weaponLoad genericparser2 wp_atst wp_blaster_rifle wp_bot_laser
+    wp_bowcaster wp_bryar_pistol wp_demp2 wp_det_pack wp_disruptor wp_emplaced_gun wp_flechette wp_melee wp_repeater
+    wp_rocket_launcher wp_saber wp_stun_baton wp_thermal wp_trip_mine"
+CGAME="FX_ATSTMain FX_Blaster FX_Bowcaster FX_BryarPistol FX_DEMP2 FX_Disruptor FX_Emplaced FX_Flechette FX_HeavyRepeater
+    FX_RocketLauncher FxPrimitives FxScheduler FxSystem FxTemplate FxUtil cg_camera cg_consolecmds cg_credits cg_draw
+    cg_drawtools cg_effects cg_ents cg_event cg_info cg_lights cg_localents cg_main cg_marks cg_players cg_playerstate
+    cg_predict cg_scoreboard cg_servercmds cg_snapshot cg_syscalls cg_text cg_view cg_weapons"
+ICARUS="BlockStream Sequence Sequencer TaskManager Instance"
+RENDERER="rd-vanilla/G2_API rd-vanilla/G2_bolts rd-vanilla/G2_bones rd-vanilla/G2_misc rd-vanilla/G2_surfaces qcommon/matcomp
+    qcommon/q_shared rd-vanilla/tr_arb rd-vanilla/tr_backend rd-vanilla/tr_bsp rd-vanilla/tr_cmds rd-vanilla/tr_curve
+    rd-vanilla/tr_draw rd-vanilla/tr_ghoul2 rd-vanilla/tr_image rd-vanilla/tr_init rd-vanilla/tr_light rd-vanilla/tr_main
+    rd-vanilla/tr_marks rd-vanilla/tr_mesh rd-vanilla/tr_model rd-vanilla/tr_quicksprite rd-vanilla/tr_scene
+    rd-vanilla/tr_shade rd-vanilla/tr_shade_calc rd-vanilla/tr_shader rd-vanilla/tr_shadows rd-vanilla/tr_skin
+    rd-vanilla/tr_sky rd-vanilla/tr_stl rd-vanilla/tr_subs rd-vanilla/tr_surface rd-vanilla/tr_surfacesprites
+    rd-vanilla/tr_world rd-vanilla/tr_WorldEffects rd-common/tr_font rd-common/tr_image_load rd-common/tr_image_jpg
+    rd-common/tr_image_tga rd-common/tr_image_png rd-common/tr_noise"
+JPEG="jaricom jcapimin jcapistd jcarith jccoefct jccolor jcdctmgr jchuff jcinit jcmainct jcmarker jcmaster jcomapi jcparam
+    jcprepct jcsample jctrans jdapimin jdapistd jdarith jdatadst jdatasrc jdcoefct jdcolor jddctmgr jdhuff jdinput
+    jdmainct jdmarker jdmaster jdmerge jdpostct jdsample jdtrans jerror jfdctflt jfdctfst jfdctint jidctflt jidctfst
+    jidctint jmemmgr jmemnobs jquant1 jquant2 jutils"
+PNG="png pngerror pngget pngmem pngpread pngread pngrio pngrtran pngrutil pngset pngtrans pngwio pngwrite pngwtran pngwutil"
+
+# Each part's objects: a list of "source object flags-name" lines, compiled JOBS at once, again only when the source, the
+# patch, this script or a file of ours is newer than the object, or the part's flags changed
+export CC CXX
+compile() {   # part, then lines "source object compiler flags..."
+    local part=$1; shift
+    mkdir -p "$BUILD/$part"
+    local flags_file="$BUILD/$part.flags"
+    printf '%s\n' "$@" | md5sum > "$flags_file.new"
+    cmp -s "$flags_file.new" "$flags_file" || rm -f "$BUILD/$part"/*.o
+    mv "$flags_file.new" "$flags_file"
+    printf '%s\n' "$@" | xargs -P "$JOBS" -I{} sh -c '
+        set -- {}; src=$1; obj=$2; shift 2
+        if [ "$obj" -nt "$src" ] && [ "$obj" -nt "'"$HERE"'/build.sh" ] && [ "$obj" -nt "'"$HERE"'/jk2.patch" ] &&
+           [ "$obj" -nt "'"$HERE"'/sys_shaderemu.cpp" ] && [ "$obj" -nt "'"$HERE"'/nullgl.c" ] && [ "$obj" -nt "'"$HERE"'/se_rand.c" ]; then exit 0; fi
+        "$@" -c "$src" -o "$obj" || { echo "failed: $src"; exit 255; }'
+}
+lines() {   # part, compiler and flags, then sources (with their extension)
+    local part=$1 cc=$2; shift 2
+    for f in "$@"; do b=$(basename "$(dirname "$f")")_$(basename "$f"); echo "$f $BUILD/$part/${b%.*}.o $cc"; done   # (folder_file.o: files.cpp is in two folders)
+}
+
+EF="$OPT $COMMON -D_JK2EXE -DJK2_MODE -I$S/code -I$S/lib/minizip/include -I$S/lib/minizip/include/minizip -I$S/lib/zlib/include"
+step "the engine"
+compile engine \
+    "$(lines engine "$CXX $CXXSTD $EF" $(for f in $ENGINE; do echo "$S/code/$f.cpp"; done) \
+        $(for f in $SHARED_CXX; do echo "$S/shared/$f.cpp"; done) \
+        "$S/shared/sys/sys_main.cpp" "$S/shared/sys/sys_event.cpp" "$S/shared/sys/con_log.cpp" "$S/shared/sys/sys_unix.cpp" \
+        "$S/shared/sys/con_tty.cpp" "$HERE/sys_shaderemu.cpp")" \
+    "$(lines engine "$CC $EF" $(for f in $MP3; do echo "$S/code/mp3code/$f.c"; done) \
+        $(for f in $SHARED_C; do echo "$S/shared/$f.c"; done) "$S/lib/minizip/ioapi.c" "$S/lib/minizip/unzip.c" \
+        $(for f in $ZLIB; do echo "$S/lib/zlib/$f.c"; done))"
+
+# (-fno-gnu-unique: a static inside an inline function is otherwise a name objcopy cannot make the module's own)
+GF="$OPT $COMMON -fno-gnu-unique -DJK2_MODE -DSP_GAME -I$S/codeJK2 -I$S/codeJK2/game"
+step "the game"
+compile game \
+    "$(lines game "$CXX $CXXSTD $GF" $(for f in $GAME; do echo "$S/codeJK2/game/$f.cpp"; done) \
+        $(for f in $CGAME; do echo "$S/codeJK2/cgame/$f.cpp"; done) $(for f in $ICARUS; do echo "$S/codeJK2/icarus/$f.cpp"; done) \
+        "$S/code/ui/gameinfo.cpp" "$S/code/qcommon/tri_coll_test.cpp" "$S/code/qcommon/q_shared.cpp" "$S/code/Rufl/hstring.cpp" \
+        $(for f in $SHARED_CXX; do echo "$S/shared/$f.cpp"; done))" \
+    "$(lines game "$CC $GF" $(for f in $SHARED_C; do echo "$S/shared/$f.c"; done) "$HERE/se_rand.c")"
+# (q_shared.cpp of code/ and of the game would make one object name: the game's is in a folder of its own)
+
+RF="$OPT $COMMON -fno-gnu-unique -DRENDERER -D_JK2EXE -DJK2_MODE -I$S/code -I$S/code/rd-vanilla -I$S/code/rd-common -I$BUILD/include -I$S/lib/jpeg-9a/include -I$S/lib/jpeg-9a -I$S/lib/libpng/include -I$S/lib/zlib/include"
+step "the renderer"
+compile renderer \
+    "$(lines renderer "$CXX $CXXSTD $RF" $(for f in $RENDERER; do echo "$S/code/$f.cpp"; done))" \
+    "$(lines renderer "$CC $RF" $(for f in $SHARED_C; do echo "$S/shared/$f.c"; done) \
+        $(for f in $JPEG; do echo "$S/lib/jpeg-9a/$f.c"; done) $(for f in $PNG; do echo "$S/lib/libpng/$f.c"; done) "$HERE/nullgl.c")"
+
+# The game and the renderer were libraries with names of their own (q_shared's, Com_Printf, their globals): each is linked
+# into one object whose names stay inside it, but for its one entry, renamed (sys_shaderemu.cpp finds them). Section
+# groups (C++'s inline functions and templates) are made plain sections first, or the program's link would keep one
+# module's copy and drop the other's that its names point into.
+step "the modules"
+module() {   # part, entries
+    local part=$1; shift
+    $LD -r --force-group-allocation -o "$BUILD/$part.all.o" "$BUILD/$part"/*.o
+    $OBJCOPY $(for e in "$@"; do echo "--keep-global-symbol=$e"; done) "$BUILD/$part.all.o" "$BUILD/$part.o"
+    $OBJCOPY $(for e in "$@"; do echo "--redefine-sym $e=se_$e"; done) "$BUILD/$part.o"
+}
+module game GetGameAPI dllEntry vmMain
+module renderer GetRefAPI
+
+step "the program"
+$CXX $OPT -o "$BUILD/jk2" "$BUILD/engine"/*.o "$BUILD/game.o" "$BUILD/renderer.o" $LIBS
+$NM -n -C "$BUILD/jk2" > "$BUILD/jk2.nm"
+if [ "${JK2_HOST:-}" = 1 ]; then
+    cp "$BUILD/jk2" "$OUT/jk2"
+    ls -l "$OUT/jk2"
+else
+    mkdir -p "$OUT/usr/bin"
+    "$CXXTC/bin/$T-strip" -o "$OUT/usr/bin/jk2.bin" "$BUILD/jk2"
+    ls -l "$OUT/usr/bin/jk2.bin"
+fi
+step done
