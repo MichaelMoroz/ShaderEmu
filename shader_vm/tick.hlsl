@@ -362,20 +362,18 @@ uint mulhu(uint a, uint b) {
 }
 // M by its kind, a product first: a division is dear, and one result made of eight costs every mul all of them
 uint op_m(uint f3, uint a, uint b) {
-    // (no returns: one in a function inlined in the loop is a flag tested after it; the four divisions are one
-    // unsigned division of the magnitudes, the signs put back)
-    uint r;
-    [branch] if (f3 == 0) r = a * b;
-    else [branch] if (f3 < 4) {
+    [branch] if (f3 == 0) return a * b;
+    [branch] if (f3 < 4) {
         uint hu = mulhu(a, b);
-        r = f3 == 1 ? hu - ((a >> 31) ? b : 0) - ((b >> 31) ? a : 0) : f3 == 2 ? hu - ((a >> 31) ? b : 0) : hu;
-    } else {
-        bool sgn = (f3 & 1) == 0, na = sgn && (a >> 31) != 0, nb = sgn && (b >> 31) != 0;
-        uint ua = na ? 0 - a : a, ub = nb ? 0 - b : b, q = ua / max(ub, 1u), m = ua - q * max(ub, 1u);
-        uint qs = (na != nb) ? 0 - q : q, ms = na ? 0 - m : m;
-        r = (f3 & 2) == 0 ? (b == 0 ? 0xffffffff : qs) : (b == 0 ? a : ms);
+        return f3 == 1 ? hu - ((a >> 31) ? b : 0) - ((b >> 31) ? a : 0) : f3 == 2 ? hu - ((a >> 31) ? b : 0) : hu;
     }
-    return r;
+    bool zero = b == 0, wraps = a == 0x80000000 && b == 0xffffffff;
+    int sa = asint(a), sb = asint(zero || wraps ? 1 : b);
+    uint safe = zero ? 1 : b;
+    [branch] if (f3 == 4) return zero ? 0xffffffff : wraps ? a : asuint(sa / sb);
+    [branch] if (f3 == 5) return zero ? 0xffffffff : a / safe;
+    [branch] if (f3 == 6) return zero ? a : wraps ? 0 : asuint(sa % sb);
+    return zero ? a : a % safe;
 }
 // The floats that are signs, the lesser or greater, comparisons and moves (the fast loop's)
 uint fp_light(uint w, uint ra, uint rb, out bool to_f, out bool ok) {
@@ -563,8 +561,6 @@ uint fast(uint room) {
             v = jump ? pc + 4 : (w & 0xfffff000) + (opc == 0x17 ? pc : 0);
             next = opc == 0x6f ? pc + imm_j(w) : opc == 0x67 ? a + imm_i(w) : next;
             ok = (next & 3) == 0;
-        } else [branch] if (opc == 0x33 && (w >> 25) == 1) {
-            v = op_m(f3, a, b);
         } else [branch] if ((w & 0x707f) == 0x202f) {
             // amoadd amoswap lr sc amoxor amoor amoand on a word of RAM (the others are the general step's)
             uint f5 = w >> 27, o = a & 0x7ffffffc;
@@ -577,6 +573,8 @@ uint fast(uint room) {
                 res_addr = lr ? a : res_addr;
                 v = sc ? (sc_ok ? 0 : 1) : old;
             }
+        } else [branch] if (opc == 0x33 && (w >> 25) == 1) {
+            v = op_m(f3, a, b);
         } else [branch] if (opc == 0x73 && (f3 & 3) != 0) {
             // csrrw, csrrs, csrrc and their immediates on a CSR nothing else looks at (sscratch, sepc, scause,
             // stval, stvec, scounteren, the float flags, time, the hart): the kernel's trap entry and exit are
