@@ -709,6 +709,36 @@ void ShaderEmu_View_Pick(int& x, int& y)
     y = ty + MAX(0, MIN(camera.h - 1, (gy + 0x8000) >> 16));
 }
 
+/*
+** TDAWN_PICK_CHECK=1, for a test (tools/test_all.py's tdawn-3d-300): at the first scene, the middle of
+** every cell in the window is put where the camera shows it, as a whole pixel, and picked back as a
+** click would be (flat): it must be the same cell every time.
+*/
+static void View_Pick_Check(int wide, int high)
+{
+    const unsigned char* heights = heights_now;
+    int tx = Map.TacPixelX, ty = Map.TacPixelY, points = 0, wrong = 0;
+
+    heights_now = NULL; // (View_Point is the flat ground's)
+    for (int cy = 0; cy < MAP_CELL_H; cy++) {
+        for (int cx = 0; cx < MAP_CELL_W; cx++) {
+            int x = origin_x + cx * 24 + 12, y = origin_y + cy * 24 + 12;
+            if (x < tx + 3 || y < ty + 3 || x > tx + wide - 4 || y > ty + high - 4) {
+                continue;
+            }
+            View_Point(x, y);
+            if (x < tx || y < ty || x >= tx + wide || y >= ty + high) {
+                continue; // (the camera does not show it: nearer rows are larger)
+            }
+            ShaderEmu_View_Pick(x, y);
+            points++;
+            wrong += (x - origin_x) / 24 != cx || (y - origin_y) / 24 != cy;
+        }
+    }
+    heights_now = heights;
+    fprintf(stderr, "tdawn: pick check at %d degrees: %d points, %d in another cell\n", camera.pitch, points, wrong);
+}
+
 // The band's corners (the tactical window's pixels) where the tilted view shows them, and the box round them.
 static void View_Band(int x0, int y0, int x1, int y1, int corner[4][2], int box_out[4])
 {
@@ -1558,6 +1588,14 @@ void DisplayClass::ShaderEmu_GL_Draw(bool forced)
         }
         host_scene_tilt(&camera, TacPixelX, TacPixelY, heights_now);
         view_shown_ms = host_ms();
+        static int pick_check = -1;
+        if (pick_check < 0) {
+            pick_check = getenv("TDAWN_PICK_CHECK") != NULL;
+        }
+        if (pick_check == 1 && camera.on) {
+            pick_check = 2;
+            View_Pick_Check(wide, high);
+        }
     }
     host_scene_begin(TacPixelX + base_x, TacPixelY + base_y);
     host_scene_view(TacPixelX, TacPixelY, TacPixelX + wide, TacPixelY + high);
