@@ -113,3 +113,21 @@ What `gles.c` would need (its owner's: a change there moves every program's byte
 that sprites and models hide each other rightly; and a quad of four corners with a colour in that pass, for the ground's rectangles over
 hills. And for the ROM: `seglPacked` takes memory from `seglMemory()`, so the models' file is copied into GPU memory (26 KB) rather than
 drawn where it lies in the ROM as Quake III's are; a call taking a ROM address would save that.
+
+**2 November 2026, later.** The card's numbers (RTX 3090, mission 3, `game_par.py tdawn --card` with `--guest TDAWN_VIEW=3d`; `--unity` and
+`--guest` for card runs are new in `game_par.py`): 2D 60.8 game frames a second, 3D 52.5 (11.04 passes a frame against 8.91); under a
+world's frame (`--unity 11.1,1.4,0.75`) 60.6 and 53.3. Step 1's gate (30 or better) holds for this mission.
+
+- **gles.c** (the owner's leave): `seglCorners`, sprites of four corners in the blended pass with the depth test. Sprites and models now
+  hide each other by depth, and overlays and the shroud lie on the heights. `CC_BYTES_NOMMU` moved with it (`2fa2b3c3`).
+- **Heights** work under every rectangle now and were looked at on the demo's five maps (`td3d_shots.py`); they stay off by default
+  (`docs/games/tdawn.md`, "In 3D": 18k instructions a frame more on the scene's core, 46.3 frames a second on the card against 52.5, a hairline between shroud pieces over a cliff). The
+  demo has only the temperate theatre: desert and winter could not be looked at. The cliff templates' high sides (terraces) were not made.
+- **Step 3.** `TDAWN_TANKS=50,250` on mission 3: 27.2 frames a second on the card standing (20.88 passes a frame), 13.2 moving (42.19; 2D
+  moving 16.6). The GPU's drawing is 0.08 ms a round whatever the scene; a model's part costs the scene's core about 480 instructions
+  whatever its triangles. The triangle budget above stands: triangles are not what bounds it, parts are.
+- **Step 1's play by script.** `TDAWN_PLAY` (`tools/test_all.py`'s `tdawn-3d-play`) wins the first mission at frame 3244 through the band
+  and clicks given at the tilted view's pixels: under two minutes, with `--races` 0 undone. Played by hand: not done.
+- **Step 5**, in part: models one after another keep the camera's projection (the scene's core 116.5k to 81.1k a frame with 50 tanks
+  standing). What is left: a model standing still is drawn anew every scene; moving tanks are bound by the game's own logic on core 0
+  (2D is 16.6 frames a second there too).
