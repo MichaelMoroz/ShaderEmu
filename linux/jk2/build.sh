@@ -132,7 +132,7 @@ compile() {   # part, then lines "source object compiler flags..."
     printf '%s\n' "$@" | xargs -P "$JOBS" -I{} sh -c '
         set -- {}; src=$1; obj=$2; shift 2
         if [ "$obj" -nt "$src" ] && [ "$obj" -nt "'"$HERE"'/build.sh" ] && [ "$obj" -nt "'"$HERE"'/jk2.patch" ] &&
-           [ "$obj" -nt "'"$HERE"'/sys_shaderemu.cpp" ] && [ "$obj" -nt "'"$HERE"'/nullgl.c" ] && [ "$obj" -nt "'"$HERE"'/se_rand.c" ]; then exit 0; fi
+           [ "$obj" -nt "'"$HERE"'/sys_shaderemu.cpp" ] && [ "$obj" -nt "'"$HERE"'/nullgl.c" ] && [ "$obj" -nt "'"$HERE"'/se_rand.c" ] && [ "$obj" -nt "'"$HERE"'/cg_rand.c" ]; then exit 0; fi
         "$@" -c "$src" -o "$obj" || { echo "failed: $src"; exit 255; }'
 }
 lines() {   # part, compiler and flags, then sources (with their extension)
@@ -159,7 +159,11 @@ compile game \
         $(for f in $CGAME; do echo "$S/codeJK2/cgame/$f.cpp"; done) $(for f in $ICARUS; do echo "$S/codeJK2/icarus/$f.cpp"; done) \
         "$S/code/ui/gameinfo.cpp" "$S/code/qcommon/tri_coll_test.cpp" "$S/code/qcommon/q_shared.cpp" "$S/code/Rufl/hstring.cpp" \
         $(for f in $SHARED_CXX; do echo "$S/shared/$f.cpp"; done))" \
-    "$(lines game "$CC $GF" $(for f in $SHARED_C; do echo "$S/shared/$f.c"; done) "$HERE/se_rand.c")"
+    "$(lines game "$CC $GF" $(for f in $SHARED_C; do echo "$S/shared/$f.c"; done) "$HERE/se_rand.c" "$HERE/cg_rand.c")"
+# the client's game draws its random numbers from states of its own (cg_rand.c says why): its objects' calls renamed
+for o in "$BUILD"/game/cgame_*.o; do
+    $OBJCOPY --redefine-sym Q_flrand=CG_flrand --redefine-sym Q_irand=CG_irand --redefine-sym rand=CG_rand "$o"
+done
 # (q_shared.cpp of code/ and of the game would make one object name: the game's is in a folder of its own)
 
 RF="$OPT $COMMON -fno-gnu-unique -DRENDERER -D_JK2EXE -DJK2_MODE -I$S/code -I$S/code/rd-vanilla -I$S/code/rd-common -I$BUILD/include -I$S/lib/jpeg-9a/include -I$S/lib/jpeg-9a -I$S/lib/libpng/include -I$S/lib/zlib/include"

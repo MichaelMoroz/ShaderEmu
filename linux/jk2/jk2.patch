@@ -89,6 +89,22 @@ index 5464b70b..29de8e86 100644
  		}
  
  		GL_Bind(mImage);
+diff --git a/code/rd-vanilla/tr_bsp.cpp b/code/rd-vanilla/tr_bsp.cpp
+index afbbb175..a5dbf9fd 100644
+--- a/code/rd-vanilla/tr_bsp.cpp
++++ b/code/rd-vanilla/tr_bsp.cpp
+@@ -1448,6 +1448,11 @@ void RE_LoadWorldMap_Actual( const char *name, world_t &worldData, int index ) {
+ 		//
+ 		//		R_Free( gpvCachedMapDiskImage );
+ 		//				gpvCachedMapDiskImage = NULL;
++#ifdef SHADEREMU
++		// On the machine it is 9.5 MB of the demo's 256 (docs/games/jk2.md, "Memory"): gone once the renderer has the
++		// world (the collision has its own); the same level loaded again (a saved game) reads the file again
++		ri.CM_DeleteCachedMap( qtrue );
++#endif
+ 	}
+ 	else
+ 	{
 diff --git a/code/server/sv_game.cpp b/code/server/sv_game.cpp
 index 8cd596fb..b8e4be48 100644
 --- a/code/server/sv_game.cpp
@@ -128,6 +144,58 @@ index 4a20f0ee..bc231fa6 100644
  #else
  			ui.Cmd_ExecuteText( EXEC_APPEND, "map yavin1\n");
  #endif
+diff --git a/codeJK2/cgame/FxPrimitives.cpp b/codeJK2/cgame/FxPrimitives.cpp
+index 0b83bc19..6b3b6d7c 100644
+--- a/codeJK2/cgame/FxPrimitives.cpp
++++ b/codeJK2/cgame/FxPrimitives.cpp
+@@ -102,7 +102,9 @@ void CParticle::Die()
+ 		vec3_t	norm;
+ 
+ 		// Man, this just seems so, like, uncool and stuff...
+-		VectorSet( norm, Q_flrand(-1.0f, 1.0f), Q_flrand(-1.0f, 1.0f), Q_flrand(-1.0f, 1.0f));
++		// (SHADEREMU: drawn before the call, in a fixed order: linux/jk2/draws.py)
++		float se_x = Q_flrand(-1.0f, 1.0f), se_y = Q_flrand(-1.0f, 1.0f);
++		VectorSet( norm, se_x, se_y, Q_flrand(-1.0f, 1.0f));
+ 		VectorNormalize( norm );
+ 
+ 		theFxScheduler.PlayEffect( mDeathFxID, mOrigin1, norm );
+diff --git a/codeJK2/cgame/cg_effects.cpp b/codeJK2/cgame/cg_effects.cpp
+index 63add3c3..41e7273b 100644
+--- a/codeJK2/cgame/cg_effects.cpp
++++ b/codeJK2/cgame/cg_effects.cpp
+@@ -551,7 +551,9 @@ void CG_Chunks( int owner, vec3_t origin, const vec3_t normal, const vec3_t mins
+ 			VectorScale( dir, Q_flrand( speed * 0.5f, speed * 1.25f ) * speedMod, le->pos.trDelta );
+ 
+ 			// Angular Velocity
+-			VectorSet( le->angles.trBase, Q_flrand(0.0f, 1.0f) * 360, Q_flrand(0.0f, 1.0f) * 360, Q_flrand(0.0f, 1.0f) * 360 );
++			// (SHADEREMU: drawn before the call, in a fixed order: linux/jk2/draws.py)
++			float se_x = Q_flrand(0.0f, 1.0f) * 360, se_y = Q_flrand(0.0f, 1.0f) * 360;
++			VectorSet( le->angles.trBase, se_x, se_y, Q_flrand(0.0f, 1.0f) * 360 );
+ 
+ 			le->angles.trDelta[0] = Q_flrand(-1.0f, 1.0f);
+ 			le->angles.trDelta[1] = Q_flrand(-1.0f, 1.0f);
+@@ -639,7 +641,9 @@ static void CG_DoGlassQuad( vec3_t p[4], vec2_t uv[4], bool stick, int time, vec
+ 	vec3_t	vel, accel;
+ 	vec3_t	rgb1;
+ 
+-	VectorSet( vel, Q_flrand(-1.0f, 1.0f) * 12, Q_flrand(-1.0f, 1.0f) * 12, -1 );
++	// (SHADEREMU: drawn before the call, in a fixed order: linux/jk2/draws.py)
++	float se_x = Q_flrand(-1.0f, 1.0f) * 12;
++	VectorSet( vel, se_x, Q_flrand(-1.0f, 1.0f) * 12, -1 );
+ 
+ 	if ( !stick )
+ 	{
+@@ -656,7 +660,9 @@ static void CG_DoGlassQuad( vec3_t p[4], vec2_t uv[4], bool stick, int time, vec
+ 	bounce = Q_flrand(0.0f, 1.0f) * 0.2f + 0.15f;
+ 
+ 	// Set up our random rotate, we only do PITCH and YAW, not ROLL.  This is something like degrees per second
+-	VectorSet( rotDelta, Q_flrand(-1.0f, 1.0f) * 40.0f, Q_flrand(-1.0f, 1.0f) * 40.0f, 0.0f );
++	// (SHADEREMU: drawn before the call, in a fixed order: linux/jk2/draws.py)
++	float se_pitch = Q_flrand(-1.0f, 1.0f) * 40.0f;
++	VectorSet( rotDelta, se_pitch, Q_flrand(-1.0f, 1.0f) * 40.0f, 0.0f );
+ 
+ 	CPoly *pol = FX_AddPoly(p, uv, 4,			// verts, ST, vertCount
+ 			vel, accel,				// motion
 diff --git a/codeJK2/cgame/cg_info.cpp b/codeJK2/cgame/cg_info.cpp
 index bdb72696..0919f611 100644
 --- a/codeJK2/cgame/cg_info.cpp
@@ -141,11 +209,56 @@ index bdb72696..0919f611 100644
  	{
  		char	text[1024]={0};
  		cgi_SP_GetStringTextString( "INGAME_ALONGTIME", text, sizeof(text) );
+diff --git a/codeJK2/cgame/cg_players.cpp b/codeJK2/cgame/cg_players.cpp
+index ef21d32f..c274c77d 100644
+--- a/codeJK2/cgame/cg_players.cpp
++++ b/codeJK2/cgame/cg_players.cpp
+@@ -3007,11 +3007,13 @@ void _PlayerSplash( const vec3_t origin, const vec3_t velocity, const float radi
+ 
+ 	float alpha = ( t / 8192.0f ) * 0.6f + 0.2f;
+ 
++	// (SHADEREMU: drawn before the call, in a fixed order: linux/jk2/draws.py)
++	float se_spin = Q_flrand(-1.0f, 1.0f) * 6.0f, se_turn = Q_flrand(0.0f, 1.0f) * 360;
+ 	FX_AddOrientedParticle( end, trace.plane.normal, NULL, NULL,
+ 								6.0f, radius + Q_flrand(0.0f, 1.0f) * 48.0f, 0,
+ 								alpha, 0.0f, 0.0f,
+ 								WHITE, WHITE, 0.0f,
+-								Q_flrand(0.0f, 1.0f) * 360, Q_flrand(-1.0f, 1.0f) * 6.0f, NULL, NULL, 0.0f, 0 ,0, 1200,
++								se_turn, se_spin, NULL, NULL, 0.0f, 0 ,0, 1200,
+ 								cgs.media.wakeMarkShader, FX_ALPHA_LINEAR | FX_SIZE_LINEAR );
+ }
+ 
+@@ -3349,7 +3351,9 @@ static void CG_ForceElectrocution( centity_t *cent, const vec3_t origin, vec3_t
+ 	{
+ 		// Just use the lerp Origin and a random direction
+ 		VectorCopy( cent->lerpOrigin, fxOrg );
+-		VectorSet( dir, Q_flrand(-1.0f, 1.0f), Q_flrand(-1.0f, 1.0f), Q_flrand(-1.0f, 1.0f) ); // Not normalized, but who cares.
++		// (SHADEREMU: drawn before the call, in a fixed order: linux/jk2/draws.py)
++		float se_x = Q_flrand(-1.0f, 1.0f), se_y = Q_flrand(-1.0f, 1.0f);
++		VectorSet( dir, se_x, se_y, Q_flrand(-1.0f, 1.0f) ); // Not normalized, but who cares.
+ 		if ( cent->gent && cent->gent->client )
+ 		{
+ 			switch ( cent->gent->client->NPC_class )
+diff --git a/codeJK2/game/NPC.cpp b/codeJK2/game/NPC.cpp
+index b57d6347..52e98d9e 100644
+--- a/codeJK2/game/NPC.cpp
++++ b/codeJK2/game/NPC.cpp
+@@ -999,7 +999,9 @@ void NPC_HandleAIFlags (void)
+ 	//been told to play a victory sound after a delay
+ 	if ( NPCInfo->greetingDebounceTime && NPCInfo->greetingDebounceTime < level.time )
+ 	{
+-		G_AddVoiceEvent( NPC, Q_irand(EV_VICTORY1, EV_VICTORY3), Q_irand( 2000, 4000 ) );
++		// (SHADEREMU: drawn before the call, in a fixed order: linux/jk2/draws.py)
++		int se_delay = Q_irand( 2000, 4000 );
++		G_AddVoiceEvent( NPC, Q_irand(EV_VICTORY1, EV_VICTORY3), se_delay );
+ 		NPCInfo->greetingDebounceTime = 0;
+ 	}
+ 
 diff --git a/codeJK2/game/g_main.cpp b/codeJK2/game/g_main.cpp
-index 671b309a..8401b9ba 100644
+index 671b309a..6945ab39 100644
 --- a/codeJK2/game/g_main.cpp
 +++ b/codeJK2/game/g_main.cpp
-@@ -1482,8 +1482,70 @@ void G_RunFrame( int levelTime ) {
+@@ -1482,7 +1482,83 @@ void G_RunFrame( int levelTime ) {
  		ValidateInUseBits();
  	}
  #endif
@@ -169,9 +282,10 @@ index 671b309a..8401b9ba 100644
 +static int se_eighth( float f )
 +{
 +	return (int)( f * 8.0f + ( f < 0 ? -0.5f : 0.5f ) );
- }
- 
++}
++
 +extern "C" unsigned se_rand_state;    // (linux/jk2/se_rand.c)
++extern "C" uint32_t SE_Holdrand( void );    // (q_math.c)
 +
 +void SE_GameSum( void )
 +{
@@ -184,6 +298,11 @@ index 671b309a..8401b9ba 100644
 +		return;
 +	unsigned h = 2166136261u;
 +	int count = 0;
++	static int detail = -2;     // JK2_SUM_AT=N: at game frame N a jk2ent: line an entity, to find what differs
++	if ( detail == -2 ) {
++		const char *s = getenv( "JK2_SUM_AT" );
++		detail = s && *s ? atoi( s ) : -1;
++	}
 +	for ( int i = 0; i < globals.num_entities; i++ ) {
 +		gentity_t *e = &g_entities[i];
 +		if ( !e->inuse )
@@ -207,15 +326,176 @@ index 671b309a..8401b9ba 100644
 +		}
 +		if ( e->NPC )
 +			h = se_mix( h, e->NPC->behaviorState );
++		if ( detail == level.framenum )
++			gi.Printf( "jk2ent: %d %s type %d health %d at %d %d %d facing %d %d %d%s %d %d %d npc %d\n", i,
++				e->classname ? e->classname : "-", e->s.eType, e->health, se_eighth( e->currentOrigin[0] ),
++				se_eighth( e->currentOrigin[1] ), se_eighth( e->currentOrigin[2] ), se_eighth( e->currentAngles[0] ),
++				se_eighth( e->currentAngles[1] ), se_eighth( e->currentAngles[2] ), e->client ? " client" : "",
++				e->client ? se_eighth( e->client->ps.origin[0] ) : 0, e->client ? se_eighth( e->client->ps.velocity[2] ) : 0,
++				e->client ? e->client->ps.legsAnim : 0, e->NPC ? e->NPC->behaviorState : -1 );
 +	}
 +	h = se_mix( h, (int)se_rand_state );
-+	gi.Printf( "jk2sum: frame %d time %d entities %d sum %08x\n", level.framenum, level.time, count, h );
-+}
++	gi.Printf( "jk2sum: frame %d time %d entities %d sum %08x draws %08x\n", level.framenum, level.time, count, h,
++		(unsigned)SE_Holdrand() );
+ }
 +#endif
-+
  
  
- extern qboolean player_locked;
+ 
+diff --git a/codeJK2/game/g_misc_model.cpp b/codeJK2/game/g_misc_model.cpp
+index 657ed823..bf34d99f 100644
+--- a/codeJK2/game/g_misc_model.cpp
++++ b/codeJK2/game/g_misc_model.cpp
+@@ -465,7 +465,9 @@ void SP_misc_model_gun_rack( gentity_t *ent )
+ 	{
+ 		for ( int i = 0; i < ct; i++ )
+ 		{
+-			GunRackAddItem( itemList[i], ent->s.origin, ent->s.angles, Q_flrand(-1.0f, 1.0f) * 2, ( i - 1 ) * 9 + Q_flrand(-1.0f, 1.0f) * 2, ofz[i] );
++			// (SHADEREMU: drawn before the call, in a fixed order: linux/jk2/draws.py)
++			float se_right = ( i - 1 ) * 9 + Q_flrand(-1.0f, 1.0f) * 2;
++			GunRackAddItem( itemList[i], ent->s.origin, ent->s.angles, Q_flrand(-1.0f, 1.0f) * 2, se_right, ofz[i] );
+ 		}
+ 	}
+ 
+@@ -678,7 +680,9 @@ void spawn_rack_goods( gentity_t *ent )
+ 			//	the gun so we don't put the pack on the same spot..so pick either the left or right side
+ 			pos = ( Q_flrand(0.0f, 1.0f) > .5 ) ? -1 : 1;
+ 
+-			GunRackAddItem( it, ent->s.origin, ent->s.angles, Q_flrand(-1.0f, 1.0f) * 2, ( Q_flrand(0.0f, 1.0f) * 6 + 4 ) * pos, v_off );
++			// (SHADEREMU: drawn before the call, in a fixed order: linux/jk2/draws.py)
++			float se_right = ( Q_flrand(0.0f, 1.0f) * 6 + 4 ) * pos;
++			GunRackAddItem( it, ent->s.origin, ent->s.angles, Q_flrand(-1.0f, 1.0f) * 2, se_right, v_off );
+ 		}
+ 	}
+ 
+@@ -696,7 +700,9 @@ void spawn_rack_goods( gentity_t *ent )
+ 			pos *= -1;
+ 		}
+ 
+-		GunRackAddItem( health, ent->s.origin, ent->s.angles, Q_flrand(-1.0f, 1.0f) * 0.5f, ( Q_flrand(0.0f, 1.0f) * 4 + 4 ) * pos, 24 );
++		// (SHADEREMU: drawn before the call, in a fixed order: linux/jk2/draws.py)
++		float se_right = ( Q_flrand(0.0f, 1.0f) * 4 + 4 ) * pos;
++		GunRackAddItem( health, ent->s.origin, ent->s.angles, Q_flrand(-1.0f, 1.0f) * 0.5f, se_right, 24 );
+ 	}
+ 
+ 	ent->s.modelindex = G_ModelIndex( "models/map_objects/kejim/weaponsrung.md3" );
+diff --git a/codeJK2/game/g_navigator.cpp b/codeJK2/game/g_navigator.cpp
+index 024b3fad..e22c9779 100644
+--- a/codeJK2/game/g_navigator.cpp
++++ b/codeJK2/game/g_navigator.cpp
+@@ -358,7 +358,7 @@ int	CNode::Save( int numNodes, fileHandle_t file )
+ 	int i;
+ 
+ 	//Write out the header
+-	unsigned long header = NODE_HEADER_ID;
++	uint32_t header = NODE_HEADER_ID;	// (32 bits in the file, whatever long is)
+ 	gi.FS_Write( &header, sizeof( header ), file );
+ 
+ 	//Write out the basic information
+@@ -397,7 +397,7 @@ Load
+ 
+ int CNode::Load( int numNodes, fileHandle_t file )
+ {
+-	unsigned long header;
++	uint32_t header;	// (32 bits in the file, whatever long is)
+ 	int i;
+ 	gi.FS_Read( &header, sizeof(header), file );
+ 
+@@ -524,7 +524,7 @@ GetLong
+ 
+ long CNavigator::GetLong( fileHandle_t file )
+ {
+-	long value;
++	int32_t value;	// (32 bits in the file, whatever long is)
+ 
+ 	gi.FS_Read( &value, sizeof( value ), file );
+ 
+@@ -638,7 +638,7 @@ bool CNavigator::Save( const char *filename, int checksum )
+ 		return false;
+ 
+ 	//Write out the header id
+-	unsigned long id = NAV_HEADER_ID;
++	uint32_t id = NAV_HEADER_ID;	// (32 bits in the file, whatever long is)
+ 
+ 	gi.FS_Write( &id, sizeof (id), file );
+ 
+diff --git a/codeJK2/game/wp_flechette.cpp b/codeJK2/game/wp_flechette.cpp
+index 8f073d71..b62fe72a 100644
+--- a/codeJK2/game/wp_flechette.cpp
++++ b/codeJK2/game/wp_flechette.cpp
+@@ -217,7 +217,9 @@ void WP_flechette_alt_blow( gentity_t *ent )
+ static void WP_CreateFlechetteBouncyThing( vec3_t start, vec3_t fwd, gentity_t *self )
+ //------------------------------------------------------------------------------
+ {
+-	gentity_t	*missile = CreateMissile( start, fwd, 950 + Q_flrand(0.0f, 1.0f) * 700, 1500 + Q_flrand(0.0f, 1.0f) * 2000, self, qtrue );
++	// (SHADEREMU: drawn before the call, in a fixed order: linux/jk2/draws.py)
++	int se_life = 1500 + Q_flrand(0.0f, 1.0f) * 2000;
++	gentity_t	*missile = CreateMissile( start, fwd, 950 + Q_flrand(0.0f, 1.0f) * 700, se_life, self, qtrue );
+ 
+ 	missile->e_ThinkFunc = thinkF_WP_flechette_alt_blow;
+ 
+diff --git a/codeJK2/game/wp_saber.cpp b/codeJK2/game/wp_saber.cpp
+index 04c5aa25..c80c7579 100644
+--- a/codeJK2/game/wp_saber.cpp
++++ b/codeJK2/game/wp_saber.cpp
+@@ -3622,7 +3622,9 @@ void WP_SaberImpact( gentity_t *owner, gentity_t *saber, trace_t *trace )
+ 			VectorCopy( saber->currentAngles, saber->s.apos.trBase );
+ 			saber->s.apos.trType = TR_LINEAR;
+ 			saber->s.apos.trTime = level.time;
+-			VectorSet( saber->s.apos.trDelta, Q_irand( -300, 300 ), Q_irand( -300, 300 ), Q_irand( -300, 300 ) );
++			// (SHADEREMU: drawn before the call, in a fixed order: linux/jk2/draws.py)
++			float se_x = Q_irand( -300, 300 ), se_y = Q_irand( -300, 300 );
++			VectorSet( saber->s.apos.trDelta, se_x, se_y, Q_irand( -300, 300 ) );
+ 		}
+ 		//see if we stopped
+ 		else if ( saber->s.pos.trType == TR_STATIONARY )
+@@ -4312,7 +4314,9 @@ void WP_SaberDrop( gentity_t *self, gentity_t *saber )
+ 	VectorCopy( saber->currentAngles, saber->s.apos.trBase );
+ 	saber->s.apos.trType = TR_LINEAR;
+ 	saber->s.apos.trTime = level.time;
+-	VectorSet( saber->s.apos.trDelta, Q_irand( -300, 300 ), saber->s.apos.trDelta[1], Q_irand( -300, 300 ) );
++	// (SHADEREMU: drawn before the call, in a fixed order: linux/jk2/draws.py)
++	float se_x = Q_irand( -300, 300 );
++	VectorSet( saber->s.apos.trDelta, se_x, saber->s.apos.trDelta[1], Q_irand( -300, 300 ) );
+ 	if ( !saber->s.apos.trDelta[1] )
+ 	{
+ 		saber->s.apos.trDelta[1] = Q_irand( -300, 300 );
+@@ -6772,7 +6776,9 @@ void ForceTelepathy( gentity_t *self )
+ 			{
+ 				if ( traceEnt->client->NPC_class == CLASS_GALAKMECH )
+ 				{
+-					G_AddVoiceEvent( NPC, Q_irand( EV_CONFUSE1, EV_CONFUSE3 ), Q_irand( 3000, 5000 ) );
++					// (SHADEREMU: drawn before the call, in a fixed order: linux/jk2/draws.py)
++					int se_delay = Q_irand( 3000, 5000 );
++					G_AddVoiceEvent( NPC, Q_irand( EV_CONFUSE1, EV_CONFUSE3 ), se_delay );
+ 				}
+ 			}
+ 			else if ( self->client->ps.forcePowerLevel[FP_TELEPATHY] > FORCE_LEVEL_3 )
+@@ -6970,7 +6976,9 @@ void ForceGrip( gentity_t *self )
+ 		switch ( traceEnt->client->NPC_class )
+ 		{
+ 		case CLASS_GALAKMECH://cant grip him, he's in armor
+-			G_AddVoiceEvent( traceEnt, Q_irand(EV_PUSHED1, EV_PUSHED3), Q_irand( 3000, 5000 ) );
++			// (SHADEREMU: drawn before the call, in a fixed order: linux/jk2/draws.py)
++			{ int se_delay = Q_irand( 3000, 5000 );
++			G_AddVoiceEvent( traceEnt, Q_irand(EV_PUSHED1, EV_PUSHED3), se_delay ); }
+ 			return;
+ 			break;
+ 		case CLASS_ATST://much too big to grip!
+diff --git a/shared/qcommon/q_math.c b/shared/qcommon/q_math.c
+index b15b3dba..c04d7a55 100644
+--- a/shared/qcommon/q_math.c
++++ b/shared/qcommon/q_math.c
+@@ -221,6 +221,9 @@ float Q_crandom( int *seed )
+ // eg the typical tint = (rand() * 255) / 32768
+ // becomes tint = irand(0, 255)
+ static uint32_t	holdrand = 0x89abcdef;
++#ifdef SHADEREMU
++uint32_t SE_Holdrand( void ) { return holdrand; }    // (the state of Q_flrand and Q_irand, for the game's jk2sum: line)
++#endif
+ 
+ void Rand_Init( int seed )
+ {
 diff --git a/shared/sys/sys_loadlib.h b/shared/sys/sys_loadlib.h
 index 97d2ef4f..1588a702 100644
 --- a/shared/sys/sys_loadlib.h

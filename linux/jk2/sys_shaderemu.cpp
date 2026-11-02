@@ -163,6 +163,23 @@ window_t WIN_Init( const windowDesc_t *desc, glconfig_t *glConfig )
 
 static int se_frames, se_stop_at = -2, se_stats_every, se_window_start, se_window_frames;
 
+// this core's instructions (the machine's rdcycle counts them on rvc_cpu; 0 on the card and on the build computer)
+static unsigned long long se_instructions( void )
+{
+#ifdef __riscv
+	unsigned hi, lo, again;
+	do {
+		asm volatile( "rdcycleh %0" : "=r"( hi ) );
+		asm volatile( "rdcycle %0" : "=r"( lo ) );
+		asm volatile( "rdcycleh %0" : "=r"( again ) );
+	} while ( hi != again );
+	return (unsigned long long)hi << 32 | lo;
+#else
+	return 0;
+#endif
+}
+static unsigned long long se_window_instructions;
+
 void WIN_Present( window_t *window )
 {
 	(void)window;
@@ -178,10 +195,22 @@ void WIN_Present( window_t *window )
 		int now = Sys_Milliseconds();
 		extern int SE_ZoneBytes( int *peak, int *blocks );
 		int peak, blocks, bytes = SE_ZoneBytes( &peak, &blocks );
-		Com_Printf( "jk2stat: frame %d, %d frames in %d ms of the computer's time, zone %d bytes in %d blocks, at most %d,"
-			" client state %d%s%s\n", se_frames, se_window_frames, now - se_window_start, bytes, blocks, peak, cls.state,
+		int free_kb = -1, cached_kb = -1;     // the system's free memory (on the machine all a program takes is taken from it)
+		if ( FILE *m = fopen( "/proc/meminfo", "r" ) ) {
+			char line[128];
+			while ( fgets( line, sizeof( line ), m ) ) {
+				sscanf( line, "MemFree: %d", &free_kb );
+				sscanf( line, "Cached: %d", &cached_kb );
+			}
+			fclose( m );
+		}
+		unsigned long long ins = se_instructions();
+		Com_Printf( "jk2stat: frame %d, %d frames in %d ms of the computer's time and %u thousand instructions of this core,"
+			" zone %d bytes in %d blocks, at most %d, free %d KB, cached %d KB, client state %d%s%s\n", se_frames, se_window_frames,
+			now - se_window_start, (unsigned)( ( ins - se_window_instructions ) / 1000 ), bytes, blocks, peak, free_kb, cached_kb, cls.state,
 			Cvar_VariableIntegerValue( "cl_paused" ) ? ", paused" : "", Cvar_VariableIntegerValue( "sv_paused" ) ? ", server paused" : "" );
 		se_window_start = now;
+		se_window_instructions = ins;
 		se_window_frames = 0;
 	}
 	// JK2_AT="FRAME:COMMAND;FRAME:COMMAND": console commands at those frames (a scripted run: "900:load auto")
