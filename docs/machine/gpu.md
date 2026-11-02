@@ -280,6 +280,10 @@ float build, about an axis of the coordinate system in the other.
 - `seglSprite()` is a rectangle of a texture over what the list drew before it: always the
   blended pass with no depth, so that many small pictures and their shadows keep their
   order. A texture of `SEGL_BITS` is one bit a pixel, drawn in the call's colour.
+- `seglCorners()` is `seglSprites()` with each sprite's four corners given, x, y and z, through the matrices; with
+  `GL_DEPTH_TEST` on it is the blended pass with the depth test (1), so what pass 0 drew with depth hides it, still
+  in the list's order among themselves: Tiberian Dawn's tilted view lays its overlays and shroud on hills with it and
+  stands its sprites among its models (`docs/games/tdawn.md`, "In 3D").
 - `seglKeptBlend()` puts a kept command into a blended pass, with a texture of words: Quake's
   light maps are kept commands that multiply (`docs/games/quake.md`).
 - `seglScreenSpace()` and `seglScreenUsed()` draw triangles of whole vertices in the window's

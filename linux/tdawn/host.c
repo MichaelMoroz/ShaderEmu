@@ -627,24 +627,59 @@ tilt_part(int part)
 	glMatrixMode(GL_MODELVIEW);
 	glLoadIdentity();
 	standing = part == 1;
+	/* every part's rectangles in the blended pass with the depth test (seglCorners): the models hide them */
+	if (part >= 0)
+		glEnable(GL_DEPTH_TEST);
+	else
+		glDisable(GL_DEPTH_TEST);
 }
 
-/* An object's rectangle (x, y of the screen) standing up: where it is drawn, or 0 for nowhere. */
+/*
+ * An object's rectangle (x, y of the screen) standing up: its corners, or 0 for nowhere. Its depth
+ * is that of the ground its lowest row shows (td3d_row_depth), so that a model in front of it hides it
+ * and one behind it does not, and the ground before its foot leaves it whole.
+ */
 static int
-tilt_stand(int x, int y, int width, int height, GLfixed box[4])
+tilt_stand(int x, int y, int width, int height, GLfixed xyz[12])
 {
 	int32_t b[4], gz = 0;
 	int32_t x0 = (int32_t)(x - tilt.tac_x) << 16, y0 = (int32_t)(y - tilt.tac_y) << 16;
+	GLfixed bx0, by0, bx1, by1, z;
 
 	if (tilt.heights)
 		gz = td3d_height(tilt.heights, (int32_t)(x + width / 2 - scene_at[0]) << 16, (int32_t)(y + height / 2 - scene_at[1]) << 16);
 	if (!td3d_stand(&tilt.view, x0, y0, x0 + (width << 16), y0 + (height << 16), gz, b))
 		return 0;
-	box[0] = (GLfixed)(((int64_t)b[0] + ((int64_t)tilt.tac_x << 16)) / screen_w);
-	box[1] = (GLfixed)(((int64_t)b[1] + ((int64_t)tilt.tac_y << 16)) / screen_h);
-	box[2] = (GLfixed)(((int64_t)b[2] + ((int64_t)tilt.tac_x << 16)) / screen_w);
-	box[3] = (GLfixed)(((int64_t)b[3] + ((int64_t)tilt.tac_y << 16)) / screen_h);
+	bx0 = (GLfixed)(((int64_t)b[0] + ((int64_t)tilt.tac_x << 16)) / screen_w);
+	by0 = (GLfixed)(((int64_t)b[1] + ((int64_t)tilt.tac_y << 16)) / screen_h);
+	bx1 = (GLfixed)(((int64_t)b[2] + ((int64_t)tilt.tac_x << 16)) / screen_w);
+	by1 = (GLfixed)(((int64_t)b[3] + ((int64_t)tilt.tac_y << 16)) / screen_h);
+	z = td3d_fixed(-td3d_row_depth(&tilt.view, b[3], gz));
+	xyz[0] = bx0, xyz[1] = by0, xyz[2] = z;
+	xyz[3] = bx1, xyz[4] = by0, xyz[5] = z;
+	xyz[6] = bx1, xyz[7] = by1, xyz[8] = z;
+	xyz[9] = bx0, xyz[10] = by1, xyz[11] = z;
 	return 1;
+}
+
+/* A ground's rectangle (overlays, smudges, the shroud) on the map's heights, a quarter of a pixel above them
+ * so that the depth test against the cells under it passes. */
+#define GROUND_LIFT (ONE / 4)
+static void
+tilt_ground(int x, int y, int width, int height, GLfixed xyz[12])
+{
+	static const int cx[4] = {0, 1, 1, 0}, cy[4] = {0, 0, 1, 1};
+	int i;
+
+	for (i = 0; i < 4; i++) {
+		int px = x + cx[i] * width, py = y + cy[i] * height;
+		int32_t gz = GROUND_LIFT;
+
+		if (tilt.heights)
+			gz += td3d_height(tilt.heights, (int32_t)(px - scene_at[0]) << 16, (int32_t)(py - scene_at[1]) << 16);
+		xyz[3 * i] = px * ONE / screen_w, xyz[3 * i + 1] = py * ONE / screen_h;
+		xyz[3 * i + 2] = (GLfixed)(gz / screen_h);
+	}
 }
 
 /*
@@ -801,8 +836,7 @@ model_now(int x, int y, int which, int facing, int turret, int house)
 	glEnable(GL_DEPTH_TEST);
 	seglPacked(models.data + model_word(p), models.data + models.coords, (GLsizei)model_word(p + 4),
 		   models.tables + (house * MODEL_TURNS + ((b + 16) >> 5 & 7)) * 256);
-	glDisable(GL_DEPTH_TEST);
-	glLoadIdentity();
+	glLoadIdentity();	/* (the depth test stays on: the parts' rectangles are tested too, tilt_part) */
 	glMatrixMode(GL_PROJECTION);
 	glLoadMatrixx(whole);
 	glMatrixMode(GL_MODELVIEW);
@@ -1435,12 +1469,35 @@ host_scene_begin(int origin_x, int origin_y)
  */
 #define BATCH 128
 static SEGLsprite batch[BATCH] __attribute__((aligned(16)));	/* (the scene's core's alone) */
+static SEGLcorners cornered[BATCH] __attribute__((aligned(16)));	/* the same in the tilted view */
 
 static void
 run_end(void)
 {
-	seglSprites(batch, batched);
+	if (tilt.on)
+		seglCorners(cornered, batched);
+	else
+		seglSprites(batch, batched);
 	batched = 0;
+}
+
+/* The tilted view's rectangle: standing up (part 1) or on the ground (parts 0 and 2), with a depth. */
+static __attribute__((noinline)) void
+put_corners(GLuint name, unsigned int colour, int keyed, int x, int y, int width, int height, const int *texels)
+{
+	SEGLcorners *s = &cornered[batched];
+
+	if (standing) {
+		if (!tilt_stand(x, y, width, height, s->xyz))
+			return;
+	} else
+		tilt_ground(x, y, width, height, s->xyz);
+	s->texels[0] = texels[0], s->texels[1] = texels[1], s->texels[2] = texels[2], s->texels[3] = texels[3];
+	s->name = name, s->colour = colour, s->keyed = keyed;
+	if (run_single)
+		seglCorners(s, 1);
+	else if (++batched == BATCH)
+		run_end();
 }
 
 static inline __attribute__((always_inline)) void
@@ -1449,9 +1506,9 @@ put_sprite(GLuint name, unsigned int colour, int keyed, int x, int y, int width,
 	SEGLsprite *s = &batch[batched];
 
 	run_quads++;
-	if (standing) {
-		if (!tilt_stand(x, y, width, height, s->box))
-			return;
+	if (tilt.on) {
+		put_corners(name, colour, keyed, x, y, width, height, texels);
+		return;
 	} else {
 		s->box[0] = x * ONE / screen_w, s->box[1] = y * ONE / screen_h;
 		s->box[2] = (x + width) * ONE / screen_w, s->box[3] = (y + height) * ONE / screen_h;
