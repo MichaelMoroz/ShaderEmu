@@ -543,7 +543,7 @@ uint fast(uint room) {
 #else
                 ok = (sa ^ 0x80000000) < RAM_MAX && off + (1u << f3) <= 4;
 #endif
-                [branch] if (ok) ram_store_nc(sa & 0x7ffffffc, b << (off * 8), (0xffffffffu >> LOAD_UP(f3)) << (off * 8));
+                ram_store_nc(sa & 0x7ffffffc, b << (off * 8), ok ? (0xffffffffu >> LOAD_UP(f3)) << (off * 8) : 0);   // (no test: a store that may not changes nothing)
                 dst = 64;
             } else [branch] if (opc == 0x53) {
                 // (opcode 0x53 before flw and fsw: a program has more of them) floats: a sum, a difference, a product, and the light ones; the rest are the general step's
@@ -627,7 +627,10 @@ uint fast(uint room) {
             // full of them, and each was a general step
             uint cn = w >> 20, src = (f3 & 4) ? rs1 : a;
             bool wr_ = (f3 & 3) == 1 || src != 0;
-            bool plain = (cn - 0x140 < 4) || cn == 0x105 || cn == 0x106 || (cn - 1 < 3) || cn == 0xc01 || cn == 0xf14;
+            // (and sstatus while no interrupt is pending, which the kernel turns off and on around every lock: then
+            // no write of it can let one in; and timeh and instret, which read 0)
+            bool plain = (cn - 0x140 < 4) || cn == 0x105 || cn == 0x106 || (cn - 1 < 3) || cn == 0xc01 || cn == 0xf14 ||
+                         cn == 0xc81 || cn == 0xc02 || (cn == 0x100 && (mip & mie & 0x222) == 0);
             ok = plain && ((cn >> 8) & 3) <= priv && !(wr_ && ((cn >> 10) & 3) == 3);
             [branch] if (ok) {
                 v = csr_read(cn);
