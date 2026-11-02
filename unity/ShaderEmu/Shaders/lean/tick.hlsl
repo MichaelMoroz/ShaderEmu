@@ -583,13 +583,15 @@ uint fast(uint room) {
                 if (wr_) csr_write(cn, (f3 & 3) == 1 ? src : (f3 & 3) == 2 ? v | src : v & ~src);
             }
         } else ok = false;
-        if (!ok) { pre_w = w; pre_valid = true; break; }
+        pre_w = w;
+        if (!ok) break;
         xr[dst] = v;
         same = next == pc + 4 && (next & 12) != 0;
         cur = cur.yzwx;
         pc = next;
         n++;
     }
+    pre_valid = n < budget;   // (left by a break: the word is the general step's)
     clock += n;
     return n;
 }
