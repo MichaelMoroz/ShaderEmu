@@ -13,7 +13,7 @@ For this project it changes two things:
 ## Using it with the harness
 
 `rvc_harness.exe` loads `d3dcompiler_47.dll` the usual way, and the build copies fxc2's
-(`tools\fxc2\d3dcompiler_47.dll`) next to it: the harness compiles with fxc2 (`shader_compiler.cpp`
+(`tools\fxc2\bin\d3dcompiler_47.dll`, the submodule `tools/fxc2`; vkd3d is LGPL-2.1-or-later and that DLL links it statically, its source and patches being in that repository) next to it: the harness compiles with fxc2 (`shader_compiler.cpp`
 tells which one it loaded by where it lies), and the shader cache keys a blob by the compiler that
 made it. To compile with Microsoft's FXC, delete `bin\d3dcompiler_47.dll` (the next build puts it
 back). The D3D12 path's preprocessing comes from the same DLL; the harness undefines `__FXC2__` for

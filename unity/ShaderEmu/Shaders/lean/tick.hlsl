@@ -210,10 +210,15 @@ static uint budget;           // the fast loop's instructions at most (a store w
 static uint used;             // core 0: its instructions in this frame's rounds before this one (texel 39.y)
 static bool early;            // core 0: this round ended before its instructions did (39.z)
 
-// ---- Memory. The cache is a local array of the pixel (c), its tags at 4b, its texels after;
+// ---- Memory. The cache is a local array of the pixel (), its tags at 4b, its texels after;
 // a bit a bucket says it was written in this pass (it starts undefined otherwise). The bits are a
 // vector in registers: as a local array of four they cost a load what the card's local memory costs.
 #define C_N 448
+// (fxc2: not zeroed at every pass; the cache's entries are read only where its bits say so. xr, above, is zeroed
+// though all of it is written before it is read: without that the three loads were 0.6 to 0.8% slower.)
+#pragma static_noinit
+static uint4 c[C_N];
+static uint4 ot[8];
 static uint4 occv = 0;
 #define OCC(b) (((idx(occv, (b) >> 5) >> ((b) & 31)) & 1) != 0)
 #define OCC_SET(b) occv = put(occv, (b) >> 5, idx(occv, (b) >> 5) | (1u << ((b) & 31)))
@@ -231,7 +236,7 @@ static uint m1_t = 0xffffffff, m1_at = 0, m2_t = 0xffffffff, m2_at = 0, absent_t
 void remember(uint t, uint at) { m2_t = m1_t; m2_at = m1_at; m1_t = t; m1_at = at; }
 uint slot(uint4 tags, uint tag) { return tags.x == tag ? 1 : tags.y == tag ? 2 : tags.z == tag ? 3 : 0; }
 // where the cache holds RAM texel t (4b + entry), or 0: a table is looked in when the one before is full
-uint find(inout uint4 c[C_N], uint t) {
+uint find(uint t) {
     // (the tables one after another, each one's bucket worked out only when it is looked in)
     uint n = 1u << bits, b = t & (n - 1), found = 0;
     bool more = false;
@@ -261,7 +266,7 @@ uint find(inout uint4 c[C_N], uint t) {
     return found;
 }
 // a word of RAM (o its offset, on a word); the texture is asked first, the cache meanwhile
-uint ram_word(inout uint4 c[C_N], uint o) {
+uint ram_word(uint o) {
     uint t = o >> 4;
     [branch] if (t != dr_t) { dr_v = TEX(RAM_ADDR(t)); dr_t = t; }
     bool maybe = (o & bloom) == o;
@@ -269,7 +274,7 @@ uint ram_word(inout uint4 c[C_N], uint o) {
     [branch] if (maybe) {
         at = t == m1_t ? m1_at : t == m2_t ? m2_at : 0;
         [branch] if (at == 0 && t != absent_t) {
-            at = find(c, t);
+            at = find(t);
             if (at != 0) remember(t, at); else absent_t = t;
         }
     }
@@ -281,7 +286,7 @@ uint ram_word(inout uint4 c[C_N], uint o) {
 // `bits` into the word at RAM offset o under `mask`: the tables looked in one after another, each
 // one's bucket worked out only when the one before is full; a whole word into a texel the cache
 // has is written without reading what was there
-void ram_store(inout uint4 c[C_N], uint o, uint v, uint mask) {
+void ram_store(uint o, uint v, uint mask) {
     if (o >= RAM_MAX) return;
     uint t = o >> 4, wi = (o >> 2) & 3, tag = t + 1, n = 1u << bits, b0 = 0, b1 = 0, f0 = 0, f1 = 0;
     uint4 tags0 = 0, tags1 = 0;
@@ -342,10 +347,10 @@ float4 rom4(Texture2D<float4> r, Texture2D<float4> gg, Texture2D<float4> b, Text
     return i == 2 ? b[p] : a[p];
 }
 // a word anywhere (a on a word): RAM, the ROM, the device tree, the clock chip, the timer
-uint load_word(inout uint4 c[C_N], uint a) {
+uint load_word(uint a) {
     [branch] if (a & 0x80000000) {
         uint o = a & 0x7fffffff;
-        return o < RAM_MAX ? ram_word(c, o) : 0;
+        return o < RAM_MAX ? ram_word(o) : 0;
     }
     [branch] if (a & 0x40000000) {
         uint2 d; _Data_ROM.GetDimensions(d.x, d.y);
@@ -358,7 +363,7 @@ uint load_word(inout uint4 c[C_N], uint a) {
            a == 0x0200bff8 ? now_lo : a == 0x0200bffc ? now_hi : 0;
 }
 // a store of `size` bytes anywhere: RAM (a byte at a time when it is not one whole word), the timer
-void store_any(inout uint4 c[C_N], uint a, uint v, uint size) {
+void store_any(uint a, uint v, uint size) {
     [branch] if ((a & 0x80000000) == 0) {
         quiet = false;
         if (size == 4 && a == 0x02004000) tcmp_lo = v;
@@ -368,7 +373,7 @@ void store_any(inout uint4 c[C_N], uint a, uint v, uint size) {
     bool whole = size == 4 && (a & 3) == 0;
     [loop] for (uint i = 0; i < (whole ? 1 : size); i++) {
         uint o = (a + i) & 0x7fffffff, sh = (o & 3) * 8;
-        ram_store(c, o & ~3u, whole ? v : ((v >> (8 * i)) & 0xff) << sh, whole ? 0xffffffff : 0xffu << sh);
+        ram_store(o & ~3u, whole ? v : ((v >> (8 * i)) & 0xff) << sh, whole ? 0xffffffff : 0xffu << sh);
     }
 }
 
@@ -503,7 +508,7 @@ void raise(uint cause, uint val) { if (!trapped) { trapped = true; tcause = caus
 
 // ---- The fast loop: what cannot trap or change what interrupts see, back to back; anything
 // else leaves it, and the general step takes that instruction. Returns how many ran.
-uint fast(inout uint4 c[C_N], uint room) {
+uint fast(uint room) {
     uint n = 0;
     budget = room;
     bool same = false;   // the last stayed within its texel: this one is the next word of it
@@ -530,7 +535,7 @@ uint fast(inout uint4 c[C_N], uint room) {
                     uint va = a + imm_i(w), up = 24 - 8 * (f3 & 3) - ((f3 & 3) == 2 ? 8 : 0);
                     ok = va != 0 && ((0x37u >> f3) & 1) != 0 && (va & 3) + (1u << (f3 & 3)) <= 4 && (va ^ 0x80000000) < RAM_MAX;
                     [branch] if (ok) {
-                        uint x = ram_word(c, va & 0x7ffffffc) >> ((va & 3) * 8) << up;
+                        uint x = ram_word(va & 0x7ffffffc) >> ((va & 3) * 8) << up;
                         v = (f3 & 4) ? x >> up : asuint(asint(x) >> up);
                     }
                 }
@@ -539,7 +544,7 @@ uint fast(inout uint4 c[C_N], uint room) {
                     // sb sh sw, within one word of RAM
                     uint sa = a + imm_s(w), off = sa & 3;
                     ok = f3 < 3 && (sa & 0x80000000) != 0 && off + (1u << f3) <= 4;
-                    [branch] if (ok) ram_store(c, sa & 0x7ffffffc, b << (off * 8), (f3 == 2 ? 0xffffffff : f3 == 1 ? 0xffff : 0xff) << (off * 8));
+                    [branch] if (ok) ram_store(sa & 0x7ffffffc, b << (off * 8), (f3 == 2 ? 0xffffffff : f3 == 1 ? 0xffff : 0xff) << (off * 8));
                     dst = 64;
                 } else [branch] if (opc == 0x53) {
                     // (opcode 0x53 before flw and fsw: a program has more of them) floats: a sum, a difference, a product, and the light ones; the rest are the general step's
@@ -560,13 +565,13 @@ uint fast(inout uint4 c[C_N], uint room) {
                     // flw, a word of RAM
                     uint va = a + imm_i(w);
                     ok = va != 0 && f3 == 2 && (va & 0x80000003) == 0x80000000 && (va & 0x7ffffffc) < RAM_MAX;
-                    [branch] if (ok) v = ram_word(c, va & 0x7ffffffc);
+                    [branch] if (ok) v = ram_word(va & 0x7ffffffc);
                     dst = 32 + rd;
                 } else {
                     // fsw, a word of RAM
                     uint sa = a + imm_s(w);
                     ok = f3 == 2 && (sa & 0x80000003) == 0x80000000;
-                    [branch] if (ok) ram_store(c, sa & 0x7ffffffc, xr[32 + ((w >> 20) & 31)], 0xffffffff);
+                    [branch] if (ok) ram_store(sa & 0x7ffffffc, xr[32 + ((w >> 20) & 31)], 0xffffffff);
                     dst = 64;
                 }
             }
@@ -586,8 +591,8 @@ uint fast(inout uint4 c[C_N], uint room) {
             bool lr = f5 == 2, sc = f5 == 3, sc_ok = res_en != 0 && res_addr == a;
             ok = a != 0 && (a & 0x80000003) == 0x80000000 && o < RAM_MAX && f5 < 16 && ((0x111fu >> f5) & 1) != 0 && (!lr || ((w >> 20) & 31) == 0);
             [branch] if (ok) {
-                uint old = sc ? 0 : ram_word(c, o);
-                [branch] if (sc ? sc_ok : !lr) ram_store(c, o, f5 == 0 ? old + b : f5 == 4 ? old ^ b : f5 == 8 ? old | b : f5 == 12 ? old & b : b, 0xffffffff);
+                uint old = sc ? 0 : ram_word(o);
+                [branch] if (sc ? sc_ok : !lr) ram_store(o, f5 == 0 ? old + b : f5 == 4 ? old ^ b : f5 == 8 ? old | b : f5 == 12 ? old & b : b, 0xffffffff);
                 res_en = lr ? 1 : sc && sc_ok ? 0 : res_en;
                 res_addr = lr ? a : res_addr;
                 v = sc ? (sc_ok ? 0 : 1) : old;
@@ -619,8 +624,8 @@ uint fast(inout uint4 c[C_N], uint room) {
 }
 
 // ---- The general step: one instruction of any kind, then the traps and interrupts.
-void worker_fault(inout uint4 c[C_N]);
-void step(inout uint4 c[C_N]) {
+void worker_fault();
+void step() {
     clock++;
     trapped = false;
     uint w;
@@ -634,7 +639,7 @@ void step(inout uint4 c[C_N]) {
     [branch] if (ra != 0) {
         uint sh = (ra & 3) * 8;
         [loop] for (uint h = 0; h < (sh != 0 ? 2u : 1u); h++) {
-            uint x = load_word(c, (ra & ~3u) + 4 * h);
+            uint x = load_word((ra & ~3u) + 4 * h);
             mv |= h == 0 ? x >> sh : x << (32 - sh);
         }
     }
@@ -654,7 +659,7 @@ void step(inout uint4 c[C_N]) {
         if (opc == 0x07 ? f3 != 2 : ((0x37u >> f3) & 1) == 0) raise(2, w);
     } else [branch] if (opc == 0x23 || opc == 0x27) {
         if (opc == 0x27 ? f3 != 2 : f3 > 2) raise(2, w);
-        else store_any(c, a + imm_s(w), opc == 0x27 ? xr[32 + ((w >> 20) & 31)] : b, 1u << f3);
+        else store_any(a + imm_s(w), opc == 0x27 ? xr[32 + ((w >> 20) & 31)] : b, 1u << f3);
         dst = 64;
     } else [branch] if (opc == 0x63) {
         bool lt = (f3 & 2) ? a < b : asint(a) < asint(b);
@@ -673,7 +678,7 @@ void step(inout uint4 c[C_N]) {
         if (f5 == 2) { res_en = 1; res_addr = a; }
         if (f5 == 3 && sc_ok) res_en = 0;
         if (f5 > 28 || ((f5 & 3) != 0 && f5 > 3) || (f5 == 2 && ((w >> 20) & 31) != 0)) raise(2, w);
-        else if (f5 != 2 && (f5 != 3 || sc_ok)) store_any(c, a, f5 == 3 ? b : x, 4);
+        else if (f5 != 2 && (f5 != 3 || sc_ok)) store_any(a, f5 == 3 ? b : x, 4);
     } else [branch] if (opc == 0x53) {
         bool to_f, ok;
         v = fp_all(w, (f7 & 0x68) == 0x68 ? a : xr[32 + ((w >> 15) & 31)], xr[32 + ((w >> 20) & 31)], to_f, ok);
@@ -728,7 +733,7 @@ void step(inout uint4 c[C_N]) {
     if (quiet && !trapped) { pc = next; return; }
     [branch] if (core != 0 && trapped) {
         // a worker is given no trap: it stops where it is, its record in its mailbox (docs/machine/multicore.md)
-        worker_fault(c);
+        worker_fault();
         trapped = false;
         next = pc;
     }
@@ -756,7 +761,7 @@ void step(inout uint4 c[C_N]) {
     pc = next;
 }
 // The record of a worker's trap, the count last; a record that does not all fit is made in the next pass.
-void worker_fault(inout uint4 c[C_N]) {
+void worker_fault() {
     [branch] if (lane_mode) { stall = STALL_LANE_FAIL; return; }   // (a lane's trap: its index has failed)
     uint box = MBOX + 0x4000 + 64 * core, seen = TEX(RAM_ADDR((box >> 4) + 3)).x, call = MBOX + 0x2000 + 32 * core, k;
     bool is_call = tcause == 8, room = stall == 0;
@@ -768,7 +773,7 @@ void worker_fault(inout uint4 c[C_N]) {
         uint j = k - n;
         uint a = k < n ? call + 4 * k : box + (j == 3 ? 32 : 36 + 4 * j);
         uint v = k < n ? (k == 0 ? xr[17] : xr[9 + k]) : j == 0 ? tcause : j == 1 ? tval : j == 2 ? pc : seen + 1;
-        ram_store(c, a, v, 0xffffffff);
+        ram_store(a, v, 0xffffffff);
     }
     if (stall == 0) { mc_word = (is_call ? 9 : 5) | (seen << 8); stall = STALL_WFI; }
     else if (room) ovf_addr = 0xffffffff;
@@ -827,7 +832,7 @@ bool worker_idle() {
     return (word & 2) != 0 && (TEX(RAM_ADDR(box)).x & 0xffffff) == (word >> 8);
 }
 // texel lin of the state after this pass
-uint4 state_out(inout uint4 c[C_N], uint lin) {
+uint4 state_out(uint lin) {
     uint end = L1_AT + BUCKETS(bits) * 4;
     [branch] if (lin >= L1_AT && lin < end) {
         uint off = lin - L1_AT, bk = off >> 2;
@@ -893,11 +898,11 @@ void lanes_begin(uint w0) {
 // After a lane's run ended at n instructions of `most`: whether it goes on with its next index
 // (an index that returned, room in its texels, and instructions for another by those made so far).
 // An index takes the texels it wrote; one that does not fit them is made again in the next pass.
-bool lane_next(inout uint4 c[C_N], uint n, uint most) {
+bool lane_next(uint n, uint most) {
     lane_ran = n;
     [branch] if (stall == STALL_LANE_RET) {
         uint t0 = lane_out + lane_T * (lane_L + lanes_n * ((lane_j & 0x9fffffff) + lane_k)), q, w = 0;
-        [loop] for (q = 0; q < lane_T; q++) w += find(c, t0 + q) != 0 ? 1u : 0u;
+        [loop] for (q = 0; q < lane_T; q++) w += find(t0 + q) != 0 ? 1u : 0u;
         if (lane_used + w > 6) return false;
         lane_used += w;
         if ((lane_status & 1) != 0 && xr[10] != 0) lane_j |= 0x20000000;   // (a job in steps, bit 0 of its stuck texels' address: this one not through)
@@ -909,22 +914,22 @@ bool lane_next(inout uint4 c[C_N], uint n, uint most) {
     return false;
 }
 // entry e of the lane's six into its buckets: texel t's tag and what it holds
-void lane_put(inout uint4 o[8], inout uint e, uint t, uint4 v) {
+void lane_put(inout uint e, uint t, uint4 v) {
     uint tg = e < 3 ? 0 : 4;
-    o[e < 3 ? 1 + e : 2 + e] = v;
-    o[tg] = put(o[tg], e < 3 ? e : e - 3, t + 1);
+    ot[e < 3 ? 1 + e : 2 + e] = v;
+    ot[tg] = put(ot[tg], e < 3 ? e : e - 3, t + 1);
     e++;
 }
 // A lane pixel's eight texels: the output texels of the indices it made, as its cache has them
 // (one an index never stored to is as RAM has it), its place in its order and its instructions
-void lane_output(inout uint4 c[C_N], inout uint4 o[8]) {
+void lane_output() {
     uint e = 0, i, q, j = lane_j & 0x9fffffff;
-    for (i = 0; i < 8; i++) o[i] = 0;
+    for (i = 0; i < 8; i++) ot[i] = 0;
     [loop] for (i = 0; i < lane_k && e < lane_used; i++) {
         uint t0 = lane_out + lane_T * (lane_L + lanes_n * (j + i));
         [loop] for (q = 0; q < lane_T; q++) {
-            uint at = find(c, t0 + q);
-            [branch] if (at != 0) lane_put(o, e, t0 + q, c[at]);
+            uint at = find(t0 + q);
+            [branch] if (at != 0) lane_put(e, t0 + q, c[at]);
         }
     }
     // (stuck: one of the first 96 K of its order is skipped, its bit set in the lane's stuck texels,
@@ -944,10 +949,10 @@ void lane_output(inout uint4 c[C_N], inout uint4 o[8]) {
         else if (b < 32) s.y |= 1u << b;
         else if (b < 64) s.z |= 1u << (b - 32);
         else s.w |= 1u << (b - 64);
-        lane_put(o, e, at, s);
+        lane_put(e, at, s);
     }
-    o[0].w = (skip ? (j + 1) | 0x40000000u : lane_stuck ? 0x80000000u | j : (j + lane_k) | (lane_j & 0x40000000)) | (lane_j & 0x20000000);
-    o[4].w = lane_ran;
+    ot[0].w = (skip ? (j + 1) | 0x40000000u : lane_stuck ? 0x80000000u | j : (j + lane_k) | (lane_j & 0x40000000)) | (lane_j & 0x20000000);
+    ot[4].w = lane_ran;
 }
 
 #ifdef LANE_FIELD
@@ -1004,21 +1009,21 @@ void field_begin(uint F) {
     lane_go();
 }
 // Pixel F's eight texels: a leader's group word, a lane's output and place, or as they were
-void field_output(inout uint4 c[C_N], inout uint4 o[8]) {
+void field_output() {
     uint e = 0, i;
     [branch] if (!field_on) {
-        for (i = 0; i < 8; i++) o[i] = 0;
-        o[0].w = field_was_a.w; o[4].w = field_was_b.w;
+        for (i = 0; i < 8; i++) ot[i] = 0;
+        ot[0].w = field_was_a.w; ot[4].w = field_was_b.w;
         return;
     }
     [branch] if (field_lead) {
-        for (i = 0; i < 8; i++) o[i] = 0;
-        lane_put(o, e, FIELD_STATUS_T + (field_F >> 6), field_status);
-        o[4].w = field_seq << 24;
+        for (i = 0; i < 8; i++) ot[i] = 0;
+        lane_put(e, FIELD_STATUS_T + (field_F >> 6), field_status);
+        ot[4].w = field_seq << 24;
         return;
     }
-    lane_output(c, o);
-    o[4].w = (field_seq << 24) | ((field_cum + (lane_ran >> 4)) & 0xffffff);
+    lane_output();
+    ot[4].w = (field_seq << 24) | ((field_cum + (lane_ran >> 4)) & 0xffffff);
 }
 #endif
 
@@ -1119,7 +1124,7 @@ struct tick_out { uint4 t0 : SV_Target0; uint4 t1 : SV_Target1; uint4 t2 : SV_Ta
 tick_out frag(v2f i) {
     uint2 p = uint2(i.vertex.xy);
     p.y %= STATE_ROWS * TICK_BANDS;
-    uint4 o[8], c[C_N];
+    
     uint k, w0 = p.y * 64 + p.x * 8;   // the pixel's first texel, in its core's rows
     uint2 own = uint2(p.x * 8, p.y);   // and where that is in the state texture
     geo_read();
@@ -1164,29 +1169,29 @@ tick_out frag(v2f i) {
             // (one loop for a core and for a lane, whose indices are its runs one after another)
             [loop] for (;;) {
                 [loop] while (n < most && stall == 0) {
-                    [branch] if (quiet) n += fast(c, most - n);
+                    [branch] if (quiet) n += fast(most - n);
                     if (n >= most || stall != 0) break;
-                    step(c);
+                    step();
                     n++;
                 }
                 if (!lane_mode) break;   // (two tests: HLSL makes both sides of an ||, and lane_next changes what it looks at)
-                if (!lane_next(c, n, most)) break;
+                if (!lane_next(n, most)) break;
             }
             used += n;
             early = n < most;
         }
     }
 #ifdef LANE_FIELD
-    [branch] if (field) field_output(c, o);
+    [branch] if (field) field_output();
     else
 #endif
-    [branch] if (lane_pixel) lane_output(c, o);
+    [branch] if (lane_pixel) lane_output();
     else for (k = 0; k < 8; k++) {
         uint lin = lin_of(w0 + k);
-        o[k] = none ? (uint4)0 : (_Init && _InitRaw) ? st(lin) : keep || lin >= FP_AT + 8 ? TEX(own + uint2(k, 0)) : state_out(c, lin);
+        ot[k] = none ? (uint4)0 : (_Init && _InitRaw) ? st(lin) : keep || lin >= FP_AT + 8 ? TEX(own + uint2(k, 0)) : state_out(lin);
     }
     tick_out r;
-    r.t0 = o[0]; r.t1 = o[1]; r.t2 = o[2]; r.t3 = o[3]; r.t4 = o[4]; r.t5 = o[5]; r.t6 = o[6]; r.t7 = o[7];
+    r.t0 = ot[0]; r.t1 = ot[1]; r.t2 = ot[2]; r.t3 = ot[3]; r.t4 = ot[4]; r.t5 = ot[5]; r.t6 = ot[6]; r.t7 = ot[7];
     return r;
 }
 #endif

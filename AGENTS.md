@@ -5,7 +5,7 @@
   and states, not what is drawn. A program of which one window is enough calls `ui_single_instance()` (`ui_single.h`).
 - The rules of the work (23 October 2026). We own the whole stack, from the games' and programs' sources down to the
   tick's DXBC instructions: the games and userland, the toolchain, the tick and the other shaders, and
-  fxc2 (`C:\Users\micha\Documents\FXC2`, `tools/fxc2`), so a cost is fixed at whichever layer it is cheapest.
+  fxc2 (the submodule `tools/fxc2`), so a cost is fixed at whichever layer it is cheapest.
   - Any sacrifice that makes userland programs faster is worth it.
   - The shaders can be rewritten completely if needed.
   - Everything must work under VRChat's constraints (no UAVs in the fragment shader, no texture arrays, D3D11 DXBC).

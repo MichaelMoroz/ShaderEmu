@@ -47,18 +47,21 @@ add_executable(rvc_harness_dxc ${RVC_HARNESS_SOURCES})
 target_compile_definitions(rvc_harness_dxc PRIVATE RVC_DEFAULT_DXC)
 target_link_libraries(rvc_harness_dxc PRIVATE harness_core d3d12 xaudio2)
 
+if(NOT EXISTS ${CMAKE_SOURCE_DIR}/tools/fxc2/bin/d3dcompiler_47.dll)
+  message(FATAL_ERROR "tools/fxc2 is empty: git submodule update --init")
+endif()
 # The D3D11 compiler is fxc2 (docs/machine/fxc2.md): its d3dcompiler_47.dll beside an executable is the
 # one Windows loads for it. Without it the harness still runs, on FXC, and compiles for minutes.
 foreach(exe rvc_harness rvc_harness_dxc)
   add_custom_command(TARGET ${exe} POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    ${CMAKE_SOURCE_DIR}/tools/fxc2/d3dcompiler_47.dll $<TARGET_FILE_DIR:${exe}>)
+    ${CMAKE_SOURCE_DIR}/tools/fxc2/bin/d3dcompiler_47.dll $<TARGET_FILE_DIR:${exe}>)
 endforeach()
 
 # The display stream's shaders outside Unity (docs/world/share.md, "Units"): tools/share_units.py compares.
 add_executable(share_test harness/apps/share_test.cpp)
 target_link_libraries(share_test PRIVATE harness_core)
 add_custom_command(TARGET share_test POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
-  ${CMAKE_SOURCE_DIR}/tools/fxc2/d3dcompiler_47.dll $<TARGET_FILE_DIR:share_test>)
+  ${CMAKE_SOURCE_DIR}/tools/fxc2/bin/d3dcompiler_47.dll $<TARGET_FILE_DIR:share_test>)
 
 # D3D12 runner for the same FXC bytecode, so D3D12-only profilers (Nsight GPU Trace) can attach.
 add_executable(rvc_trace12 harness/apps/rvc_trace12.cpp)
