@@ -114,6 +114,8 @@ uint4 put(uint4 v, uint i, uint x) { return uint4(i == 0 ? x : v.x, i == 1 ? x :
 static uint xr[65];   // x0-x31, f0-f31 as bits, and [64] for writes that must not land
 static uint pc, priv, stall, clock, mstatus, mie, mip, stvec, sscratch, sepc, scause, stval, scounteren, fcsr;
 static uint tcmp_lo, tcmp_hi, now_lo, now_hi, res_en, res_addr, msrc, mdst, mn, ovf_addr, ovf_val, bloom, dirty, mc_word;
+static uint regs = 0;   // the 16 KB of RAM the write cache has texels of (bit (o >> 14) & 31, regions 512 KB apart sharing one): a load
+                        // elsewhere searches nothing (the bloom, the stored addresses or-ed, let most loads through)
 static bool quiet;            // nothing the general step looks at after an instruction has changed
 static bool trapped;
 static uint tcause, tval;
@@ -186,8 +188,8 @@ uint find(uint t) {
 uint ram_word(uint o) {
     uint t = o >> 4;
     [branch] if (t != dr_t) { dr_v = TEX(RAM_ADDR(t)); dr_t = t; }
-    bool maybe = (o & bloom) == o;
-    uint at = t == m1_t ? m1_at : t == m2_t ? m2_at : 0;   // (the remembered texels are the cache's, whatever the bloom says)
+    bool maybe = ((regs >> ((o >> 14) & 31)) & 1) != 0;
+    uint at = t == m1_t ? m1_at : t == m2_t ? m2_at : 0;   // (the remembered texels are the cache's, whatever the regions say)
     [branch] if (maybe && at == 0 && t != absent_t) {
         at = find(t);
         if (at != 0) remember(t, at); else absent_t = t;
@@ -199,69 +201,12 @@ uint ram_word(uint o) {
 // `bits` into the word at RAM offset o under `mask`: the tables looked in one after another, each
 // one's bucket worked out only when the one before is full; a whole word into a texel the cache
 // has is written without reading what was there
-void ram_store(uint o, uint v, uint mask) {
-    if (o >= RAM_MAX) return;
-    uint t = o >> 4, wi = (o >> 2) & 3, tag = t + 1, n = 1u << bits, b0 = 0, b1 = 0, f0 = 0, f1 = 0;
-    uint4 tags0 = 0, tags1 = 0;
-    uint at = t == m1_t ? m1_at : t == m2_t ? m2_at : 0;
-    [branch] if (at == 0) {
-        b0 = t & (n - 1);
-        [branch] if (OCC(b0)) tags0 = c[4 * b0];
-        uint e0 = slot(tags0, tag), e1 = 0;
-        f0 = slot(tags0, 0);
-        [branch] if (e0 == 0 && f0 == 0) {
-            b1 = n + H1(t, bits - 1);
-            [branch] if (OCC(b1)) tags1 = c[4 * b1];
-            e1 = slot(tags1, tag); f1 = slot(tags1, 0);
-            [branch] if (e1 == 0 && f1 == 0) {
-                b1 = BUCKET2(t, n);
-                tags1 = 0;
-                [branch] if (OCC(b1)) tags1 = c[4 * b1];
-                e1 = slot(tags1, tag); f1 = slot(tags1, 0);
-            }
-        }
-        at = e0 != 0 ? 4 * b0 + e0 : e1 != 0 ? 4 * b1 + e1 : 0;
-        if (at != 0) remember(t, at);
-    }
-    [branch] if (at != 0 && mask == 0xffffffff) {
-        bloom |= o;
-        [branch] if (wi < 2) { if (wi == 0) c[at].x = v; else c[at].y = v; }
-        else { if (wi == 2) c[at].z = v; else c[at].w = v; }
-    } else {
-        // (no return in it: a return in a function inlined in the loop is a flag tested after it)
-        uint4 texel;
-        [branch] if (at != 0) texel = c[at];
-        else {
-            [branch] if (t != dr_t) { dr_v = TEX(RAM_ADDR(t)); dr_t = t; }
-            texel = dr_v;
-        }
-        uint cur = at == 0 && ovf_addr == o && (o & bloom) == o ? ovf_val : idx(texel, wi);
-        uint val = (cur & ~mask) | (v & mask);
-        [branch] if (val != cur) {
-            bloom |= o;
-            dirty |= 1u << ((o >> 22) & 31);
-            texel = put(texel, wi, val);
-            [branch] if (at != 0) {
-                c[at] = texel;
-            } else if (f0 != 0 || f1 != 0) {
-                uint b = f0 != 0 ? b0 : b1, f = f0 != 0 ? f0 : f1;
-                c[4 * b] = put(f0 != 0 ? tags0 : tags1, f - 1, tag);
-                c[4 * b + f] = texel;
-                OCC_SET(b);
-                remember(t, 4 * b + f);
-                absent_t = 0xffffffff;
-            } else {
-                ovf_addr = o; ovf_val = val;   // made by the commit, which ends the pass here
-                stall = STALL_MEM; budget = 0;
-            }
-        }
-    }
-}
 void ram_store_nc(uint o, uint v, uint mask) {   // ram_store for an o known to be in RAM
     uint t = o >> 4, wi = (o >> 2) & 3, tag = t + 1, n = 1u << bits, b0 = 0, b1 = 0, f0 = 0, f1 = 0;
     uint4 tags0 = 0, tags1 = 0;
     uint at = t == m1_t ? m1_at : t == m2_t ? m2_at : 0;
     [branch] if (at == 0) {
+        [branch] if (t != dr_t) { dr_v = TEX(RAM_ADDR(t)); dr_t = t; }   // (asked before the search: a new texel's store needs it)
         b0 = t & (n - 1);
         [branch] if (OCC(b0)) tags0 = c[4 * b0];
         uint e0 = slot(tags0, tag), e1 = 0;
@@ -286,12 +231,7 @@ void ram_store_nc(uint o, uint v, uint mask) {   // ram_store for an o known to 
         else { if (wi == 2) c[at].z = v; else c[at].w = v; }
     } else {
         // (no return in it: a return in a function inlined in the loop is a flag tested after it)
-        uint4 texel;
-        [branch] if (at != 0) texel = c[at];
-        else {
-            [branch] if (t != dr_t) { dr_v = TEX(RAM_ADDR(t)); dr_t = t; }
-            texel = dr_v;
-        }
+        uint4 texel = at != 0 ? c[at] : dr_v;   // (the RAM texel was asked with the search)
         uint cur = at == 0 && ovf_addr == o && (o & bloom) == o ? ovf_val : idx(texel, wi);
         uint val = (cur & ~mask) | (v & mask);
         [branch] if (val != cur) {
@@ -305,6 +245,7 @@ void ram_store_nc(uint o, uint v, uint mask) {   // ram_store for an o known to 
                 c[4 * b] = put(f0 != 0 ? tags0 : tags1, f - 1, tag);
                 c[4 * b + f] = texel;
                 OCC_SET(b);
+                regs |= 1u << ((o >> 14) & 31);
                 remember(t, 4 * b + f);
                 absent_t = 0xffffffff;
             } else {
@@ -314,6 +255,7 @@ void ram_store_nc(uint o, uint v, uint mask) {   // ram_store for an o known to 
         }
     }
 }
+void ram_store(uint o, uint v, uint mask) { [branch] if (o < RAM_MAX) ram_store_nc(o, v, mask); }   // (any o: past RAM no store)
 // a word anywhere (a on a word): RAM, the ROM, the clock chip, the timer
 uint load_word(uint a) {
     [branch] if (a & 0x80000000) {
@@ -543,7 +485,7 @@ uint fast(uint room) {
 #else
                 ok = (sa ^ 0x80000000) < RAM_MAX && off + (1u << f3) <= 4;
 #endif
-                [branch] if (ok) ram_store_nc(sa & 0x7ffffffc, b << (off * 8), (0xffffffffu >> LOAD_UP(f3)) << (off * 8));
+                ram_store_nc(sa & 0x7ffffffc, b << (off * 8), ok ? (0xffffffffu >> LOAD_UP(f3)) << (off * 8) : 0);   // (no test: a store that may not changes nothing)
                 dst = 64;
             } else [branch] if (opc == 0x53) {
                 // (opcode 0x53 before flw and fsw: a program has more of them) floats: a sum, a difference, a product, and the light ones; the rest are the general step's
@@ -627,7 +569,10 @@ uint fast(uint room) {
             // full of them, and each was a general step
             uint cn = w >> 20, src = (f3 & 4) ? rs1 : a;
             bool wr_ = (f3 & 3) == 1 || src != 0;
-            bool plain = (cn - 0x140 < 4) || cn == 0x105 || cn == 0x106 || (cn - 1 < 3) || cn == 0xc01 || cn == 0xf14;
+            // (and sstatus while no interrupt is pending, which the kernel turns off and on around every lock: then
+            // no write of it can let one in; and timeh and instret, which read 0)
+            bool plain = (cn - 0x140 < 4) || cn == 0x105 || cn == 0x106 || (cn - 1 < 3) || cn == 0xc01 || cn == 0xf14 ||
+                         cn == 0xc81 || cn == 0xc02 || (cn == 0x100 && (mip & mie & 0x222) == 0);
             ok = plain && ((cn >> 8) & 3) <= priv && !(wr_ && ((cn >> 10) & 3) == 3);
             [branch] if (ok) {
                 v = csr_read(cn);

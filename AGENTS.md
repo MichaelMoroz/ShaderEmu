@@ -213,6 +213,11 @@
   an sc always succeeds, an opcode of no group is no instruction. 0.2 to 0.8% of a tick, and it breaks Red
   Alert's and the NES's state, the IDE's breakpoints (the word 0) and fptest's fdiv (`tick-costs.md`,
   "FAST"). A change to a FAST block changes rvc_cpu's `tick_fast` paths with it.
+- The tick's write cache (`tick-costs.md`, "Fourth round"): a fast-loop store calls `ram_store_nc` with no test
+  of `ok` and a mask of 0 when it may not, so a mask of 0 must store nothing there; a texel enters the cache only
+  where `ram_store_nc` makes a new entry, which sets its 16 KB region's bit in `regs`, and a load searches only
+  where that bit is set: a new way into the cache sets it too, or a load misses its own store. sstatus is a fast-loop
+  CSR while `mip & mie` is 0: a new way for an interrupt to become pending within a pass makes it the general step's.
 - A round in Unity costs what a pass costs in the harness (the same fxc2 bytecode); what is
   left between them is 1.4 ms of every frame that is no round's (the room's cameras 0.65).
 - Doom's view is made by up to four worker cores from what the first core tells it between
