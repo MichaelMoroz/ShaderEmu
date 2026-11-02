@@ -29,6 +29,19 @@ extern "C" void ShaderEmu_Set_Legacy_Render(int on)
     ShaderEmu_Legacy_Render = on != 0;
 }
 
+// MapClass::Clean on the marked cells (our patch to map.cpp): 0 those, 1 every cell as the
+// Remaster has it, 2 those and a count of the cells it would have missed (must stay 0).
+extern int ShaderEmu_Clean_Mode;
+extern int ShaderEmu_Clean_Missed;
+extern "C" void ShaderEmu_Set_Clean(int mode)
+{
+    ShaderEmu_Clean_Mode = mode;
+}
+extern "C" int ShaderEmu_Clean_Missed_Count(void)
+{
+    return ShaderEmu_Clean_Missed;
+}
+
 static int se_events;
 static void __cdecl se_event(const EventCallbackStruct& e)
 {

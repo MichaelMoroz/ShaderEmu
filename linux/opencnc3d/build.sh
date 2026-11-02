@@ -92,6 +92,8 @@ fi
 # (docs/games/tdawn.md); -fms-extensions, -fpermissive and msvc_gcc.h: dllinterface.h's MSVC forms
 # (OpenCNC3D's brain/README.md, "The four portability patches", made for Clang)
 MSVC="-fno-lifetime-dse -fms-extensions -fpermissive -include $HERE/msvc_gcc.h"
+# our patch's changes, in the engine and in common/ (the file search of linux/tdawn's patch)
+MSVC="$MSVC -DSHADEREMU_BRAIN"
 cmake -S "$SRC" -B "$BUILD" $TC -DCMAKE_BUILD_TYPE=Release \
     -DBUILD_REMASTERTD=ON -DBUILD_VANILLATD=OFF -DBUILD_VANILLARA=OFF -DBUILD_REMASTERRA=OFF \
     -DSDL2=OFF -DOPENAL=OFF -DNETWORKING=OFF -DOPENCNC3D_STATIC=ON \
