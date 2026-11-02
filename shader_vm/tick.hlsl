@@ -262,6 +262,7 @@ void ram_store_nc(uint o, uint v, uint mask) {   // ram_store for an o known to 
     uint4 tags0 = 0, tags1 = 0;
     uint at = t == m1_t ? m1_at : t == m2_t ? m2_at : 0;
     [branch] if (at == 0) {
+        [branch] if (t != dr_t) { dr_v = TEX(RAM_ADDR(t)); dr_t = t; }   // (asked before the search: a new texel's store needs it)
         b0 = t & (n - 1);
         [branch] if (OCC(b0)) tags0 = c[4 * b0];
         uint e0 = slot(tags0, tag), e1 = 0;
