@@ -350,3 +350,145 @@ the budget instead of a break) saved nothing, as the loop's own test then waited
 cheaper given up where no program of ours has the encoding than tested. Moving work into the arithmetic path, even one
 product and a select, costs that path 1 to 3%; taking one operation out (`& 31`) was worth 0.2 to 0.4%. On Quake a run of
 30 s does not tell 1% from nothing: run 50 s, two ticks, twice.
+
+## 3 November 2026, third round: checks given up, small shapes, and FAST
+
+The same RTX 3090, D3D11, fxc2 67, `RVC_TICK_ALT` from the second round's snapshots (made with its image). ms of a
+frame's tick. The owner gave leave to drop checks that only an invalid or rare program would notice.
+
+**The kept set against `af803662` and `15c1e2a7`** (the new tick stamped and primary, the two beside it, one run each line):
+
+| Load | `15c1e2a7` | `af803662` | Now | against `15c1e2a7` | against `af803662` |
+|---|---|---|---|---|---|
+| Shell loop (40 s) | 1.7585 | 1.6260 | 1.6114 | -8.36% | -0.90% |
+| Shell loop, again | 1.7657 | 1.6304 | 1.6178 | -8.38% | -0.77% |
+| Quake, e1m1 (50 s) | 1.9029 | 1.7661 | 1.7569 | -7.67% | -0.52% |
+| Quake, again | 1.8986 | 1.7677 | 1.7505 | -7.80% | -0.97% |
+| Quake III (40 s) | 1.9862 | 1.8454 | 1.8350 | -7.61% | -0.56% |
+| `nxphys` (30 s) | 0.4277 | 0.3985 | 0.3813 | -10.85% | -4.32% (it moves 2 to 5% between runs) |
+
+What it is (`rvc_cpu` makes every relaxed one as the tick does; `test_all.py` 220 of 220, no value moved; on the card
+`test_card.py machine fptest nxpath-balls nxpaint` 11 of 11):
+
+- **The relaxed checks**, level alone (shell 1.6132 to 1.6118, Quake 1.7663 to 1.7705, Quake III 1.8539 to 1.8503), kept
+  with the shapes they were measured under:
+  - a plain `fence` is no instruction in the fast loop (it left the loop: 0.008% of the shell loop's and Quake's
+    instructions, `0820000f`, `0ff0000f`, `0310000f` and `0550000f`, counted from `RVC_PROF`'s `pcs.txt`); `pause` and
+    `fence.i` are the general step's;
+  - loads look at no funct3 (lwu is lw, ld and funct3 7 fail the size test) and not at 0 (the range test excludes it);
+    stores no `f3 < 3` (the size test has it); flw and the atomics no 0 test;
+  - an atomic's funct5 under 16 that is none of ours is amoswap, and lr's rs2 is not looked at (the general step too);
+  - jalr's funct3 is not looked at (fast loop and general step; rvc_cpu never did);
+  - fadd, fsub and fmul keep the card's NaN: an NVIDIA card's is `7fffffff` whatever the operands' were (a probe of
+    quiet, signalling, negative and payload NaNs, `0 * inf` and `inf - inf`), not RISC-V's `7fc00000`; `rvc_cpu`'s
+    `card_nan` makes the same. Division, root, the fused ones and min/max still make `7fc00000`;
+  - `op_m` keeps only what D3D does not give: on the card `divu` by 0 is all ones, `div` of `INT_MIN` by -1 is `INT_MIN`
+    and `rem` of it 0, but `div` of a negative number by 0 is 1 and every remainder by 0 is all ones: `div` and the
+    remainders keep their zero test.
+- **Five shapes**: a branch's less-than as slt's (signs turned over), `ram_word` taking the remembered texels whatever
+  the bloom says (they are the cache's), the inline floats' result by funct7's bits, `fp_all` testing the conversions
+  first, the pass's loop testing `!quiet` with no `[branch]`. Each was -0.1 to -0.3% of the shell loop; the five without
+  the relaxed checks shell -0.72 and -0.57%, Quake +0.48, +0.40 and +0.04%; with them shell -0.81 and -0.76%, Quake +0.05,
+  -0.64 and +0.02%, Quake III -0.33 and -0.72%.
+- **Float comparisons by themselves** before the light floats (Quake's most common float, 2.6% of its instructions; feq,
+  flt and fle with funct3 3 to 7 are fle, as rvc_cpu always made them), **a load's bytes by one shift** (`(va & 3) * 8` is
+  never over `up` for a load that may be), **a store's mask by `LOAD_UP`** and **its immediate from rd**: on the set above
+  Quake -1.25, -1.64 and -0.50%, the shell loop and Quake III level.
+
+**FAST** (`--define FAST` on the harness; `rvc_cpu --fast` or `RVC_TICK_FAST=1`, and `RVC_TICK_FAST_PARTS=1|2|4` for
+the sizes, the opcodes of no group, the sc alone): off by default. What it is: a load or store in RAM not on its size takes
+the bytes of the word it is in from its address on (a load has zeros above them; ld and lwu are lw; a store's funct3 3 to 7
+go by their low bits), instead of the general step's two words or bytes; fdiv is the card's `a / b`, in the fast loop with
+the sum and product; an sc always succeeds; an opcode of no group is no instruction instead of an illegal one. ms of the
+tick, the same run:
+
+| | Shell | Quake | Quake III | `nxphys` |
+|---|---|---|---|---|
+| All of FAST, on the kept set | 1.6240 to 1.6176, -0.39% | 1.7427 to 1.7391, -0.21% | 1.8282 to 1.8134, -0.81% | 0.3819 to 0.3813, level |
+| All of FAST, on `af803662` | 1.6399 to 1.6344, -0.34% | 1.7823 to 1.7638, -1.04% | 1.8516 to 1.8386, -0.70% | 0.3794 to 0.3833, +1.0% |
+| The sizes alone (on `af803662`) | 1.6399 to 1.6308, -0.55% | 1.7823 to 1.7662, -0.90% | 1.8516 to 1.8405, -0.60% | 0.3794 to 0.3862, +1.8% |
+| fdiv alone | | 1.7823 to 1.7700, -0.69% | | |
+| The sc alone | | 1.7823 to 1.7787, -0.20% | | |
+| The opcodes of no group alone | 1.6399 to 1.6405, level | | | |
+
+What FAST breaks (`test_all.py` under `rvc_cpu --fast`: 211 of 220; `test_card.py machine fptest nxpath-balls nxpaint`
+with `--with=--define --with=FAST`: 10 of 11):
+
+- **The sizes**: Red Alert's state (`ralert-allies-300`, `ralert-soviet-1300`, `ralert-allies-1300`, `ralert-paths`,
+  `ralert-attack`, `ralert-won`: other units and buildings by frame 300) and the NES (`nes-nova-120`,
+  `nes-nova-120-lists`: every frame's RAM `aece4b1b` for `3a2e5c47`). Both are correct C that reads and writes across a
+  word, which the general step made right. (`RVC_TICK_FAST_PARTS=1` alone fails these.)
+- **The opcodes of no group**: the IDE's debugger (`nxide-c`), whose breakpoint is the word 0 (an illegal instruction the
+  kernel turns into SIGILL, `linux/ide/debug.h`), runs through every stop (`RVC_TICK_FAST_PARTS=2` alone). `machine.h`
+  and `nxsettings` find F and Zb by a SIGILL too: F's instruction is in a group, and Zb's has run as the base instruction
+  since the second round, so `nxsettings` says Zba and Zbb are there with or without FAST. Nothing in the image emulates
+  doubles by a trap: a double is compiler-rt's integer routines (`fpu.md`).
+- **fdiv**: `fptest` on the card, 533 of 200,000 divisions wrong (a divisor over 2^126 gives 0: `7f4fac9c / ff4fac9d`
+  gave `80000000`, not `bf7fffff`), 40,462 off in the last place (40,605 without FAST). `rvc_cpu` cannot make the card's
+  division: its own is exact.
+- **The sc**: nothing in either set (`RVC_TICK_FAST_PARTS=4` alone passes them). An sc succeeds whether or not its lr
+  was made: a program that relies on a failed sc after a trap or a context switch would not see one.
+
+**Experiments**, ms of the tick against `af803662` in the same run (the shell loop 30 s, Quake 45 s, four to six ticks a
+run; a copy of a tick moved up to 0.2% on the shell loop and up to 1.4% on Quake in these). The rows from "A store's
+mask" on are on the relaxed checks. Kept rows are in bold.
+
+| What | Shell | Quake | Verdict |
+|---|---|---|---|
+| Plain fence a no-op | 1.6433 to 1.6449 | 1.7741 to 1.7813 | level |
+| Loads' funct3 and 0, stores' `f3 < 3` | 1.6433 to 1.6407 | 1.7741 to 1.7771 | level (Quake III 1.8539 to 1.8493) |
+| Atomics' funct5 and lr's rs2, jalr's funct3 | 1.6433 to 1.6429 | 1.7741 to 1.7814 | level |
+| The card's NaN in fadd, fsub, fmul | 1.6132 to 1.6214 | 1.7425 to 1.7696; 50 s 1.7663 to 1.7787 | level or +0.5 to +0.7% (Quake III 1.8539 to 1.8662) |
+| `op_m` without what D3D gives | 1.6132 to 1.6153 | 1.7425 to 1.7558 | level |
+| **All of them** | 1.6132 to 1.6118 | 1.7425 to 1.7523; 50 s 1.7663 to 1.7705 | level alone (Quake III 1.8539 to 1.8503, `nxphys` 0.3864 to 0.3925); kept with the shapes |
+| A store's mask by `LOAD_UP` | 1.6372 to 1.6342 | 1.7767 to 1.7748 | level |
+| A store's size test by a table | 1.6372 to 1.6394 | 1.7767 to 1.7818 | level |
+| A load's size test by a table | 1.6372 to 1.6396 | 1.7767 to 1.7870 | level |
+| flw before opcode 0x53 | 1.6525 to 1.6503 | 1.7734 to 1.7716 | level |
+| Opcode 0x53 first in its group, stores after | 1.6525 to 1.6614 | 1.7734 to 1.7893 | lost |
+| The floats' format bits not tested | 1.6525 to 1.6494 | 1.7734 to 1.7738 | level |
+| The light floats' funct3 and rs2 not tested | 1.6366 to 1.6390 | 1.7700 to 1.7680 | level |
+| flw's and fsw's funct3 not tested | 1.6366 to 1.6370 | 1.7700 to 1.7908 | level or lost |
+| **A branch's less-than as slt's** | 1.6366 to 1.6346 | 1.7700 to 1.7671 | level alone; kept in the five |
+| The store's immediate from rd; the branch's | 1.6424 to 1.6434; 1.6421 | 1.7788 to 1.7839; 1.7959 | level |
+| `ram_word` without the texel looked for last and not found | 1.6424 to 1.7555 | 1.7788 to 1.9174 | lost, +6.9% and +7.8%: the search is dear |
+| A jump's target as one sum | 1.6380 to 1.6414 | 1.7815 to 1.7556; 60 s 1.7588 to 1.7690 | level (Quake III 1.8386 to 1.8420) |
+| The jumps' group by two masks | 1.6380 to 1.6372 | 1.7815 to 1.7756 | level |
+| **`ram_word`'s remembered texels whatever the bloom says** | 1.6380 to 1.6350 | 1.7815 to 1.7829 | level alone; kept in the five |
+| fsw with the stores (flw by itself) | 1.6390 to 1.6455 | 1.7786 to 1.7795 | level or lost |
+| **Float comparisons by themselves** | 1.6390 to 1.6378 | 1.7786 to 1.7552; 60 s 1.7588 to 1.7461 | level alone (Quake III 1.8386 to 1.8386); kept with the next ones |
+| fmv by itself before the light floats | 1.6390 to 1.6384 | 1.7786 to 1.7859 | level |
+| A subtraction as a sum with y negated | 1.6515 to 1.6578 | 1.7859 to 1.7650; 60 s 1.7777 to 1.7786 | level |
+| slt's turn by `(~f3 & 1) << 31` | 1.6515 to 1.6531 | 1.7859 to 1.7876 | level |
+| The window turned by two selects, not three | 1.6515 to 1.6556 | 1.7859 to 1.7781 | level |
+| The light floats before the sum, difference and product | 1.6396 to 1.6408 | 1.7675 to 1.7740 | level |
+| The atomics after M and the CSRs | 1.6396 to 1.6456 | 1.7675 to 1.7982 | lost |
+| Probe: no floats in the fast loop; no CSRs; no atomics | 1.6396 to 1.6273 | 1.7675 to 1.7709; 1.7751 | the float group costs the shell loop, which has none, 0.75% |
+| **The inline floats' result by funct7's bits** | 1.6405 to 1.6370 | 1.7826 to 1.7787 | kept in the five |
+| **`fp_all`: the conversions first** | 1.6405 to 1.6362 | 1.7826 to 1.7778 | kept in the five |
+| **The pass's `!quiet` with no `[branch]`** | 1.6405 to 1.6362 | 1.7826 to 1.7821 | kept in the five |
+| A store's bloom bit at its start | 1.6416 to 1.6404 | 1.7676 to 1.7893 | level |
+| An atomic reads its word whatever it is | 1.6416 to 1.6395 | 1.7676 to 1.7858 | level |
+| **A load's bytes by one shift** | 1.6416 to 1.6387 | 1.7676 to 1.7711 | level alone; kept with the comparisons |
+| The atomics' address test as the loads' | 1.6540 to 1.6568 | 1.7771 to 1.7725 | level |
+| The fast loop's CSRs: no read-only test | 1.6540 to 1.6543 | 1.7771 to 1.7867 | level |
+| `[branch]` on the loop's `if (!ok) break` | 1.6540 to 1.6530 | 1.7771 to 1.7840 | level |
+| Stores in the first group, after arithmetic and loads | 1.6540 to 1.6762 | 1.7771 to 1.7530 | lost, +1.3% shell |
+| The float checks all given up (funct3, format, flw's) | 1.6286 to 1.6272 | 1.7484 to 1.7646 | level |
+| **A load's one shift, a store's mask by `LOAD_UP`, its immediate from rd** | 1.6286 to 1.6218 | 1.7484 to 1.7623 | level alone; kept with the comparisons |
+| **The five shapes** | 1.6286 to 1.6178 | 1.7484 to 1.7502 | **kept**, figures above |
+| Loads do not move the remembered texels | 1.6299 to 1.6591 | 1.7959 to 1.7915 | lost, +1.8% shell |
+| Two data texels kept from the texture | 1.6299 to 1.7457 | 1.7959 to 1.9315 | lost, +7.1% and +7.6% |
+| The CSRs before M | 1.6299 to 1.6305 | 1.7959 to 1.7929 | level |
+| The fast loop's body twice a turn | 1.6299 to 1.7449 | 1.7959 to 1.9025 | lost, +7.1% and +5.9% |
+| The five without the relaxed checks | 1.6433 to 1.6315; 1.6371 to 1.6277 | 1.7657 to 1.7742; 1.7680 to 1.7751; 1.7729 to 1.7736 | shell -0.6%, Quake +0.4%: with them instead |
+| The five with the comparisons | 1.6433 to 1.6323 | 1.7657 to 1.7607 | level against the five |
+| On the kept five: the comparisons; the one shift, mask and immediate; the light floats' checks | 1.6309 to 1.6232; 1.6168; 1.6221 (the five 1.6202) | 1.7608 to 1.7466; 1.7395; 1.7394 (the five 1.7549) | Quake -0.5 to -0.9% against the five |
+| On the kept five: an atomic's read; the mask; the one shift; **the comparisons with the one shift, mask and immediate** | 1.6251 to 1.6158; 1.6137; 1.6109; 1.6141 (the five 1.6145) | 1.7904 to 1.7747; 1.7621; 1.7608; 1.7337 (the five 1.7556) | **kept**: again, 60 s, Quake 1.7713 to 1.7422 and 1.7455 to 1.7367, shell 1.6118 to 1.6110, Quake III 1.8270 to 1.8280 |
+
+**What was learnt.** The checks given up this round were cheap already: none was more than noise alone, where the second
+round's funct7 table was 2% of the shell loop. A test is dear when the loop's end waits for it on a common kind; these were
+on rare kinds or folded into tests the loop makes anyway. What is still dear is a search of the write cache (without the
+absent texel +7%) and anything that adds a local array or a second copy of the body (+6 to +8%). On Quake, 45 s runs of
+five ticks moved a copy of the tick by up to 1.4%: a change was believed after three runs with the same sign. The commit
+and the other shaders cannot be timed with `RVC_TICK_ALT`, which swaps the tick pass alone.
