@@ -196,6 +196,11 @@
   first were 4% slower, and operations counted do not say which way a shape goes. After any
   change to the fast loop's control flow run the three loads in turn from one snapshot (a
   shell loop, Doom's timedemo, Quake e1m1), and bring the function to Unity's copy verbatim.
+  The fast loop's arithmetic reads no funct7 but bit 30 (and 1 for M), and a branch's funct3 2
+  and 3 are beq and bne (`tick-costs.md`, "tests the fast loop did not need": the test was 2% of
+  the shell loop): an encoding of an extension we do not have runs as the base instruction it
+  resembles, in rvc_cpu too. Zba/Zbb on the tick need a funct7 test of their own. A Quake gain
+  under 1.5% is noise until a second 50 s run of two ticks says so.
 - A round in Unity costs what a pass costs in the harness (the same fxc2 bytecode); what is
   left between them is 1.4 ms of every frame that is no round's (the room's cameras 0.65).
 - Doom's view is made by up to four worker cores from what the first core tells it between

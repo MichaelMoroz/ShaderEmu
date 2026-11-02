@@ -78,6 +78,9 @@ costs the same, so a Zba or Zbb instruction counts as one fast instruction. That
   fewer passes, so more of the passes reach the write cache's limit. That is a gain, not a loss: the window is 1.75%
   fewer passes. The layout control moved the same count by 9%.
 - **On the tick.** `ZB` (`zb_exec`, Zba and Zbb) is already in `emu.h`, behind the `K_ALU` block's `[branch] if (!ok)`.
+  - `shader_vm/tick.hlsl` has no such `ok` since 3 November 2026 (`docs/machine/tick-costs.md`, "tests the fast loop did
+    not need"): its arithmetic looks at no funct7 but bit 30, so a Zba or Zbb word is made as the base instruction it
+    resembles (`andn` as `and`), not sent to the general step. Zb on this tick needs its own test of funct7 first.
   - Zbs and Zicond were added for this study as `ZB_X` (`build/isa/alt/old_tick_zb`, about 20 lines).
   - Without `ZB` on the tick, every one of these instructions takes the general path. That makes the zb build
     36% slower modelled (Doom's core 0: 35,569 ms to 48,267).
