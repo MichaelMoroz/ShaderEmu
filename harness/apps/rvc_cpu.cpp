@@ -898,6 +898,9 @@ static inline float fl(u32 bits) { float v; memcpy(&v, &bits, 4); return v; }
 static inline u32 bits(float v) { u32 b; memcpy(&b, &v, 4); return b; }
 static inline bool is_nan(u32 b) { return (b & 0x7f800000) == 0x7f800000 && (b & 0x7fffff); }
 static inline u32 canon(float v) { u32 b = bits(v); return is_nan(b) ? 0x7fc00000u : b; }
+// fadd, fsub and fmul's NaN: the card's (an NVIDIA card's is 0x7fffffff, whatever the operands' were), as the tick's
+// fast loop leaves it (docs/machine/tick-costs.md, 3 November 2026, third round); the rest are made RISC-V's
+static inline u32 card_nan(float v) { u32 b = bits(v); return is_nan(b) ? 0x7fffffffu : b; }
 
 static u32 to_int(u32 b, bool is_unsigned) {
     float v = fl(b);
@@ -1128,9 +1131,15 @@ enum : uint8_t {
 static uint8_t step_kind[4][8192];   // [RVC_ZB]: with Zba and Zbb, op and op-imm are all the general step's;
                                      // [2 + RVC_ZB]: RVC_CALLS's core 0, jal and jalr the general step's too
 static bool step_kinds_made = false;
+// --fast or RVC_TICK_FAST=1: as the tick built with the define FAST (docs/machine/tick-costs.md, "FAST"): a load or
+// store in RAM not on its size takes its word's bytes from its address on (no trap, no second word), an sc always
+// succeeds, and an opcode the tick has no group for is no instruction. Its loads and stores go by the general step.
+// FAST's fdiv (the card's a / b, an ulp or two off) is not made here: this computer's division is exact.
+static unsigned tick_fast = 0;   // (bits: 1 the sizes, 2 no instruction, 4 the sc; RVC_TICK_FAST_PARTS=N for some)
+static const u32 FAST_RAM_END = RAM_SIZE;   // (the tick's fast loop: 0x80000000 to RAM's end)
 static void make_step_kinds() {
     static const uint8_t branch[8] = {K_BEQ, K_BNE, 0, 0, K_BLT, K_BGE, K_BLTU, K_BGEU};
-    static const uint8_t loads[8] = {K_LB, K_LH, K_LW, 0, K_LBU, K_LHU, 0, 0};
+    static const uint8_t loads[8] = {K_LB, K_LH, K_LW, 0, K_LBU, K_LHU, K_LW, 0};   // (lwu is lw, as the tick makes it)
     static const uint8_t stores[8] = {K_SB, K_SH, K_SW, 0, 0, 0, 0, 0};
     static const uint8_t imm[8] = {K_ADDI, K_SLLI, K_SLTI, K_SLTIU, K_XORI, K_SRLI, K_ORI, K_ANDI};
     static const uint8_t reg[8] = {K_ADD, K_SLL, K_SLT, K_SLTU, K_XOR, K_SRL, K_OR, K_AND};
@@ -1163,6 +1172,7 @@ static void make_step_kinds() {
         case 0x4f: k = K_FNMADD; break;
         case 0x53: k = K_FOP; break;
         }
+        if ((tick_fast & 1) && (op == 0x03 || op == 0x23 || op == 0x07 || op == 0x27)) k = K_GENERAL;
         step_kind[0][key] = k;
         step_kind[1][key] = op == 0x13 || op == 0x33 ? K_GENERAL : k;
         for (int z = 0; z < 2; z++) step_kind[2 + z][key] = k == K_JAL || k == K_JALR ? K_GENERAL : step_kind[z][key];
@@ -1218,13 +1228,26 @@ static __declspec(noinline) int general_step(Core& c, u32 ins) {
     case 0x03: {
         u32 va = a + ((i32)ins >> 20), v;
         int size = f3 & 3;
-        if (size == 3 || f3 == 7 || f3 == 6) { illegal = true; break; }
+        if ((tick_fast & 1) && (va ^ 0x80000000u) < FAST_RAM_END) {   // (FAST: its word's bytes from va on, whatever its size)
+            if (!load(c, va & ~3u, 4, v, t)) break;
+            u32 up = 24 - 8 * size - (size == 2 ? 8 : 0), x = (v >> ((va & 3) * 8)) << up;
+            result = f3 & 4 ? x >> up : (u32)((i32)x >> up);
+            break;
+        }
+        if (size == 3) { illegal = true; break; }   // (ld and funct3 7; lwu is lw, as the tick makes it)
         if (!load(c, va, 1 << size, v, t)) break;
         result = f3 == 0 ? (u32)(i32)(int8_t)v : f3 == 1 ? (u32)(i32)(int16_t)v : v;
         break;
     }
     case 0x23: {
         u32 va = a + (((i32)ins >> 25 << 5) | rd);
+        write = false;
+        if ((tick_fast & 1) && (va ^ 0x80000000u) < FAST_RAM_END) {   // (FAST: into its word from va on; funct3 3 to 7 are sb)
+            u32 bytes = f3 == 2 ? 4 : f3 == 1 ? 2 : 1;
+            for (u32 i = 0; i < bytes && (va & 3) + i < 4; i++)
+                if (!store(c, va + i, 1, b >> (8 * i), t)) break;
+            break;
+        }
         if (f3 > 2) { illegal = true; break; }
         store(c, va, 1 << f3, b, t);
         write = false;
@@ -1275,6 +1298,7 @@ static __declspec(noinline) int general_step(Core& c, u32 ins) {
         break;
     case 0x2f: {   // atomics, on words
         u32 kind = f7 >> 2, v;
+        if (f3 != 2 && (tick_fast & 2)) { write = false; break; }   // (FAST: no instruction)
         if (f3 != 2) { illegal = true; break; }
         if ((c.hart || beside_on) && workers_threaded && amo_threaded(c, kind, a, b, result, t, illegal)) break;
         if (kind == 2) {   // lr
@@ -1282,7 +1306,7 @@ static __declspec(noinline) int general_step(Core& c, u32 ins) {
             c.reserved = true, c.reservation = a, c.reserved_value = v;
             result = v;
         } else if (kind == 3) {   // sc
-            if (c.reserved && c.reservation == a) {
+            if ((tick_fast & 4) || (c.reserved && c.reservation == a)) {   // (FAST: always)
                 if (!store(c, a, 4, b, t)) break;
                 result = 0;
             } else result = 1;
@@ -1300,7 +1324,7 @@ static __declspec(noinline) int general_step(Core& c, u32 ins) {
             case 20: n = (i32)v > (i32)b ? v : b; break;
             case 24: n = v < b ? v : b; break;
             case 28: n = v > b ? v : b; break;
-            default: n = v; illegal = true;
+            default: n = b; illegal = kind >= 16;   // (a kind under 16 none of ours is amoswap, as the tick makes it)
             }
             if (illegal || !store(c, a, 4, n, t)) break;
             result = v;
@@ -1351,9 +1375,11 @@ static __declspec(noinline) int general_step(Core& c, u32 ins) {
         write = false;
         if (op == 0x07) {
             va = a + ((i32)ins >> 20);
+            if ((tick_fast & 1) && (va ^ 0x80000000u) < FAST_RAM_END) va &= ~3u;   // (FAST: its word)
             if (load(c, va, 4, v, t)) c.f[rd] = v;
         } else {
             va = a + (((i32)ins >> 25 << 5) | rd);
+            if ((tick_fast & 1) && (va ^ 0x80000000u) < FAST_RAM_END) va &= ~3u;
             store(c, va, 4, c.f[rs2], t);
         }
         break;
@@ -1375,9 +1401,9 @@ static __declspec(noinline) int general_step(Core& c, u32 ins) {
         float x = fl(fa), y = fl(fb);
         write = false;
         switch (f7) {
-        case 0x00: F[rd] = canon(x + y); break;
-        case 0x04: F[rd] = canon(x - y); break;
-        case 0x08: F[rd] = canon(x * y); break;
+        case 0x00: F[rd] = card_nan(x + y); break;
+        case 0x04: F[rd] = card_nan(x - y); break;
+        case 0x08: F[rd] = card_nan(x * y); break;
         case 0x0c: F[rd] = canon(x / y); break;
         case 0x2c: F[rd] = canon(sqrtf(x)); break;
         case 0x10: F[rd] = f3 == 0 ? (fa & 0x7fffffff) | (fb & 0x80000000) : f3 == 1 ? (fa & 0x7fffffff) | (~fb & 0x80000000) : fa ^ (fb & 0x80000000); break;
@@ -1400,7 +1426,9 @@ static __declspec(noinline) int general_step(Core& c, u32 ins) {
         c.x[0] = 0;
         break;
     }
-    default: illegal = true;
+    default:
+        if ((tick_fast & 2)) write = false;   // (FAST: an opcode the tick has no group for is no instruction)
+        else illegal = true;
     }
     if (c.wc_full) {   // (the instruction is the next pass's)
         c.clock--;
@@ -1775,9 +1803,9 @@ static __declspec(noinline) void fop_do(Core& c, u32* x, u32 ins) {
     u32 fa = f[(ins >> 15) & 31], fb = f[(ins >> 20) & 31], f3 = (ins >> 12) & 7, rs2 = (ins >> 20) & 31, rd = RD;
     float a = fl(fa), b = fl(fb);
     switch (ins >> 25) {
-    case 0x00: f[rd] = canon(a + b); break;
-    case 0x04: f[rd] = canon(a - b); break;
-    case 0x08: f[rd] = canon(a * b); break;
+    case 0x00: f[rd] = card_nan(a + b); break;
+    case 0x04: f[rd] = card_nan(a - b); break;
+    case 0x08: f[rd] = card_nan(a * b); break;
     case 0x0c: f[rd] = canon(a / b); break;
     case 0x2c: f[rd] = canon(sqrtf(a)); break;
     case 0x10: f[rd] = f3 == 0 ? (fa & 0x7fffffff) | (fb & 0x80000000) : f3 == 1 ? (fa & 0x7fffffff) | (~fb & 0x80000000) : fa ^ (fb & 0x80000000); break;
@@ -2185,8 +2213,8 @@ static bool amo_threaded(Core& c, u32 kind, u32 a, u32 b, u32& result, Trap& t, 
         return true;
     }
     static const u32 kinds = 1u << 0 | 1u << 1 | 1u << 3 | 1u << 4 | 1u << 8 | 1u << 12 | 1u << 16 | 1u << 20 | 1u << 24 | 1u << 28;
-    if (!((kinds >> kind) & 1)) { illegal = true; return true; }
-    if (kind == 3 && !(c.reserved && c.reservation == a)) { result = 1; c.reserved = false; return true; }
+    if (kind >= 16 && !((kinds >> kind) & 1)) { illegal = true; return true; }   // (under 16: amoswap, as the tick makes it)
+    if (kind == 3 && !(tick_fast & 4) && !(c.reserved && c.reservation == a)) { result = 1; c.reserved = false; return true; }
     if (!page_of(c, a, WRITE, pw, t)) return true;
     if (pw - RAM_BASE >= RAM_SIZE || (logged && routed(pw))) return false;
     volatile long* p = (volatile long*)(ramp + (pw - RAM_BASE));
@@ -2960,6 +2988,7 @@ int main(int argc, char** argv) {
         else if (a == "--desktop") opt.desktop = true;
         else if (a == "--tabs") opt.tabs = true;
         else if (a == "--quiet") opt.quiet = true;
+        else if (a == "--fast") tick_fast = 7;
         else if (a == "--net") opt.netPort = atoi(next("--net").c_str());
         else if (a == "--net-id") opt.netId = atoi(next("--net-id").c_str());
         else if (a == "--net-loss") opt.netLoss = atof(next("--net-loss").c_str());
@@ -3051,6 +3080,8 @@ int main(int argc, char** argv) {
     if (wc_on) wcache.resize(cores.size());
     if (wc_on && getenv("RVC_WC_LOG")) wc_log = fopen(getenv("RVC_WC_LOG"), "wb");
     zb_on = zb_table = getenv("RVC_ZB") && atoi(getenv("RVC_ZB")) != 0;
+    if (getenv("RVC_TICK_FAST") && atoi(getenv("RVC_TICK_FAST")) != 0) tick_fast = 7;
+    if (tick_fast && getenv("RVC_TICK_FAST_PARTS")) tick_fast = (unsigned)atoi(getenv("RVC_TICK_FAST_PARTS")) & 7;
     if (const char* isa = getenv("RVC_ISA")) {
         std::string l = std::string(",") + isa + ",";
         zb_on = zb_on || l.find(",zb,") != std::string::npos;

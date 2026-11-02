@@ -9,6 +9,10 @@
 // A pixel of the tick is eight texels of a core's state, one in each of eight targets; every
 // pixel of a core runs the whole pass and writes its own eight. (TICK_UNPACK: this file without
 // its pass, for unpack.hlsl.)
+//
+// FAST (off; rvc_harness --define FAST, rvc_cpu --fast): a load or store in RAM not on its size takes its word's bytes
+// (no trap, no second word), fdiv is the card's a / b, an sc always succeeds, and an opcode of no group is no
+// instruction. Programs it breaks: docs/machine/tick-costs.md, "FAST".
 
 Texture2D<uint4> _SelfTexture2D;
 Texture2D<float4> _Data_ROM;   // the ROM at 0x40000000
@@ -183,7 +187,7 @@ uint ram_word(uint o) {
     uint t = o >> 4;
     [branch] if (t != dr_t) { dr_v = TEX(RAM_ADDR(t)); dr_t = t; }
     bool maybe = (o & bloom) == o;
-    uint at = maybe ? (t == m1_t ? m1_at : t == m2_t ? m2_at : 0) : 0;
+    uint at = t == m1_t ? m1_at : t == m2_t ? m2_at : 0;   // (the remembered texels are the cache's, whatever the bloom says)
     [branch] if (maybe && at == 0 && t != absent_t) {
         at = find(t);
         if (at != 0) remember(t, at); else absent_t = t;
@@ -367,13 +371,13 @@ uint op_m(uint f3, uint a, uint b) {
         uint hu = mulhu(a, b);
         return f3 == 1 ? hu - ((a >> 31) ? b : 0) - ((b >> 31) ? a : 0) : f3 == 2 ? hu - ((a >> 31) ? b : 0) : hu;
     }
-    bool zero = b == 0, wraps = a == 0x80000000 && b == 0xffffffff;
-    int sa = asint(a), sb = asint(zero || wraps ? 1 : b);
-    uint safe = zero ? 1 : b;
-    [branch] if (f3 == 4) return zero ? 0xffffffff : wraps ? a : asuint(sa / sb);
-    [branch] if (f3 == 5) return zero ? 0xffffffff : a / safe;
-    [branch] if (f3 == 6) return zero ? a : wraps ? 0 : asuint(sa % sb);
-    return zero ? a : a % safe;
+    // (D3D's division by zero is all ones, and the signed ones are an unsigned one of the magnitudes)
+    bool zero = b == 0;
+    int sa = asint(a), sb = asint(b);
+    [branch] if (f3 == 4) return zero ? 0xffffffff : asuint(sa / sb);
+    [branch] if (f3 == 5) return a / b;
+    [branch] if (f3 == 6) return zero ? a : asuint(sa % sb);
+    return zero ? a : a % b;
 }
 // The floats that are signs, the lesser or greater, comparisons and moves (the fast loop's)
 uint fp_light(uint w, uint ra, uint rb, out bool to_f, out bool ok) {
@@ -391,23 +395,7 @@ uint fp_light(uint w, uint ra, uint rb, out bool to_f, out bool ok) {
 uint fp_all(uint w, uint ra, uint rb, out bool to_f, out bool ok) {
     uint f7 = w >> 25, f3 = (w >> 12) & 7, sel = (w >> 20) & 31;
     precise float a = asfloat(ra), b = asfloat(rb);
-    [branch] if ((f7 & 0x73) == 0 || f7 == 0x2c) {
-        precise float r;
-        [branch] if (f7 == 0x0c) {
-            uint ea = (ra >> 23) & 0xff, eb = (rb >> 23) & 0xff;
-            int de = (int)ea - (int)eb, ha = clamp(de, -126, 127);
-            precise float da = asfloat((ra & 0x807fffff) | ((uint)(127 + ha) << 23)), db = asfloat((rb & 0x807fffff) | ((uint)(127 - (de - ha)) << 23));
-            r = (ea - 1 < 254 && eb - 1 < 254) ? da / db : a / b;
-        } else [branch] if (f7 == 0x2c) {
-            r = sqrt(a);
-        } else {
-            precise float sum = a + b, dif = a - b, prod = a * b;
-            r = f7 == 0 ? sum : f7 == 4 ? dif : prod;
-        }
-        uint ar = asuint(r);
-        to_f = true; ok = f7 != 0x2c || sel == 0;
-        return (ar & 0x7fffffff) > 0x7f800000 ? 0x7fc00000 : ar;
-    }
+    // (the conversions first: Quake has more of them than of divisions and roots)
     [branch] if (f7 == 0x60) {
         bool an = (ra & 0x7fffffff) > 0x7f800000;
         float whole = f3 == 1 ? trunc(a) : f3 == 2 ? floor(a) : f3 == 3 ? ceil(a) : round(a);
@@ -419,6 +407,27 @@ uint fp_all(uint w, uint ra, uint rb, out bool to_f, out bool ok) {
         bool neg_in = sel == 0 && (ra >> 31) != 0;
         to_f = true; ok = sel < 2;
         return asuint((float)(neg_in ? 0 - ra : ra)) | (neg_in ? 0x80000000 : 0);
+    }
+    [branch] if ((f7 & 0x73) == 0 || f7 == 0x2c) {
+        precise float r;
+        [branch] if (f7 == 0x0c) {
+            uint ea = (ra >> 23) & 0xff, eb = (rb >> 23) & 0xff;
+            int de = (int)ea - (int)eb, ha = clamp(de, -126, 127);
+            precise float da = asfloat((ra & 0x807fffff) | ((uint)(127 + ha) << 23)), db = asfloat((rb & 0x807fffff) | ((uint)(127 - (de - ha)) << 23));
+#ifdef FAST
+            r = a / b;   // (FAST: the card's division, within an ulp or two, and zero for a divisor over 2^126)
+#else
+            r = (ea - 1 < 254 && eb - 1 < 254) ? da / db : a / b;
+#endif
+        } else [branch] if (f7 == 0x2c) {
+            r = sqrt(a);
+        } else {
+            precise float sum = a + b, dif = a - b, prod = a * b;
+            r = f7 == 0 ? sum : f7 == 4 ? dif : prod;
+        }
+        uint ar = asuint(r);
+        to_f = true; ok = f7 != 0x2c || sel == 0;
+        return (ar & 0x7fffffff) > 0x7f800000 ? 0x7fc00000 : ar;
     }
     [branch] if (f7 == 0x70 && f3 == 1) {
         bool neg = (ra >> 31) != 0;
@@ -509,18 +518,27 @@ uint fast(uint room) {
                 uint r45 = (f3 & 1) ? (alt ? asuint(asint(a) >> s) : a >> s) : a ^ y, r67 = (f3 & 1) ? a & y : a | y;
                 v = (f3 & 4) ? ((f3 & 2) ? r67 : r45) : ((f3 & 2) ? r23 : r01);
             } else {
-                // lb lh lw lbu lhu, within one word of RAM
+                // lb lh lw lbu lhu, within one word of RAM: lwu is lw, and ld and funct3 7 fail the size test (no test of
+                // funct3 of its own, nor of 0: the range test has it)
                 uint va = a + imm_i(w), up = LOAD_UP(f3);
-                ok = va != 0 && ((0x37u >> f3) & 1) != 0 && (va & 3) + (1u << (f3 & 3)) <= 4 && (va ^ 0x80000000) < RAM_MAX;
+#ifdef FAST
+                ok = (va ^ 0x80000000) < RAM_MAX;   // (FAST: a load not on its size takes its word's bytes from va on)
+#else
+                ok = (va & 3) + (1u << (f3 & 3)) <= 4 && (va ^ 0x80000000) < RAM_MAX;
+#endif
                 // (read whether or not it may be: a read changes nothing, and a load that may not is the general step's)
                 uint x = ram_word(va & 0x7ffffffc) >> ((va & 3) * 8) << up;
                 v = (f3 & 4) ? x >> up : asuint(asint(x) >> up);
             }
         } else [branch] if (opc == 0x23 || (w & 0x5f) == 0x07 || opc == 0x53) {
             [branch] if (opc == 0x23) {
-                // sb sh sw, within one word of RAM
+                // sb sh sw, within one word of RAM (funct3 3 to 7 fail the size test)
                 uint sa = a + imm_s(w), off = sa & 3;
-                ok = f3 < 3 && (sa ^ 0x80000000) < RAM_MAX && off + (1u << f3) <= 4;
+#ifdef FAST
+                ok = (sa ^ 0x80000000) < RAM_MAX;   // (FAST: a store not on its size goes into its word from sa on)
+#else
+                ok = (sa ^ 0x80000000) < RAM_MAX && off + (1u << f3) <= 4;
+#endif
                 [branch] if (ok) ram_store_nc(sa & 0x7ffffffc, b << (off * 8), (f3 == 2 ? 0xffffffff : f3 == 1 ? 0xffff : 0xff) << (off * 8));
                 dst = 64;
             } else [branch] if (opc == 0x53) {
@@ -528,10 +546,15 @@ uint fast(uint room) {
                 uint f7 = w >> 25, fa = a, fb = xr[32 + rs2];
                 [branch] if ((f7 & 0x68) != 0x68) fa = xr[32 + rs1];   // (an if: a ?: read the register either way)
                 bool to_f = true;
+#ifdef FAST
+                [branch] if ((f7 & 0x73) == 0) {
+                    precise float x = asfloat(fa), y = asfloat(fb), sum = x + y, dif = x - y, prod = x * y, quo = x / y;
+                    v = asuint(f7 == 0 ? sum : f7 == 4 ? dif : f7 == 8 ? prod : quo);
+#else
                 [branch] if ((f7 & 0x73) == 0 && f7 != 0x0c) {
                     precise float x = asfloat(fa), y = asfloat(fb), sum = x + y, dif = x - y, prod = x * y;
-                    v = asuint(f7 == 0 ? sum : f7 == 4 ? dif : prod);
-                    v = (v & 0x7fffffff) > 0x7f800000 ? 0x7fc00000 : v;
+                    v = asuint((f7 & 8) ? prod : (f7 & 4) ? dif : sum);   // (a NaN is the card's, 0x7fffffff on NVIDIA's: rvc_cpu's too)
+#endif
                 } else [branch] if (((0x50100030u >> (f7 >> 2)) & 1) != 0 && (f7 & 3) == 0 && (f7 != 0x70 || f3 == 0)) {
                     v = fp_light(w, fa, fb, to_f, ok);
                 } else {
@@ -541,31 +564,45 @@ uint fast(uint room) {
             } else [branch] if (opc == 0x07) {
                 // flw, a word of RAM
                 uint va = a + imm_i(w);
-                ok = va != 0 && f3 == 2 && (va & 0x80000003) == 0x80000000 && (va & 0x7ffffffc) < RAM_MAX;
+#ifdef FAST
+                ok = f3 == 2 && (va ^ 0x80000000) < RAM_MAX;
+#else
+                ok = f3 == 2 && (va & 0x80000003) == 0x80000000 && (va & 0x7ffffffc) < RAM_MAX;
+#endif
                 v = ram_word(va & 0x7ffffffc);
                 dst = 32 + rd;
             } else {
                 // fsw, a word of RAM
                 uint sa = a + imm_s(w);
+#ifdef FAST
+                ok = f3 == 2 && (sa ^ 0x80000000) < RAM_MAX;
+#else
                 ok = f3 == 2 && (sa & 0x80000003) == 0x80000000 && (sa & 0x7ffffffc) < RAM_MAX;
+#endif
                 [branch] if (ok) ram_store_nc(sa & 0x7ffffffc, xr[32 + rs2], 0xffffffff);
                 dst = 64;
             }
         } else [branch] if (opc == 0x63) {
-            bool lt = (f3 & 2) ? a < b : asint(a) < asint(b);
+            uint tb = (f3 & 2) ? 0 : 0x80000000;   // (less-than as slt's: signed is unsigned with the signs turned over)
+            bool lt = (a ^ tb) < (b ^ tb);
             next = (((f3 & 4) ? lt : a == b) != ((f3 & 1) != 0)) ? pc + imm_b(w) : next;
             ok = (w & 0x100) == 0;   // (funct3 2 and 3 are beq and bne; an offset not on a word, told by the word, the general step's)
             dst = 64;
-        } else [branch] if (opc == 0x37 || opc == 0x17 || opc == 0x6f || (opc == 0x67 && f3 == 0)) {
+        } else [branch] if (opc == 0x37 || opc == 0x17 || opc == 0x6f || opc == 0x67) {   // (jalr's funct3 not looked at)
             bool jump = (w & 0x40) != 0;
             v = jump ? pc + 4 : (w & 0xfffff000) + (opc == 0x17 ? pc : 0);
             next = opc == 0x6f ? pc + imm_j(w) : opc == 0x67 ? a + imm_i(w) : next;
             ok = (next & 3) == 0;
         } else [branch] if ((w & 0x707f) == 0x202f) {
-            // amoadd amoswap lr sc amoxor amoor amoand on a word of RAM (the others are the general step's)
+            // amoadd amoswap lr sc amoxor amoor amoand on a word of RAM (min and max are the general step's); a funct5 under
+            // 16 that is none of these is amoswap, and lr's rs2 is not looked at
             uint f5 = w >> 27, o = a & 0x7ffffffc;
+#ifdef FAST
+            bool lr = f5 == 2, sc = f5 == 3, sc_ok = true;   // (FAST: an sc always succeeds)
+#else
             bool lr = f5 == 2, sc = f5 == 3, sc_ok = res_en != 0 && res_addr == a;
-            ok = a != 0 && (a & 0x80000003) == 0x80000000 && o < RAM_MAX && f5 < 16 && ((0x111fu >> f5) & 1) != 0 && (!lr || rs2 == 0);
+#endif
+            ok = (a & 0x80000003) == 0x80000000 && o < RAM_MAX && f5 < 16;
             [branch] if (ok) {
                 uint old = sc ? 0 : ram_word(o);
                 [branch] if (sc ? sc_ok : !lr) ram_store_nc(o, f5 == 0 ? old + b : f5 == 4 ? old ^ b : f5 == 8 ? old | b : f5 == 12 ? old & b : b, 0xffffffff);
@@ -587,7 +624,11 @@ uint fast(uint room) {
                 v = csr_read(cn);
                 if (wr_) csr_write(cn, (f3 & 3) == 1 ? src : (f3 & 3) == 2 ? v | src : v & ~src);
             }
-        } else ok = false;
+#ifdef FAST
+        } else { ok = opc != 0x73 && (w & 0x73) != 0x43 && (opc != 0x0f || (f3 == 0 && w != 0x0100000f)); dst = 64; }   // (FAST: an opcode of no group is no instruction)
+#else
+        } else { ok = (w & 0x707f) == 0x000f && w != 0x0100000f; dst = 64; }   // (a plain fence: nothing to order)
+#endif
         pre_w = w;
         if (!ok) break;
         xr[dst] = v;
@@ -625,7 +666,7 @@ void step() {
         uint up = LOAD_UP(f3), x = mv << up;
         v = (f3 & 4) ? x >> up : asuint(asint(x) >> up);
         dst = opc == 0x07 ? 32 + rd : dst;
-        if (opc == 0x07 ? f3 != 2 : ((0x37u >> f3) & 1) == 0) raise(2, w);
+        if (opc == 0x07 ? f3 != 2 : ((0x77u >> f3) & 1) == 0) raise(2, w);   // (lwu is lw)
     } else [branch] if (opc == 0x23 || opc == 0x27) {
         if (opc == 0x27 ? f3 != 2 : f3 > 2) raise(2, w);
         else store_any(a + imm_s(w), opc == 0x27 ? xr[32 + rs2] : b, 1u << f3);
@@ -634,18 +675,23 @@ void step() {
         bool lt = (f3 & 2) ? a < b : asint(a) < asint(b);
         next = (((f3 & 4) ? lt : a == b) != ((f3 & 1) != 0)) ? pc + imm_b(w) : next;
         dst = 64;
-    } else [branch] if (opc == 0x37 || opc == 0x17 || opc == 0x6f || (opc == 0x67 && f3 == 0)) {
+    } else [branch] if (opc == 0x37 || opc == 0x17 || opc == 0x6f || opc == 0x67) {
         v = (w & 0x40) ? pc + 4 : (w & 0xfffff000) + (opc == 0x17 ? pc : 0);
         next = opc == 0x6f ? pc + imm_j(w) : opc == 0x67 ? a + imm_i(w) : next;
     } else [branch] if (opc == 0x2f && f3 == 2) {
         // lr, sc and the atomics, on the word read above
-        uint f5 = w >> 27, x = f5 == 1 ? b : f5 == 0 ? mv + b : f5 == 4 ? mv ^ b : f5 == 12 ? mv & b : f5 == 8 ? mv | b :
+        // (a funct5 under 16 that is none of ours is amoswap, as in the fast loop)
+        uint f5 = w >> 27, x = f5 == 0 ? mv + b : f5 == 4 ? mv ^ b : f5 == 12 ? mv & b : f5 == 8 ? mv | b : f5 < 16 ? b :
                  f5 == 16 ? (asint(b) < asint(mv) ? b : mv) : f5 == 20 ? (asint(b) > asint(mv) ? b : mv) : f5 == 24 ? min(b, mv) : max(b, mv);
+#ifdef FAST
+        bool sc_ok = true;
+#else
         bool sc_ok = res_en != 0 && res_addr == a;
+#endif
         v = f5 == 3 ? (sc_ok ? 0 : 1) : mv;
         if (f5 == 2) { res_en = 1; res_addr = a; }
         if (f5 == 3 && sc_ok) res_en = 0;
-        if (f5 > 28 || ((f5 & 3) != 0 && f5 > 3) || (f5 == 2 && rs2 != 0)) raise(2, w);
+        if (f5 >= 16 && (f5 & 3) != 0) raise(2, w);
         else if (f5 != 2 && (f5 != 3 || sc_ok)) store_any(a, f5 == 3 ? b : x, 4);
     } else [branch] if ((w & 0x06000073) == 0x43) {
         // fmadd, fmsub, fnmsub, fnmadd: a product and a sum, each rounded
@@ -1044,7 +1090,7 @@ tick_out frag(v2f i) {
             // (one loop for a core and for a lane, whose indices are its runs one after another)
             [loop] for (;;) {
                 [loop] while (n < most && stall == 0) {
-                    [branch] if (!quiet) interrupts();
+                    if (!quiet) interrupts();   // (no [branch]: 0.2% of the shell loop)
                     [branch] if (quiet) n += fast(most - n);
                     if (n >= most || stall != 0) break;
                     step();
