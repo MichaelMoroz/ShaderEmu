@@ -68,11 +68,13 @@ On the card (`rvc_harness` through `tools\gpu_queue.ps1`, 2 November 2026), with
 | `aoeprep` (the strings, the faces) | 0.26 s and 4.30 s | |
 | The starter's `--unpack`, from the command to its end | 16.6 s | 12.3 s |
 
-Without workers the card was not timed whole (it would hold the card for many minutes); `rvc_cpu` with the card's
+Without workers, on the card: Jedi Outcast's pak 439.4 s (2.18 billion instructions on the first core, 4.9 million a
+second). Age of Empires was not timed so on the card (it would hold it for some 15 minutes); `rvc_cpu` with the card's
 model (`--pass-model` of `tools/card_model.json`, `RVC_WCACHE=1`): Jedi Outcast 6.04 s with workers and 398.4 s
-without, Age of Empires 6.49 s and 546.7 s, `aoeprep`'s faces 2.85 s and 215.7 s. Inflating is 29 instructions a byte
-made on any core (2.17 billion for the demo's 74.2 MB on the first core alone; 2.15 billion on the workers). See the
-games' docs for the memory in play.
+without, Age of Empires 6.49 s and 546.7 s, `aoeprep`'s faces 2.85 s and 215.7 s. Instructions a byte inflated, on
+the first core alone (`rvc_cpu`): the demo's folder 29.2 (2.17 billion for 74.2 MB; on the workers 2.15 billion), the
+trial's 64.5 (3.04 billion for 47.1 MB: more copies from the block before, followed back). See the games' docs for the
+memory in play.
 
 What a round costs: every block is a core's, so a round lasts as long as its slowest block, and a block that copies from
 the one before it must be inflated as values (a byte, or the place in the block before) and then followed back. In
