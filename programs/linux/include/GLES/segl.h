@@ -171,12 +171,6 @@ void seglSprite(const GLfixed* box, const int* texels, GLuint name, unsigned col
 // Many sprites as seglSprite draws them one by one, in one call (a box, texels, texture, colour, key each).
 typedef struct { GLfixed box[4]; int texels[4]; GLuint name; unsigned colour; int keyed; } SEGLsprite;
 void seglSprites(const SEGLsprite* sprites, int count);
-// Sprites of four corners of their own: x, y, z of the corners in seglSprite's order (x0 y0, x1 y0,
-// x1 y1, x0 y1 of its texels; two triangles about the first and third), through the matrices. With
-// GL_DEPTH_TEST on they are the blended pass with the depth test (docs/machine/gpu.md, "Passes": 1,
-// tested, not written), so that what pass 0 drew with depth hides them; off, seglSprites' pass on top.
-typedef struct { GLfixed xyz[12]; int texels[4]; GLuint name; unsigned colour; int keyed; } SEGLcorners;
-void seglCorners(const SEGLcorners* sprites, int count);
 // Many sprites of one texture at once: the program writes them at seglSpriteSpace() (`room` of
 // them fit), 16 words each: four corners of x, y, 0 and texels (u | v << 16), x and y being
 // seglNumber() of a corner; seglSpritesUsed() then draws so many as seglSprite would have.

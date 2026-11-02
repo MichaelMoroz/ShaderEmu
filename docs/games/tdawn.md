@@ -496,19 +496,16 @@ Tiberian Dawn's movies are 320 x 200 in 4x2 blocks (`UnVQ_4x2`; Red Alert's are 
 its order of drawing are as in 2D, which stays the default and is drawn as before (2 November 2026: the 2D view's lists of mission 3's 600
 frames are the same before and after, `TDAWN_CHECK_LIST=1` sum `1a2b9cc4` of 455,376 words both). Pictures under `rvc_harness --cpu --warp`:
 `python tools/td3d_shots.py --image build/images/NAME --out DIR` (missions 1, 3 and 10 at frame 300, 2D and 3D, with `--views` for heights
-and sprites only, `--env NAME=VALUE` for the game). On the card: "Its speed" below.
+and sprites only). Nothing of it has been measured on the card yet.
 
 - **The camera** (`linux/tdawn/td3d.h`) looks north, `TDAWN_PITCH` degrees down (60; 35 to 85), and is fitted to the game's window: its
   far row spans the screen's top row at scale 1, the middle of its near row is the screen's bottom middle. So every pixel of the view shows
   a point inside the rectangle of cells the game culls and scrolls by, and the radar's box, the scroll and the culling need no change. The
   camera is made in floats when the window or the pitch changes; the ground to the screen and back are integers (16.16 in 64-bit products).
 - **What is drawn** (`host.c`, `host_scene_tilt`): the kept cells and the ground's rectangles (overlays, smudges, the shroud: parts 0 and
-  2) through the camera's matrix, so they lie on the map, at its heights a quarter of a pixel up (`tilt_ground`); an object's rectangle
-  (part 1) stands up, its middle put where the camera shows that point of the ground and scaled by the camera's scale there
-  (`td3d_stand`). Every rectangle is `seglCorners`' (`gles.c`: four corners of x, y, z, the blended pass with the depth test, which the
-  depth of the cells and the models hides): a standing one has the depth of the ground its lowest row shows, a pixel nearer
-  (`td3d_row_depth`), so a model in front of it hides it, one behind it does not, and the ground before its foot leaves it whole. Among
-  themselves the rectangles keep the game's order, far ones first from a camera looking north.
+  2) through the camera's matrix, so they lie on the map; an object's rectangle (part 1) stands up, its middle put where the camera shows
+  that point of the ground and scaled by the camera's scale there (`td3d_stand`). The game's order, far ones first from a camera looking
+  north, is kept for them: sprites have no depth.
 - **Models** (`linux/tdawn/models`, `tdawn-models.dat` in the ROM): a unit's or a building's kind whose name has one is drawn as the model:
   its own image's shapes (body, turret, shadow) are noted as one `HOST_MODEL` rectangle a part (`Model_Begin` in `gl.cpp`), kept with the
   object as its sprites are, and drawn by the scene's core as the file's packed vertices (`seglPacked`, `0x4000` with a table `0x2000`)
@@ -518,11 +515,9 @@ and sprites only, `--env NAME=VALUE` for the game). On the card: "Its speed" bel
 - **Heights** (`TDAWN_HEIGHTS=1`, off by default): `linux/tdawn/td3d/heights.py` makes each map's 65 x 65 corner heights at image build
   from its own templates, read against the fetched tree's table of them (`cdata.cpp`, `defines.h`: nothing of the game's table is in this
   repository): water low and flat, beaches and rivers a little under the ground, cliff rock between terraces or a ridge, the rest smoothed
-  (`tdawn-heights.dat`). The kept cells' corners, the ground's rectangles, the standing rectangles' and the models' feet and the click's
-  ray follow them. Two more rows of cells are drawn below the window, since raised ground near the eye shows them. Still off by default:
-  the scene's core does 18k instructions a frame more for them (mission 3: 32.8k to 51.0k, 11.12 to 12.67 passes a frame on `rvc_cpu`,
-  `td3d_height`'s two divisions at each corner), a hairline of the ground shows between two shroud pieces over a cliff (mission 6), and
-  the demo has the temperate theatre alone (no `DESERT.MIX` or `WINTER.MIX`): desert and winter could not be looked at.
+  (`tdawn-heights.dat`). The kept cells' corners, the standing rectangles' and the models' feet and the click's ray follow them; the ground's
+  rectangles (overlays, the shroud) do not yet, which is why they are off. Two more rows of cells are drawn below the window, since raised
+  ground near the eye shows them.
 - **Clicks** go through the game's own input: `shaderemu.cpp` gives the game, for the pointer and every button's event, the pixel the 2D
   view has for the point of the ground the ray meets (`ShaderEmu_View_Pick`; over hills in three steps). `Input`, `Click_Cell_Calc`, the
   band and `Close_Object` then make the same orders of the same cells and objects. Only while scenes are being made (250 ms): a dialog
@@ -535,36 +530,12 @@ and sprites only, `--env NAME=VALUE` for the game). On the card: "Its speed" bel
   within a 64th of a pixel, the window's every pixel inside it, the GPU's matrix against the arithmetic, a model's matrix against the same
   turns in doubles: PASS, 1,248,102 checks) and `python linux/tdawn/test/test_td3d_tools.py` (mix files, the templates' table, heights,
   the models' file; with `TDAWN_SOURCE` the demo's own five maps).
-  `tdawn-3d-play` (`TDAWN_PLAY=40`, in `gl.cpp`): the demo's first mission played to its end through the pointer, a round every 40
-  frames: the window put over the player's fighting forces, the band dragged from the ground's point at its top left to the one at its
-  bottom right, and the enemy nearest to them clicked if the window shows it, else the ground toward it, each press, move and release given
-  to the game at the tilted view's pixel and picked back by the ray. It is won at frame 3244 (without `TDAWN_PLAY` it is not won by frame
-  3300, state `a6158530`); with `--races` 0 undone.
-- `TDAWN_SUMS`, `TDAWN_CHECK_GPU` and `TDAWN_PICTURE` are the 2D picture's: they say nothing of the 3D one. `TDAWN_TANKS=N,F` puts N
-  medium tanks of the player's round the window's middle at frame F (the plan's step 3 scene).
+- `TDAWN_SUMS`, `TDAWN_CHECK_GPU` and `TDAWN_PICTURE` are the 2D picture's: they say nothing of the 3D one.
 
-Known: the bars do not scale; heights make cliffs ridges, not terraces, where a cliff line has a gap (most of the demo's: the high side of a
-cliff template is not in the game's data); the shroud over a model in front of shrouded ground is hidden by the model.
-
-### Its speed
-
-Mission 3, seed 7, frames 301 to 1200 (`game_par.py tdawn`, `--guest` for the switches; the card an RTX 3090, 2 November 2026, flat out):
-
-| | card: game frames a second | card: passes a frame | `rvc_cpu`: core 0 a frame | the busiest worker a frame (the scene's) | passes a frame |
-|---|---|---|---|---|---|
-| 2D | 60.8 | 8.91 | 70.5k | 21.6k | 9.08 |
-| 3D | 52.5 | 11.04 | 76.2k | 32.8k | 11.12 |
-| 3D, heights | 46.3 | 12.60 | 79.3k | 51.0k | 12.67 |
-| 3D, 50 tanks more, standing (`TDAWN_TANKS=50,250`) | 27.2 | 20.88 | 116.5k | 81.1k | 20.97 |
-| 3D, the 50 moving (`TDAWN_MOVE=400,0,-8`) | 13.2 | 42.19 | 259.8k | 225.5k | 42.79 |
-| 2D, the 50 moving | 16.6 | 36.35 | 245.5k | 138.8k | 36.98 |
-
-Under a world's frame (`--unity 11.1,1.4,0.75`, before `seglCorners`) 2D 60.6 and 3D 53.3. The card's drawing of the list is not what
-costs: the devices' pass is 0.080 to 0.085 ms a timed round in every row. What costs is the scene's core: a model's part is a matrix block
-and a command, about 480 instructions (50 tanks of two parts standing, 48k a frame), whatever its triangles (68 to 148): so the triangle
-budget is no bound at this size, and the plan's 100 to 300 a vehicle and 200 to 800 a building stand. A model standing still is drawn anew
-every scene (nothing of `Kept` for models yet), and models one after another load only their own modelview (`part_matrices`: the scene's
-core 116.5k to 81.1k with 50 standing).
+Known, from the code: a sprite (soldiers, trees, effects) is drawn over every model whatever is in front, as sprites are a pass with no
+depth (`seglSprite` has none: a sprite with a depth needs a call `gles.c` does not have); the ground's rectangles do not follow the heights
+(the same: a quad of four corners in the blended pass); the bars do not scale; heights make cliffs ridges, not terraces, where a cliff line
+has a gap (most of the demo's: the high side of a cliff template is not in the game's data).
 
 ## Not done
 
