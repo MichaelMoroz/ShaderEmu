@@ -504,7 +504,7 @@ uint fast(uint room) {
                 // Of funct7 only bit 30 is looked at (sub, sra, srai): an encoding none of our extensions has is
                 // made as the one it resembles, not trapped (the test of funct7 was 2% of the shell loop)
                 bool reg = (w & 0x20) != 0, alt = (w & 0x40000000) != 0;
-                uint y = reg ? b : imm_i(w), s = y & 31, turn = (f3 & 1) ? 0 : 0x80000000;
+                uint y = reg ? b : imm_i(w), s = y, turn = (f3 & 1) ? 0 : 0x80000000;   // (s: D3D's shifts take the low five bits)
                 uint r01 = (f3 & 1) ? a << s : ((reg && alt) ? a - y : a + y), r23 = (a ^ turn) < (y ^ turn) ? 1 : 0;
                 uint r45 = (f3 & 1) ? (alt ? asuint(asint(a) >> s) : a >> s) : a ^ y, r67 = (f3 & 1) ? a & y : a | y;
                 v = (f3 & 4) ? ((f3 & 2) ? r67 : r45) : ((f3 & 2) ? r23 : r01);
