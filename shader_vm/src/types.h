@@ -647,10 +647,6 @@ ins_ret ins_ret_noop() {
     return ret;
 }
 
-uint sign_extend(uint x, uint b) {
-    uint m = ((uint)1) << (b - 1);
-    return (x ^ m) - m;
-}
 
 // The tick pass hands its write bloom filter (the OR of every written word address) to the
 // commit pass in a spare state word, texel (41,0).r, so RAM texels that cannot have been
@@ -701,36 +697,11 @@ static uint mc_word = 0;
 // instruction then reads and writes the one array, and adds nothing the fast loop carries.
 #define XR_F 33
 static uint xr[XR_F + 32];
-// They are kept from pass to pass in eight texels of the state zone, after the TLBs' (FP_STATE_AT).
-void fp_state_load() {
-    for (uint k = 0; k < 8; k++) {
-#if CORES > 1
-        uint4 t = STATE_TEX(mc_state_at(FP_STATE_AT + k));
-#else
-        uint4 t = STATE_TEX(uint2((FP_STATE_AT + k) & 63, (FP_STATE_AT + k) >> 6));
-#endif
-        xr[XR_F + 4 * k] = t.r; xr[XR_F + 4 * k + 1] = t.g; xr[XR_F + 4 * k + 2] = t.b; xr[XR_F + 4 * k + 3] = t.a;
-    }
-}
-// What a pixel of those texels holds after this pass; false for any other pixel.
-bool fp_state_texel(uint2 pos, out uint4 t) {
-    uint k = pos.x + 64 * pos.y - FP_STATE_AT;
-    t = 0;
-    if (pos.x + 64 * pos.y < FP_STATE_AT || k >= 8) return false;
-    t = uint4(xr[XR_F + 4 * k], xr[XR_F + 4 * k + 1], xr[XR_F + 4 * k + 2], xr[XR_F + 4 * k + 3]);
-    return true;
-}
 #else
 static uint xr[33];  // [32] is a scratch slot for writes that must not land (x0, no result)
 #endif
 uint xreg(uint i) {
     return xr[i];
-}
-void xreg_load() {
-    for (uint k = 0; k < 32; k++) xr[k] = cpu.xreg[k];
-}
-void xreg_store() {
-    for (uint k = 0; k < 32; k++) cpu.xreg[k] = xr[k];
 }
 #elif defined(XREG_TREE)
 // FXC turns cpu.xreg[i] into ~70 instructions ending in a 32-step dependent OR chain.
@@ -1163,25 +1134,6 @@ void decode_for_commit() {
 // the write cache (TLB_STATE_AT): two entries (tag, page) a texel, then one texel with the generation.
 
 #ifdef PASS_TICK
-bool pixel_has_state(uint2 pos) {
-    // CSR data area and FB are not "state", they're only touched by commit
-    uint lin = pos.x + 64 * pos.y;
-#if CORES > 1
-    if (hart != 0) {   // a worker: no TLBs
-#ifdef FPU
-        if (lin >= FP_STATE_AT && lin < FP_STATE_AT + 8) return true;
-#endif
-        return lin < L1_STATE_AT + L1_ENTRIES;
-    }
-#endif
-#ifndef NO_PAGING
-    if (lin >= TLB_STATE_AT && lin < TLB_STATE_AT + TLB_STATE_TEXELS) return true;
-#endif
-#ifdef FPU
-    if (lin >= FP_STATE_AT && lin < FP_STATE_AT + 8) return true;
-#endif
-    return lin < L1_STATE_AT + L1_ENTRIES;
-}
 
 uint4 encode_l1(L1P uint2 pos) {
     // L1 cache
@@ -1482,11 +1434,6 @@ uint4 encode_l1(L1P uint2 pos) {
     return ret;
 }
 
-uint tex_get_csr(uint addr) {
-    uint lin = (addr >> 2) + CSR_STATE_AT;
-    uint idx = addr & 0x3;
-    return idx_uint4(STATE_TEX(uint2(lin % 64, lin / 64)), idx);
-}
 #endif
 
 uint4 l1_state_texel(uint lin) {

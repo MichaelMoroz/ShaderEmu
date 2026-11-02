@@ -65,35 +65,6 @@ bool mc_idle() {
     return (word & 2) != 0 && (RAM_TEX(MC_JOB_TEXEL(hart)).x & 0xffffff) == (word >> 8);       // asleep
 }
 
-void mc_enter() {
-    mc_word = STATE_TEX(uint2(41, 0)).a;
-    if (hart == 0) return;
-    bool called = (mc_word & 9) == 9;   // it waited for a system call's answer, which is there now
-    if (mc_word & 14) mc_word = 1;      // its job word changed, or core 0 says go on: awake
-    uint4 box = RAM_TEX(MC_START_TEXEL(hart));
-    if (box.x == MC_START) {
-        cpu.pc = box.y;
-        cpu.xreg[2] = box.z;
-        cpu.xreg[10] = hart;
-        cpu.csr.privilege = 0;
-#ifndef NO_PAGING
-#ifdef BARE_WORKERS
-        cpu.mmu.mode = box.w != 0 ? 1 : 0;   // root 0: a program of a kernel without an MMU
-#else
-        cpu.mmu.mode = 1;
-#endif
-        cpu.mmu.ppn = box.w;
-#endif
-        cpu.stall = 0;
-        mc_word = 1;
-    } else if (box.x == MC_STOP || (mc_word & 1) == 0) {
-        if (mc_word & 1) mc_word = MC_PARKED_STOP << 8;
-        cpu.stall = STALL_WFI;   // nothing runs; the commit pass clears it
-    } else if (called) {
-        cpu.xreg[10] = RAM_TEX(MC_RESUME_TEXEL(hart)).y;
-        cpu.pc += 4;
-    }
-}
 
 #define MC_PARK(why) if (hart != 0) { mc_word = (why) << 8; cpu.stall = STALL_WFI; }
 #define MC_SLEEP if (hart != 0) { mc_word = 3 | (RAM_TEX(MC_JOB_TEXEL(hart)).x << 8); }
