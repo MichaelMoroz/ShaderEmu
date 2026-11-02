@@ -199,12 +199,14 @@ so of this only the game's, the traces' and Ghoul2's bones carry over.
 Each needs the guest's toolchain (`~/nm`, `linux/openttd/toolchain.sh`), a private WSL home by the
 `building-the-system` skill, or the owner.
 
-1. **The machine's program with no picture** (the plan's step 1). `bash linux/jk2/build.sh` with OpenTTD's compiler:
-   the platform layer is the same file; to add: `jk2` in `BIG` of `linux/nommu/flat.py` (1 MB stack), a starter
-   (`/usr/bin/jk2`: `cd` to a folder with `base` linked to `/usr/share/jk2/base`, `+set fs_homepath /persistence/jk2
-   +set com_demo 1`), the clock word for `Sys_Milliseconds` (not `gettimeofday`), and `data.py OVERLAY` with
-   `JK2_PROGRAM`. *Checked by:* `rvc_cpu` with `JK2_FRAMES=4000 JK2_SUM=400 JK2_SEED=7 jk2 +set fixedtime 50 +map
-   demo` printing `host_sum.sh`'s lines; the peak of the zone and the program's memory written down (`python
+1. **The machine's program with no picture** (the plan's step 1). Written, not run: `build.sh`'s branch for the machine
+   (OpenTTD's compiler; it also writes the starter `/usr/bin/jk2`: `fs_basepath /usr/share/jk2`, `fs_homepath
+   /persistence/jk2`, `com_demo 1`), `program.sh` (as Age of Empires': `linux/nommu/build.sh jk2/build.sh`, then
+   `flat.py`), `data.py OVERLAY` calling it, and `jk2.bin` in `BIG` of `linux/nommu/flat.py` (1 MB stack). First run
+   `wsl -- bash linux/jk2/program.sh build/jk2/out PRIVATE_HOME` and fix what the guest's compiler says (the binutils
+   must know `ld -r --force-group-allocation`). Then: the clock word for `Sys_Milliseconds` (not `gettimeofday`).
+   *Checked by:* `rvc_cpu` with `JK2_FRAMES=4000 JK2_SUM=400 JK2_SEED=7 jk2 +set fixedtime 50 +map demo`, from an empty
+   `/persistence/jk2`, printing `host_sum.sh`'s lines; the peak of the zone and the program's memory written down (`python
    linux/nommu/memory.py`); the load's and a frame's instructions (`--count-from`), against the plan's 400 thousand and
    150 MB. A first guess from the host's times and the zone: the frame is far over 400 thousand with rd-vanilla's
    front end, and the memory is over 150 MB until sound and the large files stay in the ROM.

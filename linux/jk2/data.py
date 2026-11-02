@@ -8,11 +8,13 @@ no money; no changed or added files, no new levels or derived works).
    python linux/jk2/data.py host DIR --accept-eula       DIR/base/assets0.pk3 (a link where it can be), for the build
                                                         computer's program (JK2_HOST=1 linux/jk2/build.sh)
    python linux/jk2/data.py OVERLAY --accept-eula        a private image's overlay: the pak in usr/share/jk2/base, and
-                                                        the program from $JK2_PROGRAM (usr/bin/jk2.bin, usr/bin/jk2):
-                                                        not yet built for the machine, so this says what is missing
+                                                        the program (usr/bin/jk2.bin, usr/bin/jk2) from $JK2_PROGRAM or
+                                                        program.sh (written, not yet run: docs/games/jk2.md)
 Exit 0: done. 3: something is missing, and a line says what; OVERLAY is then as it was.
    JK2_CACHE    the cache (~/.cache/shaderemu/jk2/demo)
-   JK2_URL      where the installer comes from (the Internet Archive's copy of LucasArts' download)"""
+   JK2_URL      where the installer comes from (the Internet Archive's copy of LucasArts' download)
+   JK2_PROGRAM  a folder with usr/bin/jk2.bin already made flat, in place of building it
+   JK2_WSL_HOME a private WSL home to build in"""
 import hashlib, os, shutil, struct, sys, urllib.request, zlib, zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -178,6 +180,32 @@ def demo(cache):
     return pak, licence
 
 
+def wsl_path(path):
+    path = os.path.abspath(path)
+    if os.name != 'nt':
+        return path
+    return '/mnt/' + path[0].lower() + path[2:].replace('\\', '/')
+
+
+def program():
+    """A folder with the flat program and its starter: $JK2_PROGRAM, or program.sh's (not yet run: docs/games/jk2.md)."""
+    given = os.environ.get('JK2_PROGRAM')
+    if given:
+        if not os.path.exists(os.path.join(given, 'usr', 'bin', 'jk2.bin')):
+            raise Missing('%s has no usr/bin/jk2.bin' % given)
+        return given
+    out = os.path.join(os.path.dirname(os.path.dirname(HERE)), 'build', 'jk2', 'out')
+    cmd = ['bash', wsl_path(os.path.join(HERE, 'program.sh')), wsl_path(out), os.environ.get('JK2_WSL_HOME', '')]
+    if os.name == 'nt':
+        cmd = ['wsl', '--'] + cmd
+    print('jk2: building the program')
+    import subprocess
+    p = subprocess.run(cmd)
+    if p.returncode or not os.path.exists(os.path.join(out, 'usr', 'bin', 'jk2.bin')):
+        raise Missing('the program could not be built (exit %d): linux/jk2/program.sh' % p.returncode)
+    return out
+
+
 def put(src, dst):
     os.makedirs(os.path.dirname(dst), exist_ok=True)
     if os.path.exists(dst):
@@ -207,10 +235,7 @@ def main():
             print('jk2: for the build computer\'s program: +set fs_basepath', os.path.abspath(args[1]))
             return 0
         overlay = args[0]
-        built = os.environ.get('JK2_PROGRAM')
-        if not built or not os.path.exists(os.path.join(built, 'usr', 'bin', 'jk2.bin')):
-            raise Missing('the program for the machine is not built yet (JK2_PROGRAM: a folder with usr/bin/jk2.bin; '
-                          'docs/games/jk2.md, "What is left")')
+        built = program()
     except Missing as e:
         print('jk2: %s. Nothing was put in.' % e, file=sys.stderr)
         return 3

@@ -2,7 +2,7 @@
 position-independent is reported and left as it is.   python3 flat.py ROOT"""
 import os, struct, subprocess, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
-BIG = {'quake3.bin', 'halflife.bin', 'quake.bin', 'doom.bin', 'game', 'tdawn.bin', 'ralert.bin', 'classicube.bin', 'nxweb', 'nxide', 'imdemo', 'nes.bin',
+BIG = {'quake3.bin', 'jk2.bin', 'halflife.bin', 'quake.bin', 'doom.bin', 'game', 'tdawn.bin', 'ralert.bin', 'classicube.bin', 'nxweb', 'nxide', 'imdemo', 'nes.bin',
        'nxpath', 'tcc', 'nxmicropolis', 'nxphys', 'nxray', 'nxplay', 'nxvideo', 'media_test', 'nxpaint', 'nxview', 'nxfiles', 'openttd.bin', 'aoe.bin'}
 root = sys.argv[1]
 done, left = 0, []

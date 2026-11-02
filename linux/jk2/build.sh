@@ -203,6 +203,15 @@ if [ "${JK2_HOST:-}" = 1 ]; then
 else
     mkdir -p "$OUT/usr/bin"
     "$CXXTC/bin/$T-strip" -o "$OUT/usr/bin/jk2.bin" "$BUILD/jk2"
+    "$NM" -n -C "$BUILD/jk2" > "$WORK/src/jk2.nm"
+    # the starter: the demo's pak where data.py puts it (/usr/share/jk2/base), what the game writes where the host keeps it
+    cat > "$OUT/usr/bin/jk2" <<'EOF'
+#!/bin/sh
+# Jedi Outcast's demo (docs/games/jk2.md): settings and saved games in the folder the host keeps, else in /tmp
+P=/persistence; mkdir -p $P/jk2 2>/dev/null || P=/tmp
+exec jk2.bin +set fs_basepath /usr/share/jk2 +set fs_homepath $P/jk2 +set com_demo 1 "$@"
+EOF
+    chmod 755 "$OUT/usr/bin/jk2"
     ls -l "$OUT/usr/bin/jk2.bin"
 fi
 step done
