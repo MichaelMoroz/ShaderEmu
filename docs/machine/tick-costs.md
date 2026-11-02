@@ -623,3 +623,102 @@ for every turn), ms a pass of 8,192:
   once 0.045. `discard` costs nothing (an early return instead: level).
 - Quake's tick is its drawing worker's (core 1, 7,088 instructions a pass to core 0's 3,362): what workers do (loads of
   textures, stores of new texels) is what moves it.
+
+## Fifth round: the driver's modes, the frozen kinds, and floats
+
+The same RTX 3090, D3D11, fxc2 67, `RVC_TICK_ALT` from the snapshots of the rounds before (made with their image), the
+shell loop 35 to 40 s, Quake 50 s, Quake III 40 s, three to six ticks a run, `af803662` in every run. ms of a frame's
+tick. A copy of the tree against itself: shell -0.14%, Quake +0.18%. Across the round `af803662` stood 4.05 to 5.01% over
+the tree on the shell loop, 2.33 to 5.60% on Quake and 4.23 to 5.30% on Quake III: Quake's ratio alone moves by 3%
+between runs of the same pair. 48 experiments.
+
+**The kept set against `af803662` and `15c1e2a7`** (the new tick stamped and primary, the others beside it, one run each line):
+
+| Load | `15c1e2a7` | `af803662` | `219de239` (round four) | Now | against `15c1e2a7` | against `af803662` |
+|---|---|---|---|---|---|---|
+| Shell loop (40 s) | 1.8304 | 1.6942 | 1.6211 | 1.6206 | -11.46% | -4.34% |
+| Shell loop, again | 1.8367 | 1.7093 | 1.6290 | 1.6322 | -11.13% | -4.51% |
+| Quake, e1m1 (50 s) | 1.9600 | 1.8303 | 1.7599 | 1.7622 | -10.09% | -3.72% |
+| Quake, again | 1.9536 | 1.8295 | 1.7595 | 1.7542 | -10.21% | -4.12% |
+| Quake III (40 s) | 2.0432 | 1.9174 | 1.8255 | 1.8209 | -10.88% | -5.03% |
+| `nxphys` (30 s) | 0.4150 | 0.3915 | 0.3734 | 0.3851 | -7.20% | -1.63% |
+
+Short of the mark of 5% on the shell loop (4.3 to 4.5%) and Quake (3.7 to 4.1% in these two runs); Quake III 5.0%. The
+kept change is level against round four's tick in these final runs (shell +0.0, -0.2%; Quake +0.1, -0.3%; Quake III
+-0.25%); over the round's runs it was Quake -0.95% on average (six runs, -2.0 to +0.1%), Quake III -0.2%, shell +0.1%.
+On the card `test_card.py machine fptest nxpath-balls nxpaint` 11 of 11 and `mctest-255 --parts` passed; WARP's mctest-3
+in parts.
+
+What it is, one commit (`rvc_cpu` unchanged: the machine is the same):
+
+- **fmv.w.x and fmv.x.w by themselves** in the float block, after the comparisons and before `fp_light`: `v = fa`, the
+  integer register for fmv.w.x. Through `fp_light` a frozen pass of fmv.w.x was 2.36 ms, more than a float sum's (1.54);
+  by itself 1.79. It is 14% of Quake's floats (1.3% of its drawing worker's instructions).
+- **rs1's float register by a select, read beside rs2's**, not under an `if` after it: under the `if` the second read
+  waited for the first. A frozen fadd 1.557 to 1.519 ms.
+
+**The driver's modes.** A frozen pass of addi (`RVC_FREEZE=1 --bench`, the word made one instruction every turn) is about
+1.01 ms on the tree, and most changes leave it there; some put it at 1.18 (+16%) and whole runs at +6%, for nothing in the
+code: `pre_w = w` moved from before the loop's break to the turn's top (one `mov` moved, the rest the same bytecode),
+`pre_w` taken from `cur.x` after the loop (the tree's bytecode with its temps renumbered), fxc2's
+`VKD3D_HLSL_ELIDE_LOADS=0`, `VKD3D_FORWARD_STORES=0` and `VKD3D_UBFE=1` (+5 to +8% whole). Keeping 48 words the loop does
+not use (CSRs, timer, the lanes' and the field's) in `xr`'s tail instead of carried registers left the mode as it was
+(frozen addi 1.012) and cost the shell up to 1.3%: it is not register pressure. A frozen addi pass tells the mode in 20 s.
+
+**The frozen kinds** (ms a frozen pass of 8,192 of one kind, the tree, within 1% between sessions): addi 1.006 to 1.021,
+lw 0(sp) 1.541, lbu 1.539, sw 0(sp) 1.737, bne not taken 1.252, flw 1.789, fadd 1.542, flt 1.800, fmv.w.x 2.361. A float
+costs what a load does over addi, an flw 60 cycles more than an lw (it is the tree's fifth test).
+
+**The fetch keeps its shape.** Every change to how `fetch` reads cost 6 to 13% of every load: a third texel kept (the one
+before, for a jump back into it), a jump within the texel reading nothing (both reads under a test of their own; or only
+the first). A frozen straight run of addi with the third texel was 1.300 ms against 1.021: the read ahead (`fw1`) moved
+into a nested branch is waited for where that branch ends. Yet the shell loop's string loops jump within their texel
+(1.13% of its instructions, estimated from `RVC_PROF`'s pcs) or back into the one before (1.33%), each two reads waited
+for; Quake's drawing worker 0.23% and 0.27%. What they cost is still there for a form that keeps `fw1`'s read where it is.
+
+**Experiments**, ms of the tick before and after in the same run (frozen: ms a frozen pass of the kind named). Kept rows
+are in bold.
+
+| What | Shell | Quake | Verdict |
+|---|---|---|---|
+| fp's rs1 by a select, read beside rs2 | 1.6275 to 1.6250 | 1.7378 to 1.7396 | level alone (frozen fadd 1.5566 to 1.5194); kept with fmv |
+| Regions of 8 KB | 1.6275 to 1.6325 | 1.7378 to 1.7640 | lost, +1.5% Quake |
+| flw a load (`(w & 0x7b) == 3`, dst by bit 2, funct3 2 tested) | 1.6275 to 1.6485 | 1.7378 to 1.7381 | lost, +1.3% shell (frozen flw 1.7885 to 1.5890, lw 1.5408 to 1.5901, addi +2.3%) |
+| Branches before stores and floats | 1.6399 to 1.6328 | 1.7634 to 1.7699 | level (with fsh: shell -0.35%, Quake +0.6%, +0.1%, Quake III +1.2%) |
+| `!ok` and the budget one test at the turn's end, the write, pc and count by selects | 1.6399 to 1.6603 | 1.7634 to 1.7844 | lost, +1.2% |
+| `pre_w` taken from `cur.x` after the loop | 1.6399 to 1.7401 | 1.7634 to 1.8697 | lost, +6.1%: the same bytecode, temps renumbered (frozen addi 1.18) |
+| `same` known early, from pc at the turn's top, cleared by a branch taken or a jump | 1.5552 to 1.5863 | 1.7120 to 1.7308 | lost, +2.0%, +1.1% |
+| Regions by `(o >> 14) ^ (o >> 19)` | 1.5552 to 1.5581 | 1.7120 to 1.7238 | level or lost |
+| `xr` not zeroed (under `static_noinit`) | 1.5552 to 1.5612 | 1.7120 to 1.7189 | level |
+| `pre_w = w` at the turn's top, not before the break | 1.6020 to 1.7067 | 1.7380 to 1.8498 | lost, +6.5%: one `mov` moved (frozen addi 1.0135 to 1.1815) |
+| fast's locals declared in another order | 1.6020 to 1.6030 | 1.7380 to 1.7328 | level |
+| fxc2 `VKD3D_HLSL_IEEE_STRICT=1` (no `refactoringAllowed`) | 1.6020 to 1.6049 | 1.7380 to 1.7416 | level |
+| fxc2 `VKD3D_HLSL_ELIDE_LOADS=0`; `VKD3D_FORWARD_STORES=0`; `VKD3D_UBFE=1` | 1.6176 to 1.7164; 1.6969; 1.7176 | 1.7446 to 1.8780; 1.8342; 1.8425 | lost, +5 to +8% |
+| The CSRs and timer words in `xr`'s tail, not registers carried through the loop; the lanes' and field's; both (48 words) | 1.5989 to 1.6151; 1.6057; 1.6201 | 1.7429 to 1.7283; 1.7370; 1.7390 | shell +0.4 to +1.3%, Quake level |
+| The decode's fields and register reads in another order; the fetch's and remembered texels' statics; `ok` declared first | 1.6116 to 1.6118; 1.6214; 1.6142 | 1.7369 to 1.7303; 1.7447; 1.7274 | level |
+| The fetch at the turn's end, the first before the loop | frozen addi 1.0062 to 1.1703 | | lost, not run whole |
+| No `pre_w`: the general step reads its word again; `pre_w` at the top and before the break | frozen addi 1.0062 to 1.0155; 1.0190 | | level frozen |
+| Float registers read at the top with the integer ones | frozen addi 1.0129 to 1.0261, lw 1.5408 to 1.5711, fadd 1.5566 to 1.4568 | | floats -6%, integers +1 to +2%: not run whole |
+| A load reads the two remembered texels before its address is known | frozen lw 1.5403 to 1.6653 | | lost, +8% a load |
+| A store: a whole word into a remembered texel tested first | 1.6115 to 1.6140; 1.6113 to 1.6155 | 1.7446 to 1.7225; 1.7404 to 1.7269; 1.7463 to 1.7448; Quake III 1.8113 to 1.8210, 1.8155 to 1.8276 | shell level, Quake -0.7%, Quake III +0.6% (frozen sw 1.7342 to 1.6181): dropped |
+| The same by `put` into the remembered texel read ahead | 1.6115 to 1.6278 | 1.7446 to 1.7645; Quake III 1.8361 | lost |
+| A whole word into the cache's texel by `put` (read, written back) | frozen addi 1.1590, sw 1.9981 | | lost |
+| fmv.w.x and fmv.x.w by themselves, before `fp_light` | 1.6115 to 1.6197; 1.6123 to 1.6231 | 1.7446 to 1.7353; Quake III 1.8092 | shell +0.5%, Quake -0.5% (frozen fmv.w.x 2.3609 to 1.7882) |
+| **fmv by themselves and fp's rs1 by a select (kept)** | 1.6115 to 1.6155; 1.6113 to 1.6096; 1.6142 to 1.6161; 1.6146 to 1.6171; 1.6123 to 1.6123 | 1.7446 to 1.7190; 1.7404 to 1.7311; 1.7463 to 1.7117; 1.7502 to 1.7427; 1.7551 to 1.7301; 1.7284 to 1.7303; Quake III 1.8113 to 1.8063, 1.8155 to 1.8066, 1.8045 to 1.8069 | **kept**: shell +0.08% on average, Quake -0.95%, Quake III -0.21%; the final runs level |
+| The kept pair with the store test (#above) | 1.6113 to 1.6171; 1.6138 to 1.6176 | 1.7404 to 1.7353; 1.7463 to 1.7273; 1.7572 to 1.7390; Quake III +0.2% | level |
+| The kept pair with M before the atomics | 1.6123 to 1.6161 | 1.7284 to 1.7125; Quake III 1.8099 | level |
+| A window of three texels: the one before kept, a jump within the texel or back into the one before reads nothing | 1.6138 to 1.8127 | 1.7572 to 1.9503 | lost, +12% (frozen addi 1.0213 to 1.3000) |
+| A jump within the texel reads nothing: both reads under a test of their own | 1.6142 to 1.8147 | 1.7502 to 1.9317 | lost, +12%, +10% |
+| The same, the read ahead where it was, only the first read under the test | 1.6146 to 1.7473 | 1.7551 to 1.8676 | lost, +8%, +6% |
+
+**What was learnt.**
+
+- A frozen pass of one kind is exact to 1% and takes 20 s: it shows what a change does to each kind and whether it moved
+  the driver's mode, which a whole run of 50 s cannot tell from noise. Run it on addi, lw and sw before a whole run.
+- A kind's own test moved earlier helps that kind and costs those behind it about as much: flw a load (flw -11%, lw +3%),
+  float registers read at the top (floats -6%, integers +1 to +2%), a whole word into a remembered texel tested first
+  (sw -6.7%, Quake III +0.6%).
+- What a kind computes and does not use is worth taking out of its path: fmv through `fp_light` was 330 cycles over addi.
+  Each such kind is a small share of a load, so the whole runs say less than the frozen pass.
+- The shell loop's time left is in the fetch of short loops and in the stack's loads and stores; every form tried for
+  those moved the driver's mode or the read ahead.

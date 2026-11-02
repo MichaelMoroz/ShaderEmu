@@ -218,6 +218,11 @@
   where `ram_store_nc` makes a new entry, which sets its 16 KB region's bit in `regs`, and a load searches only
   where that bit is set: a new way into the cache sets it too, or a load misses its own store. sstatus is a fast-loop
   CSR while `mip & mie` is 0: a new way for an interrupt to become pending within a pass makes it the general step's.
+- The tick's modes (`tick-costs.md`, "Fifth round"): a frozen pass of addi (`RVC_FREEZE=1 --bench`, the word one
+  instruction every turn) is about 1.01 ms on the tree; a `mov` moved (`pre_w = w` from before the fast loop's break)
+  or an fxc2 switch can put it at 1.18 and every load at +6%. Run that pass (and lw's, sw's) on a tick change before
+  believing its whole runs. `fetch`'s read ahead (`fw1`) stays at the fetch block's own level: under a nested branch it
+  is waited for there (+6 to +13%). fmv.w.x and fmv.x.w have the float block's own test before `fp_light`.
 - A round in Unity costs what a pass costs in the harness (the same fxc2 bytecode); what is
   left between them is 1.4 ms of every frame that is no round's (the room's cameras 0.65).
 - Doom's view is made by up to four worker cores from what the first core tells it between

@@ -489,8 +489,8 @@ uint fast(uint room) {
                 dst = 64;
             } else [branch] if (opc == 0x53) {
                 // (opcode 0x53 before flw and fsw: a program has more of them) floats: a sum, a difference, a product, and the light ones; the rest are the general step's
-                uint f7 = w >> 25, fa = a, fb = xr[32 + rs2];
-                [branch] if ((f7 & 0x68) != 0x68) fa = xr[32 + rs1];   // (an if: a ?: read the register either way)
+                // (rs1's float register by a select, read with rs2's: under an if the second read waited for the first)
+                uint f7 = w >> 25, fb = xr[32 + rs2], fa = (f7 & 0x68) != 0x68 ? xr[32 + rs1] : a;
                 bool to_f = true;
 #ifdef FAST
                 [branch] if ((f7 & 0x73) == 0) {
@@ -506,6 +506,9 @@ uint fast(uint room) {
                     bool nan_ = (fa & 0x7fffffff) > 0x7f800000 || (fb & 0x7fffffff) > 0x7f800000;
                     v = !nan_ && (f3 == 2 ? x == y : f3 == 1 ? x < y : x <= y) ? 1 : 0;
                     to_f = false;
+                } else [branch] if ((f7 | 8) == 0x78 && (w & 0x01f07000) == 0) {
+                    v = fa;   // (fmv.w.x and fmv.x.w by themselves: through fp_light one cost a pass of them 2.36 ms, not 1.79)
+                    to_f = f7 == 0x78;
                 } else [branch] if (((0x50100030u >> (f7 >> 2)) & 1) != 0 && (f7 & 3) == 0 && (f7 != 0x70 || f3 == 0)) {
                     v = fp_light(w, fa, fb, to_f, ok);
                 } else {
