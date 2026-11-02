@@ -42,11 +42,6 @@ extern "C" int ShaderEmu_Clean_Missed_Count(void)
     return ShaderEmu_Clean_Missed;
 }
 
-// what Half-Life's GL shim (eyes.c) reads of Half-Life's server in a debugging print: never written here
-extern "C" {
-struct se_asks_t { unsigned fn[64], n, unused[3]; } se_asks;
-}
-
 static int se_events;
 static void __cdecl se_event(const EventCallbackStruct& e)
 {

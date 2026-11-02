@@ -14,10 +14,10 @@ here:
   and `rvc_cpu`**. A tick was 503 thousand instructions of core 0 and the load 331 million, over the plan's gate
   (Tiberian Dawn's 2D logic is about 80 thousand a frame); with `MapClass::Clean` on the cells that hold something and
   `linux/tdawn`'s file search, **a tick is 74 thousand and the load 54 million**, the sums as they were ("The gate").
-- **Step 2, begun: a picture, not OpenCNC3D's eyes.** `eyes.c` draws `SCG01EA`'s terrain with its heights, the sea,
-  the cartridge's models of every building, vehicle and tree, and the infantry's strips, from the pack, over Half-Life's
-  GL shim in a Nano-X window: 1.05 million instructions of core 0 a frame (89 thousand the game, 965 thousand the
-  drawing). OpenCNC3D's own renderer, the sidebar and the menus are not here ("The picture", "What is left").
+- **Step 2, OpenCNC3D's own program, under way.** Its app and renderer (`app/opencnc3d.cpp`, `game/cnc_eyes.cpp` and
+  their C files, unchanged) built by OpenTTD's C++ compiler with all of libstdc++, the brain linked in, SDL2 replaced by a
+  layer of ours over Nano-X (`sdl_nanox.c`) and its GL by Half-Life's shim (`gl_ocnc.c`): **it compiles and links**
+  (milestone 1, "The game").
 
 Nothing of the cartridge or the DOS data is in the repository, `linux/prebuilt` or the shared image, and the port is
 not in `ALL` of `linux/nommu/build.sh`: a plain build downloads nothing of it and changes no byte.
@@ -237,62 +237,58 @@ name, 3,822 times, 37 thousand instructions each, 42.7% of it in the kernel's di
 descriptions (`Read_Scenario_Descriptions`, 68 million), the same two things `docs/games/tdawn.md` found in Tiberian
 Dawn's start and cut there ("A folder's names read once").
 
-## The picture (step 2, begun)
+## The game (step 2): OpenCNC3D's own program
 
-**OpenCNC3D's own renderer is far more than a day's work here, and is not ported.** `game/cnc_eyes.cpp` is 47,617 lines
-and includes 128 headers of its own (110 thousand lines more: effects, remastered art, the editor, Red Alert in 3D,
-the sidebar, the menus, audio, network), uses `std::map`, `std::string` and `std::unordered_map` (all of libstdc++, which
-the flat C++ driver here has not: OpenTTD's toolchain would be needed), zlib, `dlopen` of the brain, SDL2 for its
-window, events and sound, and a dozen packs of its own beside the mission's (`dossidebar.pack`, `cameos.pack`, the
-DOS art packs the DOS data's bakers make). So the smallest picture was made instead, as the coordinator's brief
-allowed: `linux/opencnc3d/eyes.c`, ours, about 400 lines, which reads the mission's pack and the brain's objects and
-draws them with `cnc_eyes.cpp`'s conventions (a cell is a unit, a model unit 1/1024 of a cell, a height step 1/64, a
-facing turning a model by `-face * 2 pi / 256`, the cartridge's 50 degrees of field and a camera pitched down 55
-degrees at 16 cells). It is OpenCNC3D's data and the cartridge's models; it is not OpenCNC3D's picture.
+The owner wants OpenCNC3D here, not a recreation of it: this is its own app (`app/opencnc3d.cpp`: the DOS menus, the
+enhanced menu, the campaign and the state machine between menu and game) and its own renderer (`game/cnc_eyes.cpp`,
+compiled as a library with `-DOPENCNC3D_NO_MAIN` as its Mac and Windows builds do), built for the machine by
+`linux/opencnc3d/game.sh`, which `build.sh` runs after the brain. Their sources are compiled as they are; what the
+machine lacks is supplied beside them, as OpenCNC3D's own `compat/win` does for Windows.
 
-What it draws: the terrain's cells in the view (the atlas, keyed where the cartridge punched the sea out) on the PK9
-heights; under the cells with holes the sea floor (`BOTTOM`) and the sea (`WATER1` at 170/255); every building,
-vehicle, aircraft and tree by its pack mesh (solid and cutout first, then the shadows and translucent faces blended),
-a turret turned about its pivot by its own facing; every soldier as his set's `STAND` frame for his facing in his
-house's palette, upright to the camera. The GL is Half-Life's shim (`linux/halflife/gl_shaderemu.c` over
-`linux/quake3/gpu_shaderemu.c` on `gles.c`), included as `linux/jk2/gl_jk2.c` does, in a 640 x 480 Nano-X window;
-`build.sh` links it with the brain into `/usr/bin/opencnc3d` (1.65 MB). `OPENCNC3D_LOOK=X,Y`, `OPENCNC3D_DIST`,
-`OPENCNC3D_PITCH` move the camera; `OPENCNC3D_TICKS=N` plays N ticks before the first picture.
+| Their need | Here |
+|---|---|
+| C++ with all of libstdc++ (`std::map`, `std::string`, `std::unordered_map`, exceptions) | OpenTTD's GCC 13.3 for `riscv32-linux-musl` (`linux/openttd/toolchain.sh`, `ottd-cc` and `ottd-c++`) |
+| zlib | OpenTTD's (`$WORK/src/openttd-deps`) |
+| libcurl (the internet game list, `launcher/lnet.c`) | the image's own port (`linux/ports/curl.sh`, with mbedTLS) |
+| SDL2 | the headers of SDL 2.30.9 (zlib licence, fetched against their SHA-256; none of SDL's code is built) and `sdl_nanox.c`, ours: the 91 functions the program calls |
+| OpenGL 1.x | `compat/OpenGL/gl.h` (SDL's copy of Mesa's `gl.h` and `glext.h`) and `gl_ocnc.c`: the program's 91 `gl` calls, renamed `ocnc_gl` in its objects so that `gles.c`'s own never meet them, onto Half-Life's shim (`linux/halflife/gl_shaderemu.c`) over Quake III's draws, as `linux/jk2/gl_jk2.c` does |
+| `dlopen` of the brain | `brain_link.c`: `dlopen`, `dlsym`, `dlclose` and `dlerror` answer from a table of the brain linked in (weak, so the five functions only Red Alert's brain has are 0, as their `dlsym` would be) |
+| `__int64`, `__declspec` | `msvc_gcc.h` with `-fms-extensions -fpermissive`, as for the brain (their Windows build's flags) |
 
-Looked at (captures under `rvc_harness --cpu --warp` through `tools\gpu_queue.ps1`, 2 November 2026, kept in no
-repository): GDI 1's grass, roads, the cliff with its height, the beach and the sea with its rocks, the trees with
-their blended shadows, the MCV, the boat, a Nod gun turret and four GDI riflemen in tan where they stand. Wrong or
-missing in them: GDI's models are drawn in the Nod/neutral colours (the pack's GDI variants are not used yet), no
-building's or tree's animation plays (PKB), the tree clumps `TC01`..`TC05` have no mesh (the cartridge has none, as
-OpenCNC3D's `unit_models.json` says) and are not drawn, the soldiers stand (no `RUN` or `DETH1`), no vehicle shadow
-quads (PKD), no shroud, no terrain shade (the console's per-corner light and the CM tint), no sidebar, no cursor.
+**The SDL functions** (`sdl_nanox.c`): start and end (`SDL_Init`, `_InitSubSystem`, `_Quit`, `_SetHint`, `_GetVersion`,
+`_GetPlatform`, `_GetCurrentVideoDriver`, `_getenv`, `_free`, `_memset`, `_GetError`, `_ShowSimpleMessageBox`,
+`_GetPrefPath` (`/persistence/opencnc3d/`, else `/tmp`), `_GetBasePath`); time (`_GetTicks`, `_GetPerformanceCounter`,
+`_GetPerformanceFrequency`, `_Delay`: the clock, never a wait in place); threads, run to their end when they are made
+(`_CreateThread`, `_WaitThread`, `_DetachThread`), `_CreateMutex`, `_LockMutex`, `_UnlockMutex`, `_AtomicSet`,
+`_AtomicGet`; the one window (`_CreateWindow` as a desktop window, its size held under the screen less the caption and
+the bar, `_DestroyWindow`, `_GetWindowFlags`, `_GetWindowSize`, `_SetWindowSize`, `_GetWindowPosition`,
+`_SetWindowPosition`, `_SetWindowResizable`, `_SetWindowBordered`, `_SetWindowFullscreen` (windowed only),
+`_SetWindowDisplayMode`, `_GetWindowDisplayMode`, `_RaiseWindow`, `_SetWindowInputFocus`, `_SetWindowMouseGrab`,
+`_GetWindowDisplayIndex`, `_GetWindowFromID`, `_GetKeyboardFocus`, `_SetWindowData`, `_GetWindowData`); the screen
+(`_GetNumVideoDisplays`, `_GetDesktopDisplayMode`, `_GetCurrentDisplayMode`, `_GetNumDisplayModes`, `_GetDisplayMode`,
+`_GetClosestDisplayMode`, `_GetDisplayBounds`, `_GetDisplayUsableBounds`); GL (`_GL_SetAttribute`, `_GL_GetAttribute`,
+`_GL_CreateContext`, `_GL_DeleteContext`, `_GL_MakeCurrent`, `_GL_GetCurrentContext`, `_GL_GetCurrentWindow`,
+`_GL_GetDrawableSize`, `_GL_SetSwapInterval`, `_GL_GetSwapInterval`, `_GL_SwapWindow`, `_GL_GetProcAddress`); input
+(`_PumpEvents`, `_PollEvent`, `_PeepEvents`, `_PushEvent`, `_FlushEvent`, `_GetKeyboardState`, `_GetModState`,
+`_StartTextInput`, `_StopTextInput`, `_GetMouseState`, `_GetGlobalMouseState`, `_ShowCursor`, `_SetRelativeMouseMode`,
+`_WarpMouseInWindow`, `_WarpMouseGlobal`, `_GetScancodeFromKey`, `_GetKeyName`, `_GetKeyFromName`: Nano-X's keys,
+buttons, wheel, pointer, close and resize as SDL's events); files (`_RWFromFile`, `_LoadWAV_RW`, `_FreeWAV`); sound
+(`_OpenAudioDevice`, `_CloseAudioDevice`, `_PauseAudioDevice`, `_LockAudioDevice`, `_UnlockAudioDevice`: no device yet,
+which the program takes as a machine with none).
 
-Measured on `rvc_cpu` (90 frames of `SCG01EA`, the camera on the MCV, the game a tick a frame):
+**The GL calls the shim does not draw** (`gl_ocnc.c`, `OPENCNC3D_GL_LOG=1` names each the first time):
+`glClipPlane`, `glColorMask`, `glCopyTexSubImage2D`, `glGetTexImage`, `glPushAttrib` (and so `glPopAttrib`),
+`glReadPixels` (zeros), `glScissor`; depth state (`glDepthFunc`, `glDepthMask`, `glClearDepth`: the GPU's depth test is
+fixed), culling, normals, the texture matrix, and every texture unit past the first (`glActiveTexture` and the
+`glMultiTexCoord` of other units keep nothing). `SDL_GL_GetProcAddress` gives `glActiveTexture`,
+`glClientActiveTexture`, `glMultiTexCoord2f` and `3f`, and 0 for anything else: no shaders, no framebuffers, which is
+tier 1.
 
-| | instructions of core 0 |
-|---|---:|
-| a frame | 1,050,949 to 1,062,200 |
-| the game's tick in it | 87,912 to 91,312 |
-| the drawing | 961,824 to 974,288, for 6,081 vertices and 33 objects |
-| the load (`CNC_*` start) | 54,312,086 |
-| the pack read and its textures put in the GPU's pool | 38,143,637 |
+### Milestone 1: it compiles and links (2 November 2026)
 
-Memory: the pack (8.2 MB) is read whole and freed once its 339 textures are in the GPU's pool, which holds them in
-5,749 KB of a 12 MB pool (`HL_POOL_MB=12`, 0 left out; the soldiers' strips among them, the GDI variants not
-put there); 1,002 KB of meshes, cells and heights stay in the heap. The drawing is a vertex at a time through
-`glBegin` (`s_glVertex3f` 47 instructions, the shim's `draw_vertices` 2,576 a call over 7,380 calls in 60 frames, and
-`main`'s own loops 29%): the terrain is three quarters of the vertices and does not change, so it is the first thing
-to keep in the GPU's memory (`seglKeep`, as Doom and Quake do).
-
-## What is left
-
-- OpenCNC3D's renderer itself, at tier 1: a port of `cnc_eyes.cpp` and its modules needs OpenTTD's full C++ toolchain
-  (or the STL replaced), SDL's window, events, timer and sound replaced by a host of ours, its `dlopen` of the brain
-  turned into a link, its packs of DOS art baked (`game/bake_dos*.py` over the DOS data), and the optional shader chain
-  left out at compile time. Its tier-1 contract (`docs/tier1-gap.md`) says which paths a fixed-function GL keeps.
-- The sidebar and the menus, which come from the DOS data's SHP art through those packs.
-- In `eyes.c`, if it stays: the GDI variants, animation, the vehicle shadows, the terrain's shade and tint, the
-  shroud, and the terrain kept in the GPU's memory.
+`bash linux/nommu/build.sh opencnc3d/build.sh` (a private WSL home) makes `/usr/bin/opencnc3d`: 9,135,012 bytes of
+text, 183,384 of data and 17,784,460 of bss (`riscv32-linux-size`), 9.3 MB stripped. The brain inside it is the one
+whose sums are above, built as before.
 
 ## Licences
 
