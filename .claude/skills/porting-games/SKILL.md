@@ -1,6 +1,6 @@
 ---
 name: porting-games
-description: Step-by-step tutorial for porting a game (or any large C/C++ program) to the ShaderEmu machine - RISC-V in a GPU shader, no-MMU Linux with bFLT flat programs, a Nano-X desktop, worker cores, GPU drawing through gles.c/segl, a sound card and ROM files. Distilled from the ports already in the tree (Doom, Quake, Quake III, Half-Life, Tiberian Dawn, Red Alert, the NES, ClassiCube, Micropolis, OpenTTD). Use when asked whether a game can run on the machine, when starting a new port under linux/NAME, when writing its build.sh, patch, video/sound/input drivers or state sums, when making a port fast enough at 2 to 3 MIPS a core, when moving its work to worker cores, or when putting it on the desktop, in the image and in tools/test_all.py. Triggers on: port a game, new game, linux/NAME/build.sh, flat program, bFLT, nommu build, seglSwapEarly, sound card driver, host_sum, state sum, test_all case, nxapps, nxopen, game too slow on the machine.
+description: Step-by-step tutorial for porting a game (or any large C/C++ program) to the ShaderEmu machine - RISC-V in a GPU shader, no-MMU Linux with bFLT flat programs, a Nano-X desktop, worker cores, GPU drawing through gles.c/segl, a sound card and ROM files. Distilled from the ports already in the tree (Doom, Quake, Quake III, Half-Life, Tiberian Dawn, Red Alert, the NES, ClassiCube, Micropolis, OpenTTD, Jedi Outcast, OpenCNC3D). Use when asked whether a game can run on the machine, when starting a new port under linux/NAME, when writing its build.sh, patch, video/sound/input drivers or state sums, when making a port fast enough at 2 to 3 MIPS a core, when moving its work to worker cores, or when putting it on the desktop, in the image and in tools/test_all.py. Triggers on: port a game, new game, linux/NAME/build.sh, flat program, bFLT, nommu build, seglSwapEarly, sound card driver, host_sum, state sum, test_all case, nxapps, nxopen, game too slow on the machine.
 ---
 
 # Porting a game to ShaderEmu
@@ -39,6 +39,16 @@ Answer these before writing any code; `docs/plans/aoe-plan.md` is a worked examp
    and never goes into `linux/prebuilt`. Open data sets replace the original's where they exist
    (OpenTTD's OpenGFX/OpenSFX/OpenMSX). Unclear licence: the developer decides, and until then
    the image with it is a private one.
+   - **Read the package's own licence text first** (it is in the installer: the AoE trial's `eula.txt`,
+     the JK2 demo's `license.txt`). Demos and trials of that era often allow free, non-commercial
+     copies, but only of the whole package unchanged with its licence ("a true and complete copy",
+     "only in its original form"): an extracted, converted or repacked copy is not that. A
+     click-through in the machine settles the user's use, never our right to pass files on.
+   - A console cartridge dump (OpenCNC3D's European N64 ROM) is never redistributable: the owner's
+     own dump, checked by its SHA-1, baked into a cache outside the tree and a private image only.
+   - Where a remake's art needs files of another game, say which disc and why: OpenCNC3D's DOS art
+     comes from the Covert Operations DOS disc, as Gold's Windows 95 fonts are twice the size and
+     put every menu label under its button.
 3. **Language and runtime.**
    - C: `rv32-cc` (musl, static, `rv32imaf`, ilp32 with floats in integer registers).
    - C++ without exceptions/RTTI: `rv32-c++` (made by `linux/tdawn/build.sh`) over musl with
@@ -55,6 +65,10 @@ Answer these before writing any code; `docs/plans/aoe-plan.md` is a worked examp
 6. **Dynamic loading.** None. Link game modules into one program: Quake III's three modules are
    each one object with its names kept inside and their variables reset at each "load"
    (`linux/quake3/sys_shaderemu.c`); Half-Life links client and server in (`XASH_STATIC_LIBS`).
+   A program that `dlopen`s a library and `dlsym`s its entry points gets a `dlopen` of its own that
+   answers from a table of the linked functions (`linux/opencnc3d/brain_link.c`). Ask for each entry
+   point with `-Wl,-u,NAME` (`linux/opencnc3d/game.sh`): a weak reference pulls no member out of a
+   static archive, and `dlsym` then finds nothing (`CNC_Init` was missing).
 7. **Memory.** ~240 MB free at the shell, but a no-MMU program takes all its data, bss, stack and every
    anonymous mapping at start, and each mapping needs one contiguous run of pages. Size big pools
    to what is used (Quake III's hunk 8 MB on no-MMU, set by `sed` in `linux/nommu/build.sh`) and
@@ -65,6 +79,21 @@ Answer these before writing any code; `docs/plans/aoe-plan.md` is a worked examp
    Old 2D games at 320x200 and 386-era logic got there after several rounds; a 3D game needs its
    level kept in GPU memory and its server or drawing on workers. Starts of 100-300 million
    instructions are a minute or more at the world's speed and are worth attacking too.
+   - **Count the game's logic a tick apart from its drawing**, natively or on `rvc_cpu`. Drawing can be
+     kept on the GPU and moved to workers; logic that a frame reads directly usually cannot, and it
+     sets the ceiling. Quake III's server frame began at about 215 thousand instructions (one bot)
+     and is 147 thousand now; Jedi Outcast's is 2.3 million a 50 ms tick, about 46 million a second
+     for real time, eight times a calibrated core: it cannot play in real time however the drawing
+     is made (`docs/games/jk2.md`). At the calibrated 5.49 million a second, 20 fps is about 33
+     passes, 270 thousand instructions of core 0 a frame.
+   - Starting points to compare with (calibrated): Quake III with everything on one core and its own
+     renderer 1.25 to 1.5 million a frame, 79 fps now at 24.5 thousand; Half-Life's first build (the
+     level kept, the server and models on workers) 13 fps, now 24 to 50; Jedi Outcast over
+     rd-vanilla on one core 18.5 million a frame in play (0.29 fps), 4.62 million in its menu;
+     OpenCNC3D's own renderer and brain 63 million.
+   - A renderer that sends every vertex each frame through a GL shim (rd-vanilla, OpenCNC3D's
+     `cnc_eyes.cpp`) is a first light, not a way to playable speed: plan the kept level
+     (`gl_kept.c`) or a renderer of our own from the start, as Quake III and Half-Life did.
 
 ## Step 1: the build script, reproducible
 
@@ -161,7 +190,19 @@ The canonical 2D driver is `linux/openttd/shaderemu_v.cpp` (and Doom's `doom_vid
    `gl_shaderemu.c`); build `gles.c` with `-DSEGL_FLOAT` for float games, fixed point otherwise.
    ClassiCube writes the GPU's command lists directly (`Graphics_ShaderEmu.c`).
    `docs/machine/gpu.md` lists every `segl*` call.
-8. `fps_caption.h` (`programs/linux`) writes frames a second into the caption for free.
+   Half-Life's shim draws at most 4,096 vertices a call: split a larger draw into whole triangles,
+   quads or lines (`linux/opencnc3d/gl_ocnc.c`; OpenCNC3D's terrain came out black without it). A
+   game that asks for `GL_ARB_multitexture` gets unit 0 drawn and the other units tracked, so a
+   texture bound there is still filled; a combine of two stages is made as the nearest one stage.
+   A game's GL wrapper with another prefix is renamed by a header (`jk2_glX` in `gl_jk2.c`).
+   Take out at compile time what only a shader GL would use, and anything precomputed for it:
+   OpenCNC3D's Enhanced water field was 2,165 s of the guest's at start (`gmwipe_mod.h` in its patch).
+8. An SDL2 game gets a layer of our own over Nano-X instead of SDL: `linux/opencnc3d/sdl_nanox.c`
+   is 91 functions on SDL 2.30.9's headers (window, events, keys, the pointer, timers, a GL
+   context on `seglInit`). Its performance counter can count core 0's retired instructions
+   (`OPENCNC3D_CLOCK=instret`), so the game's own frame profiler (`OPENCNC3D_FRAMEPROF=1`) prints
+   millions of instructions where it printed milliseconds: the cheapest profile of a game's parts.
+9. `fps_caption.h` (`programs/linux`) writes frames a second into the caption for free.
 
 `gles.c` is shared: a change to it moves `CC_BYTES_NOMMU` in `tools/test_all.py`, needs
 `linux/tcc/build.sh` (`AGENTS.md`), and must keep every other game's checks.
@@ -212,6 +253,10 @@ The canonical 2D driver is `linux/openttd/shaderemu_v.cpp` (and Doom's `doom_vid
   OpenTTD's `shaderemu_m.cpp` with DMXOPL's `genmidi.op2`); or an MP3 decoded on
   workers by libmedia into a stream voice's ring (ClassiCube); NES channels as voices playing
   waves at a step and volume the emulator updates (`linux/nes/apu_shaderemu.c`).
+- **Never decode music on core 0.** Jedi Outcast's menu music is an MP3 decoded by the engine on
+  core 0: 3.5 million instructions a second of sound, two thirds of the core, so its menu ran at
+  1.16 fps and at 3.74 with sound off. Decode it on workers into a stream voice's ring from the
+  first day, as ClassiCube and `nxplay` do.
 - `rvc_cpu` has no card unless `RVC_SOUND=1`; check samples with `--fixed-dt 0.004
   --sound-capture F.wav --save-state F.snap` and `tools\sound_reference.py ... --rom`.
 
@@ -465,3 +510,10 @@ All written by the game's `build.sh` into `$OUT`:
 - Defaults sized for the machine: OpenTTD's new map 64x64 (256x256 takes ~16 min to make at
   2 MIPS), Tiberian Dawn's game speed 20 steps, ClassiCube's low-memory world.
 - A window that dies with no error is usually the developer closing it; run headless.
+- An engine that clamps a frame's time (Quake-family engines at 200 ms) runs several game frames
+  a client frame once a frame is slow: Jedi Outcast in real time was 23.0 million a frame against
+  18.5 at `fixedtime 50`. Measure under a fixed step, and say which.
+- A Remaster-era library may do work every tick for a view nobody shows: OpenCNC3D's brain drew
+  the 1995 view at every tick (4.97 million a tick, off by default now: `OPENCNC3D_RENDER=1`) and
+  checked all 16,384 cells (`MapClass::Clean`, 427 thousand of a 503-thousand tick; now only the
+  cells marked).

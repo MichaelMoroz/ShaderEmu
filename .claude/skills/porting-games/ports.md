@@ -101,6 +101,42 @@ checked. Paths are from the repository root; each game's doc is `docs/games/NAME
   packed files, so a level change goes to core 0.
 - **Checks**: `HL_ROTATION=check` (0 wrong), `HL_PREDICT=check` (0 over 0.1), `HLGL_PICSUM=1`, `HL_MARK=FROM,TO` for counting; walked with `HL_SCRIPT` under `RVC_RACES`.
 
+## Jedi Outcast's demo (OpenJK), private image only
+
+- **Source**: OpenJK at a commit, its single-player game and rd-vanilla linked into one program;
+  `docs/games/jk2.md`, `docs/plans/jk2-plan.md`.
+- **Data**: `data.py` fetches LucasArts' installer against its sums into a cache outside the tree and
+  takes the pak out with `--accept-eula`; out of `ALL`, `linux/prebuilt` and the shared image. Its licence
+  allows copies only in the original form, so the installer itself, unchanged, is what may be shipped.
+- **Files**: `gl_jk2.c` (rd-vanilla's `glX` renamed `jk2_glX` onto Half-Life's shim), a sound card
+  stream, the desktop's entries; the weather's outside cache asked as boxes of points
+  (`CM_PointContentsGrid`, `JK2_WEATHER_CHECK=1`: 0 of 423,192 words wrong); triangles as
+  `glDrawElements` (`r_primitives 2`).
+- **Speed** (calibrated, 2 November 2026): one core, no worker ever runs. Menu 4.62M a frame (1.16 fps;
+  the MP3 music 3.0M of it), play 18.5M (0.29 fps; client's game 6.1M, renderer 5.5M, sound 3.8M, game
+  2.4M), start 964M (JPEG on core 0 59%). The game logic per tick is the ceiling.
+- **Checks**: `JK2_KEYS` scripts of keys by frame, `fixedtime`; `test_all.py jk2` and `jk2-sums` (long,
+  on an image with the pak) against `host_sum.sh` and the build computer.
+
+## OpenCNC3D (the N64 Command & Conquer on PC), private image only
+
+- **Source**: OpenCNC3D pinned, sparse; its brain is Vanilla Conquer ce83b59 with its own patch, then
+  `linux/opencnc3d/opencnc3d.patch`; `build.sh` makes the brain, `game.sh` the program
+  (`app/opencnc3d.cpp` and `game/cnc_eyes.cpp` unchanged, OpenTTD's C++ compiler with libstdc++).
+- **Data**: the owner's EU cartridge (`bake.py`, SHA-1 checked) baked by OpenCNC3D's `bake5.py` over our
+  `bake/pk4mod.py` and `bake/n64_terrain.py` (its own baker is lost), checked by its `packinspect.py`; the
+  DOS data by HTTP range from archive.org discs (`data.py`); `play.py` runs its 12 bake scripts into the
+  play folder (52 MB); `overlay.py` into a private image. Nothing baked from the cartridge is committed.
+- **Files**: `brain_shaderemu.cpp` (the brain's host, sums), `brain_link.c` (`dlopen`/`dlsym` from a
+  table), `sdl_nanox.c` (91 SDL2 functions over Nano-X), `gl_ocnc.c` (its GL onto Half-Life's shim:
+  draws split at 4,096 vertices, units tracked), `host.cpp`, `host_sum.sh`, `check_objects.py`.
+- **Tricks**: `-Wl,-u` for each of the brain's 76 entry points; the 1995 view not drawn
+  (`OPENCNC3D_RENDER=1`); `MapClass::Clean` on marked cells (`OPENCNC3D_CLEAN=full|check`);
+  `OPENCNC3D_CLOCK=instret` with `OPENCNC3D_FRAMEPROF=1`; `--flowtest` is its own autopilot through the
+  menu into a mission.
+- **Checks**: the INIs' objects (60 of 60, 73 of 73), 11 sums over 3,000 ticks the same on the build
+  computer and `rvc_cpu` (SCG01EA ends `7ed86914`).
+
 ## Tiberian Dawn and Red Alert (Vanilla Conquer)
 
 - **Source**: Vanilla Conquer at a commit; `linux/tdawn/vanilla-conquer.patch`; Red Alert applies

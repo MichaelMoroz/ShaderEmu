@@ -36,6 +36,11 @@ new port's first profile (`tools/prof.py report`; its pattern library is
 | zip inflated at every start | store entries uncompressed at build (`store_zip.py`) | ClassiCube |
 | Tables of a renderer not used | made when that renderer is wanted | Doom |
 | Clearing a table cell by cell | one piece | Tiberian Dawn |
+| JPEGs decoded with libjpeg's fancy upsampling (16 x 16 IDCTs: 171M of a 964M start) and colour conversion on core 0 | `do_fancy_upsampling = FALSE`; decode at the size used (`r_picmip`, a 1,024 picture straight to 512); libmedia on workers | Jedi Outcast |
+| The pak's CRC at start (29M) | not summed | Jedi Outcast, Quake III |
+| `stpncpy` padding and large `memset`s filling the write cache (18,675 full passes, 114M lost) | no padding; clear only what is read | Jedi Outcast, Quake III |
+| A precomputed field for a shader path the machine has not (2,165 s) | left out at compile time | OpenCNC3D |
+| The engine's 1995 view drawn at every tick for a remaster (4.97M a tick) | not drawn; a switch draws it, and sums must not move | OpenCNC3D |
 
 Measure a start as a one-tick run (`openttd -v null:ticks=1 -g`) under `prof.py`, or
 `rvc_cpu --count-from` from the command to the first frame's line. A frame drawn at every step
@@ -66,6 +71,12 @@ of a long load is a cost too: draw progress once a second.
 | `R_PointToAngle` and the like every frame per thing | kept while the answer cannot change | Doom |
 | Fixed-point division one bit a step / as doubles | as many bits a step as fit; integer division | Doom |
 | `memcpy` of textures into a pool (6 KB a pass is the cache) | make the piece where it will lie, not copied; megabytes to workers (`ui_bulk.h`) | Quake, `nxplay` |
+| Music decoded on core 0 (an MP3: 3.5M a second of sound, two thirds of the core) | libmedia on workers into a stream voice's ring | Jedi Outcast (measured, not fixed), ClassiCube |
+| Every cell checked at every tick (`MapClass::Clean`, 427k of a 503k tick) | only cells marked where an occupier or overlapper is given a pointer, in the same order; a `=check` mode counts misses | OpenCNC3D |
+| A small vector function out of line (`DotProduct`, 102k calls, 7% of a frame) | inline in a header, or LTO | Jedi Outcast (measured, not fixed) |
+| Effects' debris traced against every entity (23 traces, 2.0M a frame) | against the world only | Jedi Outcast (measured, not fixed) |
+| Blob shadows as marks cut from the world (1.9M a frame) | off (`cg_shadows 0`) or a kept quad | Jedi Outcast (measured, not fixed) |
+| A renderer reading the brain's printed object dump each frame | the objects as numbers through a function | OpenCNC3D (part of its 47M a frame; measured, not fixed) |
 
 Compiler-level: `-O3 -fno-tree-vectorize -fsched-pressure -funroll-loops`, LTO with raised inline
 limits, PGO - each a few percent to a fifth (`docs/games/tdawn.md`, "What the compiler is told").

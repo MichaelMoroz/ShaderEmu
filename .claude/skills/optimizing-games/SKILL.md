@@ -1,6 +1,6 @@
 ---
 name: optimizing-games
-description: Make a game or large program that already runs on the ShaderEmu machine faster - what bounds its frame, how to profile it with tools/prof.py, what to fix on the first core, what to move to worker cores, drawing a frame behind, the write cache and texel layout of what is stored, per-core state, compiling whole with played counts (LTO, PGO), and the checks that say it is still the same game (state sums, RVC_RACES, RVC_RACES_NEAR, walking instead of standing). Learnt on Doom, Quake, Quake III, Half-Life, Tiberian Dawn, Red Alert, ClassiCube, the NES and OpenTTD. Use when asked to optimize, speed up or raise the frames or ticks a second of a game or program on the machine, or to decide whether work should go on a worker. Triggers on: optimize a game, frames a second, too slow, core 0 a frame, passes a frame, prof.py, game_par, worker core for X, frame behind, write cache full, texel layout, PGO, profile.gz, LTO.
+description: Make a game or large program that already runs on the ShaderEmu machine faster - what bounds its frame, how to profile it with tools/prof.py, what to fix on the first core, what to move to worker cores, drawing a frame behind, the write cache and texel layout of what is stored, per-core state, compiling whole with played counts (LTO, PGO), and the checks that say it is still the same game (state sums, RVC_RACES, RVC_RACES_NEAR, walking instead of standing). Learnt on Doom, Quake, Quake III, Half-Life, Tiberian Dawn, Red Alert, ClassiCube, the NES, OpenTTD, Jedi Outcast and OpenCNC3D. Use when asked to optimize, speed up or raise the frames or ticks a second of a game or program on the machine, or to decide whether work should go on a worker. Triggers on: optimize a game, frames a second, too slow, core 0 a frame, passes a frame, prof.py, game_par, worker core for X, frame behind, write cache full, texel layout, PGO, profile.gz, LTO.
 ---
 
 # Optimizing a game on the machine
@@ -33,6 +33,16 @@ Before reading any flat profile, ask which of these it is, as the answer decides
 | Core 0 waits at the swap or for a job | the worker's job plus about 2 passes of handover | shorten the job; core 0 savings buy no frames (Half-Life's fight) |
 | Passes end early (`RVC_PASSLOG`, `tools\tick_util.ps1`) | waits, full caches, copies | section 5 |
 | Passes a frame near the picture's interval | the pacing itself | nothing here: OpenTTD stands at its 66 ms (`OPENTTD_FRAME_MS`); look at its ticks instead |
+| Core 0 busy 97 to 99% of every pass and no worker ever runs | a port still on one core (Jedi Outcast, OpenCNC3D) | split the frame into logic, drawing and sound first (below), then section 6 |
+
+**Find the ceiling before the first change.** Measure the game's logic a tick apart from its drawing and sound. Drawing
+goes to the GPU and to workers; logic the frame reads directly mostly stays, so it bounds what any amount of work buys.
+Jedi Outcast: 2.3 million a 50 ms tick is 46 million a second for real time, eight times a calibrated core (5.49 million a
+second, 1.491 ms a pass), so with every Half-Life and Quake III method its play estimates at 1 to 2 fps, the game at a
+tenth of real time; only its menu could reach about 10 to 20. Say so before proposing rounds. 20 fps is about 33 passes,
+270 thousand instructions of core 0 a frame. A frame's parts by name, cheaply: the game's own frame profiler on a clock
+that counts retired instructions (`OPENCNC3D_CLOCK=instret` with `OPENCNC3D_FRAMEPROF=1`), or `JK2_STATS`-style lines
+of `rdcycle`. The plain `rvc_cpu` clock is about 3.32 million a second of core 0, 1.65 times slower than the calibrated one.
 
 `RVC_PASSLOG=FILE` gives a line a pass from the mark (`pass end ran pc ra ms`; end 0 budget, 1 ended itself, 2 waited, 4 full,
 5 a copy), `RVC_PASSLOG_STACK=N` who ended it. Half-Life's `HL_RENDER_CALLS=1` prints its job's timeline: a game with a job a
@@ -71,6 +81,14 @@ In order of what most often paid, with the port it came from:
    each tile (3.5% of OpenTTD's workers); a slot cleared by its keys, not whole.
 5. **The clock word** (`0x81000034`) in place of a system call, 32-bit maths in place of 64-bit, floats in place of doubles.
 6. **The machine's copy** for anything large (CSRs `0x0b0` to `0x0b3`; a copy from RAM to RAM is 256 KB a pass). Fills go to borrowed workers (`ui_bulk.h`).
+7. **Decoding off core 0.** Music, pictures and inflate on workers through libmedia: Jedi Outcast's menu was two thirds MP3
+   decoding (3.0 of 4.62 million a frame), its start 59% JPEG with libjpeg's fancy upsampling.
+8. **Work for a view or path nobody uses.** A remaster's engine drew its 1995 view at every tick (OpenCNC3D, 4.97 million a
+   tick); a shader-only precompute ran on a GL with no shaders (2,165 s); effects traced against entities (Jedi Outcast 2.0
+   million a frame). Each kept behind a switch, with the sums the same both ways.
+9. **Inline the small maths.** An out-of-line `DotProduct` was 7% of Jedi Outcast's frame: a header or LTO, then Quake III's flags.
+10. **A fixed step.** An engine that clamps a slow frame (200 ms) runs several game frames a client frame: 23.0 million against
+    18.5 at `fixedtime 50`. Measure under the fixed step and say which.
 
 Tried and not worth it, so measure before believing: Half-Life's mesh cache per submodel and skin (no frames), a kernel name table built at the
 first lookup (a program that runs once paid more: nxweb +9%; the image carries the table now), `strcmp` by words (calls average 2 to 3 characters).
@@ -99,6 +117,11 @@ What pays: work that needs **no answer in the same frame**, with its **own data*
 | Work begun ahead and joined or thrown away | Doom's sight checks (`doom_ahead`), C&C's second path search |
 | A picture cut in parts, a core a part | OpenTTD `ViewportFlush` |
 | A long job shared out | libmedia, Red Alert's movie rows, ClassiCube's meshes |
+
+What a renderer needs before it can go to a worker: its own copies of what the game changes. OpenJK took out Quake III's two
+`backEndData` sets, and Ghoul2's bone caches are shared with the game's bolts, so Jedi Outcast's back end on a worker means
+bringing both back (Half-Life's hit hulls are the warning). A renderer that sends every vertex each frame through the GL shim
+gains more from keeping the level in GPU memory (Half-Life's `gl_kept.c` runs on the same shim) than from a worker.
 
 What does not: a job under some tens of thousands of instructions (a pass each way), splitting a ten-pass frame, a job a round
 for many workers (use a team on a round word: `mcw_for`), and logic whose objects the drawing reads and marks, unless the drawing works from copies.
