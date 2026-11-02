@@ -195,6 +195,9 @@ CASES = [
          has=[r'searches not run again and \d+ another core.s, 0 of them wrong', r'edge walks made both ways, 0 of them wrong', r'state 1a9a814b',
               r'scans looked at again, 0 of them wrong'],
          never=[r'no heights', r' [1-9]\d* of them wrong']),
+    # docs/games/tdawn.md, "In 3D": the first mission played to its end by the band and clicks through the tilted view's ray (TDAWN_PLAY)
+    case('tdawn-3d-play', 'games tdawn td3d', X + TD + 'TDAWN_VIEW=3d TDAWN_PLAY=40 TDAWN_SCEN=1 TDAWN_FRAMES=4000 tdawn FROMINSTALL', True,
+         wall=400, has=[r'play: mission 1 won at frame 3244'], never=[r'mission 1 lost', r'Segmentation fault']),
     # docs/games/tdawn.md, "A mission won": the demo's first mission won, its score screen, the next mission played
     case('tdawn-won', 'games tdawn', X + TD + 'TDAWN_SCEN=1 TDAWN_WIN=100 TDAWN_FRAMES=300 tdawn FROMINSTALL', True, wall=400,
          has=[r'^tdawn: score: ends', r'done at frame 300: SCG10EA, .* state 325b1830'], never=[r'Segmentation fault', r'out of memory']),
