@@ -114,6 +114,8 @@ uint4 put(uint4 v, uint i, uint x) { return uint4(i == 0 ? x : v.x, i == 1 ? x :
 static uint xr[65];   // x0-x31, f0-f31 as bits, and [64] for writes that must not land
 static uint pc, priv, stall, clock, mstatus, mie, mip, stvec, sscratch, sepc, scause, stval, scounteren, fcsr;
 static uint tcmp_lo, tcmp_hi, now_lo, now_hi, res_en, res_addr, msrc, mdst, mn, ovf_addr, ovf_val, bloom, dirty, mc_word;
+static uint regs = 0;   // the 16 KB of RAM the write cache has texels of (bit (o >> 14) & 31, regions 512 KB apart sharing one): a load
+                        // elsewhere searches nothing (the bloom, the stored addresses or-ed, let most loads through)
 static bool quiet;            // nothing the general step looks at after an instruction has changed
 static bool trapped;
 static uint tcause, tval;
@@ -186,8 +188,8 @@ uint find(uint t) {
 uint ram_word(uint o) {
     uint t = o >> 4;
     [branch] if (t != dr_t) { dr_v = TEX(RAM_ADDR(t)); dr_t = t; }
-    bool maybe = (o & bloom) == o;
-    uint at = t == m1_t ? m1_at : t == m2_t ? m2_at : 0;   // (the remembered texels are the cache's, whatever the bloom says)
+    bool maybe = ((regs >> ((o >> 14) & 31)) & 1) != 0;
+    uint at = t == m1_t ? m1_at : t == m2_t ? m2_at : 0;   // (the remembered texels are the cache's, whatever the regions say)
     [branch] if (maybe && at == 0 && t != absent_t) {
         at = find(t);
         if (at != 0) remember(t, at); else absent_t = t;
@@ -243,6 +245,7 @@ void ram_store_nc(uint o, uint v, uint mask) {   // ram_store for an o known to 
                 c[4 * b] = put(f0 != 0 ? tags0 : tags1, f - 1, tag);
                 c[4 * b + f] = texel;
                 OCC_SET(b);
+                regs |= 1u << ((o >> 14) & 31);
                 remember(t, 4 * b + f);
                 absent_t = 0xffffffff;
             } else {
