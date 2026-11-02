@@ -51,7 +51,8 @@ for f in audio/audio_sdl.c menu/dosmenu.c menu/dosops.c menu/doslobby.c menu/dos
          net/netmatch.c net/netbeacon.c net/roomcode.c launcher/lnet.c launcher/ljson.c; do cc_one gnu99 "$OCNC/$f"; done
 cxx_one() {
     local f=$1 o=$2; shift 2
-    newer "$f" "$o" || [ "$HERE/msvc_gcc.h" -nt "$o" ] || return 0
+    # (or our patch, whose part under opencnc3d/ changes their headers)
+    newer "$f" "$o" || [ "$HERE/msvc_gcc.h" -nt "$o" ] || [ "$HERE/opencnc3d.patch" -nt "$o" ] || return 0
     ottd-c++ $CXXF $INC "$@" -c "$f" -o "$o" 2> "$o.err" || { grep -E "error" "$o.err" | head -20; exit 1; }
 }
 cxx_one "$OCNC/menu/enhanced_menu.cpp" enhanced_menu.o

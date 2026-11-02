@@ -334,6 +334,38 @@ end, score, fame and map selection. On the way it built, ahead of time, what Enh
 OpenCNC3D's program (`game/gmwipe_mod.h`, in `opencnc3d.patch` under `opencnc3d/`) makes nothing ahead when the
 chain cannot boot.
 
+### Milestone 4: GDI mission 1 drawn, with the sidebar (2 November 2026)
+
+`opencnc3d --classic --flowtest 2000` under `rvc_harness --cpu --warp` (through `tools\gpu_queue.ps1`), captured in
+play: the N64 camera over the GDI beach landing, the green shore, cliffs and rocks of the cartridge's terrain on its
+heights, the sea, the gunboat firing (the cartridge's particle effects), the landed riflemen and the MCV, the sandbag
+wall, the shroud's soft edge, and OpenCNC3D's 640 x 480 sidebar on the right (credits 2000, the GDI eagle in the radar,
+Repair, Sell and Map, the empty build columns: no construction yard yet in this mission). Two things of the shim were
+needed for the terrain, which was black at first (`gl_ocnc.c`):
+
+- **Draws past 4,096 vertices.** The shim drops a primitive bigger than its buffer (`MAX_PRIMITIVE`); `glDrawArrays`,
+  `glDrawElements` and a `glBegin` are cut into pieces of whole triangles, quads or lines.
+- **The terrain's two texture stages** (unit 0 `GL_COMBINE` subtracting the tint, unit 1 modulating by the primary
+  alpha, the N64 combiner's form): while they are set, a vertex colour (tint, light) is given as (light, light, light,
+  1), in `glColor` and in colour arrays. The tint's subtraction is left out (it is 0 on all but 248 of SCG01EA's 4,225
+  corners); the sea draws its first water texture alone (unit 1's second is not drawn).
+
+**What a frame costs core 0** (`OPENCNC3D_FRAMEPROF=1` with `OPENCNC3D_CLOCK=instret`, which makes SDL's performance
+counter core 0's retired instructions at "10^9 a second", so OpenCNC3D's own frame profile reads in millions of
+instructions; the harness's `--cpu --warp`, a window of 80 frames in play): **63.13 million instructions a frame**,
+of which **47.44 million** are OpenCNC3D's "events + tick + refresh" (the brain's ticks due and the renderer taking the
+brain's state, `OBJ|` text it prints and the renderer reads back) and **15.69 million the drawing**: water 5.93,
+terrain depth 1.78, the HUD and present 1.78, rain and shroud 1.64, relief 1.08, objects 1.02, seabed 0.78, shroud
+corners 0.69, trees 0.47, infantry 0.22, effects 0.14. The windows before: 67.99 (51.83 logic) over 74 frames, and
+107.10 over 47 frames with one frame of 1,935.7 million (1,919.0 in the tick and refresh). At 2 to 3 MIPS a frame
+is 21 to 32 s. **Memory**: `free` says 160,652 kB used of 256,060 with the mission running (the kernel, Nano-X and
+the program; the program's own 10.4 MB of text, 0.2 MB of data and 18.1 MB of bss, the 64 MB GPU pool and the 8.2 MB
+scenario pack among it), 68,496 kB free.
+
+**The game logic's sums**: the brain in the program is `TiberianDawn.a` from the same build as `opencnc3d-brain`, whose
+bytes are as at the sums above (MD5 `6a5b3221...` before and after this work), so its 11 sums of both missions stand;
+nothing of the brain was changed for the program.
+
 ## Licences
 
 OpenCNC3D is GPL-3.0 and its brain carries EA's GPL with the Section 7 terms of `brain/vanilla/License.txt`; its code
@@ -347,4 +379,11 @@ the DOS data stay in a cache outside the tree and in private images; `bake.py` c
 - A `--opencnc3d` switch on `linux/nommu/image.py` and a `tools/test_all.py` case: the private image was made by hand
   (`overlay.py`, then `image.py ocnc ROOT KERNEL` on a copy of the shared root), and the sums are in this document.
 - No card run: `rvc_cpu` and `rvc_harness --cpu --warp` only, no worker cores, no frames a second on the card.
-- The movies, music and the DOS data inside `SETUP.Z`.
+- The movies and the music; no sound (`SDL_OpenAudioDevice` says there is no device).
+- Input by hand: the captures are of OpenCNC3D's `--flowtest` autopilot; keys and the pointer go through
+  `sdl_nanox.c` but were not played with.
+- The second texture unit (the sea's second water texture, the tint), the depth state, `glScissor`, `glClipPlane`,
+  `glReadPixels`, `glCopyTexSubImage2D`: listed above, not drawn.
+- The picture was not compared with OpenCNC3D's native build on the build computer.
+- Speed: 63 million instructions a frame on core 0, three quarters of it the tick and the taking of the brain's state;
+  nothing on worker cores yet.

@@ -17,6 +17,55 @@ static int unit;          // glActiveTexture: what the shim draws is unit 0's; t
 static int client_unit;   // glClientActiveTexture: unit 0's coordinate array alone reaches the shim
 static unsigned bound_at[8];   // each unit's texture: one bound on another unit is still filled
 #define TEXCOORD_ARRAY 0x8078
+#define COLOR_ARRAY 0x8076
+
+// The terrain's two stages (cnc_eyes.cpp, "unit 0 GL_COMBINE SUBTRACT, unit 1 GL_COMBINE MODULATE by the
+// primary alpha"): the vertex colour carries the tint in RGB and the light in alpha. The shim has one stage
+// that modulates, so while those two are set a colour (a, a, a, 1) is given for (tint, a): the light, without
+// the tint's subtraction (which is 0 on all but 248 of SCG01EA's 4,225 corners).
+static struct { int mode, rgb, op1; } env[8] = {{0x2100, 0x2100, 0x0300}, {0x2100, 0x2100, 0x0300}};
+static int tex_on[8];
+static int tint_active(void) {
+    return env[0].mode == 0x8570 && env[0].rgb == 0x84E7 && tex_on[1] &&
+           env[1].mode == 0x8570 && env[1].rgb == 0x2100 && env[1].op1 == 0x0302;
+}
+static void env_set(GLenum_ n, int v) {
+    if (n == 0x2200) env[unit].mode = v;            // GL_TEXTURE_ENV_MODE
+    else if (n == 0x8571) env[unit].rgb = v;        // GL_COMBINE_RGB
+    else if (n == 0x8591) env[unit].op1 = v;        // GL_OPERAND1_RGB
+}
+static struct { int size, stride, on; GLenum_ type; const void* p; } colours;   // the program's colour array
+static float* lit;   // its colours as the light, while the terrain's stages are set
+static int lit_n;
+static void lit_colours(int first, int count) {
+    if (!colours.on || !tint_active()) return;
+    if (first + count > lit_n) { lit_n = first + count; lit = realloc(lit, (size_t)lit_n * 16); }
+    for (int i = first; i < first + count; i++) {
+        float a;
+        if (colours.type == 0x1401) {   // GL_UNSIGNED_BYTE
+            const unsigned char* c = (const unsigned char*)colours.p + (size_t)i * (colours.stride ? colours.stride : colours.size);
+            a = colours.size > 3 ? c[3] * (1.0f / 255) : 1;
+        } else {
+            const float* c = (const float*)((const char*)colours.p + (size_t)i * (colours.stride ? colours.stride : colours.size * 4));
+            a = colours.size > 3 ? c[3] : 1;
+        }
+        lit[i * 4] = lit[i * 4 + 1] = lit[i * 4 + 2] = a, lit[i * 4 + 3] = 1;
+    }
+    s_glColorPointer(4, 0x1406, 16, lit);
+}
+static void program_colours(void) {
+    if (colours.on && tint_active()) s_glColorPointer(colours.size, colours.type, colours.stride, colours.p);
+}
+
+// glBegin's vertices past the shim's 4,096 a primitive: what is drawn so far is ended and begun again, at
+// a whole triangle, quad or line
+static GLenum_ begun;
+static int begun_n;
+static void vertex_room(void) {
+    int whole = begun == 4 ? 4095 : begun == 7 ? 4092 : begun == 1 ? 4096 : 0;   // TRIANGLES, QUADS, LINES
+    if (whole && begun_n == whole) { s_glEnd(); s_glBegin(begun); begun_n = 0; }
+    begun_n++;
+}
 
 static void lacking(const char* name, int* said) {
     if (*said) return;
@@ -41,7 +90,7 @@ void ocnc_glClientActiveTexture(GLenum_ t) { client_unit = (int)(t - 0x84C0) & 7
 // a call on the texture another unit has bound: that texture bound for it, unit 0's again after
 #define ON_UNIT(call) do { if (!unit) { call; } else { s_glBindTexture(GL_TEXTURE_2D, bound_at[unit]); call;                                                    s_glBindTexture(GL_TEXTURE_2D, bound_at[0]); } } while (0)
 void ocnc_glAlphaFunc(GLenum_ f, float r) { (void)f, (void)r; }   // the shim keys texels it would drop
-void ocnc_glBegin(GLenum_ m) { s_glBegin(m); }
+void ocnc_glBegin(GLenum_ m) { begun = m, begun_n = 0; s_glBegin(m); }
 void ocnc_glEnd(void) { s_glEnd(); }
 void ocnc_glBindTexture(GLenum_ t, unsigned n) { bound_at[unit] = n; if (!unit) s_glBindTexture(t, n); }
 void ocnc_glBlendFunc(GLenum_ s, GLenum_ d) { s_glBlendFunc(s, d); }
@@ -52,24 +101,44 @@ void ocnc_glClipPlane(GLenum_ p, const double* e) { (void)p, (void)e; LACK(glCli
 void ocnc_glColor3f(float r, float g, float b) { s_glColor3f(r, g, b); }
 void ocnc_glColor3ub(unsigned char r, unsigned char g, unsigned char b) { s_glColor3ub(r, g, b); }
 void ocnc_glColor3ubv(const unsigned char* v) { s_glColor3ub(v[0], v[1], v[2]); }
-void ocnc_glColor4f(float r, float g, float b, float a) { s_glColor4f(r, g, b, a); }
-void ocnc_glColor4fv(const float* v) { s_glColor4fv(v); }
-void ocnc_glColor4ub(unsigned char r, unsigned char g, unsigned char b, unsigned char a) { s_glColor4ub(r, g, b, a); }
-void ocnc_glColor4ubv(const unsigned char* v) { s_glColor4ubv(v); }
+void ocnc_glColor4f(float r, float g, float b, float a) { if (tint_active()) s_glColor4f(a, a, a, 1); else s_glColor4f(r, g, b, a); }
+void ocnc_glColor4fv(const float* v) { ocnc_glColor4f(v[0], v[1], v[2], v[3]); }
+void ocnc_glColor4ub(unsigned char r, unsigned char g, unsigned char b, unsigned char a) { ocnc_glColor4f(r / 255.0f, g / 255.0f, b / 255.0f, a / 255.0f); }
+void ocnc_glColor4ubv(const unsigned char* v) { ocnc_glColor4ub(v[0], v[1], v[2], v[3]); }
 void ocnc_glColorMask(unsigned char r, unsigned char g, unsigned char b, unsigned char a) { (void)r, (void)g, (void)b, (void)a; LACK(glColorMask); }
-void ocnc_glColorPointer(int s, GLenum_ t, int st, const void* p) { s_glColorPointer(s, t, st, p); }
+void ocnc_glColorPointer(int s, GLenum_ t, int st, const void* p) { colours.size = s, colours.type = t, colours.stride = st, colours.p = p; s_glColorPointer(s, t, st, p); }
 void ocnc_glCopyTexSubImage2D(GLenum_ t, int l, int x, int y, int a, int b, int w, int h) { (void)t, (void)l, (void)x, (void)y, (void)a, (void)b, (void)w, (void)h; LACK(glCopyTexSubImage2D); }
 void ocnc_glCullFace(GLenum_ m) { (void)m; }
 void ocnc_glDeleteTextures(int n, const unsigned* t) { s_glDeleteTextures(n, t); }
 void ocnc_glDepthFunc(GLenum_ f) { (void)f; }
 void ocnc_glDepthMask(unsigned char m) { (void)m; }
-void ocnc_glDisable(GLenum_ w) { if (!unit) s_glDisable(w); }
-void ocnc_glDisableClientState(GLenum_ w) { if (w != TEXCOORD_ARRAY || !client_unit) s_glDisableClientState(w); }
-void ocnc_glDrawArrays(GLenum_ m, int f, int n) { s_glDrawArrays(m, f, n); }
+void ocnc_glDisable(GLenum_ w) { if (w == 0x0DE1) tex_on[unit] = 0; if (!unit) s_glDisable(w); }
+void ocnc_glDisableClientState(GLenum_ w) { if (w == COLOR_ARRAY) colours.on = 0; if (w != TEXCOORD_ARRAY || !client_unit) s_glDisableClientState(w); }
+void ocnc_glDrawArrays(GLenum_ m, int f, int n) {
+    lit_colours(f, n);
+    // past the shim's 4,096 vertices a draw, in pieces of whole triangles, quads or lines
+    int whole = m == 4 ? 4095 : m == 7 ? 4092 : m == 1 ? 4096 : 0;
+    if (whole) for (; n > whole; f += whole, n -= whole) s_glDrawArrays(m, f, whole);
+    s_glDrawArrays(m, f, n);
+    program_colours();
+}
 void ocnc_glDrawBuffer(GLenum_ b) { (void)b; }
-void ocnc_glDrawElements(GLenum_ m, int n, GLenum_ t, const void* i) { s_glDrawElements(m, n, t, i); }
-void ocnc_glEnable(GLenum_ w) { if (!unit) s_glEnable(w); }
-void ocnc_glEnableClientState(GLenum_ w) { if (w != TEXCOORD_ARRAY || !client_unit) s_glEnableClientState(w); }
+void ocnc_glDrawElements(GLenum_ m, int n, GLenum_ t, const void* i) {
+    if (colours.on && tint_active()) {   // the colours of every vertex the indices name
+        int most = 0;
+        for (int k = 0; k < n; k++) {
+            int v = t == 0x1403 ? ((const unsigned short*)i)[k] : t == 0x1405 ? (int)((const unsigned*)i)[k] : ((const unsigned char*)i)[k];
+            if (v > most) most = v;
+        }
+        lit_colours(0, most + 1);
+    }
+    int whole = m == 4 ? 4095 : m == 1 ? 4096 : 0, size = t == 0x1403 ? 2 : t == 0x1405 ? 4 : 1;
+    if (whole) for (; n > whole; i = (const char*)i + whole * size, n -= whole) s_glDrawElements(m, whole, t, i);
+    s_glDrawElements(m, n, t, i);
+    program_colours();
+}
+void ocnc_glEnable(GLenum_ w) { if (w == 0x0DE1) tex_on[unit] = 1; if (!unit) s_glEnable(w); }
+void ocnc_glEnableClientState(GLenum_ w) { if (w == COLOR_ARRAY) colours.on = 1; if (w != TEXCOORD_ARRAY || !client_unit) s_glEnableClientState(w); }
 void ocnc_glFinish(void) {}
 void ocnc_glFlush(void) {}
 void ocnc_glFrontFace(GLenum_ m) { (void)m; }
@@ -125,9 +194,9 @@ void ocnc_glShadeModel(GLenum_ m) { (void)m; }
 void ocnc_glTexCoord2f(float s, float t) { s_glTexCoord2f(s, t); }
 void ocnc_glTexCoord2fv(const float* v) { s_glTexCoord2fv(v); }
 void ocnc_glTexCoordPointer(int s, GLenum_ t, int st, const void* p) { if (!client_unit) s_glTexCoordPointer(s, t, st, p); }
-void ocnc_glTexEnvf(GLenum_ t, GLenum_ n, float v) { if (!unit) s_glTexEnvf(t, n, v); }
-void ocnc_glTexEnvfv(GLenum_ t, GLenum_ n, const float* v) { if (!unit) s_glTexEnvfv(t, n, v); }
-void ocnc_glTexEnvi(GLenum_ t, GLenum_ n, int v) { if (!unit) s_glTexEnvi(t, n, v); }
+void ocnc_glTexEnvf(GLenum_ t, GLenum_ n, float v) { env_set(n, (int)v); if (!unit) s_glTexEnvf(t, n, v); }
+void ocnc_glTexEnvfv(GLenum_ t, GLenum_ n, const float* v) { if (n != 0x2201) env_set(n, (int)v[0]); if (!unit) s_glTexEnvfv(t, n, v); }
+void ocnc_glTexEnvi(GLenum_ t, GLenum_ n, int v) { env_set(n, v); if (!unit) s_glTexEnvi(t, n, v); }
 void ocnc_glTexImage2D(GLenum_ t, int l, int i, int w, int h, int b, GLenum_ f, GLenum_ ty, const void* p) {
     ON_UNIT(s_glTexImage2D(t, l, i, w, h, b, f, ty, p));
 }
@@ -138,10 +207,10 @@ void ocnc_glTexSubImage2D(GLenum_ t, int l, int x, int y, int w, int h, GLenum_ 
 }
 void ocnc_glTranslated(double x, double y, double z) { s_glTranslated(x, y, z); }
 void ocnc_glTranslatef(float x, float y, float z) { s_glTranslatef(x, y, z); }
-void ocnc_glVertex2f(float x, float y) { s_glVertex2f(x, y); }
-void ocnc_glVertex2i(int x, int y) { s_glVertex2f((float)x, (float)y); }
-void ocnc_glVertex3f(float x, float y, float z) { s_glVertex3f(x, y, z); }
-void ocnc_glVertex3fv(const float* v) { s_glVertex3fv(v); }
+void ocnc_glVertex2f(float x, float y) { vertex_room(); s_glVertex2f(x, y); }
+void ocnc_glVertex2i(int x, int y) { vertex_room(); s_glVertex2f((float)x, (float)y); }
+void ocnc_glVertex3f(float x, float y, float z) { vertex_room(); s_glVertex3f(x, y, z); }
+void ocnc_glVertex3fv(const float* v) { vertex_room(); s_glVertex3fv(v); }
 void ocnc_glVertexPointer(int s, GLenum_ t, int st, const void* p) { s_glVertexPointer(s, t, st, p); }
 void ocnc_glViewport(int x, int y, int w, int h) { s_glViewport(x, y, w, h); }
 

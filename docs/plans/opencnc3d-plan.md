@@ -107,6 +107,9 @@ resolver had to be written; OpenCNC3D's `bake5.py` runs unchanged over them, ste
      scripts (`play.py`, 52 MB), the brain's 76 entry points pulled into the link (10.4 MB of text), and a capture of
      OpenCNC3D's own DOS menu under `rvc_harness --cpu --warp`. Its `--flowtest` autopilot goes on into GDI mission 1
      (Start New Game, GDI, the briefing, the mission with the HUD and the DOS sidebar loaded, a won mission's score).
+     Milestone 4, **a mission drawn**: GDI mission 1 in play with OpenCNC3D's sidebar, captured (terrain, sea, units,
+     effects, shroud); 63.13 million instructions a frame on core 0, 47.44 of them the tick and the taking of the brain's
+     state and 15.69 the drawing; 160,652 kB of 256,060 used. Left for step 4: the tick and refresh first.
 3. **Input, sound, the menus, the sidebar, films.** The pointer and keys through the game's own input; sound on the card; the
    sidebar and menus of OpenCNC3D; films through libmedia's VQA. A mission played by script to its end, as a test case of
    `tools/test_all.py` tagged `long` that says `OPENCNC3D-NO-DATA` on an image without the cartridge.
