@@ -48,7 +48,6 @@ struct Options {
     double fixedDt = 0.004;
     double seconds = 0;  // > 0: keep running until this much wall time has passed
     std::string dumpState;
-    bool noDoubles = false;  // NVIDIA's D3D12 path miscomputes rvc's double math; see README
     std::vector<std::string> defines;
     bool dxc = false;        // compile with DXC to DXIL: seconds instead of minutes, for prototyping
     std::string dxcOpt = "-O3";  // DXC optimisation flags, space separated
@@ -87,12 +86,11 @@ int main(int argc, char** argv) {
         else if (a == "--dxc-opt") opt.dxcOpt = next();
         else if (a == "--dxc-dump") opt.dxcDump = next();
         else if (a == "--dxc-sm") opt.dxcSm = next();
-        else if (a == "--no-doubles") opt.noDoubles = true;
         else if (a == "--define") opt.defines.push_back(next());
         else {
             fprintf(stderr, "usage: rvc_trace12 [--rvc DIR] [--payload DIR] [--load-state FILE | --cold] [--ticks N]\n"
                             "                   [--frames N | --seconds S] [--bench WARMUP] [--fixed-dt S] [--cache DIR] [--dump-state FILE]\n"
-                            "                   [--dxc [--dxc-dir DIR] [--dxc-opt \"FLAGS\"] [--dxc-sm 6_x]] [--no-doubles] [--define NAME[=V]] [--warp] [--debug]\n");
+                            "                   [--dxc [--dxc-dir DIR] [--dxc-opt \"FLAGS\"] [--dxc-sm 6_x]] [--define NAME[=V]] [--warp] [--debug]\n");
             return a == "--help" ? 0 : 1;
         }
     }
@@ -147,7 +145,6 @@ int main(int argc, char** argv) {
     cs.cacheDir = opt.cacheDir;
     cs.includeDirs = {SHADEREMU_UNITY_INCLUDE_DIR};
     cs.defines = {{"SHADER_API_D3D11", "1"}, {"SHADER_TARGET", "50"}, {"UNITY_COMPILER_HLSL", "1"}, {"UNITY_VERSION", "202235"}};
-    if (opt.noDoubles) cs.defines.push_back({"NO_DOUBLES", "1"});
     for (auto& d : opt.defines) {  // NAME or NAME=VALUE
         size_t eq = d.find('=');
         cs.defines.push_back({d.substr(0, eq), eq == std::string::npos ? "1" : d.substr(eq + 1)});

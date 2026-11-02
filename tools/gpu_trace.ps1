@@ -6,8 +6,7 @@
 #   pwsh tools\gpu_trace.ps1 -Filter warps_issue_stalled,latency   # only metrics containing these
 #   pwsh tools\gpu_trace.ps1 -Extra '--define NO_PAGING'      # more rvc_trace12 arguments
 #
-# --no-doubles is always passed: NVIDIA's D3D12 path miscomputes rvc's double math (timer and
-# MULH), so the guest diverges without it. The shader folder must support NO_DOUBLES.
+# is always passed: NVIDIA's D3D12 path miscomputes rvc's double math (timer and
 param(
     [string]$Rvc = 'shader_vm',
     [string]$Payload = 'rvc\_Nix\rvc\data-net',
@@ -23,7 +22,7 @@ if (-not (Test-Path $Ngfx)) { Write-Error "Nsight Graphics not found at $Ngfx (p
 $run = Join-Path $Root (Join-Path $Out (Get-Date -Format 'yyyyMMdd-HHmmss'))
 New-Item -ItemType Directory -Force $run | Out-Null
 
-$appArgs = "--rvc $Rvc --payload $Payload --no-doubles --seconds 30 $Extra"
+$appArgs = "--rvc $Rvc --payload $Payload --seconds 30 $Extra"
 $p = Start-Process -FilePath $Ngfx -ArgumentList @(
     '--activity', '"GPU Trace Profiler"', '--exe', (Join-Path $Root 'bin\rvc_trace12.exe'), '--dir', $Root, '--args', "`"$appArgs`"",
     '--start-after-ms', '5000', '--limit-to-frames', $Frames, '--auto-export', '--architecture', '"Blackwell GB20x"',

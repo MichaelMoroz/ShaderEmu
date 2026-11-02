@@ -17,17 +17,18 @@ uniform uint _Init, _Ticks, _PlayerID;
 uniform uint _Rtc0Lo, _Rtc0Hi, _Rtc1Lo, _Rtc1Hi;
 #define _RTC0 ((_Rtc0Lo & 0xffff) | (_Rtc0Hi << 16))
 #define _RTC1 ((_Rtc1Lo & 0xffff) | (_Rtc1Hi << 16))
+uniform uint _MtimeLoLo, _MtimeLoHi;   // the timer: the host works it out, a pixel with no doubles (rvc_time.h)
+#define _HostMtimeLo ((_MtimeLoLo & 0xffff) | (_MtimeLoHi << 16))
+#define _HostMtimeHi 0u
 #else
 uniform uint _RTC0, _RTC1;
+uniform uint _HostMtimeLo, _HostMtimeHi;   // the timer: the host works it out, a pixel with no doubles (rvc_time.h)
 #endif
 uniform uint _TimePass;   // this frame's round (--tick-rounds): the clock a tick on for each, as passes are told apart by it
 uniform uint _TickFull;   // the rounds that always run (--tick-split); a later one only for core 0's rest of its frame,
                           // and for the workers only when core 0 ended the round before early (texel 39.z)
 #define MORE_ROUND (_TimePass >= max(_TickFull, 1) && TEX(uint2(39, 0)).z == 0)
 uniform float4 _Time;
-#ifdef NO_DOUBLES
-uniform uint _HostMtimeLo, _HostMtimeHi;
-#endif
 
 #ifndef CORES
 #define CORES 256
@@ -453,14 +454,14 @@ uint lanes_csr() { return 0x80000000u | ((core == 0 ? 0 : lanes_of(bits)) << 8) 
 uint lane_left() { uint most = max(_Ticks, 2); return lane_mode ? most - min(clock, most) : 0xffffffff; }
 // The CSRs Linux uses, as fields; the machine's own read as zeros, a write to one not kept goes nowhere.
 uint csr_read(uint n) {
-    uint fs = (mstatus & 0x6000) != 0 ? 0x80006000 : 0, r = asuint(_Time.w);   // FS reads dirty whenever it is on
-    r ^= r << 13; r ^= r >> 17; r ^= r << 5;
+    [branch] if (n == 0x0bf) { uint r = asuint(_Time.w); r ^= r << 13; r ^= r >> 17; r ^= r << 5; return r; }
+    uint fs = (mstatus & 0x6000) != 0 ? 0x80006000 : 0;   // FS reads dirty whenever it is on
     return n == 0x301 ? 0x40141101 : n == 1 ? fcsr & 0x1f : n == 2 ? (fcsr >> 5) & 7 : n == 3 ? fcsr & 0xff :
            n == 0x100 ? (mstatus & 0xde162) | fs : n == 0x300 ? mstatus | fs : n == 0x104 ? mie & 0x222 : n == 0x304 ? mie :
            n == 0x144 ? mip & 0x222 : n == 0x344 ? mip : n == 0x105 ? stvec : n == 0x106 ? scounteren :
            n == 0x140 ? sscratch : n == 0x141 ? sepc : n == 0x142 ? scause : n == 0x143 ? stval :
            n == 0xc01 ? now_lo : n == 0xb00 || n == 0xc00 ? clock : n == 0xf14 ? core :
-           n == 0x0bf ? r : n == 0x0be ? _PlayerID : n == 0x0b8 ? lanes_csr() : n == 0x0ba ? lane_left() :
+           n == 0x0be ? _PlayerID : n == 0x0b8 ? lanes_csr() : n == 0x0ba ? lane_left() :
 #ifdef LANE_FIELD
            n == 0x0b9 ? (_LaneField != 0 ? (uint)FIELD_MAX : 0) :   // the field's lanes, where the host draws it
 #endif
@@ -790,12 +791,7 @@ void load_state() {
     res_en = t37.x; res_addr = t37.y; msrc = t37.z; mdst = t37.w; mn = st(38).z;
     mc_word = st(41).w;
     used = core == 0 && _TimePass != 0 ? st(39).y : 0;
-#ifdef NO_DOUBLES
     now_lo = _HostMtimeLo; now_hi = _HostMtimeHi;
-#else
-    double mt = (double)_Time.x * 1000000.0 * 0.1;   // (as the machine has always worked it out)
-    now_lo = (uint)floor(mt - 4294967296.0 * floor(mt / 4294967296.0)); now_hi = (uint)(mt / 4294967296.0);
-#endif
     now_lo += _TimePass;
     now_hi += now_lo < _TimePass ? 1 : 0;
     if (timer_due()) mip |= 0x20;
@@ -1115,7 +1111,6 @@ struct tick_out { uint4 t0 : SV_Target0; uint4 t1 : SV_Target1; uint4 t2 : SV_Ta
                   uint4 t4 : SV_Target4; uint4 t5 : SV_Target5; uint4 t6 : SV_Target6; uint4 t7 : SV_Target7; };
 tick_out frag(v2f i) {
     uint2 p = uint2(i.vertex.xy);
-    p.y %= STATE_ROWS * TICK_BANDS;
     
     uint k, w0 = p.y * 64 + p.x * 8;   // the pixel's first texel, in its core's rows
     uint2 own = uint2(p.x * 8, p.y);   // and where that is in the state texture

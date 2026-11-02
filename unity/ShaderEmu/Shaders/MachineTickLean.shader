@@ -19,6 +19,8 @@ Shader "ShaderEmu/MachineTickLean"
         _Rtc0Hi ("RTC0 high half", Int) = 0
         _Rtc1Lo ("RTC1 low half", Int) = 0
         _Rtc1Hi ("RTC1 high half", Int) = 0
+        _MtimeLoLo ("The timer, low half", Int) = 0
+        _MtimeLoHi ("The timer, high half", Int) = 0
         _LaneField ("The lanes' field drawn (docs/machine/lanes.md)", Int) = 1
 
         _Data_RAM_R ("RAM Texture R", 2D) = "black" {}

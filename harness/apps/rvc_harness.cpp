@@ -202,7 +202,6 @@ struct Options {
     std::string l1Log;        // per frame: instructions, last stall, a count, then the RAM texels its write cache held
     std::string statsFrom;    // --stats-from TEXT: the STATS line is for the run from where the console says TEXT (no GPU timing)
     double statsAfter = -1;   // >= 0: print a STATS line for the part of the run after this many seconds
-    bool noDoubles = false;
     bool holodeck = false;    // --holodeck: tell the guest its owner sits in a holodeck's seat (docs/world/holodeck.md)
     double holodeckAim = 0;   // --holodeck-aim DEGREES: with it, a tracked right hand that points up by so much
     bool holodeckHands = false;
@@ -237,7 +236,6 @@ struct Options {
     bool sound = false;       // play the sound card: the terminal mode, or --sound
     std::string soundCapture; // WAV of what the sound card played, written at exit
     int volume = 10;          // --volume: how loud the host plays it, in percent
-    bool doubles = false;     // --doubles: keep the shader's double math under DXC too
 #ifdef RVC_DEFAULT_DXC
     bool dxc = true;          // D3D12 + DXC instead of D3D11 + FXC
 #else
@@ -293,8 +291,6 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
                        ends) and print a BENCH line with IPS and a hash of the state area
   --present            present each frame to a hidden 64x64 swapchain, so tools that define a frame
                        by Present (Nsight GPU Trace) can see frame boundaries
-  --no-doubles         compile with NO_DOUBLES (shader must support it): timer value from the host,
-                       exact integer MULH. Not bit-identical to the double build.
   --define NAME        add a preprocessor define to the shader build (repeatable)
   --uart-burst N       input characters per handshake (default 4)
   --viz                open a window showing memory live (writes glow); --no-viz turns it off
@@ -364,9 +360,8 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
   --tabs               the console as four terminals: 0x1e and a digit, either way, says whose bytes follow
   --workers auto|2|4|8 how geotune lays out the workers at boot (docs/machine/multicore.md, "Packing the small workers")
   --dxc / --d3d11      backend: D3D12 with DXC-compiled DXIL, or D3D11 with FXC bytecode (what VRChat
-                       runs). rvc_harness_dxc.exe defaults to --dxc. DXC implies NO_DOUBLES. shader_vm
+                       runs). rvc_harness_dxc.exe defaults to --dxc. shader_vm
                        has no tick for D3D12 (eight targets only): --dxc needs another --rvc.
-  --doubles            with --dxc: keep the shader's double math (about 15 percent slower)
   --dxc-opt "FLAGS"    DXC optimisation flags (default -O3)   --dxc-sm 6_x   --dxc-dir DIR
   --profile            (not on shader_vm's tick) compile with PROFILE defined and print the shader's PROF() event counters at
                        exit (names from <rvc>/src/prof.h; with --bench, counted after the warm-up)
@@ -436,7 +431,6 @@ bool parseArgs(int argc, char** argv, Options& o) {
         }
         else if (a == "--dxc") o.dxc = true;
         else if (a == "--d3d11") o.dxc = false;
-        else if (a == "--doubles") o.doubles = true;
         else if (a == "--dxc-opt") o.dxcOpt = next("--dxc-opt");
         else if (a == "--dxc-sm") o.dxcSm = next("--dxc-sm");
         else if (a == "--dxc-dir") o.dxcDir = next("--dxc-dir");
@@ -512,7 +506,6 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--open-after") o.openAfter = unescape(next("--open-after"));
         else if (a == "--persist") o.persist = next("--persist");
         else if (a == "--viz-capture") { o.vizCapture = next("--viz-capture"); o.viz = true; }
-        else if (a == "--no-doubles") o.noDoubles = true;
         else if (a == "--no-gpu") o.noGpu = true;
         else if (a == "--gpu-capture") o.gpuCapture = next("--gpu-capture");
         else if (a == "--cpu-fresh") o.cpuFresh = true;
@@ -562,7 +555,6 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else { fprintf(stderr, "unknown option %s\n", a.c_str()); usage(); return false; }
     }
     if (havePendingExpect) { fprintf(stderr, "--expect without --send\n"); return false; }
-    if (o.dxc && !o.doubles) o.noDoubles = true;
     return true;
 }
 
@@ -1009,7 +1001,6 @@ int main(int argc, char** argv) {
     bo.compile.defines = {{"SHADER_API_D3D11", "1"}, {"SHADER_TARGET", "50"}, {"UNITY_COMPILER_HLSL", "1"},
                           {"UNITY_VERSION", "202235"}};
     if (opt.profile) bo.compile.defines.push_back({"PROFILE", "1"});
-    if (opt.noDoubles) bo.compile.defines.push_back({"NO_DOUBLES", "1"});
     for (auto& d : opt.defines) {  // NAME or NAME=VALUE
         size_t eq = d.find('=');
         bo.compile.defines.push_back({d.substr(0, eq), eq == std::string::npos ? "1" : d.substr(eq + 1)});

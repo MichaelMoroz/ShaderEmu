@@ -1500,6 +1500,11 @@ public class EmuMachine : UdonSharpBehaviour
         frameMs = Time.timeSinceLevelLoad * 1000f;
         frameLength += (Mathf.Min(Time.unscaledDeltaTime, 0.1f) * 1000f - frameLength) * 0.2f;
 
+        // The timer, worked out as the harness's rvc_time.h does: the tick has no doubles. A material's numbers are floats, so in halves.
+        long mtime = (long)((double)(Time.timeSinceLevelLoad / 20f) * 100000.0);
+        tickMaterial.SetInt("_MtimeLoLo", (int)(mtime & 0xffff));
+        tickMaterial.SetInt("_MtimeLoHi", (int)((mtime >> 16) & 0xffff));
+
         // The clock chip (DS1742): local time as BCD, century in the control byte.
         DateTime now = DateTime.Now;
         if (now.Second != rtcSecond)
