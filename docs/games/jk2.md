@@ -1,11 +1,13 @@
 # Star Wars Jedi Knight II: Jedi Outcast, the 2002 demo
 
 Begun 2 November 2026, by `docs/plans/jk2-plan.md`. What there is: OpenJK's single player of Jedi Outcast built as
-one program by `linux/jk2/build.sh`, with the game and the renderer linked in and a platform layer of our own, with
-no window, no picture and sound mixed into nothing (the plan's step 1). The demo's level loads and plays on the build
-computer and **on the machine (`rvc_cpu`)**, and 200 s of it give the same sums on both. **The plan's gate of step 1
-is not met**: a frame is 7.7 million instructions of core 0, against about 400 thousand, and the load 28.6 billion
-("On the machine"). Nothing of it is in the image; there is no picture to look at yet.
+one program by `linux/jk2/build.sh`, with the game and the renderer linked in and a platform layer of our own. The
+demo's level loads and plays on the build computer and **on the machine**, and the same runs give the same sums on
+both. Since the plan's step 2 (2 November 2026) it is **drawn on the machine's GPU** in a Nano-X window, through
+rd-vanilla over Half-Life's OpenGL ("The picture"); keys and the pointer drive it, its sound goes to the card, and a
+script of keys plays its start from the menu as a test. **It is far too slow**: a frame of play is 11.4 million
+instructions of core 0 with the picture (7.8 without), against about 400 thousand for 5 frames a second at 2 MIPS,
+and the load to the level 11.5 billion. It goes into private images only.
 
     wsl -- python3 linux/jk2/data.py host ~/jk2-host/data --accept-eula   (the demo, fetched once into a cache; its licence)
     wsl -- bash linux/jk2/host_sum.sh                                     (builds the build computer's program, plays, sums)
@@ -13,8 +15,9 @@ is not met**: a frame is 7.7 million instructions of core 0, against about 400 t
     python linux/jk2/survey.py PAK                                        (what the demo's pak holds)
     python linux/jk2/draws.py TREE                                        (calls drawing two random numbers: must say 0)
 
-In the guest (a private image with `/usr/share/jk2/base/assets0.pk3` and the program): `JK2_FRAMES=4000 JK2_SUM=400
-JK2_SEED=7 jk2 +set fixedtime 50 +set com_maxfps 0 +map demo`.
+In the guest (a private image with `/usr/share/jk2/base/assets0.pk3` and the program, "A private image"): `nano-X -p &
+jk2` for the menu, `jk2 +map demo` for the level; with no window system it draws nothing (the sums' runs): `JK2_FRAMES=4000
+JK2_SUM=400 JK2_SEED=7 jk2 +set fixedtime 50 +set com_maxfps 0 +map demo`.
 
 (`JK2_CACHE=DIR` puts the cache elsewhere: `~/.cache/shaderemu/jk2/demo` of whoever runs it, WSL's or Windows'.)
 
@@ -93,11 +96,16 @@ untextured points; under `JK2_MODE` a missing picture is now the white one (`tr_
   the data is put back as it began (a copy of 30 KB on the machine), the rest zeroed and the constructors run
   (`se_game_fresh`). A copy of all of it, the first way, was 5.5 MB more on the machine. `JK2_AT="1000:load auto"` loads
   the autosave: it plays on, on the build computer (clean under AddressSanitizer with the first way) and on the machine.
-- `sys_shaderemu.cpp` is what `shared/sdl` was: no window (a 640 x 480 "mode"), no input but the terminal's console
-  lines, sound mixed into a buffer nobody hears at the pace of the client's time, and the end (`SE_Exit`: the C
-  library's `exit` ran a null destructor of a linked-in module).
-- `nullgl.c` is the 71 OpenGL 1.1 calls the renderer makes, doing nothing: everything the renderer does but draw still
-  happens (the level, shaders, pictures decoded, Ghoul2 bones and vertices made, the scene sorted).
+- `sys_shaderemu.cpp` is what `shared/sdl` was: a 640 x 480 "mode", the terminal's lines as console commands, and the
+  end (`SE_Exit`: the C library's `exit` ran a null destructor of a linked-in module). On the machine (`SE_WINDOW`, the
+  build's "window" part) it also opens the Nano-X window, takes its keys and the pointer, and plays the mix on the
+  sound card ("The picture"); on the build computer, and on the machine with no window system, it has no window and
+  mixes the sound into a buffer nobody hears at the pace of the client's time.
+- `gl_jk2.c` (the machine) is the 70 OpenGL 1.1 calls the renderer makes, renamed `jk2_glX` in its object by build.sh:
+  Half-Life's `linux/halflife/gl_shaderemu.c`, included as it is, over Quake III's draws (`linux/quake3/gpu_shaderemu.c`
+  on `gles.c`) once the window is open, and `nullgl.c`'s answers before.
+- `nullgl.c` (the build computer) is the same calls doing nothing: everything the renderer does but draw still happens
+  (the level, shaders, pictures decoded, Ghoul2 bones and vertices made, the scene sorted).
 - `se_rand.c` is the game's `rand`: glibc's and musl's differ, MSVC's is what the game was written against.
 - `cg_rand.c` is the client's game's random numbers, on states of its own (build.sh renames `Q_flrand`, `Q_irand` and
   `rand` in its objects): in the 2002 library both drew from one state, so what the client's game drew for its effects
@@ -121,6 +129,12 @@ freed once the renderer has the world (`tr_bsp.cpp`: 9.5 MB); the `.nav` file's 
     JK2_SEED=N          the game's random numbers from N, not the clock
     JK2_SOUND=off       no sound at all (the game then loads none, and a save of the game crashed before nullgl's fix)
     JK2_CINEMATICS=play the films played (the default skips them)
+    JK2_KEYS="F:K F:K+ F:K-"  keys pressed, held or let go at client frames F; F:atX,Y puts the menus' pointer at X, Y of 640 x 480
+    JK2_PICTURE=none    no window even with a window system (nullgl.c's answers)
+    JK2_SOUND=mix       the mix into a buffer nobody hears even with a sound card (for sums: the card's pace moves them)
+    JK2_WEATHER_CHECK=1 the snow's outside cache also asked point by point, and the words that differ counted
+    HL_POOL_MB=N        the GPU's texture memory, MB of RAM (36); HLGL_LOG=1 every texture uploaded
+    jk2gpu:             with JK2_STATS, the textures in GPU memory, how many found no room, vertices drawn a frame
     +set com_demo 1     the demo (the starter's)
     +set fixedtime 50   each frame 50 ms of the game's time, whatever it took
     JK2_CFLAGS=, JK2_LINK=, JK2_WORK=, JK2_SRC=, JK2_TREE=keep, JK2_JOBS=N   (to build.sh)
@@ -162,6 +176,22 @@ home folder a run left behind (its `openjo_sp.cfg` and autosave) changed the nex
 
 The build computer is built with the machine's float flags (`-fsingle-precision-constant -ffp-contract=off
 -fno-math-errno`); its libm and musl's may differ in a last bit, which the eighths are for: no such difference showed.
+
+**The tests** (`tools/test_all.py jk2 jk2-sums`, tagged `long`, on an image with the demo's pak: an image without it
+says `JK2-NO-DATA` and passes). `jk2-sums` is the run above (4,000 frames, the last two lines; 235 s on `rvc_cpu`).
+`jk2` plays the start from the menu by a script of keys (`JK2_KEYS`): Enter on New, the pointer on Begin Game and a
+click, the opening scene, then forward for 200 frames, a turn, forward again and a shot; the player dies after it and
+the autosave is loaded. Its sums are the build computer's (2 November 2026, 151 s):
+
+    jk2sum: frame 800 time 41250 entities 645 sum b7b63862 draws cf778cae
+    jk2sum: frame 1000 time 51250 entities 651 sum 0610489c draws cb577a0c
+    jk2sum: frame 1200 time 61250 entities 641 sum 5496b62c draws 8d82b4ce
+    jk2sum: frame 1000 time 51250 entities 643 sum d946eeaa draws 7bf726e5     (after the load)
+
+The player can move from about the game's frame 850 (a walk from client frame 1,300 moved the sums at game frame 900,
+one from 1,000 did not). Two runs of the same keys played two games until `CL_KeyState` was made to take a key held in
+a frame as held for all of it under `fixedtime` (the patch): it took the share of the computer's milliseconds the key
+was down.
 
 ## On the machine (the plan's step 1)
 
@@ -219,6 +249,105 @@ traces, behaviours and bolts are made several times cheaper or shared out among 
 Not yet seen: whether the first scripted scene plays as it should. The opening crawl and film are skipped, and with no
 picture there is nothing to look at; the level loads, its scripts run (ICARUS), the autosave is written, and 200 s of it
 play without error.
+
+## The picture (the plan's step 2)
+
+Made 2 November 2026. The quickest way to a picture was taken first: rd-vanilla stays whole, front end and back end,
+and its OpenGL 1.1 calls go to Half-Life's (`linux/halflife/gl_shaderemu.c`, included unchanged by `linux/jk2/gl_jk2.c`),
+which makes them Quake III's GPU draws on `gles.c`. A renderer of our own in `tr_shaderemu`'s form is **not** written:
+this is the picture to compare one with, and it shows what rd-vanilla's back end costs.
+
+- **The window**: `GrNewWindowEx` of 640 x 480 when `GrOpen` finds a window system (`WIN_Init`), the GPU through
+  `hlglOpen`; no window system (or `JK2_PICTURE=none`) is the null picture. A frame is swapped in `WIN_Present`.
+- **What is drawn**: the BSP's faces and patches with every stage of their shaders as rd-vanilla draws them (no
+  multitexture: a light map is a second pass that multiplies), MD3 and Ghoul2 models skinned by rd-vanilla on core 0,
+  the menus, the loading screen and the 2D, the snow. Left out by the shim: depth ranges (the first person's weapon),
+  clip planes (portals, mirrors), stencils (shadows), copies of the screen (the glow), line widths.
+- **Textures**: 512 texels a side at most (`GL_MAX_TEXTURE_SIZE`: the menus' and the loading screen's pictures of 1,024
+  were 12 MB), `r_picmip 2` by the starter, in a pool of 36 MB of RAM (`HL_POOL_MB`): the menus and the level take
+  31.6 MB, 0 left out. With the 24 MB first tried, 105 to 401 textures found no room and their surfaces were not drawn.
+  A JPEG is decoded at the size `r_picmip` asks for, by libjpeg's scaled IDCT (the fast one), not whole and then halved,
+  and the levels under the first are not made (the GPU draws level 0 alone).
+- `r_primitives 2` (the starter): triangles as `glDrawElements`. rd-vanilla's default with no compiled vertex arrays
+  was strips of `glArrayElement`, about four thousand primitives a frame, each a draw of its own: 11.79 million
+  instructions a frame against 11.35.
+- `jk2gpu:` lines (with `JK2_STATS`) say the textures in GPU memory, how many were left out and the vertices drawn.
+
+Captures (`rvc_harness --cpu --warp` through `tools\gpu_queue.ps1`, `--save-state`, `tools\snapshot_screen.py`), 2 November
+2026: the main menu (New, Load, Controls, Setup, Exit; New's difficulties and Begin Game), the loading screen ("A long
+time ago..."), the opening scene in the hangar (Kyle's ship coming in, a file of Stormtroopers, the light maps, the snow),
+the level's courts with the Stormtroopers marching, and the level after the opening. Darker than the game on a PC
+(no gamma ramp: the light maps are not brightened), the sky's boxes black in places. **Not seen**: the player's own
+view with the HUD, hands and saber; at the captures' frames the opening scene was still playing or the player was dead.
+
+| 2 November 2026, `rvc_cpu`, `fixedtime 50`, seed 7 | before (step 1, null GL) | null GL now | with the picture |
+|---|---|---|---|
+| The load, the client's frames 1 to 400 | 28.56 billion | 18.0 billion | 11.36 billion (`r_picmip 2`) |
+| A frame of play, the client's frames 2,000 to 2,800 | 7.6 to 7.7 million | 7.8 million | 11.35 million |
+| GPU memory for textures | | | 31.6 of 36 MB |
+
+The load's two cuts: the snow's outside cache ("The load") and the pictures at `r_picmip`'s size. With the picture the
+state sums at frames 400 to 2,400 are the null picture's (the renderer changes no game state).
+
+Where the frame with the picture goes (`tools/prof.py` over 400 frames from frame 2,000 with strips, before
+`r_primitives 2`, 11.4 million instructions a frame): rd-vanilla's back end 7.25 million (`RB_RenderDrawSurfList`),
+of it the shim's conversion of vertices (`draw_vertices`, `array_vertex`, `jk2_glArrayElement`: 2.9 million), Ghoul2's
+surfaces skinned (`RB_SurfaceGhoul`, 67 a frame: 2.39 million with what they call), the culling's `DotProduct` (1.07
+million), marks clipped (`R_ChopPolyBehindPlane`, `R_MarkFragments`: 0.47 million); the client's game 3.05 million
+(`CG_DrawActiveFrame`); the game 0.6 million. Half of the frame is rd-vanilla's way of feeding a GL: the next step is
+the plan's renderer of our own, the level kept in GPU memory and drawn by a few kept draws (Quake III's way).
+
+## Ghoul2 (the plan's step 3): the numbers
+
+Measured on the frame above: 6 characters drawn a frame (`CG_Player`), 67 Ghoul2 surfaces, 2.39 million instructions
+of core 0 to skin them (`RB_SurfaceGhoul`: weights, bones and normals, about 400 thousand a Stormtrooper of 2,843
+vertices at LOD 0, some 140 instructions a vertex); their bones 0.25 million (`G2_TransformBone`,
+`Multiply_3x4Matrix`); the game's bolts on its side 0.41 million ("On the machine"). The busiest view of the demo's
+start has 14 Stormtroopers: about 5.6 million a frame to skin them.
+
+- **On worker cores** (the plan's first way): 5.6 million shared out among workers, each model's vertices into GPU memory,
+  a pass or more each way and the vertices' stores against a core's 6 KB a pass; it needs the back end to take a model's
+  vertices from elsewhere than its tessellation buffer, which rd-vanilla's back end does not allow without the renderer
+  of our own.
+- **In the GPU's vertex shader** (the second): a model's 72 bones (72 x 12 floats) written a frame, about 2 thousand
+  instructions of core 0 a model against 400 thousand: two hundred times fewer, and nothing for the workers. It needs a
+  new draw kind (four weights a vertex, the bones in a table) in the GPU shader and Unity's copy, measured there.
+- **Bones at a lower rate** (the third) helps either way only for the skinning; the game's own bolts must stay exact.
+
+**Chosen on these numbers: the GPU's vertex shader**, with far models' skins at a lower rate where it changes no game
+state. Not built yet: it goes with the renderer of our own, since rd-vanilla's back end skins into its tessellation
+buffer on core 0 whatever the GL under it.
+
+## Input, sound and the desktop (the plan's step 4)
+
+- **Keys and the pointer** (`se_input` in `sys_shaderemu.cpp`, once a frame from `WIN_Present`), Quake III's way: the
+  window's keys as the game's (`A_*`; a printable key is its character, F5 to F12 are not after F4 in OpenJK's table), the
+  machine's input words for the pointer, the window system asked when they moved and four times a second. In a menu
+  the pointer's move is the menu's cursor's; in play the left button held turns the view by the pointer's travel and
+  the right button fires (`A_MOUSE1`, the demo's `+attack`). Ctrl fires too (the starter's `+bind CTRL "+attack"`; the
+  demo binds Ctrl to use, which E is as well).
+- **Sound**: the engine's own mixer, into a stream voice's ring of 8,192 stereo frames on the sound card
+  (`se_card_init`): the card plays what the mix has written (`SNDDMA_Submit` tells it `s_paintedtime`) and its place
+  is the DMA position. The CPU still mixes (about 1.2 million instructions a frame) and decodes the MP3s; voices of the
+  card for each sound, and the music and films, are not done. With no card (`rvc_cpu` without `RVC_SOUND`) or
+  `JK2_SOUND=mix` the mix goes nowhere at the client's pace, as before: a run on the card's pace plays another game
+  (a voice that ends in another frame), so the sums are made without the card. Heard: not yet.
+- **The desktop**: `Games/Jedi Outcast (demo)` in the Start menu (`nxapps.77-jk2`, put by `data.py` into an image with
+  the demo only), the icon `linux/apps/icons/jk2.png` (a light sword drawn by `tools/draw_icons.py`, nothing of the
+  game's), the game's number `GAME_JK2` 10 (`linux/apps/gameid.h`, `EmuGamepad.cs`: the shooters' controls; not
+  tried in the world). No `ui_single_instance`, no holodeck seat.
+
+## The load
+
+- **The snow's outside cache** (`COutside::Cache`, 9.9 billion instructions: 13.5 million `CM_PointContents`, each also
+  searching a 16-entry cache of points): `CM_PointContentsGrid` (`cm_test.cpp`, given to the renderer in `refimport_t`)
+  answers a box of the grid's points at once while it lies on one side of every plane down the tree and, in its leaf,
+  whole inside or apart from each brush of the asked contents; what lies within 0.25 units of a plane is cut in two
+  down to single points, asked as `CM_PointContents` asks. `JK2_WEATHER_CHECK=1` asks every point too: **0 of 423,192
+  words differ** (the demo's zone, 229 x 264 x 224 points, 155,330 outside; the build computer, 2 November 2026). The
+  cache file the game wrote into its home (a file made from the level) is neither read nor written.
+- **Pictures** at `r_picmip`'s size and no levels under the first ("The picture"). Not done: decoding on the workers
+  by libmedia; rd-vanilla loads a picture at a time as its shaders are parsed, so that needs the loads gathered first.
 
 ## Memory
 
@@ -282,30 +411,36 @@ so of this only the game's, the traces' and Ghoul2's bones carry over.
 
 ## What is left, in order
 
-Step 1 is done but for its gate, which is not met ("On the machine"): **the owner decides whether to go on.** If so:
+The owner chose on 2 November 2026 to go on past step 1's gate. Steps 2 and 4 have a first form, step 3 its choice:
 
-1. **The game's own 21 million instructions a second** ("On the machine"): its traces (patches), NPCs' behaviours and
-   Ghoul2 bolts made cheaper, or the NPCs shared out among workers, before the picture is worth making; the plan's
-   step 5 brought forward. The frame's cuts that do not wait for the picture: the clock word for `Sys_Milliseconds`
-   (not `gettimeofday`), the snow's 1,000 particles and their `PointOutside` tests, the blob shadows' marks, the sound
-   on the card (step 4). *Checked by* the `jk2stat:` instructions, `prof.py` and `host_sum.sh`'s lines on `rvc_cpu`.
-2. **Memory**: the sound and the music (step 4: about 38 MB of the zone), `python linux/nommu/memory.py` with `jk2` in its
-   list; `_humanoid.gla` and the level read where they lie only if the owner allows a pak stored unpacked.
-3. **The picture** (step 2): a renderer of our own in `tr_shaderemu`'s form behind `refexport_t`, keeping rd-vanilla's
-   Ghoul2 (`G2_*.cpp`, `tr_ghoul2.cpp`'s bones: the game traces against them), models, skins and fonts, and replacing
-   its drawing; or first rd-vanilla over Half-Life's GL 1.1 shim (`linux/halflife/gl_shaderemu.c` on `gles.c`) for a
-   picture to compare with. The pictures are decoded at load from the pak as it is (the licence), on workers by
-   libmedia. *Checked by* a flight through the level on `rvc_harness --cpu --warp` (through the queue), the calibrated
-   clock against Quake III's 79 frames a second.
-4. **Ghoul2** (step 3): the three ways of the plan on one Stormtrooper (2,843 vertices, 72 bones, four weights).
-5. **Input, sound, the desktop** (step 4); **speed** (step 5); **in** (step 6: `image.py --jk2`/`JK2_IMAGE=1` calling
-   `data.py`, `test_all.py jk2 --image`, `AGENTS.md`'s line). Each as the plan says.
+1. **A renderer of our own** (step 2's real form): `tr_shaderemu`'s method behind `refexport_t`, the level kept in GPU
+   memory as kept draws, keeping rd-vanilla's Ghoul2 (`G2_*.cpp`, `tr_ghoul2.cpp`'s bones: the game traces against
+   them), models, skins and fonts. rd-vanilla's back end is 7.25 of a frame's 11.4 million ("The picture").
+2. **Ghoul2 skinned by the GPU's vertex shader** ("Ghoul2"): a draw kind of four weights a vertex and a bone table, in
+   `gpu.shader` and Unity's copy, measured on the card.
+3. **The game's own 21 million instructions a second** ("On the machine"): traces through patches, NPCs' behaviours and
+   Ghoul2 bolts made cheaper, or the game on a worker (step 5).
+4. **Sound** as voices of the card (the decoded sounds and the MP3s' 14.5 MB of decoder states out of RAM), music, films.
+5. **The player's own view checked**: HUD, hands and saber, in a capture after the opening scene with the player alive.
+6. **In** (step 6): `image.py --jk2`/`JK2_IMAGE=1` calling `data.py`, `AGENTS.md`'s line.
 
 **For the owner:** whether an image with the demo's pak may go into the world, and whether the pak may be baked
 (converted) on the build computer at all, given the licence's "no modified files, no derivative works" (above).
 
 ## Not done
 
-No picture, sound, input or window; nothing in the shared image (`image.py --jk2` is not wired: a private image only); films; OpenJK's `alloc-dealloc-mismatch` in
-`strip.cpp` at shutdown (upstream's, seen under AddressSanitizer). The renderer's variables are not put back at a
-`vid_restart` as the game's are.
+The renderer of our own, Ghoul2 on the GPU, sound by voices, music and films (skipped: a film says it could not be
+opened, in red at the top of the picture), the HUD and the first person's weapon seen, depth ranges, mirrors and
+portals, shadows, the glow; `ui_single_instance`, the holodeck's seat; nothing in the shared image (`image.py --jk2` is
+not wired: a private image only); pictures decoded on workers; `RVC_RACES` (no workers are used: `HLGL_WORKERS=0`);
+OpenJK's `alloc-dealloc-mismatch` in `strip.cpp` at shutdown (upstream's, seen under AddressSanitizer). The renderer's
+variables are not put back at a `vid_restart` as the game's are.
+
+## A private image
+
+    wsl -- bash -c 'HOME=~/agents/X JK2_OUT=DIR bash linux/nommu/build.sh jk2/build.sh && python3 linux/nommu/flat.py DIR'
+    cp -r build/nommu/flatroot ROOT                     (of the main checkout)
+    JK2_PROGRAM=DIR python linux/jk2/data.py ROOT --accept-eula
+    python linux/nommu/image.py jk2 ROOT build/nommu/Image
+
+(A worktree needs `build\images\linux` and `rvc` of the main checkout, a junction each.)

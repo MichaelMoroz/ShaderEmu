@@ -241,8 +241,9 @@ else
 P=/persistence; mkdir -p $P/jk2 2>/dev/null || P=/tmp
 # (Ctrl fires as in the other shooters and the world's controller: the demo binds it to use, which E is too; the
 # quotes keep the engine's command line from cutting the bind at its +); pictures a quarter of their size each way, the
-# GPU's memory being 36 MB of RAM (gl_jk2.c)
-exec jk2.bin +set fs_basepath /usr/share/jk2 +set fs_homepath $P/jk2 +set com_demo 1 +bind CTRL '"+attack"' +set r_picmip 2 "$@"
+# GPU's memory being 36 MB of RAM (gl_jk2.c); triangles as glDrawElements, not strips of glArrayElement (four thousand
+# primitives a frame, each a draw of its own)
+exec jk2.bin +set fs_basepath /usr/share/jk2 +set fs_homepath $P/jk2 +set com_demo 1 +bind CTRL '"+attack"' +set r_picmip 2 +set r_primitives 2 "$@"
 EOF
     chmod 755 "$OUT/usr/bin/jk2"
     # the Start menu's entry; data.py puts it into an image with the demo, never into the shared one
