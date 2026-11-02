@@ -241,7 +241,6 @@ Each run prints where a frame went (`tdstat:` lines, every five seconds):
     TDAWN_CHECK_SORT=1  the ground layer's pass made by a worker is made here too and compared (RALERT_CHECK_SORT)
     TDAWN_THREAT=here   the houses' threat is added on this core; TDAWN_CHECK_THREAT=1 sums it where read
     TDAWN_DRAW=here     the objects are drawn by this core, not a frame behind by a worker (RALERT_DRAW)
-    TDAWN_VIEW=3d       the tilted view ("In 3D"); with TDAWN_PITCH=N (60), TDAWN_HEIGHTS=1, TDAWN_MODELS=0, TDAWN_PICK_CHECK=1
 
 ### Why a frame is not half
 
@@ -489,53 +488,6 @@ Tiberian Dawn's movies are 320 x 200 in 4x2 blocks (`UnVQ_4x2`; Red Alert's are 
 ## A mission won
 
 `TDAWN_WIN=N` wins the mission at frame N (once) and prints a line at each step, as Red Alert's `RALERT_WIN` (`docs/games/ralert.md`, "A mission won"). Tiberian Dawn's demo goes from mission 1 to 10 by its own code, and its score screen makes no table of colours: mission 10 is then played with its state at frame 300 `325b1830` (`tdawn-won` in `tools/test_all.py`). Half of that screen's instructions are `Linear_Blit_To_Linear`, the page copied whole at each of its steps; not changed. The table and the doubled rows (`common/interpal.cpp`, `host_for`) are shared, for the screens that use them.
-
-## In 3D
-
-`TDAWN_VIEW=3d` draws the map through a tilted camera (`docs/plans/td3d-plan.md`): the game's rules, its cells, its window on the map and
-its order of drawing are as in 2D, which stays the default and is drawn as before (2 November 2026: the 2D view's lists of mission 3's 600
-frames are the same before and after, `TDAWN_CHECK_LIST=1` sum `1a2b9cc4` of 455,376 words both). Pictures under `rvc_harness --cpu --warp`:
-`python tools/td3d_shots.py --image build/images/NAME --out DIR` (missions 1, 3 and 10 at frame 300, 2D and 3D, with `--views` for heights
-and sprites only). Nothing of it has been measured on the card yet.
-
-- **The camera** (`linux/tdawn/td3d.h`) looks north, `TDAWN_PITCH` degrees down (60; 35 to 85), and is fitted to the game's window: its
-  far row spans the screen's top row at scale 1, the middle of its near row is the screen's bottom middle. So every pixel of the view shows
-  a point inside the rectangle of cells the game culls and scrolls by, and the radar's box, the scroll and the culling need no change. The
-  camera is made in floats when the window or the pitch changes; the ground to the screen and back are integers (16.16 in 64-bit products).
-- **What is drawn** (`host.c`, `host_scene_tilt`): the kept cells and the ground's rectangles (overlays, smudges, the shroud: parts 0 and
-  2) through the camera's matrix, so they lie on the map; an object's rectangle (part 1) stands up, its middle put where the camera shows
-  that point of the ground and scaled by the camera's scale there (`td3d_stand`). The game's order, far ones first from a camera looking
-  north, is kept for them: sprites have no depth.
-- **Models** (`linux/tdawn/models`, `tdawn-models.dat` in the ROM): a unit's or a building's kind whose name has one is drawn as the model:
-  its own image's shapes (body, turret, shadow) are noted as one `HOST_MODEL` rectangle a part (`Model_Begin` in `gl.cpp`), kept with the
-  object as its sprites are, and drawn by the scene's core as the file's packed vertices (`seglPacked`, `0x4000` with a table `0x2000`)
-  with the depth test, a part turned by the unit's facing and a turret by its own. The colours are a table a house and an eighth of a turn
-  (the house's two from its remap of the palette's gold ramp, 177 and 180; the light from the north-west above). At most 200 parts a scene
-  (a list's set has 256 matrix blocks); a kind with no model, and an object past that, is its sprites standing up. `TDAWN_MODELS=0`: none.
-- **Heights** (`TDAWN_HEIGHTS=1`, off by default): `linux/tdawn/td3d/heights.py` makes each map's 65 x 65 corner heights at image build
-  from its own templates, read against the fetched tree's table of them (`cdata.cpp`, `defines.h`: nothing of the game's table is in this
-  repository): water low and flat, beaches and rivers a little under the ground, cliff rock between terraces or a ridge, the rest smoothed
-  (`tdawn-heights.dat`). The kept cells' corners, the standing rectangles' and the models' feet and the click's ray follow them; the ground's
-  rectangles (overlays, the shroud) do not yet, which is why they are off. Two more rows of cells are drawn below the window, since raised
-  ground near the eye shows them.
-- **Clicks** go through the game's own input: `shaderemu.cpp` gives the game, for the pointer and every button's event, the pixel the 2D
-  view has for the point of the ground the ray meets (`ShaderEmu_View_Pick`; over hills in three steps). `Input`, `Click_Cell_Calc`, the
-  band and `Close_Object` then make the same orders of the same cells and objects. Only while scenes are being made (250 ms): a dialog
-  over the map has the pointer as it is. The band is drawn where the camera has its corners (`ShaderEmu_GL_Band`, called by `display.cpp`)
-  and the bars over where it shows the object's middle.
-- **Checks**: `tools/test_all.py`'s `tdawn-3d-300` (state `f7650705`, as in 2D, and `TDAWN_PICK_CHECK=1`: every cell's middle in the
-  window put on the screen as a whole pixel and picked back must be that cell: 93 points, 0 in another cell) and `tdawn-3d-paths` (heights
-  on, `1a9a814b`, `TDAWN_CHECK_PATHS` and `TDAWN_CHECK_SCANS` with 0 wrong); both with `--races`, 0 undone. Missions 1, 3 and 10 held at frame
-  300 have the same state in 2D, 3D, 3D with heights and 3D with sprites only (`f6e24c6c`, `c63742a4`, `f7650705`). On the host: `linux/tdawn/test/td3d_test.c` (the camera there and back
-  within a 64th of a pixel, the window's every pixel inside it, the GPU's matrix against the arithmetic, a model's matrix against the same
-  turns in doubles: PASS, 1,248,102 checks) and `python linux/tdawn/test/test_td3d_tools.py` (mix files, the templates' table, heights,
-  the models' file; with `TDAWN_SOURCE` the demo's own five maps).
-- `TDAWN_SUMS`, `TDAWN_CHECK_GPU` and `TDAWN_PICTURE` are the 2D picture's: they say nothing of the 3D one.
-
-Known, from the code: a sprite (soldiers, trees, effects) is drawn over every model whatever is in front, as sprites are a pass with no
-depth (`seglSprite` has none: a sprite with a depth needs a call `gles.c` does not have); the ground's rectangles do not follow the heights
-(the same: a quad of four corners in the blended pass); the bars do not scale; heights make cliffs ridges, not terraces, where a cliff line
-has a gap (most of the demo's: the high side of a cliff template is not in the game's data).
 
 ## Not done
 

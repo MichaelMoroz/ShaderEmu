@@ -13,7 +13,6 @@
 #include <GLES/segl.h>
 #include "nano-X.h"
 #include "host.h"
-#include "td3d.h"	/* the tilted view (docs/games/tdawn.md, "In 3D") */
 #include "mcwx.h"	/* programs/mc: the machine's worker cores, over the second layer (docs/machine/multicore.md) */
 
 #define ONE		65536
@@ -54,12 +53,11 @@ struct scene_note { int kind, x, y, width, height, atlas_x, atlas_y; unsigned in
 static struct scene_note scene_notes[SCENE_PARTS][SCENE_MOST] __attribute__((aligned(16)));
 static int scene_noted[SCENE_PARTS + 1] __attribute__((aligned(16)));	/* (a texel of its own: the worker adds to it) */
 /* What a worker stores here besides: in a texel of its own too (two cores never store to one 16 bytes). */
-static struct { int fill_count, missed, batched; uint32_t run_quads; int standing; } own __attribute__((aligned(16)));
+static struct { int fill_count, missed, batched; uint32_t run_quads; } own __attribute__((aligned(16)));
 #define fill_count own.fill_count
 #define missed own.missed
 #define batched own.batched
 #define run_quads own.run_quads
-#define standing own.standing	/* the tilted view: the rectangles now are objects', standing up */
 static int scene_part = 1, scene_out, scene_owed, scene_owed_page, scene_owed_cursor;
 static int scene_at[2], scene_view[4];	/* the scene's origin on the screen, and the view its kept rectangles are cut to */
 #define PATH_CORES 3
@@ -73,7 +71,6 @@ static void frames_room(void);
 static void workers_open(void);
 unsigned int host_scene_jobs;	/* scenes a worker made, for the games' figures */
 static void scene_finish(void);
-static void run_end(void);
 static void behind_joined_now(void);
 static mcw_handle scene_handle;
 static int run_single = -1, list_check;	/* TDAWN_SPRITES=one, TDAWN_CHECK_LIST: put_sprite() */
@@ -471,11 +468,10 @@ resize_for_test(void)
 }
 
 /* The window's matrices: glOrthox(0, 1, 1, 0, -1, 1), and a place for the map's corner. */
-static const GLfixed whole[16] = {2 * ONE, 0, 0, 0, 0, -2 * ONE, 0, 0, 0, 0, -ONE, 0, -ONE, ONE, 0, ONE};
-
 static void
 whole_window(int origin_x, int origin_y)
 {
+	static const GLfixed whole[16] = {2 * ONE, 0, 0, 0, 0, -2 * ONE, 0, 0, 0, 0, -ONE, 0, -ONE, ONE, 0, ONE};
 	int width, height;
 
 	seglSize(&width, &height);
@@ -567,247 +563,6 @@ host_shades(void)
 	return shades;
 }
 
-/*
- * ---- the tilted view (docs/games/tdawn.md, "In 3D"; td3d.h) ----
- *
- * gl.cpp gives each scene a camera (host_scene_tilt). The kept cells and the ground's rectangles
- * (parts 0 and 2: overlays, smudges, the shroud) are drawn through its matrix, so they lie on the
- * map; an object's rectangle (part 1) stands up: its middle is put where the camera shows that
- * point of the ground and it is scaled by the camera's scale there, drawn in the screen's pixels
- * (td3d_stand). The objects keep the game's order, which from a camera looking north is the far
- * ones first. A model (HOST_MODEL) is the ROM's packed vertices drawn with the depth test.
- * Written by the first core between scenes, read by the scene's core: scene_finish() first.
- */
-static struct {
-	struct td3d_view view;
-	int32_t matrix[16];		/* the ground's clip matrix in the scene's units (the whole window, 0 to 1) */
-	int32_t pixels[16];		/* the same for vertices in the screen's pixels (the models') */
-	int tac_x, tac_y, on;
-	const unsigned char *heights;	/* 65 x 65 corners in quarters of a pixel, or NULL */
-} tilt __attribute__((aligned(16)));
-
-void
-host_scene_tilt(const struct td3d_view *view, int tac_x, int tac_y, const unsigned char *heights)
-{
-	scene_finish();
-	tilt.on = view && view->on && screen_w > 0 && screen_h > 0;
-	if (!tilt.on)
-		return;
-	tilt.view = *view;
-	tilt.tac_x = tac_x, tilt.tac_y = tac_y;
-	tilt.heights = heights;
-	td3d_clip_matrix(view, tac_x, tac_y, screen_w, screen_h, screen_w, screen_h, tilt.matrix);
-	td3d_clip_matrix(view, tac_x, tac_y, screen_w, screen_h, 1, 1, tilt.pixels);
-}
-
-/* A kept cell's corners at the map's heights (z in the scene's units, which are y's). */
-static void
-tile_heights(unsigned int *to, int map_x, int map_y)
-{
-	const unsigned char *h = tilt.on ? tilt.heights : NULL;
-	int cx = map_x / 24, cy = map_y / 24;
-
-	if (!h || map_x < 0 || map_y < 0 || cx > 63 || cy > 63)
-		return;
-	to[2] = (unsigned int)(h[cy * 65 + cx] * (ONE / 4) / screen_h);
-	to[6] = (unsigned int)(h[cy * 65 + cx + 1] * (ONE / 4) / screen_h);
-	to[10] = (unsigned int)(h[(cy + 1) * 65 + cx + 1] * (ONE / 4) / screen_h);
-	to[14] = (unsigned int)(h[(cy + 1) * 65 + cx] * (ONE / 4) / screen_h);
-}
-
-/* The matrices of the scene's parts: the ground's through the camera, the objects' in pixels. */
-static void
-tilt_part(int part)
-{
-	if (!tilt.on)
-		return;
-	run_end();	/* (the batch so far with the matrices it was made under) */
-	glMatrixMode(GL_PROJECTION);
-	glLoadMatrixx(part == 1 || part < 0 ? whole : tilt.matrix);
-	glMatrixMode(GL_MODELVIEW);
-	glLoadIdentity();
-	standing = part == 1;
-}
-
-/* An object's rectangle (x, y of the screen) standing up: where it is drawn, or 0 for nowhere. */
-static int
-tilt_stand(int x, int y, int width, int height, GLfixed box[4])
-{
-	int32_t b[4], gz = 0;
-	int32_t x0 = (int32_t)(x - tilt.tac_x) << 16, y0 = (int32_t)(y - tilt.tac_y) << 16;
-
-	if (tilt.heights)
-		gz = td3d_height(tilt.heights, (int32_t)(x + width / 2 - scene_at[0]) << 16, (int32_t)(y + height / 2 - scene_at[1]) << 16);
-	if (!td3d_stand(&tilt.view, x0, y0, x0 + (width << 16), y0 + (height << 16), gz, b))
-		return 0;
-	box[0] = (GLfixed)(((int64_t)b[0] + ((int64_t)tilt.tac_x << 16)) / screen_w);
-	box[1] = (GLfixed)(((int64_t)b[1] + ((int64_t)tilt.tac_y << 16)) / screen_h);
-	box[2] = (GLfixed)(((int64_t)b[2] + ((int64_t)tilt.tac_x << 16)) / screen_w);
-	box[3] = (GLfixed)(((int64_t)b[3] + ((int64_t)tilt.tac_y << 16)) / screen_h);
-	return 1;
-}
-
-/*
- * The models' file (linux/tdawn/models/pack.py: "TDM1"), in GPU memory as it is in the ROM, and
- * a table of 256 colours for each house and each eighth of a turn the light comes from (a vertex's
- * tag is its material and which way its face looks: the table has them lit).
- */
-#define MODEL_TURNS 8
-static struct {
-	unsigned char *data;
-	int count;
-	uint32_t normals, coords;
-	unsigned int *tables;			/* HOST_HOUSES x MODEL_TURNS x 256 words */
-	unsigned char made[HOST_HOUSES];
-	int32_t sine[65];			/* a quarter turn of sines, 16.16 */
-} models __attribute__((aligned(16)));
-
-static inline uint32_t
-model_word(const unsigned char *at)
-{
-	return (uint32_t)at[0] | (uint32_t)at[1] << 8 | (uint32_t)at[2] << 16 | (uint32_t)at[3] << 24;
-}
-
-int
-host_models_open(const char *path)
-{
-	FILE *f;
-	long size;
-	int i;
-
-	if (models.data)
-		return models.count;
-	if (!screen || !(f = fopen(path, "rb")))
-		return -1;
-	fseek(f, 0, SEEK_END);
-	size = ftell(f);
-	fseek(f, 0, SEEK_SET);
-	models.data = size > 16 ? seglMemory((size + 15) & ~15) : NULL;
-	models.tables = models.data ? seglMemory(HOST_HOUSES * MODEL_TURNS * 256 * 4) : NULL;
-	if (!models.tables || fread(models.data, 1, size, f) != (size_t)size || memcmp(models.data, "TDM1", 4)) {
-		fclose(f);
-		fprintf(stderr, "tdawn: no models (%s)\n", path);
-		models.data = NULL;	/* (GPU memory is not given back: nothing more is asked of it) */
-		return -1;
-	}
-	fclose(f);
-	models.count = (int)model_word(models.data + 4);
-	models.normals = model_word(models.data + 8);
-	models.coords = model_word(models.data + 12);
-	for (i = 0; i <= 64; i++)
-		models.sine[i] = td3d_fixed(sinf((float)i * 3.14159265f / 128.0f));
-	return models.count;
-}
-
-int
-host_model_find(const char *name, int *parts)
-{
-	int i;
-
-	for (i = 0; models.data && i < models.count; i++) {
-		const unsigned char *m = models.data + 16 + 32 * i;
-		if (!strncmp((const char *)m, name, 8)) {
-			*parts = m[9];
-			return i;
-		}
-	}
-	return -1;
-}
-
-/* What the models' tables are lit by: the light from the north-west above, of 127, and how much is everywhere. */
-#define LIGHT_X (-57)
-#define LIGHT_Y 57
-#define LIGHT_Z 98
-#define LIGHT_AMBIENT 115	/* 256ths */
-#define LIGHT_DIFFUSE 166
-
-void
-host_model_house(int house, unsigned int main_colour, unsigned int dark_colour)
-{
-	static const int c8[8] = {1000, 707, 0, -707, -1000, -707, 0, 707}, s8[8] = {0, 707, 1000, 707, 0, -707, -1000, -707};
-	const signed char *normals;
-	int turn, material, n;
-
-	if (!models.data || house < 0 || house >= HOST_HOUSES)
-		return;
-	host_settle();	/* (the list in flight may read the table) */
-	normals = (const signed char *)(models.data + models.normals);
-	for (turn = 0; turn < MODEL_TURNS; turn++) {
-		/* the light in the model's own frame, the model turned this far clockwise */
-		int lx = (LIGHT_X * c8[turn] - LIGHT_Y * s8[turn]) / 1000, ly = (LIGHT_X * s8[turn] + LIGHT_Y * c8[turn]) / 1000;
-		unsigned int *to = models.tables + (house * MODEL_TURNS + turn) * 256;
-		for (material = 0; material < 16; material++) {
-			uint32_t colour = model_word(models.data + models.normals + 64 + 4 * material);
-			if (colour == 0xffffffffu)
-				colour = material == 0 ? main_colour : dark_colour;
-			for (n = 0; n < 16; n++) {
-				const signed char *d = normals + 4 * n;
-				int dot = d[0] * lx + d[1] * ly + d[2] * LIGHT_Z;	/* of 127 x 127 */
-				int light = LIGHT_AMBIENT + (dot > 0 ? LIGHT_DIFFUSE * dot / (127 * 127) : 0);
-				unsigned int r = (colour >> 16 & 255) * light >> 8, g = (colour >> 8 & 255) * light >> 8, b = (colour & 255) * light >> 8;
-				to[material << 4 | n] = (r > 255 ? 255 : r) << 16 | (g > 255 ? 255 : g) << 8 | (b > 255 ? 255 : b);
-			}
-		}
-	}
-	models.made[house] = 1;
-}
-
-static inline int32_t
-model_sin(int a)	/* a in 256ths of a turn */
-{
-	a &= 255;
-	return a <= 64 ? models.sine[a] : a <= 128 ? models.sine[128 - a] : a <= 192 ? -models.sine[a - 128] : -models.sine[256 - a];
-}
-
-/*
- * A model's part standing at (x, y) of the screen, as the 2D view would have its middle, turned:
- * its bytes are scaled and moved by the modelview (step, the part's origin and pivot, the facing,
- * a turret's own facing, where it stands) and projected by the camera's matrix in pixels.
- */
-static void
-model_now(int x, int y, int which, int facing, int turret, int house)
-{
-	const unsigned char *m, *p;
-	int model = which & 255, part = which >> 8 & 255, turns, a, b;
-	int32_t step, o[3], pv[3], gz = 0;
-	int32_t mv[16];
-
-	if (!tilt.on || !models.data || model >= models.count || house < 0 || house >= HOST_HOUSES || !models.made[house])
-		return;
-	m = models.data + 16 + 32 * model;
-	if (part >= m[9])
-		return;
-	p = models.data + model_word(m + 12) + 32 * part;
-	/* (out of the tactical window by more than two cells: not drawn) */
-	if (x < tilt.tac_x - 48 || y < tilt.tac_y - 48 || x > tilt.tac_x + tilt.view.w + 48 || y > tilt.tac_y + tilt.view.h + 48)
-		return;
-	o[0] = (int32_t)model_word(p + 8), o[1] = (int32_t)model_word(p + 12), o[2] = (int32_t)model_word(p + 16);
-	step = (int32_t)model_word(p + 20);
-	/* (the pivot in 16ths of a pixel) */
-	pv[0] = (int16_t)(p[24] | p[25] << 8) * 4096, pv[1] = (int16_t)(p[26] | p[27] << 8) * 4096, pv[2] = (int16_t)(p[28] | p[29] << 8) * 4096;
-	turns = p[30];
-	if (tilt.heights)
-		gz = td3d_height(tilt.heights, (int32_t)(x - scene_at[0]) << 16, (int32_t)(y - scene_at[1]) << 16);
-	a = facing, b = turns ? turret : facing;
-	td3d_model_matrix(step, o, pv, turns, model_sin(a + 64), model_sin(a), model_sin(b + 64), model_sin(b), (int32_t)x << 16,
-			  (int32_t)y << 16, gz, mv);
-	run_end();
-	glMatrixMode(GL_PROJECTION);
-	glLoadMatrixx(tilt.pixels);
-	glMatrixMode(GL_MODELVIEW);
-	glLoadMatrixx((const GLfixed *)mv);
-	glDisable(GL_BLEND);
-	glDisable(GL_TEXTURE_2D);
-	glEnable(GL_DEPTH_TEST);
-	seglPacked(models.data + model_word(p), models.data + models.coords, (GLsizei)model_word(p + 4),
-		   models.tables + (house * MODEL_TURNS + ((b + 16) >> 5 & 7)) * 256);
-	glDisable(GL_DEPTH_TEST);
-	glLoadIdentity();
-	glMatrixMode(GL_PROJECTION);
-	glLoadMatrixx(whole);
-	glMatrixMode(GL_MODELVIEW);
-}
-
 /* A cell of the map: 24 pixels square at a place of the map, from the atlas. */
 void
 host_tile(int index, int map_x, int map_y, int atlas_x, int atlas_y)
@@ -828,7 +583,6 @@ host_tile(int index, int map_x, int map_y, int atlas_x, int atlas_y)
 	to[4] = x1, to[5] = y0, to[6] = 0, to[7] = u1 | v0;
 	to[8] = x1, to[9] = y1, to[10] = 0, to[11] = u1 | v1;
 	to[12] = x0, to[13] = y1, to[14] = 0, to[15] = u0 | v1;
-	tile_heights(to, map_x, map_y);
 }
 
 void
@@ -1414,12 +1168,6 @@ host_scene_begin(int origin_x, int origin_y)
 		seglDiscard();		/* one nobody showed */
 	scene_at[0] = origin_x, scene_at[1] = origin_y;
 	whole_window(origin_x, origin_y);
-	if (tilt.on) {
-		/* the kept cells through the camera, still moved to the map's corner (docs/games/tdawn.md, "In 3D") */
-		glMatrixMode(GL_PROJECTION);
-		glLoadMatrixx(tilt.matrix);
-		glMatrixMode(GL_MODELVIEW);
-	}
 	seglKeptMatrices();
 	glLoadIdentity();
 	glClearColorx(0, 0, 0, ONE);
@@ -1449,13 +1197,8 @@ put_sprite(GLuint name, unsigned int colour, int keyed, int x, int y, int width,
 	SEGLsprite *s = &batch[batched];
 
 	run_quads++;
-	if (standing) {
-		if (!tilt_stand(x, y, width, height, s->box))
-			return;
-	} else {
-		s->box[0] = x * ONE / screen_w, s->box[1] = y * ONE / screen_h;
-		s->box[2] = (x + width) * ONE / screen_w, s->box[3] = (y + height) * ONE / screen_h;
-	}
+	s->box[0] = x * ONE / screen_w, s->box[1] = y * ONE / screen_h;
+	s->box[2] = (x + width) * ONE / screen_w, s->box[3] = (y + height) * ONE / screen_h;
 	s->texels[0] = texels[0], s->texels[1] = texels[1], s->texels[2] = texels[2], s->texels[3] = texels[3];
 	s->name = name, s->colour = colour, s->keyed = keyed;
 	if (run_single)
@@ -1536,7 +1279,6 @@ scene_job(uint32_t counts, uint32_t last)
 		const struct scene_note *n = scene_notes[part];
 		uint32_t i;
 
-		tilt_part(part);
 		for (i = 0; i < count[part]; i++, n++)
 			if (n->kind == NOTE_QUADS) {
 				const struct host_quad *q = (const struct host_quad *)(uintptr_t)n->x;
@@ -1545,20 +1287,15 @@ scene_job(uint32_t counts, uint32_t last)
 				for (k = 0; k < n->y; k++, q++) {
 					int x = q->x + scene_at[0], y = q->y + scene_at[1];
 
-					if (q->kind == HOST_MODEL)
-						model_now(x, y, q->w, q->h, q->ax, q->ay);
-					else if (x < scene_view[2] && y < scene_view[3] && x + q->w > scene_view[0] && y + q->h > scene_view[1])
+					if (x < scene_view[2] && y < scene_view[3] && x + q->w > scene_view[0] && y + q->h > scene_view[1])
 						sprite_now(q->kind, x, y, q->w, q->h, q->ax, q->ay, q->colour);
 				}
 			} else if (n->kind == NOTE_BLOCK)
 				block_now(n->x, n->y, n->width, n->height, n->atlas_x, n->atlas_y, n->colour);
-			else if (n->kind == HOST_MODEL)
-				model_now(n->x, n->y, n->width, n->height, n->atlas_x, n->atlas_y);
 			else
 				sprite_now(n->kind, n->x, n->y, n->width, n->height, n->atlas_x, n->atlas_y, n->colour);
 	}
 	run_end();
-	tilt_part(-1);	/* (the page and the pointer go over it in the window's own units) */
 	if (jobs_counted)
 		mcw_add(HOST_JOB_QUADS, run_quads);
 	run_quads = 0;
@@ -1624,8 +1361,6 @@ host_scene_picture(unsigned char *index, unsigned int *dark)
 		for (i = 0; i < scene_noted[part]; i++, n++) {
 			const struct host_quad *q = (const struct host_quad *)(uintptr_t)n->x;
 
-			if (n->kind == HOST_MODEL)
-				continue;	/* (a model is not drawn here) */
 			if (n->kind != NOTE_QUADS) {
 				picture_rect(index, dark, n->kind, n->x, n->y, n->width, n->height, n->atlas_x, n->atlas_y, n->colour);
 				continue;
@@ -1633,7 +1368,7 @@ host_scene_picture(unsigned char *index, unsigned int *dark)
 			for (k = 0; k < n->y; k++, q++) {
 				int x = q->x + scene_at[0], y = q->y + scene_at[1];
 
-				if (q->kind != HOST_MODEL && x < scene_view[2] && y < scene_view[3] && x + q->w > scene_view[0] && y + q->h > scene_view[1])
+				if (x < scene_view[2] && y < scene_view[3] && x + q->w > scene_view[0] && y + q->h > scene_view[1])
 					picture_rect(index, dark, q->kind, x, y, q->w, q->h, q->ax, q->ay, q->colour);
 			}
 		}

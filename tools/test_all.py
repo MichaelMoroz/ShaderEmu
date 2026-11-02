@@ -185,16 +185,6 @@ CASES = [
     case('tdawn-move', 'games tdawn long', X + TD + 'TDAWN_SCEN=3 TDAWN_MOVE=100,8,0 TDAWN_SUMS=1 TDAWN_FRAMES=600 tdawn FROMINSTALL', True, count=[(r'^tdsum: ', 600)]),
     case('tdawn-move-refresh', 'games tdawn long', X + TD + 'TDAWN_SCEN=3 TDAWN_MOVE=100,8,0 TDAWN_SUMS=1 TDAWN_REFRESH=1 TDAWN_FRAMES=600 tdawn FROMINSTALL', True,
          same=[(r'^(tdsum: .*)', 'tdawn-move')]),
-    # docs/games/tdawn.md, "In 3D": the tilted view draws differently and changes no rule: the same states, every path
-    # search as made on one core, the scan bits as made every time, and every cell picked back as itself
-    case('tdawn-3d-300', 'games tdawn td3d', X + TD + 'TDAWN_VIEW=3d TDAWN_PICK_CHECK=1 TDAWN_SCEN=10 TDAWN_FRAMES=300 tdawn FROMINSTALL', True,
-         has=[r'done at frame 300: SCG10EA, .* state f7650705', r'pick check at 60 degrees: \d+ points, 0 in another cell'],
-         never=[r'no models', r'no heights']),
-    case('tdawn-3d-paths', 'games tdawn td3d', X + TD + 'TDAWN_VIEW=3d TDAWN_HEIGHTS=1 TDAWN_SCEN=3 TDAWN_CHECK_PATHS=1 TDAWN_CHECK_SCANS=1 '
-         'TDAWN_FRAMES=1300 tdawn FROMINSTALL', True,
-         has=[r'searches not run again and \d+ another core.s, 0 of them wrong', r'edge walks made both ways, 0 of them wrong', r'state 1a9a814b',
-              r'scans looked at again, 0 of them wrong'],
-         never=[r'no heights', r' [1-9]\d* of them wrong']),
     # docs/games/tdawn.md, "A mission won": the demo's first mission won, its score screen, the next mission played
     case('tdawn-won', 'games tdawn', X + TD + 'TDAWN_SCEN=1 TDAWN_WIN=100 TDAWN_FRAMES=300 tdawn FROMINSTALL', True, wall=400,
          has=[r'^tdawn: score: ends', r'done at frame 300: SCG10EA, .* state 325b1830'], never=[r'Segmentation fault', r'out of memory']),

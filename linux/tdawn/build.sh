@@ -42,7 +42,7 @@ fi
 # the tree is upstream's commit plus our patch and our files, put there again on every build
 git -C "$VC" checkout -q -f "$COMMIT" && git -C "$VC" clean -q -fd
 git -C "$VC" apply "$HERE/vanilla-conquer.patch"
-cp "$HERE/cxxrt.cpp" "$HERE/shaderemu.cpp" "$HERE/soundio_shaderemu.cpp" "$HERE/host.c" "$HERE/host.h" "$HERE/td3d.h" "$VC/common/"
+cp "$HERE/cxxrt.cpp" "$HERE/shaderemu.cpp" "$HERE/soundio_shaderemu.cpp" "$HERE/host.c" "$HERE/host.h" "$VC/common/"
 # the worker cores' library, the same for every program (programs/mc): host.c gives a core the scene
 cp "$REPO/programs/mc/mc.h" "$REPO/programs/mc/mcw.h" "$REPO/programs/mc/mcw.c" "$REPO/programs/mc/mcwx.h" "$REPO/programs/mc/mcwx.c" "$VC/common/"
 cp "$HERE/gl.cpp" "$VC/tiberiandawn/"
@@ -130,11 +130,6 @@ fi
 # all in /usr/share: the image builder adds files to folders the ROM has, and makes none.
 # The game looks for its files by name in one folder, which the starter makes of links.
 for f in DEMO DEMOL SOUNDS SPEECH; do cp "$WORK/src/tdawn-demo/$f.MIX" "$OUT/usr/share/tdawn-$f.MIX"; done
-# the 3D view's data (docs/games/tdawn.md, "In 3D"): each map's heights from its own templates, read
-# against the fetched tree's table of them, and the models made by script; 47 KB of the ROM
-python3 "$HERE/td3d/heights.py" --source "$SRC/tiberiandawn" --mix "$WORK/src/tdawn-demo/DEMOL.MIX" \
-    --mix "$WORK/src/tdawn-demo/DEMO.MIX" --out "$OUT/usr/share/tdawn-heights.dat" > "$WORK/src/tdawn-heights.log"
-python3 "$HERE/models/build.py" "$OUT/usr/share/tdawn-models.dat" > "$WORK/src/tdawn-models.log"
 # the sounds as the sound card plays them from the ROM (docs/machine/sound.md); made again when stale
 PAK="$WORK/src/tdawn-demo/tdawn-sound.pak"
 if [ ! "$PAK" -nt "$WORK/src/tdawn-demo/SOUNDS.MIX" ] || [ ! "$PAK" -nt "$REPO/tools/make_tdawn_sound.py" ]; then
