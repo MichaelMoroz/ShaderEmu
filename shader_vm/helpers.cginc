@@ -46,12 +46,4 @@ struct v2f {
 
 
 
-uint unpack_raw_float4(in float4 data) {
-    uint res = 0;
-    res |= uint(data.a*255.0f+0.5f) << 24;
-    res |= uint(data.b*255.0f+0.5f) << 16;
-    res |= uint(data.g*255.0f+0.5f) << 8;
-    res |= uint(data.r*255.0f+0.5f);
-    return res;
-}
 

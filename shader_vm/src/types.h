@@ -1278,25 +1278,12 @@ uint mem_get_cached_or_tex_from_state_cache_or_mtd(uint addr) {
         uint mtd_addr = addr - 0x40000000;
         uint mtd_idx = (mtd_addr >> 2) & 0x3;
         mtd_addr = mtd_addr >> 4;
-        uint2 mtd_lin = uint2(mtd_addr % m_dim.x, mtd_addr / m_dim.x);
-        mtd_lin.y = m_dim.y - mtd_lin.y - 1;
-        //[branch] if (mtd_lin.y >= m_dim.y) return 0;
+        uint2 mtd_lin = uint2(mtd_addr & 2047, mtd_addr >> 11);
         return idx_uint4(asuint(_Data_ROM[mtd_lin]), mtd_idx);   // (the ROM: one texture, a texel a pixel)
     }
     return 0;
 }
 
-// `ret` is the texel as it is (with CORES > 1, a RAM texel as the cores before this one leave it)
-// The texel at physical address `a` for a copy the pass left to the commit: RAM as the texture
-// has it, or the ROM.
-uint4 lazy_source(uint a) {
-    [branch]
-    if (a & 0x80000000) {
-        return RAM_TEX(RAM_ADDR((a & 0x7fffffff) >> 4));
-    }
-    return uint4(mem_get_cached_or_tex_from_state_cache_or_mtd(a), mem_get_cached_or_tex_from_state_cache_or_mtd(a + 4),
-                 mem_get_cached_or_tex_from_state_cache_or_mtd(a + 8), mem_get_cached_or_tex_from_state_cache_or_mtd(a + 12));
-}
 
 uint4 commit(uint2 pos, uint4 ret) {
     if (pos.y < 64 && pos.x >= 64) {
@@ -1412,91 +1399,6 @@ uint4 commit(uint2 pos, uint4 ret) {
 
     }
 #endif
-
-    // RAM
-    if (pos.y >= 64) {
-        uint2 pos_ram = uint2(pos.x, pos.y - 64);
-        uint lin = RAM_LIN(pos_ram.x, pos_ram.y);
-
-        if (_Init) {
-            // init main memory from texture
-            uint2 ram_dim;
-            _Data_RAM_A.GetDimensions(ram_dim.x, ram_dim.y);
-            uint2 pos2 = uint2(lin % 2048, lin / 2048);  // the payload image is row-major
-            // something feels off here... off by one, you might say...
-            // ...but this way it actually works
-            pos2.y = ram_dim.y - pos2.y - 1;
-
-            if (pos2.y >= ram_dim.y) {
-                // zero unset memory
-                ret = uint4(0, 0, 0, 0);
-            } else {
-                uint r = unpack_raw_float4(_Data_RAM_R[pos2]);
-                uint g = unpack_raw_float4(_Data_RAM_G[pos2]);
-                uint b = unpack_raw_float4(_Data_RAM_B[pos2]);
-                uint a = unpack_raw_float4(_Data_RAM_A[pos2]);
-                ret = uint4(r, g, b, a);
-            }
-        } else {
-            lin <<= 4;
-
-            // A fill or copy the pass left to us (LAZY_MEMOP: kind in the low bits, texels above;
-            // whole texels, its source as the texture has it): made first, so that what the
-            // pass stored to its destination afterwards, which the cache has, lies on top.
-            uint lazy = cpu.debug_arb_0, lazy2 = cpu.stall_count;
-            [branch]
-            if (lazy != 0 && lin >= cpu.trap_count && ((lin - cpu.trap_count) >> 4) < (lazy >> 2)) {
-                if ((lazy & 3) == 2) {
-                    ret = uint4(cpu.debug_last_ins, cpu.debug_last_ins, cpu.debug_last_ins, cpu.debug_last_ins);
-                } else {
-                    ret = lazy_source(cpu.debug_last_ins + (lin - cpu.trap_count));
-                }
-            }
-            [branch]
-            if (lazy2 != 0 && lin >= cpu.memop_dst_p && ((lin - cpu.memop_dst_p) >> 4) < (lazy2 >> 2)) {
-                if ((lazy2 & 3) == 2) {
-                    ret = uint4(cpu.memop_src_p, cpu.memop_src_p, cpu.memop_src_p, cpu.memop_src_p);
-                } else {
-                    ret = lazy_source(cpu.memop_src_p + (lin - cpu.memop_dst_p));
-                }
-            }
-
-            if ((cpu.stall == STALL_MEMOP_COPY || cpu.stall == STALL_MEMOP_FILL) &&
-                (lin + (3 << 2)) >= cpu.memop_dst_p &&
-                lin < (cpu.memop_dst_p + cpu.memop_n))
-            {
-                // we've found ourselves in a position for a memcpy (or a fill), ignore cache and perform it
-                // (a memop is always the last instruction in a commit cycle, so we know we have
-                // higher priority than the L1 cache)
-                [loop]
-                for (uint icp = 0; icp < 4; icp++) {
-                    uint lin_word = lin + (icp << 2);
-                    if (lin_word >= cpu.memop_dst_p &&
-                        lin_word < (cpu.memop_dst_p + cpu.memop_n))
-                    {
-                        uint offset = lin_word - cpu.memop_dst_p;
-                        uint src = cpu.memop_src_p + offset;
-                        uint transfer = cpu.memop_src_v;
-                        [branch]
-                        if (cpu.stall == STALL_MEMOP_COPY) transfer = mem_get_cached_or_tex_from_state_cache_or_mtd(src);
-                        set_idx_uint4(ret, transfer, icp);
-                    }
-                }
-            } else {
-                // write back L1 cache
-                [branch]
-                if ((lin & c_bloom) == lin) {
-                    uint4 cached;
-                    if (l1_state_find(lin >> 4, cached)) ret = cached;
-                }
-
-                     if (cpu.cache.ram_l1_last_addr == lin           ) { ret.r = cpu.cache.ram_l1_last_val; }
-                else if (cpu.cache.ram_l1_last_addr == lin + (1 << 2)) { ret.g = cpu.cache.ram_l1_last_val; }
-                else if (cpu.cache.ram_l1_last_addr == lin + (2 << 2)) { ret.b = cpu.cache.ram_l1_last_val; }
-                else if (cpu.cache.ram_l1_last_addr == lin + (3 << 2)) { ret.a = cpu.cache.ram_l1_last_val; }
-            }
-        }
-    }
 
     // hand-over word is cleared here (FXC hits an internal error if this sits next to the
     // stall-clearing switch above)

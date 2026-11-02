@@ -283,9 +283,8 @@ uint load_word(uint a) {
         return o < RAM_MAX ? ram_word(o) : 0;
     }
     [branch] if (a & 0x40000000) {
-        uint2 d; _Data_ROM.GetDimensions(d.x, d.y);
         uint t = (a - 0x40000000) >> 4;
-        return asuint(_Data_ROM[uint2(t % d.x, d.y - 1 - t / d.x)])[(a >> 2) & 3];   // (the ROM: a texel a pixel)
+        return asuint(_Data_ROM[uint2(t & 2047, t >> 11)])[(a >> 2) & 3];   // (the ROM: a texel a pixel, from the first row)
     }
     return a == 0x030007f8 ? _RTC0 : a == 0x030007fc ? _RTC1 : a == 0x02004000 ? tcmp_lo : a == 0x02004004 ? tcmp_hi :
            a == 0x0200bff8 ? now_lo : a == 0x0200bffc ? now_hi : 0;

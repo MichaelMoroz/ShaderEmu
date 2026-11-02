@@ -199,9 +199,9 @@ int main(int argc, char** argv) {
             }
             const UINT w = 2048, h = (std::max)(1u, (UINT)((bin.size() / 16 + w - 1) / w));
             const size_t pitch = (size_t)w * 16;
-            std::vector<uint8_t> rows((size_t)h * pitch, 0);   // row 0 = the bottom: texel 0 in the last row
+            std::vector<uint8_t> rows((size_t)h * pitch, 0);   // texel 0 in the first row
             for (UINT y = 0; y < h && (size_t)y * pitch < bin.size(); ++y)
-                memcpy(rows.data() + (size_t)(h - 1 - y) * pitch, bin.data() + (size_t)y * pitch, (std::min)(pitch, bin.size() - (size_t)y * pitch));
+                memcpy(rows.data() + (size_t)y * pitch, bin.data() + (size_t)y * pitch, (std::min)(pitch, bin.size() - (size_t)y * pitch));
             textures["_Data_ROM"] = uploadTexture(dx, w, h, DXGI_FORMAT_R32G32B32A32_FLOAT, 16, rows.data(), D3D12_RESOURCE_FLAG_NONE,
                                                   D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             continue;

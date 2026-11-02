@@ -21,7 +21,7 @@ public class ShaderEmuTexelsImporter : ScriptedImporter
         {
             long from = (long)y * pitch;
             if (from >= bin.Length) break;
-            System.Buffer.BlockCopy(bin, (int)from, raw, (height - 1 - y) * pitch, (int)System.Math.Min(pitch, bin.Length - from));
+            System.Buffer.BlockCopy(bin, (int)from, raw, y * pitch, (int)System.Math.Min(pitch, bin.Length - from));
         }
         Texture2D tex = new Texture2D(Width, height, TextureFormat.RGBAFloat, false, true);
         tex.filterMode = FilterMode.Point;
@@ -40,7 +40,7 @@ public class ShaderEmuTexelsImporter : ScriptedImporter
         for (long i = 0; i < bin.Length; i++)
         {
             long y = i / pitch, x = i % pitch;
-            if (raw[(height - 1 - y) * pitch + x] != bin[i]) wrong++;
+            if (raw[y * pitch + x] != bin[i]) wrong++;
         }
         return wrong;
     }

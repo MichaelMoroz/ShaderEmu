@@ -7,10 +7,7 @@ float _Init;
 #define SBI_HLE
 #define NO_PAGING
 
-Texture2D<float4> _Data_RAM_R;
-Texture2D<float4> _Data_RAM_G;
-Texture2D<float4> _Data_RAM_B;
-Texture2D<float4> _Data_RAM_A;
+Texture2D<float4> _Data_RAM;   // the start image: as the ROM
 
 Texture2D<float4> _Data_ROM;   // the ROM: a 16-byte texel a pixel, read by its bits (asuint)
 
@@ -43,7 +40,6 @@ uint4 mc_state_read(uint2 pos) {
 #define STATE_TEX(pos) mc_state_read(uint2(pos))
 
 static uint2 s_dim;
-static uint2 m_dim;
 
 #include "helpers.cginc"
 #include "src/types.cginc" // includes fb.h

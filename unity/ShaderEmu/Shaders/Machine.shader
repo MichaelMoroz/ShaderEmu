@@ -25,10 +25,7 @@ Shader "ShaderEmu/Machine"
         _Rtc1Lo ("RTC1 low half", Int) = 0
         _Rtc1Hi ("RTC1 high half", Int) = 0
 
-        _Data_RAM_R ("RAM Texture R", 2D) = "black" {}
-        _Data_RAM_G ("RAM Texture G", 2D) = "black" {}
-        _Data_RAM_B ("RAM Texture B", 2D) = "black" {}
-        _Data_RAM_A ("RAM Texture A", 2D) = "black" {}
+        _Data_RAM ("The start image, a 16-byte texel a pixel (RGBAFloat, read by its bits)", 2D) = "black" {}
 
 
         _Data_ROM ("ROM, a 16-byte texel a pixel (RGBAFloat, read by its bits)", 2D) = "black" {}
@@ -222,7 +219,6 @@ Shader "ShaderEmu/Machine"
             #define RAM_TEX(pos) (_SelfTexture2D[pos])
 
             static uint2 s_dim;
-            static uint2 m_dim;
 
             #include "helpers.cginc"
             #include "src/types.cginc"

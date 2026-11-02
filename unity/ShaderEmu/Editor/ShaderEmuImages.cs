@@ -41,6 +41,12 @@ public static class ShaderEmuImages
         return ImageFolder + "/" + name + "_rom.texels";
     }
 
+    // RAM's start image as well.
+    public static string RamPath(string name)
+    {
+        return ImageFolder + "/" + name + "_ram.texels";
+    }
+
     [MenuItem("ShaderEmu/Sync shader sources from the repository")]
     public static void SyncShaders()
     {
@@ -70,30 +76,34 @@ public static class ShaderEmuImages
         Directory.CreateDirectory(ImageFolder);
         foreach (BootImage image in Images)
         {
-            WriteLanes(image.name, "ram", image.ram);
-            CopyRom(image.name, image.rom);
+            CopyTexels(image.name, "ram", image.ram);
+            CopyTexels(image.name, "rom", image.rom);
         }
         AssetDatabase.Refresh();
         Debug.Log("[ShaderEmu] boot images imported from " + Repo);
     }
 
-    static void CopyRom(string name, string file)
+    static void CopyTexels(string name, string part, string file)
     {
         string path = Repo + "/" + file;
         if (!File.Exists(path))
         {
-            Debug.LogWarning("[ShaderEmu] " + path + " is missing; image '" + name + "' will lack its ROM");
+            Debug.LogWarning("[ShaderEmu] " + path + " is missing; image '" + name + "' will lack its " + part);
             return;
         }
-        File.Copy(path, RomPath(name), true);
+        File.Copy(path, part == "ram" ? RamPath(name) : RomPath(name), true);
     }
 
-    // The ROM in four lanes as before, for the Udon model only (EmuUdonCpu reads them on the processor).
+    // RAM's image and the ROM in four lanes as before, for the Udon model only (EmuUdonCpu reads them on the processor).
     [MenuItem("ShaderEmu/Import the ROM's lanes for the Udon model")]
     public static void ImportRomLanes()
     {
         Directory.CreateDirectory(ImageFolder);
-        foreach (BootImage image in Images) WriteLanes(image.name, "rom", image.rom);
+        foreach (BootImage image in Images)
+        {
+            WriteLanes(image.name, "ram", image.ram);
+            WriteLanes(image.name, "rom", image.rom);
+        }
         AssetDatabase.Refresh();
     }
 

@@ -102,22 +102,20 @@ uint ram_word(uint address) {
     return k == 0 ? t.r : k == 1 ? t.g : k == 2 ? t.b : t.a;
 }
 // A word of a texture: RAM, or with GPU_ROM the ROM (addresses from 0x40000000), read as the
-// CPU reads it: four textures, one for each word of a 16-byte texel, rows bottom up.
+// CPU reads it: a 16-byte texel a pixel, from the first row.
 #if defined(GPU_ROM)
 uint texture_word(uint address) {
     [branch]
     if ((address >> 30) != 1) return ram_word(address);
-    uint2 dim;
-    _Data_ROM.GetDimensions(dim.x, dim.y);
-    uint texel = (address - 0x40000000) >> 4, k = (address >> 2) & 3;
-    uint2 at = uint2(texel % dim.x, dim.y - 1 - texel / dim.x);
-    return asuint(_Data_ROM[at])[k];   // (the ROM: one texture, a texel a pixel)
+    uint texel = (address - 0x40000000) >> 4;
+    return asuint(_Data_ROM[uint2(texel & 2047, texel >> 11)])[(address >> 2) & 3];
 }
 // A 16-byte texel there.
 uint4 texture_texel(uint address) {
     [branch]
     if ((address >> 30) != 1) return ram(texel_of(address));
-    return uint4(texture_word(address), texture_word(address + 4), texture_word(address + 8), texture_word(address + 12));
+    uint texel = (address - 0x40000000) >> 4;
+    return asuint(_Data_ROM[uint2(texel & 2047, texel >> 11)]);
 }
 #else
 #define texture_word ram_word

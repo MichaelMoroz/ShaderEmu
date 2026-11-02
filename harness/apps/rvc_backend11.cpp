@@ -236,8 +236,9 @@ public:
     bool loadPayload(Material& mat, const std::string& dir, const std::string& prefix, const std::string& propBase,
                      std::string& err) override {
         if (prefix == "none") return true;
-        if (propBase == "_Data_MTD") {
-            // the ROM: one texture of 16-byte texels, RGBAFloat read by its bits (as the world's importer makes it,
+        const bool ramImage = propBase == "_Data_RAM";
+        if (propBase == "_Data_MTD" || ramImage) {
+            // the ROM and RAM's start image: one texture of 16-byte texels, RGBAFloat read by its bits (as the world's importer makes it,
             // docs/machine/gpu.md "The ROM as one texture")
             std::string bin;
             fs::path base = prefix.find_first_of("/\\") == std::string::npos ? fs::u8path(dir) / prefix : fs::u8path(prefix);
@@ -246,18 +247,18 @@ public:
                 return false;
             }
             // RVC_CODE_FILE: rows under the ROM's, from the texture's first
-            if (const char* cf = getenv("RVC_CODE_FILE"); cf && *cf) {
+            if (const char* cf = getenv("RVC_CODE_FILE"); cf && *cf && !ramImage) {
                 std::string code;
                 if (!readFileBinary(cf, code)) { err = std::string(cf) + ": cannot read"; return false; }
                 bin.resize((bin.size() + 2048 * 16 - 1) / (2048 * 16) * (2048 * 16));
                 bin += code;
             }
             UINT height = 0;
-            auto srv = createTextureTexels(gpu_.device.Get(), bin, 2048, /*flipY=*/true, height, err);
+            auto srv = createTextureTexels(gpu_.device.Get(), bin, 2048, /*flipY=*/false, height, err);
             if (!srv) return false;
-            mat.setTexture("_Data_ROM", srv.Get(), 2048, height);
+            mat.setTexture(ramImage ? "_Data_RAM" : "_Data_ROM", srv.Get(), 2048, height);
             keep_.push_back(srv);
-            fprintf(stderr, "[harness] _Data_ROM <- %s (2048x%u, RGBAFloat)\n", prefix.c_str(), height);
+            fprintf(stderr, "[harness] %s <- %s (2048x%u, RGBAFloat)\n", ramImage ? "_Data_RAM" : "_Data_ROM", prefix.c_str(), height);
             return true;
         }
         const char* lanes[4] = {"r", "g", "b", "a"};

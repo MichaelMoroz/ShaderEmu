@@ -90,7 +90,7 @@ Shader "ShaderEmu/Scope"
                 int x = min((int)(frac(sx) * (float)dim.x), (int)dim.x - 1);
                 int row = (int)(((float)strip + p.y) * (float)dim.y / 3.0);
                 if (row >= (int)dim.y) return float3(0.02, 0.025, 0.04);
-                uint w = asuint(_Data_ROM.Load(int3(x, (int)dim.y - 1 - row, 0)).x);
+                uint w = asuint(_Data_ROM.Load(int3(x, row, 0)).x);
                 float3 c = float3(w & 0xff, (w >> 8) & 0xff, (w >> 16) & 0xff) / 255.0;
                 return c * 0.9 + 0.04;
             }

@@ -12,10 +12,7 @@ Shader "Nix/shader_vm"
         _RTC0 ("RTC0", Int) = 0
         _RTC1 ("RTC1", Int) = 0
 
-        _Data_RAM_R ("RAM Texture R", 2D) = "black" {}
-        _Data_RAM_G ("RAM Texture G", 2D) = "black" {}
-        _Data_RAM_B ("RAM Texture B", 2D) = "black" {}
-        _Data_RAM_A ("RAM Texture A", 2D) = "black" {}
+        _Data_RAM ("The start image, a 16-byte texel a pixel (RGBAFloat, read by its bits)", 2D) = "black" {}
 
 
 
@@ -66,10 +63,7 @@ Shader "Nix/shader_vm"
             float _Init;
             uniform uint _CommitAlways;   // COMMIT_BANDS: bands 0 to 31 drawn every commit (the control words' 28)
 
-            Texture2D<float4> _Data_RAM_R;
-            Texture2D<float4> _Data_RAM_G;
-            Texture2D<float4> _Data_RAM_B;
-            Texture2D<float4> _Data_RAM_A;
+            Texture2D<float4> _Data_RAM;   // the start image: as the ROM
 
             Texture2D<float4> _Data_ROM;   // the ROM: a 16-byte texel a pixel, read by its bits (asuint)
 
@@ -119,7 +113,6 @@ Shader "Nix/shader_vm"
             #endif
 
             static uint2 s_dim;
-            static uint2 m_dim;
 
             #include "helpers.cginc"
             #include "src/types.h" // includes fb.h

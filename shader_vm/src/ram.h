@@ -361,7 +361,6 @@ void ram_gather_amp_geom(point amp_d I[1], inout TriangleStream<ram_v2f> stream,
 uint4 ram_gather_texel(ram_v2f i) {
     uint2 pos = (uint2)i.vertex.xy;
     s_dim = uint2(2048, STATE_TEX_HEIGHT);
-    _Data_ROM.GetDimensions(m_dim.x, m_dim.y);
 #if CORES > 1
     MC_GEO_READ
 #endif
@@ -428,7 +427,6 @@ uint4 ram_progress(uint core, uint x, uint4 result) {
 }
 uint4 ram_state_texel(uint2 pos) {
     s_dim = uint2(2048, STATE_TEX_HEIGHT);
-    _Data_ROM.GetDimensions(m_dim.x, m_dim.y);
     uint4 own = _TickState[pos], result;
 #if CORES > 1
     uint hb = (pos.x >> 6) | ((pos.y >> 3) << 5);
@@ -578,19 +576,12 @@ void ram_commit_amp_geom(point amp_d I[1], inout TriangleStream<ram_v2f> stream,
 
 uint4 ram_init_texel(uint2 pos) {
     uint lin = RAM_LIN(pos.x, pos.y - 64);
-    uint2 ram_dim;
-    _Data_RAM_A.GetDimensions(ram_dim.x, ram_dim.y);
-    uint2 pos2 = uint2(lin % 2048, lin / 2048);   // the payload image is row-major, rows bottom up
-    pos2.y = ram_dim.y - pos2.y - 1;
-    if (pos2.y >= ram_dim.y) return (uint4)0;
-    return uint4(unpack_raw_float4(_Data_RAM_R[pos2]), unpack_raw_float4(_Data_RAM_G[pos2]),
-                 unpack_raw_float4(_Data_RAM_B[pos2]), unpack_raw_float4(_Data_RAM_A[pos2]));
+    return asuint(_Data_RAM[uint2(lin & 2047, lin >> 11)]);   // (the start image as the ROM: a texel a pixel; past it, zeros)
 }
 
 uint4 ram_commit_texel(ram_v2f i) {
     uint2 pos = (uint2)i.vertex.xy;
     s_dim = uint2(2048, STATE_TEX_HEIGHT);
-    _Data_ROM.GetDimensions(m_dim.x, m_dim.y);
     uint kind = i.info.x, t = (pos.y - 64) * 2048 + pos.x;
     [branch]
     if (kind == RK_SLOT) return _Stage[i.info.yz];

@@ -443,36 +443,27 @@ public class EmuMachine : UdonSharpBehaviour
 
     private void ApplyImage()
     {
-        machineMaterial.SetTexture("_Data_RAM_R", Pick(0));
-        machineMaterial.SetTexture("_Data_RAM_G", Pick(1));
-        machineMaterial.SetTexture("_Data_RAM_B", Pick(2));
-        machineMaterial.SetTexture("_Data_RAM_A", Pick(3));
-        machineMaterial.SetTexture("_Data_ROM", Pick(4));
-        tickMaterial.SetTexture("_Data_ROM", Pick(4));
+        machineMaterial.SetTexture("_Data_RAM", Pick(0));
+        machineMaterial.SetTexture("_Data_ROM", Pick(1));
+        tickMaterial.SetTexture("_Data_ROM", Pick(1));
         // (a copy out of the ROM is committed as points, and its edges gathered; RAM starts as points)
-        pointsMaterial.SetTexture("_Data_ROM", Pick(4));
-        gatherMaterial.SetTexture("_Data_ROM", Pick(4));
-        pointsMaterial.SetTexture("_Data_RAM_R", Pick(0));
-        pointsMaterial.SetTexture("_Data_RAM_G", Pick(1));
-        pointsMaterial.SetTexture("_Data_RAM_B", Pick(2));
-        pointsMaterial.SetTexture("_Data_RAM_A", Pick(3));
-        gpuMaterial.SetTexture("_Data_ROM", Pick(4));
+        pointsMaterial.SetTexture("_Data_ROM", Pick(1));
+        gatherMaterial.SetTexture("_Data_ROM", Pick(1));
+        pointsMaterial.SetTexture("_Data_RAM", Pick(0));
+        gpuMaterial.SetTexture("_Data_ROM", Pick(1));
         if (pointsBlitMaterial != null)
         {
-            pointsBlitMaterial.SetTexture("_Data_ROM", Pick(4));
-            gatherBlitMaterial.SetTexture("_Data_ROM", Pick(4));
-            pointsBlitMaterial.SetTexture("_Data_RAM_R", Pick(0));
-            pointsBlitMaterial.SetTexture("_Data_RAM_G", Pick(1));
-            pointsBlitMaterial.SetTexture("_Data_RAM_B", Pick(2));
-            pointsBlitMaterial.SetTexture("_Data_RAM_A", Pick(3));
+            pointsBlitMaterial.SetTexture("_Data_ROM", Pick(1));
+            gatherBlitMaterial.SetTexture("_Data_ROM", Pick(1));
+            pointsBlitMaterial.SetTexture("_Data_RAM", Pick(0));
         }
-        if (gpuBlitMaterial != null) gpuBlitMaterial.SetTexture("_Data_ROM", Pick(4));
-        if (volumeMaterial != null) volumeMaterial.SetTexture("_Data_ROM", Pick(4));   // the holodeck's light maps
-        if (romViewMaterial != null) romViewMaterial.SetTexture("_Data_ROM", Pick(4));
+        if (gpuBlitMaterial != null) gpuBlitMaterial.SetTexture("_Data_ROM", Pick(1));
+        if (volumeMaterial != null) volumeMaterial.SetTexture("_Data_ROM", Pick(1));   // the holodeck's light maps
+        if (romViewMaterial != null) romViewMaterial.SetTexture("_Data_ROM", Pick(1));
         if (sound != null)
         {
             // samples are played from where they lie in the ROM
-            sound.mixMaterial.SetTexture("_Data_ROM", Pick(4));
+            sound.mixMaterial.SetTexture("_Data_ROM", Pick(1));
         }
     }
 

@@ -12,10 +12,7 @@ Shader "ShaderEmu/MachineCommitBlit"
         _TickState ("The state rows after the tick", 2D) = "black" {}
         _Stage ("The commit's stage (pass 0 draws it)", 2D) = "black" {}
         _GpuTarget ("The GPU's colour target", 2D) = "black" {}
-        _Data_RAM_R ("RAM Texture R", 2D) = "black" {}
-        _Data_RAM_G ("RAM Texture G", 2D) = "black" {}
-        _Data_RAM_B ("RAM Texture B", 2D) = "black" {}
-        _Data_RAM_A ("RAM Texture A", 2D) = "black" {}
+        _Data_RAM ("The start image, a 16-byte texel a pixel (RGBAFloat, read by its bits)", 2D) = "black" {}
         _Data_ROM ("ROM, a 16-byte texel a pixel (RGBAFloat, read by its bits)", 2D) = "black" {}
         _AmpRank ("Each patch point's place in the card's order (BlitOrder.shader)", 2D) = "black" {}
         _GatherPoints ("The gather's points: 1 + CORES", Int) = 257
