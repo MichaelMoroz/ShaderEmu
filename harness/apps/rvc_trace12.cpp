@@ -187,7 +187,7 @@ int main(int argc, char** argv) {
                                                     D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     const char* lanes[4] = {"r", "g", "b", "a"};
     const char* props[4] = {"_R", "_G", "_B", "_A"};
-    std::vector<std::pair<const char*, const char*>> payloads = {{"rootfs", "_Data_MTD"}, {"dts", "_Data_DTB"}};
+    std::vector<std::pair<const char*, const char*>> payloads = {{"rootfs", "_Data_MTD"}};
     if (opt.cold) payloads.push_back({"linux_payload", "_Data_RAM"});
     for (auto& pr : payloads) {
         if (std::string(pr.second) == "_Data_MTD") {   // the ROM: one RGBAFloat texture, a 16-byte texel a pixel
@@ -277,10 +277,7 @@ int main(int argc, char** argv) {
     Material mat;
     mat.applyDefaults(shader);
     mat.setInt("_Ticks", opt.ticks);
-    mat.setInt("_TicksDivisor", 1);
-    mat.setInt("_DoTick", 0);
     mat.setInt("_Init", 0);
-    mat.setInt("_InitRaw", 0);
     mat.setInt("_UdonUARTInChar", (int)hdr.sentChar);
     mat.setInt("_UdonUARTInTag", (int)hdr.sentTag);
     mat.setVector("unity_OrthoParams", 1, 1, 0, 1);

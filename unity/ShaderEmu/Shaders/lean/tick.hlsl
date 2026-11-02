@@ -12,8 +12,7 @@
 
 Texture2D<uint4> _SelfTexture2D;
 Texture2D<float4> _Data_ROM;   // the ROM at 0x40000000
-Texture2D<float4> _Data_DTB_R, _Data_DTB_G, _Data_DTB_B, _Data_DTB_A;   // the device tree at 0x1020
-uniform uint _Init, _InitRaw, _Ticks, _TicksDivisor, _PlayerID;
+uniform uint _Init, _Ticks, _PlayerID;
 #ifdef RTC_HALVES   // Unity: a material's numbers are floats, so each clock word comes as two 16-bit halves
 uniform uint _Rtc0Lo, _Rtc0Hi, _Rtc1Lo, _Rtc1Hi;
 #define _RTC0 ((_Rtc0Lo & 0xffff) | (_Rtc0Hi << 16))
@@ -185,7 +184,6 @@ uint lin_of(uint w) {
 
 uint idx(uint4 v, uint i) { return (i & 2) ? ((i & 1) ? v.w : v.z) : ((i & 1) ? v.y : v.x); }
 uint4 put(uint4 v, uint i, uint x) { return uint4(i == 0 ? x : v.x, i == 1 ? x : v.y, i == 2 ? x : v.z, i == 3 ? x : v.w); }
-uint unpack(float4 f) { return uint(f.a * 255.0 + 0.5) << 24 | uint(f.b * 255.0 + 0.5) << 16 | uint(f.g * 255.0 + 0.5) << 8 | uint(f.r * 255.0 + 0.5); }
 
 // ---- The processor's state in this pass
 static uint xr[65];   // x0-x31, f0-f31 as bits, and [64] for writes that must not land
@@ -342,11 +340,7 @@ void ram_store(uint o, uint v, uint mask) {
         stall = STALL_MEM; budget = 0;
     }
 }
-float4 rom4(Texture2D<float4> r, Texture2D<float4> gg, Texture2D<float4> b, Texture2D<float4> a, uint2 p, uint i) {
-    [branch] if (i < 2) return i == 0 ? r[p] : gg[p];
-    return i == 2 ? b[p] : a[p];
-}
-// a word anywhere (a on a word): RAM, the ROM, the device tree, the clock chip, the timer
+// a word anywhere (a on a word): RAM, the ROM, the clock chip, the timer
 uint load_word(uint a) {
     [branch] if (a & 0x80000000) {
         uint o = a & 0x7fffffff;
@@ -357,8 +351,6 @@ uint load_word(uint a) {
         uint t = (a - 0x40000000) >> 4;
         return asuint(_Data_ROM[uint2(t % d.x, d.y - 1 - t / d.x)])[(a >> 2) & 3];   // (the ROM: a texel a pixel)
     }
-    [branch] if (a - 0x1020 < 0xfe0)
-        return unpack(rom4(_Data_DTB_R, _Data_DTB_G, _Data_DTB_B, _Data_DTB_A, uint2((a - 0x1020) >> 4, 0), (a >> 2) & 3));
     return a == 0x030007f8 ? _RTC0 : a == 0x030007fc ? _RTC1 : a == 0x02004000 ? tcmp_lo : a == 0x02004004 ? tcmp_hi :
            a == 0x0200bff8 ? now_lo : a == 0x0200bffc ? now_hi : 0;
 }
@@ -458,7 +450,7 @@ uint lanes_of(uint b) { return b < 3 ? 0 : (L1_AT + BUCKETS(b) * 4 - 56) / 8 + 1
 // CSR 0x0b8 read: lanes are built (bit 31), this core's lanes (bits 8-15), how its last job ended
 uint lanes_csr() { return 0x80000000u | ((core == 0 ? 0 : lanes_of(bits)) << 8) | (lane_word < 16 ? lane_word : 0); }
 // CSR 0x0ba read: in a lane, the instructions left of its pass (its clock counts them from 0); elsewhere no end
-uint lane_left() { uint most = max(_Ticks / max(_TicksDivisor, 1), 2); return lane_mode ? most - min(clock, most) : 0xffffffff; }
+uint lane_left() { uint most = max(_Ticks, 2); return lane_mode ? most - min(clock, most) : 0xffffffff; }
 // The CSRs Linux uses, as fields; the machine's own read as zeros, a write to one not kept goes nowhere.
 uint csr_read(uint n) {
     uint fs = (mstatus & 0x6000) != 0 ? 0x80006000 : 0, r = asuint(_Time.w);   // FS reads dirty whenever it is on
@@ -1145,7 +1137,7 @@ tick_out frag(v2f i) {
     bool keep = !field && !none && !_Init && core != 0 && (worker_idle() || MORE_ROUND);
     bool any = field;
     for (k = 0; k < 8; k++) any = any || lin_of(w0 + k) < FP_AT + 8;
-    [branch] if (!none && !keep && any && !(_Init && _InitRaw)) {
+    [branch] if (!none && !keep && any) {
         if (_Init) {
             // as firmware would enter the kernel: supervisor mode, the device tree's address in a1
             stall = 0; clock = 0; priv = 1; pc = 0x82000000; ovf_addr = 0xffffffff;
@@ -1164,7 +1156,7 @@ tick_out frag(v2f i) {
             }
             // a round after the first (--tick-rounds) gives core 0 what is left of its frame's instructions,
             // and the workers all of theirs: core 0 runs as with a round a frame, the workers it waits for more
-            uint n = 0, most = max(_Ticks / max(_TicksDivisor, 1), 2);
+            uint n = 0, most = max(_Ticks, 2);
             most = core != 0 ? most : min(most, most * max(_TickFull, 1) - min(used, most * max(_TickFull, 1)));
             // (one loop for a core and for a lane, whose indices are its runs one after another)
             [loop] for (;;) {
@@ -1188,7 +1180,7 @@ tick_out frag(v2f i) {
     [branch] if (lane_pixel) lane_output();
     else for (k = 0; k < 8; k++) {
         uint lin = lin_of(w0 + k);
-        ot[k] = none ? (uint4)0 : (_Init && _InitRaw) ? st(lin) : keep || lin >= FP_AT + 8 ? TEX(own + uint2(k, 0)) : state_out(lin);
+        ot[k] = none ? (uint4)0 : keep || lin >= FP_AT + 8 ? TEX(own + uint2(k, 0)) : state_out(lin);
     }
     tick_out r;
     r.t0 = ot[0]; r.t1 = ot[1]; r.t2 = ot[2]; r.t3 = ot[3]; r.t4 = ot[4]; r.t5 = ot[5]; r.t6 = ot[6]; r.t7 = ot[7];

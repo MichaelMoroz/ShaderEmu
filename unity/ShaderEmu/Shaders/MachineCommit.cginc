@@ -2,7 +2,7 @@
 // under RAM_INPLACE; src/ram.cginc, docs/machine/gpu.md "RAM in one texture"), for Machine.shader's
 // Commit (the state rows), MachineGather.shader and MachineCommitPoints.shader (RAM). Include
 // after UnityCG.cginc and MachineBlit.cginc; MachineGather.shader defines COMMIT_GATHER first.
-float _Init, _InitRaw;
+float _Init;
 // MachineTickLean.shader's machine: its CSRs are fields of the state, with no table to commit
 #define SBI_HLE
 #define NO_PAGING
@@ -11,7 +11,6 @@ Texture2D<float4> _Data_RAM_R;
 Texture2D<float4> _Data_RAM_G;
 Texture2D<float4> _Data_RAM_B;
 Texture2D<float4> _Data_RAM_A;
-Texture2D<float4> _Data_RAM_RAW;
 
 Texture2D<float4> _Data_ROM;   // the ROM: a 16-byte texel a pixel, read by its bits (asuint)
 

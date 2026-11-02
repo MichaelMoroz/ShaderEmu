@@ -13,15 +13,14 @@ public static class ShaderEmuImages
 
     public class BootImage
     {
-        public string name, title, ram, rom, tree;
+        public string name, title, ram, rom;
     }
 
     public static readonly BootImage[] Images =
     {
         // Linux without an MMU (docs/system/nommu.md), for MachineTickLean.shader's machine.
         new BootImage { name = "linux", title = "Linux: shell, Nano-X desktop (nx), Doom, glxgears",
-                        ram = "build/images/nommu/linux_payload.bin", rom = "build/images/nommu/rootfs.bin",
-                        tree = "build/images/nommu/dts.bin" },
+                        ram = "build/images/nommu/linux_payload.bin", rom = "build/images/nommu/rootfs.bin" },
         // The bare-metal programs (programs/bin: gears, raycast, raytrace, blend, rects) start in
         // machine mode at 0x80000000, which the SBI_HLE build of the shader does not do.
     };
@@ -73,7 +72,6 @@ public static class ShaderEmuImages
         {
             WriteLanes(image.name, "ram", image.ram);
             CopyRom(image.name, image.rom);
-            WriteLanes(image.name, "tree", image.tree);
         }
         AssetDatabase.Refresh();
         Debug.Log("[ShaderEmu] boot images imported from " + Repo);

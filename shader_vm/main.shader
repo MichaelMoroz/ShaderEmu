@@ -3,13 +3,10 @@ Shader "Nix/shader_vm"
     Properties
     {
         [ToggleUI] _Init ("Init", float) = 0
-        [ToggleUI] _InitRaw ("Init directly from _Data_RAM_RAW", float) = 0
         _Ticks ("Ticks per Frame", Int) = 1024
-        _TicksDivisor ("Tick Divisor", Int) = 4
 
         _UdonUARTInChar ("UART input Udon side", Int) = 0
         _UdonUARTInTag ("UART input unique tag", Int) = 0
-        _UartBurst ("UART input characters per tag step this shader accepts (host hint)", Int) = 4
 
         _PlayerID ("Player ID", Int) = -1
         _RTC0 ("RTC0", Int) = 0
@@ -20,23 +17,10 @@ Shader "Nix/shader_vm"
         _Data_RAM_B ("RAM Texture B", 2D) = "black" {}
         _Data_RAM_A ("RAM Texture A", 2D) = "black" {}
 
-        _Data_RAM_RAW ("RAM Texture RAW", 2D) = "black" {}
 
-        _Data_DTB_R ("Device Tree Binary Texture R", 2D) = "black" {}
-        _Data_DTB_G ("Device Tree Binary Texture G", 2D) = "black" {}
-        _Data_DTB_B ("Device Tree Binary Texture B", 2D) = "black" {}
-        _Data_DTB_A ("Device Tree Binary Texture A", 2D) = "black" {}
 
         _Data_ROM ("ROM, a 16-byte texel a pixel (RGBAFloat, read by its bits)", 2D) = "black" {}
 
-        _DoTick ("DEBUG: Perform single step", Int) = 0
-        /* _BreakpointLow ("DEBUG: Breakpoint: Enter single step mode at this PC address (low 16)", Int) = 0 */
-        /* _BreakpointHigh ("DEBUG: Breakpoint: Enter single step mode at this PC address (high 16)", Int) = 0 */
-        /* _BreakpointLowClock ("DEBUG: Breakpoint: Enter single step mode at this clock (low 16)", Int) = 0 */
-        /* _BreakpointHighClock ("DEBUG: Breakpoint: Enter single step mode at this clock (high 16)", Int) = 0 */
-        /* _CheckCSR ("DEBUG: Display CSR", Int) = 0 */
-        /* _CheckMEM ("DEBUG: Display RAM", Int) = 0 */
-        /* [ToggleUI] _CheckMEMraw ("DEBUG: Display RAM raw (not | 0x80000000)", Int) = 0 */
     }
     SubShader
     {
@@ -79,14 +63,13 @@ Shader "Nix/shader_vm"
             #include "crt.cginc"
             #include "UnityCG.cginc"
 
-            float _Init, _InitRaw;
+            float _Init;
             uniform uint _CommitAlways;   // COMMIT_BANDS: bands 0 to 31 drawn every commit (the control words' 28)
 
             Texture2D<float4> _Data_RAM_R;
             Texture2D<float4> _Data_RAM_G;
             Texture2D<float4> _Data_RAM_B;
             Texture2D<float4> _Data_RAM_A;
-            Texture2D<float4> _Data_RAM_RAW;
 
             Texture2D<float4> _Data_ROM;   // the ROM: a 16-byte texel a pixel, read by its bits (asuint)
 
@@ -391,14 +374,6 @@ Shader "Nix/shader_vm"
                 return _SelfTexture2D[pos];
 #endif
 
-                if (_Init && _InitRaw) {
-                    float3 raw[6];
-                    for (uint off = 0; off < 6; off++) {
-                        raw[off] = _Data_RAM_RAW[pos + uint2((off * s_dim.x) % (s_dim.x*3), (off / 3) * s_dim.y)].rgb;
-                    }
-                    uint4 data = unpack_uint4(raw);
-                    return data;
-                }
 
 #ifdef GPU_DEVICE
                 uint4 picture;

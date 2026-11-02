@@ -1125,7 +1125,7 @@ public static partial class ShaderEmuBuilder
 
         List<Texture2D> textures = new List<Texture2D>();
         ShaderEmuImages.BootImage boot = ShaderEmuImages.Images[0];
-        foreach (string part in new[] { "ram", "rom", "tree" })
+        foreach (string part in new[] { "ram", "rom" })
             for (int lane = 0; lane < 4; lane++)
                 // (the ROM is one texture, in place 4: ShaderEmuTexelsImporter)
                 textures.Add(part != "rom" ? AssetDatabase.LoadAssetAtPath<Texture2D>(ShaderEmuImages.LanePath(boot.name, part, lane))

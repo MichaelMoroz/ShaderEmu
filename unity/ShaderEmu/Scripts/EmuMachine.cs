@@ -492,10 +492,6 @@ public class EmuMachine : UdonSharpBehaviour
         machineMaterial.SetTexture("_Data_RAM_A", Pick(3));
         machineMaterial.SetTexture("_Data_ROM", Pick(4));
         tickMaterial.SetTexture("_Data_ROM", Pick(4));
-        tickMaterial.SetTexture("_Data_DTB_R", Pick(8));
-        tickMaterial.SetTexture("_Data_DTB_G", Pick(9));
-        tickMaterial.SetTexture("_Data_DTB_B", Pick(10));
-        tickMaterial.SetTexture("_Data_DTB_A", Pick(11));
         // (a copy out of the ROM is committed as points, and its edges gathered; RAM starts as points)
         pointsMaterial.SetTexture("_Data_ROM", Pick(4));
         gatherMaterial.SetTexture("_Data_ROM", Pick(4));
@@ -592,11 +588,6 @@ public class EmuMachine : UdonSharpBehaviour
         pointsMaterial.SetInt("_Init", 1);
         gatherMaterial.SetInt("_Init", 1);
         BlitsInt("_Init", 1);
-        machineMaterial.SetInt("_InitRaw", 0);
-        tickMaterial.SetInt("_InitRaw", 0);
-        pointsMaterial.SetInt("_InitRaw", 0);
-        BlitsInt("_InitRaw", 0);
-        tickMaterial.SetInt("_DoTick", 0);
         tickMaterial.SetInt("_Ticks", ticks);
         machineMaterial.SetInt("_UartInLo", 0);
         machineMaterial.SetInt("_UartInHi", 0);

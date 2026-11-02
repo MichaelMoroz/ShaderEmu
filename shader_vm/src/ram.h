@@ -398,12 +398,6 @@ uint4 ram_gather_texel(ram_v2f i) {
 #endif
 
 // The 64 state rows after the commit.
-uint4 ram_init_raw(uint2 pos) {
-    float3 raw[6];
-    for (uint off = 0; off < 6; off++)
-        raw[off] = _Data_RAM_RAW[pos + uint2((off * 2048u) % (2048u * 3), (off / 3) * STATE_TEX_HEIGHT)].rgb;
-    return unpack_uint4(raw);
-}
 // A staged copy's place in what its core keeps: the stall stays until its last chunk is made,
 // and its addresses and length move on by a chunk when one is.
 uint4 ram_progress(uint core, uint x, uint4 result) {
@@ -431,7 +425,6 @@ uint4 ram_progress(uint core, uint x, uint4 result) {
 uint4 ram_state_texel(uint2 pos) {
     s_dim = uint2(2048, STATE_TEX_HEIGHT);
     _Data_ROM.GetDimensions(m_dim.x, m_dim.y);
-    if (_Init && _InitRaw) return ram_init_raw(pos);
     uint4 own = _TickState[pos], result;
 #ifdef LANE_FIELD
     // the lanes' field (shader_vm/tick.hlsl): of a lane's texels its place and its count,
@@ -584,7 +577,6 @@ void ram_commit_amp_geom(point amp_d I[1], inout TriangleStream<ram_v2f> stream,
 #endif
 
 uint4 ram_init_texel(uint2 pos) {
-    if (_InitRaw) return ram_init_raw(pos);
     uint lin = RAM_LIN(pos.x, pos.y - 64);
     uint2 ram_dim;
     _Data_RAM_A.GetDimensions(ram_dim.x, ram_dim.y);

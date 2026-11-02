@@ -156,7 +156,7 @@ namespace {
 struct Options {
     std::string rvcDir = "shader_vm";
     std::string payloadDir;  // default <rvc>/data-net
-    std::string ramPrefix = "linux_payload", mtdPrefix = "rootfs", dtbPrefix = "dts";
+    std::string ramPrefix = "linux_payload", mtdPrefix = "rootfs";
     std::string cacheDir = "build/shadercache";
     std::string uartLog;
     std::string dumpState;
@@ -186,7 +186,7 @@ struct Options {
     bool profile = false;
     bool present = false;
     bool viz = false;         // memory view window
-    int uartBurst = 0;        // input characters per handshake; 0 = what the shader declares
+    int uartBurst = 0;        // input characters per handshake; 0: 4
     bool resume = false;      // with no other arguments: resume the shell snapshot instead of booting
     bool tabs = false;        // ask the guest for its console as several terminals (docs/machine/console.md)
     int workers = 0;          // --workers: the small workers' blocks geotune lays out (0 its own pick; 1-3: 2, 4, 8 columns)
@@ -260,7 +260,7 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
 
   --rvc DIR            rvc shader folder (default rvc/_Nix/rvc)
   --payload DIR        folder with the payload PNGs (default <rvc>/data-net)
-  --ram/--mtd/--dtb P  PNG name prefixes in the payload folder (default linux_payload, rootfs, dts;
+  --ram/--mtd P        PNG name prefixes in the payload folder (default linux_payload, rootfs;
                        "none" leaves that texture black)
   --ticks N            emulated instructions per tick pass (default 8192; upstream uses 2048). Large values on a real
                        GPU can trigger a driver timeout (TDR); WARP has no timeout.
@@ -296,11 +296,11 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
   --no-doubles         compile with NO_DOUBLES (shader must support it): timer value from the host,
                        exact integer MULH. Not bit-identical to the double build.
   --define NAME        add a preprocessor define to the shader build (repeatable)
-  --uart-burst N       input characters per handshake (default: the shader's _UartBurst property, else 1)
+  --uart-burst N       input characters per handshake (default 4)
   --viz                open a window showing memory live (writes glow); --no-viz turns it off
   --viz-capture FILE   save the memory view as a BMP at exit
   --resume             when started without other arguments: resume the shell snapshot instead of booting
-  --image NAME|DIR     boot a named image instead of --payload/--ram/--mtd/--dtb; --image list shows them
+  --image NAME|DIR     boot a named image instead of --payload/--ram/--mtd; --image list shows them
                        (shader_vm's tick runs linux-net only; on --cpu the display's shader is all it compiles).
                        DIR: a folder of our Linux without an MMU (a private image, build\\images\\NAME)
                        Without it (and without --payload, --ram or --load-state) a menu asks at start
@@ -442,7 +442,6 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--dxc-dir") o.dxcDir = next("--dxc-dir");
         else if (a == "--ram") { o.ramPrefix = next("--ram"); o.payloadSet = true; }
         else if (a == "--mtd") o.mtdPrefix = next("--mtd");
-        else if (a == "--dtb") o.dtbPrefix = next("--dtb");
         else if (a == "--ticks") { o.ticks = atoi(next("--ticks").c_str()); o.ticksSet = true; }
         else if (a == "--frames") o.maxFrames = strtoull(next("--frames").c_str(), nullptr, 10);
         else if (a == "--seconds") o.maxSeconds = atof(next("--seconds").c_str());
@@ -660,24 +659,23 @@ struct BootImage {
     const char* dir;
     const char* ram;
     const char* mtd;
-    const char* dtb;
     int machine;   // the smallest machine it runs on: 0 full, 1 no paging, 2 machine mode only
 };
 const BootImage kImages[] = {
-    {"linux-net", "Linux with a shell; glxgears runs on the GPU device", "data-net", "linux_payload", "rootfs", "dts", 0},
-    {"linux", "Linux, kernel with built-in initramfs", "data", "linux_payload", "none", "dts", 0},
-    {"micropython", "MicroPython on OpenSBI (bare metal REPL)", "data", "mprv_payload", "none", "dts", 1},
-    {"rust", "Rust test payload on OpenSBI (bare metal)", "data", "rust_payload", "none", "dts", 1},
-    {"gears", "Gears: three lit, textured gears drawn by the GPU device (bare metal C)", nullptr, "gears", "none", "none", 2},
-    {"rects", "GPU test card: 3,600 rectangles in one list, written back to RAM (bare metal C)", nullptr, "rects", "none", "none", 2},
-    {"blend", "GPU test card: the eight passes, blending with and without depth (bare metal C)", nullptr, "blend", "none", "none", 2},
-    {"sound", "Sound test card: every kind of voice for half a second (bare metal C)", nullptr, "sound", "none", "none", 2},
-    {"raycast", "Raycaster: walk a textured maze on the display (bare metal C)", nullptr, "raycast", "none", "none", 2},
-    {"raytrace", "Raytracer drawing to the display (bare metal C)", nullptr, "raytrace", "none", "none", 2},
-    {"classes", "What each kind of instruction costs: loops of one kind, a mark between them (bare metal C)", nullptr, "classes", "none", "none", 0},
-    {"fpcheck", "Float instructions on the fast path: prints a sum to compare between shader builds (bare metal C)", nullptr, "fpcheck", "none", "none", 0},
-    {"rvc-raytrace", "rvc's Rust raytracer, drawing into raw memory", "data", "rust_raytrace", "none", "dts", 1},
-    {"bare", "C bare-metal test (no firmware)", "data", "bare", "none", "dts", 1},
+    {"linux-net", "Linux with a shell; glxgears runs on the GPU device", "data-net", "linux_payload", "rootfs", 0},
+    {"linux", "Linux, kernel with built-in initramfs", "data", "linux_payload", "none", 0},
+    {"micropython", "MicroPython on OpenSBI (bare metal REPL)", "data", "mprv_payload", "none", 1},
+    {"rust", "Rust test payload on OpenSBI (bare metal)", "data", "rust_payload", "none", 1},
+    {"gears", "Gears: three lit, textured gears drawn by the GPU device (bare metal C)", nullptr, "gears", "none", 2},
+    {"rects", "GPU test card: 3,600 rectangles in one list, written back to RAM (bare metal C)", nullptr, "rects", "none", 2},
+    {"blend", "GPU test card: the eight passes, blending with and without depth (bare metal C)", nullptr, "blend", "none", 2},
+    {"sound", "Sound test card: every kind of voice for half a second (bare metal C)", nullptr, "sound", "none", 2},
+    {"raycast", "Raycaster: walk a textured maze on the display (bare metal C)", nullptr, "raycast", "none", 2},
+    {"raytrace", "Raytracer drawing to the display (bare metal C)", nullptr, "raytrace", "none", 2},
+    {"classes", "What each kind of instruction costs: loops of one kind, a mark between them (bare metal C)", nullptr, "classes", "none", 0},
+    {"fpcheck", "Float instructions on the fast path: prints a sum to compare between shader builds (bare metal C)", nullptr, "fpcheck", "none", 0},
+    {"rvc-raytrace", "rvc's Rust raytracer, drawing into raw memory", "data", "rust_raytrace", "none", 1},
+    {"bare", "C bare-metal test (no firmware)", "data", "bare", "none", 1},
 };
 
 // dir = nullptr: one of our programs.
@@ -714,14 +712,12 @@ void applyImage(Options& o, const BootImage& im) {
     o.payloadDir = imageDir(im);
     o.ramPrefix = im.ram;
     o.mtdPrefix = im.mtd;
-    o.dtbPrefix = im.dtb;
     // Our build of the Linux image (tools/make_linux_image.py): upstream's root filesystem with
     // our programs added, and a device tree that keeps the kernel out of the GPU's memory.
     std::error_code ec;
     std::string dir = linuxDir(o);
     if (o.image == "linux-net" && fs::exists(dir + "/rootfs.bin", ec) && fs::exists(dir + "/dts.bin", ec)) {
         o.mtdPrefix = dir + "/rootfs";
-        o.dtbPrefix = dir + "/dts";
         // and our kernel, if it has been built (linux/kernel/build.sh)
         if (fs::exists(dir + "/linux_payload.bin", ec)) {
             o.ramPrefix = dir + "/linux_payload";
@@ -1093,15 +1089,11 @@ int main(int argc, char** argv) {
     std::vector<uint64_t> altN(altDirs.size() + 1), altPicked(altDirs.size() + 1);
     uint64_t altSeen = 0;
     if (!backend.loadPayload(mat, opt.payloadDir, opt.ramPrefix, "_Data_RAM", err) ||
-        !backend.loadPayload(mat, opt.payloadDir, opt.mtdPrefix, "_Data_MTD", err) ||
-        !backend.loadPayload(mat, opt.payloadDir, opt.dtbPrefix, "_Data_DTB", err)) {
+        !backend.loadPayload(mat, opt.payloadDir, opt.mtdPrefix, "_Data_MTD", err)) {
         fprintf(stderr, "[harness] %s\n", err.c_str());
         return 1;
     }
     mat.setInt("_Ticks", opt.ticks);
-    mat.setInt("_TicksDivisor", 1);
-    mat.setInt("_DoTick", 0);
-    mat.setInt("_InitRaw", 0);
     mat.setInt("_UdonUARTInChar", 0);
     mat.setInt("_UdonUARTInTag", 0);
     mat.setVector("unity_OrthoParams", 1, 1, 0, 1);
@@ -1159,7 +1151,7 @@ int main(int argc, char** argv) {
     // A resumed guest is sitting at its prompt; a newline makes it print one.
     if (g_rawConsole && !opt.loadState.empty() && scriptQueue.empty()) scriptQueue.push_back('\r');
 
-    int uartBurst = opt.uartBurst > 0 ? opt.uartBurst : (int)mat.getFloat("_UartBurst", 1);
+    int uartBurst = opt.uartBurst > 0 ? opt.uartBurst : 4;
     if (uartBurst < 1) uartBurst = 1;
     if (uartBurst > 4) uartBurst = 4;
 

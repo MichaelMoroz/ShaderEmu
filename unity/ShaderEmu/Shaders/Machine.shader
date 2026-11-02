@@ -13,7 +13,6 @@ Shader "ShaderEmu/Machine"
         _Stage ("The commit's stage (MachineGather.shader)", 2D) = "black" {}
         _Window ("The rows the control pass drew", 2D) = "black" {}
         [ToggleUI] _Init ("Init", Int) = 0
-        [ToggleUI] _InitRaw ("Init directly from _Data_RAM_RAW", Int) = 0
         _Ticks ("Ticks per Frame", Int) = 2048
 
         _UartInLo ("UART input, characters 1-2", Int) = 0
@@ -25,18 +24,12 @@ Shader "ShaderEmu/Machine"
         _Rtc0Hi ("RTC0 high half", Int) = 0
         _Rtc1Lo ("RTC1 low half", Int) = 0
         _Rtc1Hi ("RTC1 high half", Int) = 0
-        _DoTick ("DEBUG: Perform single step", Int) = 0
 
         _Data_RAM_R ("RAM Texture R", 2D) = "black" {}
         _Data_RAM_G ("RAM Texture G", 2D) = "black" {}
         _Data_RAM_B ("RAM Texture B", 2D) = "black" {}
         _Data_RAM_A ("RAM Texture A", 2D) = "black" {}
-        _Data_RAM_RAW ("RAM Texture RAW", 2D) = "black" {}
 
-        _Data_DTB_R ("Device Tree Binary Texture R", 2D) = "black" {}
-        _Data_DTB_G ("Device Tree Binary Texture G", 2D) = "black" {}
-        _Data_DTB_B ("Device Tree Binary Texture B", 2D) = "black" {}
-        _Data_DTB_A ("Device Tree Binary Texture A", 2D) = "black" {}
 
         _Data_ROM ("ROM, a 16-byte texel a pixel (RGBAFloat, read by its bits)", 2D) = "black" {}
 
