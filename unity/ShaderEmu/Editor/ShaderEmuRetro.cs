@@ -778,12 +778,6 @@ public static partial class ShaderEmuBuilder
             scope.picked = LitUp;
             Apply(scope);
         }
-        foreach (EmuMachine machine in world.GetComponentsInChildren<EmuMachine>(true))
-        {
-            machine.workerPlain = Color.clear;
-            machine.workerPicked = LitUp;
-            Apply(machine);
-        }
         foreach (EmuShareHub hub in world.GetComponentsInChildren<EmuShareHub>(true))
         {
             hub.rowColour = Color.clear;
