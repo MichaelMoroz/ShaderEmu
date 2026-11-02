@@ -254,6 +254,61 @@ void ram_store(uint o, uint v, uint mask) {
         stall = STALL_MEM; budget = 0;
     }
 }
+void ram_store_nc(uint o, uint v, uint mask) {   // ram_store for an o known to be in RAM
+    uint t = o >> 4, wi = (o >> 2) & 3, tag = t + 1, n = 1u << bits, b0 = 0, b1 = 0, f0 = 0, f1 = 0;
+    uint4 tags0 = 0, tags1 = 0;
+    uint at = t == m1_t ? m1_at : t == m2_t ? m2_at : 0;
+    [branch] if (at == 0) {
+        b0 = t & (n - 1);
+        [branch] if (OCC(b0)) tags0 = c[4 * b0];
+        uint e0 = slot(tags0, tag), e1 = 0;
+        f0 = slot(tags0, 0);
+        [branch] if (e0 == 0 && f0 == 0) {
+            b1 = n + H1(t, bits - 1);
+            [branch] if (OCC(b1)) tags1 = c[4 * b1];
+            e1 = slot(tags1, tag); f1 = slot(tags1, 0);
+            [branch] if (e1 == 0 && f1 == 0) {
+                b1 = BUCKET2(t, n);
+                tags1 = 0;
+                [branch] if (OCC(b1)) tags1 = c[4 * b1];
+                e1 = slot(tags1, tag); f1 = slot(tags1, 0);
+            }
+        }
+        at = e0 != 0 ? 4 * b0 + e0 : e1 != 0 ? 4 * b1 + e1 : 0;
+        if (at != 0) remember(t, at);
+    }
+    [branch] if (at != 0 && mask == 0xffffffff) {
+        bloom |= o;
+        [branch] if (wi < 2) { if (wi == 0) c[at].x = v; else c[at].y = v; }
+        else { if (wi == 2) c[at].z = v; else c[at].w = v; }
+        return;
+    }
+    uint4 texel;
+    [branch] if (at != 0) texel = c[at];
+    else {
+        [branch] if (t != dr_t) { dr_v = TEX(RAM_ADDR(t)); dr_t = t; }
+        texel = dr_v;
+    }
+    uint cur = at == 0 && ovf_addr == o && (o & bloom) == o ? ovf_val : idx(texel, wi);
+    uint val = (cur & ~mask) | (v & mask);
+    if (val == cur) return;
+    bloom |= o;
+    dirty |= 1u << ((o >> 22) & 31);
+    texel = put(texel, wi, val);
+    [branch] if (at != 0) {
+        c[at] = texel;
+    } else if (f0 != 0 || f1 != 0) {
+        uint b = f0 != 0 ? b0 : b1, f = f0 != 0 ? f0 : f1;
+        c[4 * b] = put(f0 != 0 ? tags0 : tags1, f - 1, tag);
+        c[4 * b + f] = texel;
+        OCC_SET(b);
+        remember(t, 4 * b + f);
+        absent_t = 0xffffffff;
+    } else {
+        ovf_addr = o; ovf_val = val;   // made by the commit, which ends the pass here
+        stall = STALL_MEM; budget = 0;
+    }
+}
 // a word anywhere (a on a word): RAM, the ROM, the clock chip, the timer
 uint load_word(uint a) {
     [branch] if (a & 0x80000000) {
@@ -463,8 +518,8 @@ uint fast(uint room) {
             [branch] if (opc == 0x23) {
                 // sb sh sw, within one word of RAM
                 uint sa = a + imm_s(w), off = sa & 3;
-                ok = f3 < 3 && (sa & 0x80000000) != 0 && off + (1u << f3) <= 4;
-                [branch] if (ok) ram_store(sa & 0x7ffffffc, b << (off * 8), (f3 == 2 ? 0xffffffff : f3 == 1 ? 0xffff : 0xff) << (off * 8));
+                ok = f3 < 3 && (sa ^ 0x80000000) < RAM_MAX && off + (1u << f3) <= 4;
+                [branch] if (ok) ram_store_nc(sa & 0x7ffffffc, b << (off * 8), (f3 == 2 ? 0xffffffff : f3 == 1 ? 0xffff : 0xff) << (off * 8));
                 dst = 64;
             } else [branch] if (opc == 0x53) {
                 // (opcode 0x53 before flw and fsw: a program has more of them) floats: a sum, a difference, a product, and the light ones; the rest are the general step's
@@ -490,8 +545,8 @@ uint fast(uint room) {
             } else {
                 // fsw, a word of RAM
                 uint sa = a + imm_s(w);
-                ok = f3 == 2 && (sa & 0x80000003) == 0x80000000;
-                [branch] if (ok) ram_store(sa & 0x7ffffffc, xr[32 + rs2], 0xffffffff);
+                ok = f3 == 2 && (sa & 0x80000003) == 0x80000000 && (sa & 0x7ffffffc) < RAM_MAX;
+                [branch] if (ok) ram_store_nc(sa & 0x7ffffffc, xr[32 + rs2], 0xffffffff);
                 dst = 64;
             }
         } else [branch] if (opc == 0x63) {
@@ -511,7 +566,7 @@ uint fast(uint room) {
             ok = a != 0 && (a & 0x80000003) == 0x80000000 && o < RAM_MAX && f5 < 16 && ((0x111fu >> f5) & 1) != 0 && (!lr || rs2 == 0);
             [branch] if (ok) {
                 uint old = sc ? 0 : ram_word(o);
-                [branch] if (sc ? sc_ok : !lr) ram_store(o, f5 == 0 ? old + b : f5 == 4 ? old ^ b : f5 == 8 ? old | b : f5 == 12 ? old & b : b, 0xffffffff);
+                [branch] if (sc ? sc_ok : !lr) ram_store_nc(o, f5 == 0 ? old + b : f5 == 4 ? old ^ b : f5 == 8 ? old | b : f5 == 12 ? old & b : b, 0xffffffff);
                 res_en = lr ? 1 : sc && sc_ok ? 0 : res_en;
                 res_addr = lr ? a : res_addr;
                 v = sc ? (sc_ok ? 0 : 1) : old;
