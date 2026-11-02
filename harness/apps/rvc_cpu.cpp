@@ -1204,13 +1204,12 @@ static __declspec(noinline) int general_step(Core& c, u32 ins) {
         u32 imm = ((i32)ins >> 31 << 12) | ((ins << 4) & 0x800) | ((ins >> 20) & 0x7e0) | ((ins >> 7) & 0x1e);
         bool take = false;
         switch (f3) {
-        case 0: take = a == b; break;
-        case 1: take = a != b; break;
+        case 0: case 2: take = a == b; break;   // (funct3 2 and 3 are beq and bne, as the tick makes them)
+        case 1: case 3: take = a != b; break;
         case 4: take = (i32)a < (i32)b; break;
         case 5: take = (i32)a >= (i32)b; break;
         case 6: take = a < b; break;
         case 7: take = a >= b; break;
-        default: illegal = true;
         }
         if (take) next = pc + imm;
         write = false;

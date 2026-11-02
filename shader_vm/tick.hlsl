@@ -554,7 +554,7 @@ uint fast(uint room) {
         } else [branch] if (opc == 0x63) {
             bool lt = (f3 & 2) ? a < b : asint(a) < asint(b);
             next = (((f3 & 4) ? lt : a == b) != ((f3 & 1) != 0)) ? pc + imm_b(w) : next;
-            ok = (f3 & 6) != 2 && (next & 3) == 0;
+            ok = (w & 0x100) == 0;   // (funct3 2 and 3 are beq and bne; an offset not on a word, told by the word, the general step's)
             dst = 64;
         } else [branch] if (opc == 0x37 || opc == 0x17 || opc == 0x6f || (opc == 0x67 && f3 == 0)) {
             bool jump = (w & 0x40) != 0;
@@ -633,7 +633,6 @@ void step() {
     } else [branch] if (opc == 0x63) {
         bool lt = (f3 & 2) ? a < b : asint(a) < asint(b);
         next = (((f3 & 4) ? lt : a == b) != ((f3 & 1) != 0)) ? pc + imm_b(w) : next;
-        if ((f3 & 6) == 2) raise(2, w);
         dst = 64;
     } else [branch] if (opc == 0x37 || opc == 0x17 || opc == 0x6f || (opc == 0x67 && f3 == 0)) {
         v = (w & 0x40) ? pc + 4 : (w & 0xfffff000) + (opc == 0x17 ? pc : 0);
