@@ -1,6 +1,6 @@
 # Plan: the tick made simpler, and RAM in pairs
 
-Written 2 November 2026, nothing of it built. All on a branch, `tick-simple`, each stage a commit or a few, `main` untouched
+Written 2 November 2026; done, and merged into `main` the same day (below). All on a branch, `tick-simple`, each stage a commit or a few, `main` untouched
 until the whole is measured. Numbers here are from one RTX 3090, this date. Optimizations are weighed together: a stage that
 loses alone is kept aside and tried again with the later ones, not dropped.
 
@@ -16,7 +16,8 @@ Numbers are one RTX 3090. Wall a frame or tick time, against the stage before, o
 | 4 | One row of cores, geotune out | Shell -1.7%, Doom -1.8%, Quake -2.5%, `nxray` -11.6%, `nxphys` -11.7%, the commit a third cheaper |
 | 5 | The ROM from its first row, RAM's image one texture | Level: these loads hardly read the ROM |
 | 6a | Every way of pairing, through the mirror | Below |
-| 6 | The port | **Not started**, by the rule of 6a |
+| 6 | The port, made after all (branch `ram-pairs`, not merged) | No clear win, in all-core MIPS: shell 4.14 to 4.09, Quake 7.06 to 7.12, Quake III 7.19 to 7.13, `nxray` 752 to 672. The ROM alone in pairs: level; RAM alone: worse; RAM above the devices only: level. Rows stay |
+| 7 | The tick cleaned up (`f8710181`, `cf2b4a30`) | Dead code and toggles out, the unpack in `unpack.hlsl`, `--tick-split` gone, the general step only for what the fast loop does not take, `fp_all` by branches: Quake 2.008 to 1.957 ms a tick, shell 1.939 to 1.814, 6,618 to 6,229 lines of bytecode. Tried and lost: `load_state` in two loops (+3% Quake), `xr` under `static_noinit` (level), a tree in `csr_read`/`csr_write` (mixed) |
 
 **Where stage 4 differs from the plan.** RAM stays at row 64 and the field's state is in tiles 5 and 6 of the slots, which no row had to move for. Workers are 2^5 at most, so decision 2 is 2^5.
 A worker's texels are in tiles, not rows (rows: Quake 50% slower). After the stage, one triangle over the targets with what no core runs discarded (Quake -0.5%, `nxphys` -2.7%, `nxray` -5.7%; a warp is 4 x 8 pixels of one core, by `InterlockedAdd`) made `TICK_GAP` needless (decision 3: Quake +0.4% without, 26% under quads), so the targets are 2048 x 16.
@@ -44,7 +45,7 @@ Half-Life's data is not in an image made without WSL, so it is not among them. T
 
 **Why no port.** On the games the best simple map is Doom +1.6, Quake -1.9, Quake III -0.5: about nothing, and the rule was that stage 6 does not start then. The port touches every device row, host readback and Unity pass, and AMD and Intel may gain nothing. Worth trying again if a program that matters looks like the shell loop or `nxray`, or the fetch changes. The mirror is in git nowhere: it is `RVC_MIRROR` in a patch, and is simple to make again from this.
 
-**Not done or not known.** No Unity project is on this computer, so nothing of Unity was compiled or run: the editor scripts, `EmuMachine` and the shaders need "Sync shader sources", "Import boot images" (`_ram.texels`), the world built anew and fxc2's `bin/unity`. The kernel was not rebuilt (no WSL): nothing needs it, but `linux/userland` and `programs/mc` changed in source only (`geotune` out of `emuinit`), and the prebuilt `emuinit` still looks for it and goes on. Decision 1 needs an AMD and an Intel card, so the ROM stays RGBAFloat. Nothing here ran on such a card.
+**Unity** (D:\VRChat\ShaderEmu, the editor with fxc2's `bin/unity` in an overlay copy): the shaders compile with 0 errors and the world boots and runs Quake. In the open editor, Game view in front, Quake at e1m1, 8 rounds a frame: `tick-simple` 20.66 ms a frame (6.46 MIPS all cores) against `main` 21.80 ms (6.24), one run each; with the cleanup, in batch mode, 18.4 ms. Two things learnt: a scene changed by a script must be marked dirty or `SaveOpenScenes` skips it (the world then loaded the old textures and never booted), and `totalInstructions` is core 0's alone (add `totalWorkerInstructions`). The kernel was not rebuilt (no WSL): nothing needs it, but `linux/userland` and `programs/mc` changed in source only (`geotune` out of `emuinit`), and the prebuilt `emuinit` still looks for it and goes on. Decision 1 is closed: the ROM stays RGBAFloat (no AMD or Intel card is to hand, and none will be sought).
 
 ## What is known
 
