@@ -163,6 +163,7 @@ void seglSize( int *width, int *height );
 #define REG_INPUT 0x20      // the machine's input words: the pointer, its buttons, the keys' count (docs/machine/input.md)
 #define REG_CLOCK 0x34      // its clock in milliseconds
 
+struct se_asks_t { unsigned fn[64], n, unused[3]; } se_asks;   // (what gl_shaderemu.c reads of Half-Life's server: never written here)
 static GR_WINDOW_ID se_window;
 static void se_input( void );
 static int se_win_w = 640, se_win_h = 480;
@@ -276,6 +277,14 @@ void WIN_Present( window_t *window )
 			Cvar_VariableIntegerValue( "cl_paused" ) ? ", paused" : "", Cvar_VariableIntegerValue( "sv_paused" ) ? ", server paused" : "" );
 		se_window_start = now;
 		se_window_instructions = ins;
+#ifdef SE_WINDOW
+		if ( jk2glOn() ) {     // the GPU's memory: textures in it, and how many found no room; vertices drawn since
+			unsigned in_gpu, size, left_out, vertices;
+			jk2glStats( &in_gpu, &size, &left_out, &vertices );
+			Com_Printf( "jk2gpu: textures %u of %u KB, %u left out, %u vertices a frame\n", in_gpu >> 10, size >> 10, left_out,
+				vertices / ( se_stats_every > 0 ? se_stats_every : 1 ) );
+		}
+#endif
 		se_window_frames = 0;
 	}
 	// JK2_AT="FRAME:COMMAND;FRAME:COMMAND": console commands at those frames (a scripted run: "900:load auto")

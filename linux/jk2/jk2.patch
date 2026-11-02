@@ -297,7 +297,7 @@ index a0f0ace4..e1a2ddd9 100644
  	qboolean			(*SND_RegisterAudio_LevelLoadEnd)	( qboolean bDeleteEverythingNotUsedThisLevel );
  
 diff --git a/code/rd-vanilla/tr_WorldEffects.cpp b/code/rd-vanilla/tr_WorldEffects.cpp
-index 5464b70b..ec55f290 100644
+index 5464b70b..6e6d897a 100644
 --- a/code/rd-vanilla/tr_WorldEffects.cpp
 +++ b/code/rd-vanilla/tr_WorldEffects.cpp
 @@ -428,8 +428,21 @@
@@ -348,7 +348,7 @@ index 5464b70b..ec55f290 100644
  
  			// Iterate Over All Weather Zones
  			//--------------------------------
-@@ -744,6 +766,30 @@
+@@ -744,6 +766,56 @@
  					Mins[x] += (POINTCACHE_CELL_SIZE/2);
  				}
  
@@ -373,13 +373,39 @@ index 5464b70b..ec55f290 100644
 +						Com_Error (ERR_DROP, "Weather Effect: Both Indoor and Outdoor brushs encountered in map.\n" );
 +						return;
 +					}
++					// JK2_WEATHER_CHECK=1: the points asked one by one too, as before, and the words that differ counted
++					if ( getenv( "JK2_WEATHER_CHECK" ) )
++					{
++						int words = wz.miPointCacheByteSize / 4, wrong = 0;
++						uint32_t *grid = (uint32_t *)malloc( wz.miPointCacheByteSize );
++						memcpy( grid, wz.mPointCache, wz.miPointCacheByteSize );
++						memset( wz.mPointCache, 0, wz.miPointCacheByteSize );
++						for(z = 0; z < wz.mDepth; z++)
++							for(q = 0; q < 32; q++)
++								for(x = 0; x < wz.mWidth; x++)
++									for(y = 0; y < wz.mHeight; y++)
++									{
++										CurPos[0] = x			* POINTCACHE_CELL_SIZE;
++										CurPos[1] = y			* POINTCACHE_CELL_SIZE;
++										CurPos[2] = ((z << 5) + q)	* POINTCACHE_CELL_SIZE;
++										CurPos	  += Mins;
++										contents = ri.CM_PointContents(CurPos.v, 0);
++										if (contents&CONTENTS_INSIDE || contents&CONTENTS_OUTSIDE)
++											wz.mPointCache[((z * wz.mWidth * wz.mHeight) + (y * wz.mWidth) + x)] |= (1u << q);
++									}
++						for ( int i = 0; i < words; i++ )
++							wrong += wz.mPointCache[i] != grid[i];
++						Com_Printf( "jk2: the weather's cache of zone %d, %d x %d x %d points: %d of %d words wrong, %d points outside, %d inside\n",
++							zone, wz.mWidth, wz.mHeight, wz.mDepth << 5, wrong, words, scan.outside, scan.inside );
++						free( grid );
++					}
 +				}
 +				if ( 0 )
 +#endif
  
  				// Start Scanning
  				//----------------
-@@ -879,6 +925,19 @@
+@@ -879,6 +951,19 @@
  	}
  };
  COutside			mOutside;
@@ -399,7 +425,7 @@ index 5464b70b..ec55f290 100644
  bool				COutside::SWeatherZone::mMarkedOutside = false;
  
  
-@@ -1035,7 +1094,13 @@
+@@ -1035,7 +1120,13 @@
  		mImage = R_FindImageFile(texturePath, qfalse, qfalse, qfalse, GL_CLAMP);
  		if (!mImage)
  		{

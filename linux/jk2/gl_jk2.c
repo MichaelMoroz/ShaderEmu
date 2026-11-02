@@ -9,7 +9,7 @@
 int SE_RenderWho(void) { return 0; }
 int SE_RenderOut(void) { return 0; }
 uint32_t SE_RenderOnCore0(uint32_t (*fn)(void*), void* args) { return fn(args); }
-struct se_asks_t { unsigned fn[64], n, unused[3]; } se_asks;
+// (se_asks, which gl_shaderemu.c names in a block of its own, is defined in sys_shaderemu.cpp)
 
 static int on;   // the window is open and the GPU draws
 int jk2glOn(void) { return on; }
@@ -17,7 +17,7 @@ int jk2glOn(void) { return on; }
 int jk2glOpen(unsigned window) {
     if (on) return 0;
     if (!getenv("HLGL_WORKERS")) setenv("HLGL_WORKERS", "0", 0);   // (none yet: textures are converted by this core)
-    if (!getenv("HL_POOL_MB")) setenv("HL_POOL_MB", "24", 0);
+    if (!getenv("HL_POOL_MB")) setenv("HL_POOL_MB", "36", 0);   // (the demo's level and menus at r_picmip 2: 31.6 MB)
     if (hlglOpen(window) < 0) return -1;
     on = 1;
     return 0;
@@ -105,7 +105,9 @@ void jk2_glGetIntegerv(GLenum name, GLint* v) {
     switch (name) {
     case 0x84E2: *v = 1; return;              // GL_MAX_TEXTURE_UNITS_ARB: one, the renderer's plain paths
     case 0x0D05: case 0x0CF5: *v = 4; return; // GL_PACK_ALIGNMENT, GL_UNPACK_ALIGNMENT (0 made the screenshot of a save divide by it)
-    case 0x0D33: *v = on ? 1024 : 2048; return;   // GL_MAX_TEXTURE_SIZE (as nullgl.c without a window)
+    // GL_MAX_TEXTURE_SIZE: 512 on the GPU (the menus' and loading screens' pictures of 1,024 were 12 of its 24 MB, and
+    // the window is 640 wide); without a window as nullgl.c
+    case 0x0D33: *v = on ? 512 : 2048; return;
     }
     if (on) s_glGetIntegerv(name, v);
     else if (name == 0x0BA2) v[0] = v[1] = 0, v[2] = 640, v[3] = 480;
