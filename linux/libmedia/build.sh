@@ -81,4 +81,6 @@ done
 for p in $pids; do wait $p; done
 gcc -O2 -w $INC $(for f in $PICTURES $AUDIO $VIDEO; do echo "$BUILD/host/$f.o"; done) "$HERE/test/mcw_host.c" "$HERE/test/media_test.c" \
     -lpthread -lm -o "$BUILD/media_test-host"
+# a cabinet's unpacking (linux/apps/cab.h) the same way, to be compared with 7-Zip's (docs/system/install.md)
+gcc -O2 -w $INC $(for f in $PICTURES $AUDIO $VIDEO; do echo "$BUILD/host/$f.o"; done) "$HERE/test/mcw_host.c" "$HERE/test/cab_test.c"     -lpthread -lm -o "$BUILD/cab_test-host"
 ls -l "$OUT/lib/libmedia.a" "$OUT/bin/media_test"

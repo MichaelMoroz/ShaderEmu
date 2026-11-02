@@ -245,7 +245,9 @@ The canonical 2D driver is `linux/openttd/shaderemu_v.cpp` (and Doom's `doom_vid
   pool on first play.
 - **Play from the ROM where the file lies**: `snd_rom(fd, first_bytes, n)` gives a ROM file's
   physical address (Quake's WAVs inside the pak, Doom's WAD lumps, Micropolis's `sounds.bin`). 16-bit samples must lie on an
-  even address: Age of Empires' `make_data.py` writes its DRS files anew with padding for that.
+  even address: Age of Empires copies such a wave of the trial's own DRS files once, at its load (`port/sound.cpp`). A file
+  in tmpfs mapped is where it lies too (its address is the card's). Data whose licence allows only the whole, unchanged
+  package goes in as its installer and is unpacked in the machine after the licence is accepted (`docs/system/install.md`).
 - **Pack at build time** into what the card plays: IMA ADPCM with a checkpoint every 32 samples
   (`tools/make_tdawn_sound.py`, ClassiCube's `sound/adpcm_encode.c`, Half-Life's `repack.py`),
   or unsigned bytes decoded by libmedia's host build (`$WORK/src/libmedia/media_test-host`).

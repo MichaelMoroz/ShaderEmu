@@ -102,7 +102,10 @@ then "Sync shader sources from the repository" and "Import boot images from the 
 - tmpfs is ramfs without the MMU, and it is the writable layer of the root's overlay. It has
   `RENAME_WHITEOUT` and `trusted.*` attributes as shmem has them (`patch_ramfs.py`), and the
   overlay has `redirect_dir`: a file or a folder of the ROM is renamed, moved and removed in
-  place. An attribute costs about 60 bytes of slab, on what was copied up or renamed.
+  place. An attribute costs about 60 bytes of slab, on what was copied up or renamed. A file truncated up from nothing
+  gets its pages in one run, so that it can be mapped shared and written in place: the kernel took one buddy block,
+  4 MB at most, and now takes the first run of free pages long enough when the file is larger or no block is free
+  (`patch_ramfs.py`; the installers' 64 MB pak, `docs/system/install.md`).
 - A program's whole memory is taken at its start: its data, bss and stack, and every anonymous
   mapping, cleared. A worker program gives its workers' stacks back when it closes them
   (`mcw_close`); a large pool is mapped at its size, not `calloc`'d (Quake III's zone and hunk).

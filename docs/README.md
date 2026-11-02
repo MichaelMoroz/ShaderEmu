@@ -30,6 +30,7 @@ One file per subject. A doc names another by its file name, which is unique acro
 - [terminal.md](system/terminal.md) – Terminal programs
 - [ports.md](system/ports.md) – Ports: upstream's network and system programs
 - [media.md](system/media.md) – libmedia: pictures, sound and films on the worker cores
+- [install.md](system/install.md) – a game's installer kept as its maker shipped it, its licence accepted and its files unpacked in the machine (cabinst)
 - [lan.md](system/lan.md) – The network: TCP/IP between machines
 - [fetch.md](system/fetch.md) – Fetch: pages from the host
 - [persist.md](system/persist.md) – Persist: a folder the host keeps between sessions

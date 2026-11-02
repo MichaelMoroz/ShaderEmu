@@ -40,14 +40,15 @@ build_one() {
     # makes its strips there: the library every program has for them
     [ $p = nxview ] || [ $p = nxmon ] || [ $p = nxpaint ] || [ $p = nxweb ] && more="-I$REPO/programs/mc $REPO/programs/mc/mcw.c"
     # pictures of every kind, decoded and encoded on the worker cores (linux/libmedia, docs/system/media.md)
-    case $p in nxview|nxpaint|nxfiles|nxsettings|nxicon|nxweb)
+    # (cabinst: a game's installer unpacked on them, docs/system/install.md)
+    case $p in nxview|nxpaint|nxfiles|nxsettings|nxicon|nxweb|cabinst)
         more="-I$REPO/linux/libmedia -I$REPO/programs/mc $MEDIA $WORK/src/libmedia/mcw.o $WORK/src/libmedia/mcwx.o -lm -Wl,--gc-sections" ;;
     esac
     rv32-cc -O2 -Wall -Wno-unused-function -I"$MW/src/include" -I"$HERE/../userland" "$HERE/$p.c" $more "$MW/src/lib/libnano-X.a" -o "$WORK/src/apps/$p"
     riscv32-linux-strip -o "$OUT/bin/$p" "$WORK/src/apps/$p"
 }
 pids=()
-for p in nxedit nxfiles nxpaint nxview nxsettings nxmon nxweb nxkey nxfuzz nxicon nxask nxnet open nxpersist nxreg nxtetris nxmine nxpinball nxeyes nxclock nxterm nxcalc; do
+for p in nxedit nxfiles nxpaint nxview nxsettings nxmon nxweb nxkey nxfuzz nxicon nxask nxnet open nxpersist nxreg nxtetris nxmine nxpinball nxeyes nxclock nxterm nxcalc cabinst; do
     build_one $p & pids+=($!)
 done
 # archives unpacked on the worker cores (unarc.c: open --unpack runs it first, docs/system/open.md)

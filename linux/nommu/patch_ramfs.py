@@ -98,4 +98,46 @@ change(F, '\t.drop_inode\t= generic_delete_inode,\n\t.show_options\t= ramfs_show
        '.evict_inode\t= ramfs_evict_inode,')
 change(F, '\tsb->s_op\t\t= &ramfs_ops;\n', '\tsb->s_op\t\t= &ramfs_ops;\n\tsb->s_xattr\t\t= ramfs_xattr_handlers;\n',
        'ramfs_xattr_handlers;\n')
-print('ramfs: whiteouts and trusted xattrs')
+# A file truncated up from nothing gets its pages in one run, so that it can be mapped shared and written in place (the
+# installers' unpacking, linux/apps/cabinst.c: workers write a 64 MB pak straight into its pages). The kernel's way is one
+# buddy block, at most MAX_ORDER - 1 (4 MB); larger takes the first run of free pages (alloc_pages_run, patch_drivers.py),
+# pages one by one as split_page leaves them.
+N = 'fs/ramfs/file-nommu.c'
+change(N, '''	/* make various checks */
+	order = get_order(newsize);
+	if (unlikely(order >= MAX_ORDER))
+		return -EFBIG;
+''', '''	/* make various checks (ShaderEmu: a run of pages past the largest block) */
+	order = get_order(newsize);
+	if (unlikely(order >= MAX_ORDER) && newsize > ((size_t)256 << 20))
+		return -EFBIG;
+''', 'ShaderEmu: a run of pages')
+change(N, '''	pages = alloc_pages(gfp, order);
+	if (!pages)
+		return -ENOMEM;
+
+	/* split the high-order page into an array of single pages */
+	xpages = 1UL << order;
+	npages = (newsize + PAGE_SIZE - 1) >> PAGE_SHIFT;
+
+	split_page(pages, order);
+''', '''	npages = (newsize + PAGE_SIZE - 1) >> PAGE_SHIFT;
+	pages = order < MAX_ORDER ? alloc_pages(gfp | __GFP_NOWARN, order) : NULL;
+	if (pages) {
+		/* split the high-order page into an array of single pages */
+		xpages = 1UL << order;
+		split_page(pages, order);
+	} else {
+		/* larger than a block, or no block that large free: a run */
+		void *run = alloc_pages_run(npages);
+
+		if (!run)
+			return -ENOMEM;
+		pages = virt_to_page(run);
+		xpages = npages;
+	}
+''', 'void *run = alloc_pages_run(npages);')
+change(N, 'int ramfs_nommu_expand_for_mapping(struct inode *inode, size_t newsize)\n',
+       'void *alloc_pages_run(unsigned long nr);\n\nint ramfs_nommu_expand_for_mapping(struct inode *inode, size_t newsize)\n',
+       'void *alloc_pages_run(unsigned long nr);\n\nint ramfs_nommu')
+print('ramfs: whiteouts and trusted xattrs, a large file in one run of pages')

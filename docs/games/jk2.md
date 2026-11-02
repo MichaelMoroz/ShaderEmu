@@ -15,7 +15,8 @@ and the load to the level 11.5 billion. It goes into private images only.
     python linux/jk2/survey.py PAK                                        (what the demo's pak holds)
     python linux/jk2/draws.py TREE                                        (calls drawing two random numbers: must say 0)
 
-In the guest (a private image with `/usr/share/jk2/base/assets0.pk3` and the program, "A private image"): `nano-X -p &
+In the guest (a private image with the installer `/usr/share/jk2/jk2demo.exe` and the program, "A private image"; the
+starter unpacks the pak first, "The demo in the machine"): `nano-X -p &
 jk2` for the menu, `jk2 +map demo` for the level; with no window system it draws nothing (the sums' runs): `JK2_FRAMES=4000
 JK2_SUM=400 JK2_SEED=7 jk2 +set fixedtime 50 +set com_maxfps 0 +map demo`.
 
@@ -23,9 +24,12 @@ JK2_SUM=400 JK2_SEED=7 jk2 +set fixedtime 50 +set com_maxfps 0 +map demo`.
 
 ## The demo's data
 
-Nothing of it is in the repository. `linux/jk2/data.py` fetches it into `~/.cache/shaderemu/jk2/demo` only with
-`--accept-eula`, checks it, and takes its pak and licence out of the installer itself (the installer is a Microsoft
-cabinet behind a program: data.py reads the cabinet's MSZIP blocks with Python's zlib, and nothing of it is run).
+Nothing of it is in the repository. `linux/jk2/data.py` fetches the installer into `~/.cache/shaderemu/jk2/demo` and
+checks it. **An image gets the installer itself, byte for byte** (`/usr/share/jk2/jk2demo.exe`, since 2 November 2026):
+the machine shows its licence, read out of it, and unpacks the pak into memory once it is accepted there ("The demo in
+the machine", `docs/system/install.md`). Only for the build computer's own program (`data.py fetch` and `host`, with
+`--accept-eula`) are the pak and licence taken out of it on this side (the installer is a Microsoft cabinet behind a
+program: data.py reads the cabinet's MSZIP blocks with Python's zlib, and nothing of it is run).
 
 | | |
 |---|---|
@@ -39,8 +43,8 @@ given or sent to others only in its original form and for no money or other cons
 modified, have files added or deleted, and no new levels or derivative works may be made from it; no decompiling or
 reverse engineering of the demo except as the law permits; no warranty. So:
 
-- An image with the pak **byte for byte as it is**, at no charge, is the nearest the licence comes to allowing; but an
-  image is not "the Demo in its original form", so whether it may go into the world is the owner's call (as the plan says).
+- The owner's decision (2 November 2026): an image holds the installer unchanged, the demo in its original form, and
+  it is unpacked in the machine after the licence is accepted there. (Before, an image held the pak taken out of it.)
 - A **baked** file like Quake III's `quake3-se.dat` (pictures halved and re-encoded, sounds packed for the card, the
   level re-cut) is a modified and derived file of the demo: the licence's words forbid it, even made on the user's own
   computer. Until the owner decides, the port reads the pak as it is and converts at load time, in the machine
@@ -177,7 +181,7 @@ home folder a run left behind (its `openjo_sp.cfg` and autosave) changed the nex
 The build computer is built with the machine's float flags (`-fsingle-precision-constant -ffp-contract=off
 -fno-math-errno`); its libm and musl's may differ in a last bit, which the eighths are for: no such difference showed.
 
-**The tests** (`tools/test_all.py jk2 jk2-sums`, tagged `long`, on an image with the demo's pak: an image without it
+**The tests** (`tools/test_all.py jk2 jk2-sums`, tagged `long`, on an image with the demo's installer, its pak unpacked first with the licence answered on the terminal: an image without it
 says `JK2-NO-DATA` and passes). `jk2-sums` is the run above (4,000 frames, the last two lines; 235 s on `rvc_cpu`).
 `jk2` plays the start from the menu by a script of keys (`JK2_KEYS`): Enter on New, the pointer on Begin Game and a
 click, the opening scene, then forward for 200 frames, a turn, forward again and a shot; the player dies after it and
@@ -424,8 +428,25 @@ The owner chose on 2 November 2026 to go on past step 1's gate. Steps 2 and 4 ha
 5. **The player's own view checked**: HUD, hands and saber, in a capture after the opening scene with the player alive.
 6. **In** (step 6): `image.py --jk2`/`JK2_IMAGE=1` calling `data.py`, `AGENTS.md`'s line.
 
-**For the owner:** whether an image with the demo's pak may go into the world, and whether the pak may be baked
-(converted) on the build computer at all, given the licence's "no modified files, no derivative works" (above).
+**For the owner:** whether the pak may be baked (converted) on the build computer at all, given the licence's "no
+modified files, no derivative works" (above). An image holds the installer unchanged since 2 November 2026 (below).
+
+## The demo in the machine
+
+The starter runs `cabinst` (`docs/system/install.md`) before the game: `Disk1\Install\license.txt` read out of the
+installer and shown in a window (on the terminal without a window system), Accept only once it has been scrolled to its
+end, the registry's `jk2.eula` keeping an acceptance; then the pak, 64,001,989 bytes, unpacked on the workers into a
+tmpfs file mapped in place, `/tmp/jk2/base/assets0.pk3`, every session, and the game started with `fs_basepath /tmp/jk2`.
+`jk2 --unpack` does only that. On the card (2 November 2026): the licence 0.89 s, the pak 6.69 s (the folder's 74.2 MB
+inflated, 255 workers), `jk2 --unpack` from the command to its end 12.3 s. Its CRC-32 is 7-Zip's, `239abc19`.
+
+**Does it play with the pak in RAM?** Yes, measured: `jk2-sums`' run at frame 4,000 (`jk2stat`) had 69,360 KB free with
+64,036 KB cached (the pak, which tmpfs cannot drop), where the pak in the ROM left 79,144 KB free and 54,220 KB cached
+(the pak's pages read, which the kernel can drop); 183,228 KB were free at the shell after the unpack. The nine sums of
+`host_sum.sh` are the same, and `jk2` (the keys' script) and `jk2-sums` pass, the licence answered on the terminal. So
+the pak is not read by blocks out of the installer: that way (each block's start and the windows to start from kept a
+session) was not needed. `test_all.py jk2-install` is the first start on the desktop: Accept refused, the text scrolled
+to its end, accepted, the bar to the end, the pak's CRC-32.
 
 ## Not done
 
@@ -440,7 +461,7 @@ variables are not put back at a `vid_restart` as the game's are.
 
     wsl -- bash -c 'HOME=~/agents/X JK2_OUT=DIR bash linux/nommu/build.sh jk2/build.sh && python3 linux/nommu/flat.py DIR'
     cp -r build/nommu/flatroot ROOT                     (of the main checkout)
-    JK2_PROGRAM=DIR python linux/jk2/data.py ROOT --accept-eula
+    JK2_PROGRAM=DIR python linux/jk2/data.py ROOT                   (the installer, unchanged, and the program)
     python linux/nommu/image.py jk2 ROOT build/nommu/Image
 
 (A worktree needs `build\images\linux` and `rvc` of the main checkout, a junction each.)

@@ -1,15 +1,16 @@
 """Star Wars Jedi Knight II: Jedi Outcast's 2002 demo, only when asked (docs/games/jk2.md, "The demo's data"): the
-official installer fetched and checked against its sums into a cache outside the tree, its one pak and its licence
-taken out of it (the installer is a Microsoft cabinet with a program in front; nothing of it is run), and checked
-again. Nothing of it goes into the repository or linux/prebuilt. By asking for it with --accept-eula the user
-accepts the demo's licence, which is printed (license.txt, LucasArts 2002: copies only in its original form and for
-no money; no changed or added files, no new levels or derived works).
+official installer fetched and checked against its sums into a cache outside the tree. Nothing of it goes into the
+repository or linux/prebuilt. An image gets the installer itself, byte for byte (the licence, license.txt, LucasArts
+2002: copies only in its original form and for no money; no changed or added files, no new levels or derived works):
+the machine shows its licence, and unpacks its pak into memory once it is accepted (cabinst, docs/system/install.md).
+For the build computer's own program the pak is taken out of it here (it is a Microsoft cabinet with a program in
+front; nothing of it is run), only with --accept-eula, which accepts the licence.
    python linux/jk2/data.py fetch --accept-eula          the cache: jk2demo.exe, then base/assets0.pk3 and license.txt
    python linux/jk2/data.py host DIR --accept-eula       DIR/base/assets0.pk3 (a link where it can be), for the build
                                                         computer's program (JK2_HOST=1 linux/jk2/build.sh)
-   python linux/jk2/data.py OVERLAY --accept-eula        a private image's overlay: the pak in usr/share/jk2/base, and
+   python linux/jk2/data.py OVERLAY                      a private image's overlay: the installer in usr/share/jk2, and
                                                         the program (usr/bin/jk2.bin, usr/bin/jk2) from $JK2_PROGRAM or
-                                                        program.sh (written, not yet run: docs/games/jk2.md)
+                                                        program.sh
 Exit 0: done. 3: something is missing, and a line says what; OVERLAY is then as it was.
    JK2_CACHE    the cache (~/.cache/shaderemu/jk2/demo)
    JK2_URL      where the installer comes from (the Internet Archive's copy of LucasArts' download)
@@ -218,37 +219,43 @@ def put(src, dst):
 
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith('--')]
-    if not args or '--accept-eula' not in sys.argv:
+    if not args:
         print(__doc__)
-        print('jk2: nothing done: the demo is fetched only with --accept-eula, which accepts its licence.')
+        return 2
+    if args[0] in ('fetch', 'host') and '--accept-eula' not in sys.argv:
+        print(__doc__)
+        print('jk2: nothing done: the pak is taken out of the installer on this computer only with --accept-eula, which '
+              'accepts its licence.')
         return 2
     cache = os.environ.get('JK2_CACHE') or os.path.join(os.path.expanduser('~'), '.cache', 'shaderemu', 'jk2', 'demo')
     os.makedirs(cache, exist_ok=True)
     try:
-        pak, licence = demo(cache)
-        print('jk2: the demo\'s licence, accepted by --accept-eula:', licence)
-        if args[0] == 'fetch':
-            print('jk2: in the cache:', pak)
-            return 0
-        if args[0] == 'host':
+        if args[0] in ('fetch', 'host'):
+            pak, licence = demo(cache)
+            print('jk2: the demo\'s licence, accepted by --accept-eula:', licence)
+            if args[0] == 'fetch':
+                print('jk2: in the cache:', pak)
+                return 0
             put(pak, os.path.join(args[1], 'base', 'assets0.pk3'))
             print('jk2: for the build computer\'s program: +set fs_basepath', os.path.abspath(args[1]))
             return 0
+        exe = fetch(cache)
         overlay = args[0]
         built = program()
     except Missing as e:
         print('jk2: %s. Nothing was put in.' % e, file=sys.stderr)
         return 3
-    # the pak as it is (the licence allows copies only in its original form): the program and it together
-    os.makedirs(os.path.join(overlay, 'usr', 'share', 'jk2', 'base'), exist_ok=True)
+    # the installer as LucasArts made it, byte for byte (the licence allows copies only in their original form): the
+    # machine unpacks it after its licence is accepted there (cabinst, docs/system/install.md). The program and it together
+    os.makedirs(os.path.join(overlay, 'usr', 'share', 'jk2'), exist_ok=True)
     os.makedirs(os.path.join(overlay, 'usr', 'bin'), exist_ok=True)
-    shutil.copyfile(pak, os.path.join(overlay, 'usr', 'share', 'jk2', 'base', 'assets0.pk3'))
+    shutil.copyfile(exe, os.path.join(overlay, 'usr', 'share', 'jk2', EXE))
     for name in ('jk2.bin', 'jk2'):
         shutil.copyfile(os.path.join(built, 'usr', 'bin', name), os.path.join(overlay, 'usr', 'bin', name))
     menu = os.path.join(built, 'usr', 'share', 'nxapps.77-jk2')
     if os.path.exists(menu):
         shutil.copyfile(menu, os.path.join(overlay, 'usr', 'share', 'nxapps.77-jk2'))
-    print('jk2: in the image')
+    print('jk2: in the image: the installer, unpacked in the machine after its licence is accepted there')
     return 0
 
 

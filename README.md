@@ -101,6 +101,7 @@ menu lists those with a window; the machine's own reader has these docs at `/usr
 | `nxsettings`, `nxreg`, `nxpersist` | settings; the registry; what `/persistence` keeps | `docs/system/nanox.md`, `docs/system/persist.md` |
 | `nxnet` | the machines of the network and their shared folders | `docs/system/lan.md` |
 | `open`, `unarc` | a file with the program for its kind; zip, tar and `.gz` unpacked on the workers, eight to ten times busybox's speed | `docs/system/open.md`, `docs/system/media.md` |
+| `cabinst` | a game's installer as its maker shipped it: its licence shown, Accept once read to its end, its cabinet unpacked on the workers into memory with a bar (Age of Empires, Jedi Outcast) | `docs/system/install.md` |
 | `nxphys` | rigid boxes on every core | `docs/apps/physics.md` |
 | `nxray`, `nxpath` | rays on every core; a path tracer and viewer of meshes | `docs/apps/raytrace.md` |
 | `imdemo` | Dear ImGui over the machine's OpenGL | `docs/apps/imgui.md` |

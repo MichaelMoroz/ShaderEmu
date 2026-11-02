@@ -98,6 +98,14 @@ const char *media_inflate_stream(const void *in, uint32_t in_size, void *out, ui
 uint32_t media_inflate_room(void);
 const char *media_inflate_one(const void *in, uint32_t in_size, void *out, uint32_t out_size, uint32_t *made, uint32_t *used,
 			      uint32_t *crc, void *room);
+/* A Microsoft cabinet's MSZip blocks (docs/system/media.md, "A cabinet's blocks"): block k's raw deflate stream (after
+ * its "CK") is in[k], in_size[k] bytes, and makes plain[k] bytes, 32 KB each but the run's last; its dictionary is the
+ * block before it, the first block's the wlen bytes before out (the folder's blocks before the run; 0 at its start).
+ * Made one after another into out (16-aligned), on up to `workers` more cores, in room of media_mszip_room(count)
+ * bytes (16-aligned). NULL, or what is wrong. */
+uint32_t media_mszip_room(uint32_t count);
+const char *media_mszip(const uint8_t *const *in, const uint32_t *in_size, const uint32_t *plain, uint32_t count, uint8_t *out,
+			uint32_t wlen, void *room, int workers);
 /* CRC-32 (gzip's and zip's) of more bytes after crc (0 at first); of two pieces joined. */
 uint32_t media_crc32(uint32_t crc, const void *data, uint32_t bytes);
 uint32_t media_crc32_join(uint32_t crc1, uint32_t crc2, uint32_t bytes2);
