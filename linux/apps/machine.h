@@ -17,7 +17,9 @@ machine_trap(int signal_number)
 	siglongjmp(machine_no_instruction, 1);
 }
 
-/* Runs instruction 1 or 2 (a word each); true if it was not illegal. */
+/* Runs instruction 1 or 2; true if it was not illegal and, for 2, gave its own answer. The tick's
+ * fast loop reads no funct7 (docs/machine/tick-costs.md, "tests the fast loop did not need"), so
+ * sh1add on a machine without Zba runs as slt and does not trap: 1 << 1 + 1 is 3, slt's 1 < 1 is 0. */
 static int
 machine_runs(int which)
 {
@@ -25,11 +27,14 @@ machine_runs(int which)
 	volatile int there = 0;
 
 	if (!sigsetjmp(machine_no_instruction, 1)) {
-		if (which == 1)
+		if (which == 1) {
 			__asm__ volatile(".word 0xd0007053");	/* fcvt.s.w ft0, zero */
-		else
-			__asm__ volatile(".word 0x20002033");	/* sh1add zero, zero, zero (Zba) */
-		there = 1;
+			there = 1;
+		} else {
+			int one = 1, got;
+			__asm__ volatile(".insn r 0x33, 2, 0x10, %0, %1, %1" : "=r"(got) : "r"(one));	/* sh1add (Zba) */
+			there = got == 3;
+		}
 	}
 	signal(SIGILL, before);
 	return there;
