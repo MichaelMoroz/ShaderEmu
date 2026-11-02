@@ -99,7 +99,7 @@ So a worker keeps only what it must. A worker keeps the CPU's 44 texels, its wri
 
 Which pixel of the tick is which texel of which core is only a function, and all of it is shifts. Every core has a slot of
 64 x 8 texels in the state's rows, core k's at `((k & 31) * 64, (k >> 5) * 8)`, and a block of 8 x 8 pixels in the tick's targets, at
-`(8 + 8 k, 0)` for a worker: one row of cores (2 November 2026; before, bands and strips by divisions). Nearly all of a worker is its cache:
+`(8 k, 0)`: one row of cores (2 November 2026; before, bands and strips by divisions). Nearly all of a worker is its cache:
 
 | Tables of 2^bits buckets | New stores a pass | Texels | Tiles |
 |---|---|---|---|
@@ -123,29 +123,26 @@ Programs do not lay workers out: the `SHAPE` calls of `/dev/gpu` do nothing. The
 core but the first at size 5, in a delayed work of the driver's at boot, or in the first `WORKERS` call if nothing has
 laid them out by then.
 
-**The tick's geometry shader draws the blocks** (`tick_geom` in `tick.hlsl`). The pass is handed a primitive for every
-sixteen cores; the shader reads the geometry and puts out a quad for core 0 and one for each worker that has something to
-run. A worker that is parked, asleep or stopped gets none, so it costs no pixel. While the slots are laid out anew the shader
-draws them, as zeros. The host knows none of this.
+**One triangle draws the tick** (`tick_geom` in `tick.hlsl`), over all the targets, and `frag` discards at its top what no core
+runs: a worker parked, asleep or stopped, past the geometry's count, or a column past a worker's last tile. Its unpack still draws a
+quad for each slot with something to run. The host knows none of this.
 
 ## Eight texels a pixel
 
 A pixel of the tick is eight texels of state: with eight render targets the pass runs an eighth of the pixels. The D3D11
-harness does that (`TICK_MRT`) and so does the world ("In Unity"): the tick draws into eight targets of 2056 x 16 (`TICK_W`, `TICK_H`: core
-0's eight columns, eight empty, a block of eight for each worker, in rows 0 to 7; the lanes' field under them). Core 0's pixel (x, y) keeps
+harness does that (`TICK_MRT`) and so does the world ("In Unity"): the tick draws into eight targets of 2048 x 16 (`TICK_W`, `TICK_H`: a block of
+eight columns for each core, in rows 0 to 7; the lanes' field under them). Core 0's pixel (x, y) keeps
 texels 8x to 8x + 7 of row y. A worker's tile of 8 x 8 is a column of eight pixels in its block. The same pass compiled with `TICK_UNPACK` then
 draws the state's quads into the state texture and copies each texel from its target, so the commit, the control pass
 and every reader find the state where it is.
 
 Where the pixels are matters more than how many there are (2 November 2026, RTX 3090, wall a frame):
 
-- A worker's quad is its whole block, its columns past the last doing nothing. A quad as narrow as its tiles cost Quake 18%: its diagonal
-  cuts the card's 4 x 8 tiles differently.
-- Core 0's pixels want eight empty columns between them and the first worker's (`TICK_GAP`): without them Quake is 6% slower.
-- Where a worker's block lies in the row does not matter: blocks placed by the core's number with its bits reversed, as far apart as they
-  go, were level (Doom 0, Quake +0.9%, `nxray` +0.4%, `nxphys` -1.5%).
-- The row against the bands of before, all else equal: shell -1.7%, Doom -1.8%, Quake -2.5%, `nxray` -11.6%, `nxphys` -11.7%, the commit a third
-  cheaper. The dense layouts of before, workers of 2^3 in two columns (`nxray` faster, what stores slower), are gone with the program that made them.
+- **A warp is 4 x 8 pixels of one core**, seen by `InterlockedAdd` on a shared counter (each pixel takes a number; a wave's are consecutive). Under one triangle a block of
+  8 x 8 is exactly two warps of 32 lanes, a worker's five columns one of 32 and one of 8, and no two cores share one.
+- A quad for each core was worse: each triangle of a quad runs apart, and blocks in a tile 16 wide interleave, so core 0 beside worker 1 lost 26% of Quake (hence an empty `TICK_GAP` then) and a quad as narrow as a worker's tiles 18%. One triangle against quads: Quake -0.5%, `nxphys` -2.7%, `nxray` -5.7%; with it no gap is needed (Quake +0.4% without).
+- Where a worker's block lies in the row did not matter under quads: placed by the core's number with its bits reversed they were level.
+- The row of quads against the bands of before: shell -1.7%, Quake -2.5%, `nxray` -11.6%, `nxphys` -11.7%, the commit a third cheaper. The dense layouts of before, workers of 2^3 in two columns, are gone with the program that made them.
 - `mctest`'s bench, the same primes on every worker, hides sharing: cores that run the same instructions pay nothing for
   it. Judge a layout by a program in which no two cores do the same (`nxray`). `TICK_LOAD=N` draws every worker's quad
   N times, read by nothing: what the tick would cost with N times the busy workers.
@@ -633,7 +630,7 @@ own write cache (336 texels: 64 + 32 + 16 buckets of three) and passes of 8,192 
 
 - **The tick is a camera's pass.** The tick's shader is on a mesh of seventeen triangles (one for every sixteen cores and one
   for the lanes' field) that only the tick's camera sees (a layer of its own); `EmuMachine` gives the
-  camera eight targets of 2056 x 16 once (`Camera.SetTargetBuffers`, which Udon has) and renders it once a round.
+  camera eight targets of 2048 x 16 once (`Camera.SetTargetBuffers`, which Udon has) and renders it once a round.
   `tick_geom` draws core 0's pixels and a block of columns for each worker with something to
   run, as the harness's does, and draws nothing for any other camera (it looks at the target's size).
 - **The unpack** (`Machine.shader`'s third pass, a Blit into the 2048 x 64 texture the commit

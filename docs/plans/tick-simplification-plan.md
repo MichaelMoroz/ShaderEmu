@@ -19,7 +19,7 @@ Numbers are one RTX 3090. Wall a frame or tick time, against the stage before, o
 | 6 | The port | **Not started**, by the rule of 6a |
 
 **Where stage 4 differs from the plan.** RAM stays at row 64 and the field's state is in tiles 5 and 6 of the slots, which no row had to move for. Workers are 2^5 at most, so decision 2 is 2^5.
-`TICK_GAP` stays, so the targets are 2056 wide (decision 3: without it Quake is 6% slower). A worker's texels are in tiles, not rows (rows: Quake 50% slower), and its quad its whole block.
+A worker's texels are in tiles, not rows (rows: Quake 50% slower). After the stage, one triangle over the targets with what no core runs discarded (Quake -0.5%, `nxphys` -2.7%, `nxray` -5.7%; a warp is 4 x 8 pixels of one core, by `InterlockedAdd`) made `TICK_GAP` needless (decision 3: Quake +0.4% without, 26% under quads), so the targets are 2048 x 16.
 Sparse blocks, by bit reversal, were level. The old paths without `RAM_INPLACE` in `main.shader` went; `rvc_trace12`, on D3D12, still expects them and is not known to run.
 
 **Stage 6a.** Percent of tick time against the mirror in rows, only the active tick's mirror drawn. The figures earlier in this plan, -4.3 and -4.6, had the mirrors' draw order in them.

@@ -83,13 +83,11 @@ uniform uint _LaneField;
 
 // ---- The geometry (docs/machine/multicore.md, "The geometry"): every core has a slot of 64 x 8 texels in
 // the state's rows, core k's at ((k & 31) * 64, (k >> 5) * 8), and a block of 8 x 8 pixels in the targets,
-// at (k * 8, 0): one row of cores, all found by shifts. Core 0's texels are in rows; a worker's in whole tiles
+// at (k * 8, 0): one row of cores, all found by shifts, drawn by one triangle over the targets (a quad a core split each block
+// along its diagonal and mixed cores in a warp), what no core runs discarded at the top of frag: a warp is 4 x 8 pixels of one core. Core 0's texels are in rows; a worker's in whole tiles
 // of 8 x 8, a tile a column of its block (rows of 64 cost its loads: Quake 50%), a pixel eight texels of a tile's row.
 #define GEO_TEXEL 0x10003du
-#ifndef TICK_GAP
-#define TICK_GAP 8   // empty columns between core 0's block and the workers'
-#endif
-#define TICK_W 2056
+#define TICK_W 2048
 #define TICK_H 16
 static uint4 g;
 static uint g_count;
@@ -970,56 +968,43 @@ void quad(inout TriangleStream<v2f> s, float x, float y, float w, float h, float
 [maxvertexcount(64)]
 #endif
 void tick_geom(triangle v2f IN[3], uint prim : SV_PrimitiveID, inout TriangleStream<v2f> s) {
-#ifdef LANE_FIELD
-    if (prim > (CORES + 15) / 16) return;
-#else
-    if (prim >= (CORES + 15) / 16) return;
-#endif
 #ifdef TICK_GEOM_GUARD
-    TICK_GEOM_GUARD   // Unity: only the tick's own camera draws it
+    TICK_GEOM_GUARD
 #endif
-#ifdef TICK_UNPACK
-    float2 size; _SelfTexture2D.GetDimensions(size.x, size.y);
+#ifndef TICK_UNPACK
+    // one triangle over all the targets: frag discards what no core runs
+    if (prim == 0) {
+        v2f o;
+        o.vertex = float4(-1, 1, 0, 1); s.Append(o);
+        o.vertex = float4(3, 1, 0, 1); s.Append(o);
+        o.vertex = float4(-1, -3, 0, 1); s.Append(o);
+        s.RestartStrip();
+    }
 #else
-    float2 size = float2(TICK_W, TICK_H);
-#endif
+    if (prim > (CORES + 15) / 16) return;
+    float2 size; _SelfTexture2D.GetDimensions(size.x, size.y);
 #ifdef LANE_FIELD
-    // the primitive after the cores' is the field's: as many of its rows as the posted job's lanes fill
     [branch] if (prim == (CORES + 15) / 16) {
         if (_Init || _LaneField == 0) return;
         uint4 job = TEX(RAM_ADDR(FIELD_JOB_T));
-        uint rows = job.x == 0 ? 0 : (min(job.z, (uint)FIELD_MAX) + 2047) >> 11;
-        if (rows == 0) return;
-#ifdef TICK_UNPACK
+        if (job.x == 0) return;
         for (uint b = 0; b < 32; b++) quad(s, b * 64 + 40, 0, 16, 64, size);   // (tiles 5 and 6 of every slot: the first eight's are the cores' again)
-#else
-        quad(s, 0, 8, TICK_W, rows, size);
-#endif
         return;
     }
 #endif
     geo_read();
     select_core(0);
-#ifdef TICK_UNPACK
     if (prim == 0) quad(s, 0, 0, 64, rows_now, size);
     if (_Init) return;
     if ((g.r & 1) != 0) { if (prim == 0) { quad(s, 64, 0, 1984, 8, size); quad(s, 0, 8, 2048, 56, size); } return; }
-#else
-    if (prim == 0) quad(s, 0, 0, 8, rows_now, size);
-    if (_Init) return;
-    if ((g.r & 1) != 0) { if (prim == 0) quad(s, 8 + TICK_GAP, 0, TICK_W - 8 - TICK_GAP, 8, size); return; }
-#endif
     for (uint n = 0; n < 16; n++) {
         uint k = prim * 16 + n;
         if (k == 0 || k > g_count) continue;
         select_core(k);
         if (worker_idle() || MORE_ROUND) continue;   // (its state stays as the commit left it)
-#ifdef TICK_UNPACK
         quad(s, (k & 31) << 6, (k >> 5) << 3, rows_now * 8, 8, size);
-#else
-        quad(s, TICK_GAP + (k << 3), 0, 8, 8, size);   // (the whole block: a narrower quad's diagonal cost Quake 18%)
-#endif
     }
+#endif
 }
 
 #ifdef TICK_UNPACK
@@ -1027,7 +1012,7 @@ Texture2D<uint4> _TickOut0, _TickOut1, _TickOut2, _TickOut3, _TickOut4, _TickOut
 uint4 frag(v2f i) : SV_Target {
     uint2 p = uint2(i.vertex.xy);
     uint k = (p.x >> 6) | ((p.y >> 3) << 5), r = p.y & 7, tile = (p.x & 63) >> 3;
-    uint3 at = uint3((k << 3) + tile + (k != 0 ? TICK_GAP : 0), r, 0);
+    uint3 at = uint3((k << 3) + tile, r, 0);
 #ifdef LANE_FIELD
     [branch] if (k >= 8 && tile >= 5 && tile < 7) {
         // the field's: lane F's texel, from its pixel in the targets (one of a row the tick did not draw: as it is)
@@ -1050,20 +1035,25 @@ struct tick_out { uint4 t0 : SV_Target0; uint4 t1 : SV_Target1; uint4 t2 : SV_Ta
                   uint4 t4 : SV_Target4; uint4 t5 : SV_Target5; uint4 t6 : SV_Target6; uint4 t7 : SV_Target7; };
 tick_out frag(v2f i) {
     uint2 p = uint2(i.vertex.xy);
-    geo_read();
-    select_core(p.x < 8 ? 0 : (p.x - TICK_GAP) >> 3);
-    uint k, px = (p.x < 8 ? p.x : p.x - TICK_GAP) & 7;
-    uint w0 = core == 0 ? p.y * 64 + px * 8 : (px << 6) + (p.y << 3);   // the pixel's first texel, in its core's numbering
-    uint2 own = uint2(((core & 31) << 6) + px * 8, ((core >> 5) << 3) + p.y);   // and where that is in the state texture
-    bool none = false, field = false;
+    bool field = false;
 #ifdef LANE_FIELD
     [branch] if (p.y >= 8) {
-        field = true;   // a pixel of the field: lane F (the geometry draws it only with a job posted)
+        // a pixel of the field: lane F, while a job is posted, as many rows as its lanes fill
+        uint4 fjob = TEX(RAM_ADDR(FIELD_JOB_T));
+        if (_Init || _LaneField == 0 || fjob.x == 0 || p.y - 8 >= (min(fjob.z, (uint)FIELD_MAX) + 2047) >> 11) { discard; }
+        field = true;
         field_F = (p.y - 8) * 2048 + p.x;
-    } else
+    }
+#else
+    if (p.y >= 8) discard;
 #endif
-    none = core != 0 && (_Init != 0 || core > g_count || px >= rows_now);
-    bool keep = !field && !none && !_Init && core != 0 && (worker_idle() || MORE_ROUND);
+    geo_read();
+    select_core(p.x >> 3);
+    uint k, px = p.x & 7;
+    uint w0 = core == 0 ? p.y * 64 + px * 8 : (px << 6) + (p.y << 3);   // the pixel's first texel, in its core's numbering
+    uint2 own = uint2(((core & 31) << 6) + px * 8, ((core >> 5) << 3) + p.y);   // and where that is in the state texture
+    if (!field && core != 0 && (_Init != 0 || core > g_count || px >= rows_now || worker_idle() || MORE_ROUND)) discard;
+    bool none = false, keep = false;
     bool any = field;
     for (k = 0; k < 8; k++) any = any || lin_of(w0 + k) < FP_AT + 8;
     [branch] if (!none && !keep && any) {

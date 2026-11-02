@@ -1272,7 +1272,7 @@ private:
     bool mrt_ = false;
     UINT mrtLoad_ = 1;   // TICK_LOAD: the workers' quads drawn so many times (a measurement)
     UINT activeCores_ = 1;   // the cores whose pixels are drawn this frame: all, or core 0 alone (workersNow)
-    UINT tickWidth() const { return 2056; }   // TICK_W, a block of 8 x 8 for each core
+    UINT tickWidth() const { return 2048; }   // TICK_W, a block of 8 x 8 for each core
     UINT tickHeight() const { return 16; }   // TICK_H: the cores' row, and the lanes' field under it
     ComPtr<ID3D11Texture2D> mrtTex_[8];
     ComPtr<ID3D11RenderTargetView> mrtRtv_[8];

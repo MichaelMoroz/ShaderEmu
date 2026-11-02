@@ -6,8 +6,7 @@
 - Tick simplification (2 November 2026, `docs/plans/tick-simplification-plan.md` has the numbers and what was not done). The tick needs fxc2 67 or later, the submodule
   `tools/fxc2` (`git submodule update --init`; a new compiler is a commit moving it), and Unity's editor needs its `bin/unity` too: `c` and `ot` are statics under `#pragma static_noinit`,
   which an older DLL ignores (448 zeroing instructions a pass); `xr` stays zeroed (without it 0.6 to 0.8% slower). The geometry is one row of cores
-  (`docs/machine/multicore.md`, "The geometry"): no division by a variable in it, a worker has 2^5 at most, a worker's quad is its whole block and its texels are in tiles,
-  each of which was measured (18%, 50%). The timer comes from the host: no doubles in the tick. The ROM and RAM's start image are one RGBAFloat texture each, from their first row.
+  (`docs/machine/multicore.md`, "The geometry"): no division by a variable in it, a worker has 2^5 at most and its texels are in tiles (rows: 50% slower), and one triangle draws the tick, `frag` discarding what no core runs: a warp is then 4 x 8 pixels of one core. The timer comes from the host: no doubles in the tick. The ROM and RAM's start image are one RGBAFloat texture each, from their first row.
 - The rules of the work (23 October 2026). We own the whole stack, from the games' and programs' sources down to the
   tick's DXBC instructions: the games and userland, the toolchain, the tick and the other shaders, and
   fxc2 (the submodule `tools/fxc2`), so a cost is fixed at whichever layer it is cheapest.
