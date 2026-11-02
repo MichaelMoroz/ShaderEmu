@@ -9,7 +9,9 @@
 #                                                       (WSL; OPENCNC3D_WORK, ~/ocnc-host)
 #   OPENCNC3D_TREE=keep    the Vanilla Conquer tree as it stands, for writing our patch:
 #                          (cd $WORK/src/vanilla-conquer-ocnc && git diff) > linux/opencnc3d/opencnc3d.patch
-#                          (its index holds upstream with OpenCNC3D's patch: the diff is ours alone)
+#                          (its index holds upstream with OpenCNC3D's patch: the diff is ours alone),
+#                          then OpenCNC3D's own files' part (applied with -p2 to the fetched tree):
+#                          (cd $WORK/src/opencnc3d && git diff --src-prefix=a/opencnc3d/ --dst-prefix=b/opencnc3d/ -- game app menu) >> ...
 # The cartridge and the DOS data are not here: linux/opencnc3d/bake.py and data.py, into a cache outside the tree.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -48,8 +50,14 @@ git -C "$OCNC" sparse-checkout init --no-cone
 git -C "$OCNC" sparse-checkout set '/brain/patches/' '/brain/host/' '/brain/README.md' '/brain/fair_ai.h' \
     '/game/sidebar_build_potential.h' '/tools/romdump/' \
     '/tools/bakery/' '/game/bake*.py' '/game/missions/' '/game/*.json' '/data/autoheight/' \
-    '/tools/heightmap-viewer/*.py' '/LICENSE' '/NOTICE.md' '/tools/bin_to_n64map.py' '/docs/re-findings.md'
+    '/tools/heightmap-viewer/*.py' '/LICENSE' '/NOTICE.md' '/tools/bin_to_n64map.py' '/docs/re-findings.md' \
+    '/game/' '/menu/' '/video/' '/audio/' '/app/' '/net/' '/launcher/' '/input/' '/sidebar/' '/VERSION' '/tools/version.sh' \
+    '/tools/sidebar_redesign/*.py' '/tools/sidebar_redesign/chunks/' '/tools/sidebar_redesign/palette256.npy' \
+    '/art/interface/enhanced-menu-logos-v01/' '/art/interface/ra-enhanced-menu-v01/emblems/'
 git -C "$OCNC" checkout -q "$OCNC_COMMIT"
+# OpenCNC3D's own program as it was, then ours: the part of opencnc3d.patch under opencnc3d/
+git -C "$OCNC" checkout -q -f "$OCNC_COMMIT" -- game app menu
+git -C "$OCNC" apply -p2 --include='game/*' --include='app/*' --include='menu/*' "$HERE/opencnc3d.patch"
 
 if [ ! -d "$VC/.git" ]; then
     step "Vanilla Conquer ${VC_COMMIT:0:7}"
@@ -63,7 +71,7 @@ if [ "${OPENCNC3D_TREE:-}" != keep ]; then
     cp "$OCNC/brain/patches/wwkeyboard_null.cpp" "$VC/common/"
     cp "$OCNC/brain/patches/opencnc3d_compat.h" "$VC/tiberiandawn/"
     git -C "$VC" add -A
-    [ ! -s "$HERE/opencnc3d.patch" ] || git -C "$VC" apply "$HERE/opencnc3d.patch"
+    [ ! -s "$HERE/opencnc3d.patch" ] || git -C "$VC" apply --exclude='opencnc3d/*' "$HERE/opencnc3d.patch"
 fi
 cp "$HERE/brain_shaderemu.cpp" "$VC/tiberiandawn/"
 # built from a copy in which a file keeps its time unless its bytes change
@@ -119,4 +127,8 @@ else
     mkdir -p "$OUT/usr/bin"
     $STRIP -o "$OUT/usr/bin/opencnc3d-brain" "$BUILD/opencnc3d-brain"
     ls -l "$OUT/usr/bin/opencnc3d-brain"
+
+    # OpenCNC3D's own program: its app and renderer, with this brain linked in (game.sh)
+    step "the game"
+    source "$HERE/game.sh"
 fi

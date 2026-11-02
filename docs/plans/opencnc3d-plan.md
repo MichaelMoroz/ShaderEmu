@@ -90,9 +90,26 @@ resolver had to be written; OpenCNC3D's `bake5.py` runs unchanged over them, ste
      the Remaster is off (4.97 million with it; the sums are the same either way). Of a tick, **427 thousand are
      `MapClass::Clean`**, the Remaster's check of all 16,384 MEGAMAP cells at every tick, and **71 thousand the game's
      logic** (`LogicClass::AI`), about Tiberian Dawn's. The next step is that scan, with the sums, before the eyes.
+   - *Past the gate, 2 November 2026, at the owner's word.* `Clean` walks only the cells that ever held an occupier or an
+     overlapper, in the same order (`OPENCNC3D_CLEAN=check`: 0 cells missed in 3,000 ticks of both missions), and the
+     file search is `linux/tdawn`'s: **a tick 74,346 instructions (`SCG01EA`) and 83,762 (`SCB01EA`), the load 54.0 and
+     58.8 million**, the 11 sums of both missions and 60 of 60 and 73 of 73 objects as before on both machines.
 2. **The eyes.** `cnc_eyes.cpp` over the GL shim in a Nano-X window: the mission's terrain, water, models and the 2D seen in
    captures under `rvc_harness --cpu --warp` against the native build's pictures. Its packs and textures held in RAM within a
    budget measured here; models and terrain go to the ROM if they must.
+   - *OpenCNC3D's own program (`docs/games/opencnc3d.md`, "The game"), 2 November 2026.* At the owner's word the eyes
+     are OpenCNC3D's, not a recreation. Milestone 1, **it compiles and links**: `app/opencnc3d.cpp`, `game/cnc_eyes.cpp`
+     and 36 C files of theirs, unchanged, by OpenTTD's C++ compiler (all of libstdc++), the brain linked in for its
+     `dlopen` (`brain_link.c`), 91 SDL2 functions of ours over Nano-X (`sdl_nanox.c`), 91 GL calls onto Half-Life's
+     shim (`gl_ocnc.c`): one flat program of 9.1 MB of text, 183 KB of data and 17.8 MB of bss.
+     Milestones 2 and 3, **it starts, reaches its first frame and draws its menu**: the DOS data from the Covert Operations
+     DOS disc (Gold's 640 x 400 fonts put every label below its button), the play folder made by OpenCNC3D's own 12 bake
+     scripts (`play.py`, 52 MB), the brain's 76 entry points pulled into the link (10.4 MB of text), and a capture of
+     OpenCNC3D's own DOS menu under `rvc_harness --cpu --warp`. Its `--flowtest` autopilot goes on into GDI mission 1
+     (Start New Game, GDI, the briefing, the mission with the HUD and the DOS sidebar loaded, a won mission's score).
+     Milestone 4, **a mission drawn**: GDI mission 1 in play with OpenCNC3D's sidebar, captured (terrain, sea, units,
+     effects, shroud); 63.13 million instructions a frame on core 0, 47.44 of them the tick and the taking of the brain's
+     state and 15.69 the drawing; 160,652 kB of 256,060 used. Left for step 4: the tick and refresh first.
 3. **Input, sound, the menus, the sidebar, films.** The pointer and keys through the game's own input; sound on the card; the
    sidebar and menus of OpenCNC3D; films through libmedia's VQA. A mission played by script to its end, as a test case of
    `tools/test_all.py` tagged `long` that says `OPENCNC3D-NO-DATA` on an image without the cartridge.

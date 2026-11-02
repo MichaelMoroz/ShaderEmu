@@ -99,6 +99,56 @@ extern "C" int ShaderEmu_Frame(void)
     return (int)Frame;
 }
 
+// The objects to draw, for linux/opencnc3d/eyes.c: what OpenCNC3D_Dump_Objects prints of each live
+// object outside limbo, as numbers. kind: 0 infantry, 1 unit, 2 building, 3 terrain, 4 aircraft.
+struct ShaderEmu_Object {
+    int kind;
+    char type[12];
+    int house;      // HousesType: 0 GDI (GoodGuy), 1 Nod (BadGuy), ...
+    int x, y;       // the centre, in leptons (256 a cell)
+    int face, turret; // 0..255 clockwise from north; turret -1 when none
+    int strength, max_strength;
+};
+static int se_put(ShaderEmu_Object* out, int n, int max, ObjectClass* o, int kind)
+{
+    if (o == NULL || !o->IsActive || o->IsInLimbo || n >= max)
+        return n;
+    ShaderEmu_Object& s = out[n];
+    s.kind = kind;
+    strncpy(s.type, o->Class_Of().IniName, sizeof(s.type) - 1);
+    s.type[sizeof(s.type) - 1] = 0;
+    s.house = (int)o->Owner();
+    COORDINATE c = o->Center_Coord();
+    s.x = Coord_X(c);
+    s.y = Coord_Y(c);
+    s.face = -1;
+    s.turret = -1;
+    if (o->Is_Techno()) {
+        TechnoClass* t = (TechnoClass*)o;
+        s.face = (int)t->PrimaryFacing.Current();
+        if (kind == 1 && ((UnitClass*)o)->Class->IsTurretEquipped)
+            s.turret = (int)((UnitClass*)o)->SecondaryFacing.Current();
+    }
+    s.strength = o->Strength;
+    s.max_strength = o->Class_Of().MaxStrength;
+    return n + 1;
+}
+extern "C" int ShaderEmu_Objects(ShaderEmu_Object* out, int max)
+{
+    int n = 0;
+    for (int i = 0; i < Terrains.Count(); i++)
+        n = se_put(out, n, max, Terrains.Ptr(i), 3);
+    for (int i = 0; i < Buildings.Count(); i++)
+        n = se_put(out, n, max, Buildings.Ptr(i), 2);
+    for (int i = 0; i < Units.Count(); i++)
+        n = se_put(out, n, max, Units.Ptr(i), 1);
+    for (int i = 0; i < Aircraft.Count(); i++)
+        n = se_put(out, n, max, Aircraft.Ptr(i), 4);
+    for (int i = 0; i < Infantry.Count(); i++)
+        n = se_put(out, n, max, Infantry.Ptr(i), 0);
+    return n;
+}
+
 // FNV-1a over 32-bit words: the same on the build computer and the machine, whatever the
 // size of a pointer, since only the game's numbers go in.
 static unsigned se_h;
