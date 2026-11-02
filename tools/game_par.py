@@ -20,6 +20,8 @@ ends it (the world's fixed rounds a frame); rvc_cpu's guest seconds count a shor
 fxc2, as the world), one image after another, and prints the game's own frames a second, passes
 a second and a game frame, and core 0's, the workers' and all cores' millions of instructions a
 second (the harness's STATS lines from the mark). It refuses while VRChat or SteamVR runs.
+--guest goes to card runs too; --unity F,U[,R] gives the card's tick a world frame's rounds
+(rvc_harness --unity, docs/machine/speed.md): the world's measure, not a flat-out run.
 """
 import argparse, os, re, subprocess, sys, time
 
@@ -286,13 +288,14 @@ def card_folder(image):
              (os.path.join('build', 'shadercache'), os.path.join(ROOT, 'build', 'shadercache')),
              (os.path.join('build', 'images', 'linux'), image), (os.path.join('build', 'images', 'nommu'), image)]
     os.makedirs(os.path.join(work, 'build', 'images'), exist_ok=True)
+    os.makedirs(os.path.join(ROOT, 'build', 'shadercache'), exist_ok=True)   # (a junction to nothing is no folder, and is not made again)
     for link, target in links:
-        if not os.path.exists(os.path.join(work, link)):
+        if not os.path.lexists(os.path.join(work, link)):
             subprocess.run(['cmd', '/c', 'mklink', '/J', os.path.join(work, link), target], capture_output=True, check=True)
     return work
 
 
-def run_card(name, g, image, log, show, limit, rvc='shader_vm'):
+def run_card(name, g, image, log, show, limit, rvc='shader_vm', guest=(), unity=None):
     if vr_running():
         print(f'{name}: not run on the card, {" and ".join(vr_running())} running')
         return None
@@ -302,8 +305,8 @@ def run_card(name, g, image, log, show, limit, rvc='shader_vm'):
         os.remove(log)
     args = ['pwsh', '-NoProfile', '-File', os.path.join(ROOT, 'tools', 'gpu_queue.ps1'), os.path.join(ROOT, 'bin', 'rvc_harness.exe'),
             '--d3d11', '--rvc', rvc, '--image', 'linux-net', '--no-desktop', '--no-stdin', '--uart-log', log,
-            '--seconds', str(limit), '--expect', '/ # ', '--send', 'md5sum /usr/bin/*.bin /usr/bin/nxphys; ' + c['cmd'] + '; ' + DONE + '\\n',
-            '--until', c.get('until', 'LX-DONE'), '--stats-from', c['mark']] + more
+            '--seconds', str(limit), '--expect', '/ # ', '--send', 'md5sum /usr/bin/*.bin /usr/bin/nxphys; ' + ''.join(f'export {v}; ' for v in guest) + c['cmd'] + '; ' + DONE + '\\n',
+            '--until', c.get('until', 'LX-DONE'), '--stats-from', c['mark']] + more + (['--unity', unity] if unity else [])
     if show:
         print(subprocess.list2cmdline(args))
     t = time.time()
@@ -334,7 +337,7 @@ def run_card(name, g, image, log, show, limit, rvc='shader_vm'):
     binary = name.split('-')[0]   # (which image ran, by the guest's own sum of the game)
     md5 = re.search(r'([0-9a-f]{32})  /usr/bin/' + binary + r'(\.bin)?\s', text)
     extra = (extra + '; ' if extra else '') + (f"{binary} {md5[1][:8]}" if md5 else 'no md5sum line')
-    print(f"{name} (card): {r['fps']:.1f} frames a second ({frames} frames, {secs:.1f} s from the mark); {r['passes_s']:.0f} passes "
+    print(f"{name} (card{', unity ' + unity if unity else ''}): {r['fps']:.1f} frames a second ({frames} frames, {secs:.1f} s from the mark); {r['passes_s']:.0f} passes "
           f"a second, {r['passes']:.2f} a frame; core 0 {r['core0']:.2f}M a second, workers {r['workers']:.2f}M, all cores "
           f"{r['all']:.2f}M" + (f"; {extra}" if extra else '') + f"; {r['wall']:.0f} s on the card")
     return r
@@ -348,8 +351,9 @@ def card_main(a):
         if n not in GAMES:
             sys.exit(f'no game {n}: ' + ', '.join(GAMES))
         for im in images:
-            log = os.path.join(ROOT, 'build', 'game_par', f'card_{n}_{os.path.basename(os.path.abspath(im))}.log')
-            r = run_card(n, GAMES[n], im, log, a.show, a.limit, a.rvc)
+            log = os.path.join(ROOT, 'build', 'game_par', f'card_{n}_{os.path.basename(os.path.abspath(im))}' + ('_unity' if a.unity else '')
+                               + ''.join('_' + v.replace('=', '-') for v in a.guest) + '.log')
+            r = run_card(n, GAMES[n], im, log, a.show, a.limit, a.rvc, a.guest, a.unity)
             if r:
                 rows.append(dict(r, image=os.path.basename(os.path.abspath(im))))
     print('\n| Game | Image | Frames a second | Passes a second | Passes a frame | Core 0 M/s | Workers M/s | All cores M/s |')
@@ -369,9 +373,10 @@ def main():
     ap.add_argument('--runs', type=int, default=1, help='runs at salts SALT.. SALT+RUNS-1, and their mean')
     ap.add_argument('--profile', help="core 0's pc every 256 instructions from the mark, for tools/pc_profile.py")
     ap.add_argument('--show', action='store_true', help="print rvc_cpu's command line")
-    ap.add_argument('--guest', action='append', default=[], help='NAME=VALUE exported in the guest before the game (rvc_cpu runs)')
+    ap.add_argument('--guest', action='append', default=[], help='NAME=VALUE exported in the guest before the game')
     ap.add_argument('--plain', action='store_true', help='rvc_cpu without RVC_SOUND, RVC_WCACHE, RVC_ADFAULT and RVC_RACES (the counts before 15 October 2026)')
     ap.add_argument('--card', action='store_true', help='on the graphics card in real time, through tools/gpu_queue.ps1')
+    ap.add_argument('--unity', help="with --card: F,U[,R], a world frame of F ms, U of it the world's own (rvc_harness --unity)")
     ap.add_argument('--limit', type=int, default=240, help='with --card: seconds a run may take at most')
     ap.add_argument('--rvc', default='shader_vm', help='with --card: the processor folder (e.g. a copy of shader_vm)')
     ap.add_argument('--calibrated', action='store_true', help="rvc_cpu's clock as a card's: tools/card_model.json (tools/calibrate.py)")
