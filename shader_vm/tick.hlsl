@@ -331,31 +331,50 @@ uint fp_light(uint w, uint ra, uint rb, out bool to_f, out bool ok) {
          : f7 == 0x14 ? (an ? (bn ? 0x7fc00000 : rb) : bn ? ra : ((less == (f3 == 0)) ? ra : rb))
          : f7 == 0x50 ? ((!an && !bn && (f3 == 2 ? a == b : f3 == 1 ? a < b : a <= b)) ? 1 : 0) : ra;
 }
-// Every other float of opcode 0x53, every result made and one chosen (the general step's). The
-// card divides by multiplying with 1 / b: two ordinary numbers have their exponents moved to the middle.
+// Every other float of opcode 0x53, each kind paying for itself. The card divides by multiplying with
+// 1 / b: two ordinary numbers have their exponents moved to the middle.
 uint fp_all(uint w, uint ra, uint rb, out bool to_f, out bool ok) {
-    uint f7 = w >> 25, f3 = (w >> 12) & 7, sel = (w >> 20) & 31, ea = (ra >> 23) & 0xff, eb = (rb >> 23) & 0xff;
+    uint f7 = w >> 25, f3 = (w >> 12) & 7, sel = (w >> 20) & 31;
     precise float a = asfloat(ra), b = asfloat(rb);
-    bool an = (ra & 0x7fffffff) > 0x7f800000;
-    int de = (int)ea - (int)eb, ha = clamp(de, -126, 127);
-    precise float da = asfloat((ra & 0x807fffff) | ((uint)(127 + ha) << 23)), db = asfloat((rb & 0x807fffff) | ((uint)(127 - (de - ha)) << 23));
-    precise float q = (ea - 1 < 254 && eb - 1 < 254) ? da / db : a / b;
-    precise float sum = a + b, dif = a - b, prod = a * b, root = sqrt(a);
-    uint ar = asuint(f7 == 0 ? sum : f7 == 4 ? dif : f7 == 8 ? prod : f7 == 0x0c ? q : root);
-    ar = (ar & 0x7fffffff) > 0x7f800000 ? 0x7fc00000 : ar;
-    float whole = f3 == 1 ? trunc(a) : f3 == 2 ? floor(a) : f3 == 3 ? ceil(a) : round(a);
-    uint to_s = (an || whole >= 2147483648.0) ? 0x7fffffff : whole <= -2147483648.0 ? 0x80000000 : asuint((int)whole);
-    uint to_u = (an || whole >= 4294967296.0) ? 0xffffffff : whole <= 0.0 ? 0 : whole >= 2147483648.0 ? 0x80000000 + (uint)(whole - 2147483648.0) : (uint)whole;
-    bool neg_in = sel == 0 && (ra >> 31) != 0, neg = (ra >> 31) != 0;
-    uint from = asuint((float)(neg_in ? 0 - ra : ra)) | (neg_in ? 0x80000000 : 0), man = ra & 0x7fffff, ex = (ra >> 23) & 0xff;
-    uint cls = ex == 0xff ? (man != 0 ? ((man & 0x400000) ? 0x200 : 0x100) : (neg ? 1 : 0x80))
+    [branch] if ((f7 & 0x73) == 0 || f7 == 0x2c) {
+        precise float r;
+        [branch] if (f7 == 0x0c) {
+            uint ea = (ra >> 23) & 0xff, eb = (rb >> 23) & 0xff;
+            int de = (int)ea - (int)eb, ha = clamp(de, -126, 127);
+            precise float da = asfloat((ra & 0x807fffff) | ((uint)(127 + ha) << 23)), db = asfloat((rb & 0x807fffff) | ((uint)(127 - (de - ha)) << 23));
+            r = (ea - 1 < 254 && eb - 1 < 254) ? da / db : a / b;
+        } else [branch] if (f7 == 0x2c) {
+            r = sqrt(a);
+        } else {
+            precise float sum = a + b, dif = a - b, prod = a * b;
+            r = f7 == 0 ? sum : f7 == 4 ? dif : prod;
+        }
+        uint ar = asuint(r);
+        to_f = true; ok = f7 != 0x2c || sel == 0;
+        return (ar & 0x7fffffff) > 0x7f800000 ? 0x7fc00000 : ar;
+    }
+    [branch] if (f7 == 0x60) {
+        bool an = (ra & 0x7fffffff) > 0x7f800000;
+        float whole = f3 == 1 ? trunc(a) : f3 == 2 ? floor(a) : f3 == 3 ? ceil(a) : round(a);
+        to_f = false; ok = sel < 2;
+        return sel == 0 ? ((an || whole >= 2147483648.0) ? 0x7fffffff : whole <= -2147483648.0 ? 0x80000000 : asuint((int)whole))
+                        : ((an || whole >= 4294967296.0) ? 0xffffffff : whole <= 0.0 ? 0 : whole >= 2147483648.0 ? 0x80000000 + (uint)(whole - 2147483648.0) : (uint)whole);
+    }
+    [branch] if (f7 == 0x68) {
+        bool neg_in = sel == 0 && (ra >> 31) != 0;
+        to_f = true; ok = sel < 2;
+        return asuint((float)(neg_in ? 0 - ra : ra)) | (neg_in ? 0x80000000 : 0);
+    }
+    [branch] if (f7 == 0x70 && f3 == 1) {
+        bool neg = (ra >> 31) != 0;
+        uint man = ra & 0x7fffff, ex = (ra >> 23) & 0xff;
+        to_f = false; ok = sel == 0;
+        return ex == 0xff ? (man != 0 ? ((man & 0x400000) ? 0x200 : 0x100) : (neg ? 1 : 0x80))
              : ex == 0 ? (man != 0 ? (neg ? 4 : 0x20) : (neg ? 8 : 0x10)) : (neg ? 2 : 0x40);
+    }
     uint light = fp_light(w, ra, rb, to_f, ok);
-    bool arith = (f7 & 0x73) == 0 || f7 == 0x2c;
-    to_f = to_f || arith || f7 == 0x68;
-    ok = arith ? (f7 != 0x2c || sel == 0) : (f7 == 0x60 || f7 == 0x68) ? sel < 2 : f7 == 0x70 ? (sel == 0 && f3 < 2) :
-         (f7 == 0x10 || f7 == 0x14 || f7 == 0x50 || f7 == 0x78) && ok;
-    return arith ? ar : f7 == 0x60 ? (sel == 0 ? to_s : to_u) : f7 == 0x68 ? from : f7 == 0x70 && f3 == 1 ? cls : light;
+    ok = f7 == 0x70 ? sel == 0 && f3 == 0 : (f7 == 0x10 || f7 == 0x14 || f7 == 0x50 || f7 == 0x78) && ok;
+    return light;
 }
 
 // A worker's lanes: the pixels whose eight texels are two whole buckets of its cache, texels
@@ -419,8 +438,8 @@ uint fast(uint room) {
     uint4 cur = 0;
     [loop] while (n < budget) {
         [branch] if (!same) { fetch(pc); uint s = (pc >> 2) & 3; cur = (s & 2) ? ((s & 1) ? fw0.wxyz : fw0.zwxy) : ((s & 1) ? fw0.yzwx : fw0); }
-        uint w = cur.x, opc = w & 0x7f, f3 = (w >> 12) & 7, rd = (w >> 7) & 31;
-        uint a = xr[(w >> 15) & 31], b = xr[(w >> 20) & 31], next = pc + 4, v = 0, dst = rd == 0 ? 64 : rd;
+        uint w = cur.x, opc = w & 0x7f, f3 = (w >> 12) & 7, rd = (w >> 7) & 31, rs1 = (w >> 15) & 31, rs2 = (w >> 20) & 31;
+        uint a = xr[rs1], b = xr[rs2], next = pc + 4, v = 0, dst = rd == 0 ? 64 : rd;
         bool ok = true;
         // arithmetic, loads, stores and floats a group, in it arithmetic and loads one
         bool alu = (w & 0x5f) == 0x13 && (w & 0xfe00007f) != 0x02000033, ld = opc == 0x03;   // (flw and fsw are the floats')
@@ -452,8 +471,8 @@ uint fast(uint room) {
                     dst = 64;
                 } else [branch] if (opc == 0x53) {
                     // (opcode 0x53 before flw and fsw: a program has more of them) floats: a sum, a difference, a product, and the light ones; the rest are the general step's
-                    uint f7 = w >> 25, fa = a, fb = xr[32 + ((w >> 20) & 31)];
-                    [branch] if ((f7 & 0x68) != 0x68) fa = xr[32 + ((w >> 15) & 31)];   // (an if: a ?: read the register either way)
+                    uint f7 = w >> 25, fa = a, fb = xr[32 + rs2];
+                    [branch] if ((f7 & 0x68) != 0x68) fa = xr[32 + rs1];   // (an if: a ?: read the register either way)
                     bool to_f = true;
                     [branch] if ((f7 & 0x73) == 0 && f7 != 0x0c) {
                         precise float x = asfloat(fa), y = asfloat(fb), sum = x + y, dif = x - y, prod = x * y;
@@ -475,7 +494,7 @@ uint fast(uint room) {
                     // fsw, a word of RAM
                     uint sa = a + imm_s(w);
                     ok = f3 == 2 && (sa & 0x80000003) == 0x80000000;
-                    [branch] if (ok) ram_store(sa & 0x7ffffffc, xr[32 + ((w >> 20) & 31)], 0xffffffff);
+                    [branch] if (ok) ram_store(sa & 0x7ffffffc, xr[32 + rs2], 0xffffffff);
                     dst = 64;
                 }
             }
@@ -493,7 +512,7 @@ uint fast(uint room) {
             // amoadd amoswap lr sc amoxor amoor amoand on a word of RAM (the others are the general step's)
             uint f5 = w >> 27, o = a & 0x7ffffffc;
             bool lr = f5 == 2, sc = f5 == 3, sc_ok = res_en != 0 && res_addr == a;
-            ok = a != 0 && (a & 0x80000003) == 0x80000000 && o < RAM_MAX && f5 < 16 && ((0x111fu >> f5) & 1) != 0 && (!lr || ((w >> 20) & 31) == 0);
+            ok = a != 0 && (a & 0x80000003) == 0x80000000 && o < RAM_MAX && f5 < 16 && ((0x111fu >> f5) & 1) != 0 && (!lr || rs2 == 0);
             [branch] if (ok) {
                 uint old = sc ? 0 : ram_word(o);
                 [branch] if (sc ? sc_ok : !lr) ram_store(o, f5 == 0 ? old + b : f5 == 4 ? old ^ b : f5 == 8 ? old | b : f5 == 12 ? old & b : b, 0xffffffff);
@@ -507,7 +526,7 @@ uint fast(uint room) {
             // csrrw, csrrs, csrrc and their immediates on a CSR nothing else looks at (sscratch, sepc, scause,
             // stval, stvec, scounteren, the float flags, time, the hart): the kernel's trap entry and exit are
             // full of them, and each was a general step
-            uint cn = w >> 20, src = (f3 & 4) ? (w >> 15) & 31 : a;
+            uint cn = w >> 20, src = (f3 & 4) ? rs1 : a;
             bool wr_ = (f3 & 3) == 1 || src != 0;
             bool plain = (cn - 0x140 < 4) || cn == 0x105 || cn == 0x106 || (cn - 1 < 3) || cn == 0xc01 || cn == 0xf14;
             ok = plain && ((cn >> 8) & 3) <= priv && !(wr_ && ((cn >> 10) & 3) == 3);
@@ -535,8 +554,8 @@ void step() {
     uint w;
     [branch] if (pre_valid) w = pre_w; else w = fetch(pc);
     pre_valid = false;
-    uint opc = w & 0x7f, f3 = (w >> 12) & 7, rd = (w >> 7) & 31, f7 = w >> 25;
-    uint a = xr[(w >> 15) & 31], b = xr[(w >> 20) & 31], next = pc + 4, v = 0, dst = rd == 0 ? 64 : rd;
+    uint opc = w & 0x7f, f3 = (w >> 12) & 7, rd = (w >> 7) & 31, rs1 = (w >> 15) & 31, rs2 = (w >> 20) & 31, f7 = w >> 25;
+    uint a = xr[rs1], b = xr[rs2], next = pc + 4, v = 0, dst = rd == 0 ? 64 : rd;
     if ((pc & 3) != 0) { raise(0, pc); w = 0; opc = 0x7f; }
     // a read for loads and atomics, put together from two words when it is not on one (at 0: nothing)
     uint ra = (opc & 0x7b) == 0x03 ? a + imm_i(w) : (w & 0x202f) == 0x202f ? a : 0, mv = 0;
@@ -547,23 +566,14 @@ void step() {
             mv |= h == 0 ? x >> sh : x << (32 - sh);
         }
     }
-    [branch] if (opc == 0x13 || (opc == 0x33 && f7 != 1)) {
-        uint f6 = w >> 26, y = opc == 0x13 ? imm_i(w) : b, s = y & 31;
-        bool sub = opc == 0x33 && f7 == 0x20;
-        v = f3 == 0 ? (sub ? a - y : a + y) : f3 == 1 ? a << s : f3 == 2 ? (asint(a) < asint(y) ? 1 : 0) : f3 == 3 ? (a < y ? 1 : 0) :
-            f3 == 4 ? a ^ y : f3 == 5 ? ((w & 0x40000000) ? asuint(asint(a) >> s) : a >> s) : f3 == 6 ? a | y : a & y;
-        bool okk = opc == 0x13 ? ((f3 & 3) != 1 || f6 == 0 || (f3 == 5 && f6 == 0x10)) : (f7 == 0 || (f7 == 0x20 && (f3 == 0 || f3 == 5)));
-        if (!okk) raise(2, w);
-    } else [branch] if (opc == 0x33) {
-        v = op_m(f3, a, b);
-    } else [branch] if (opc == 0x03 || opc == 0x07) {
+    [branch] if (opc == 0x03 || opc == 0x07) {
         uint up = LOAD_UP(f3), x = mv << up;
         v = (f3 & 4) ? x >> up : asuint(asint(x) >> up);
         dst = opc == 0x07 ? 32 + rd : dst;
         if (opc == 0x07 ? f3 != 2 : ((0x37u >> f3) & 1) == 0) raise(2, w);
     } else [branch] if (opc == 0x23 || opc == 0x27) {
         if (opc == 0x27 ? f3 != 2 : f3 > 2) raise(2, w);
-        else store_any(a + imm_s(w), opc == 0x27 ? xr[32 + ((w >> 20) & 31)] : b, 1u << f3);
+        else store_any(a + imm_s(w), opc == 0x27 ? xr[32 + rs2] : b, 1u << f3);
         dst = 64;
     } else [branch] if (opc == 0x63) {
         bool lt = (f3 & 2) ? a < b : asint(a) < asint(b);
@@ -581,22 +591,17 @@ void step() {
         v = f5 == 3 ? (sc_ok ? 0 : 1) : mv;
         if (f5 == 2) { res_en = 1; res_addr = a; }
         if (f5 == 3 && sc_ok) res_en = 0;
-        if (f5 > 28 || ((f5 & 3) != 0 && f5 > 3) || (f5 == 2 && ((w >> 20) & 31) != 0)) raise(2, w);
+        if (f5 > 28 || ((f5 & 3) != 0 && f5 > 3) || (f5 == 2 && rs2 != 0)) raise(2, w);
         else if (f5 != 2 && (f5 != 3 || sc_ok)) store_any(a, f5 == 3 ? b : x, 4);
-    } else [branch] if (opc == 0x53) {
-        bool to_f, ok;
-        v = fp_all(w, (f7 & 0x68) == 0x68 ? a : xr[32 + ((w >> 15) & 31)], xr[32 + ((w >> 20) & 31)], to_f, ok);
-        dst = to_f ? 32 + rd : dst;
-        if (!ok) raise(2, w);
     } else [branch] if ((w & 0x06000073) == 0x43) {
         // fmadd, fmsub, fnmsub, fnmadd: a product and a sum, each rounded
-        precise float x = asfloat(xr[32 + ((w >> 15) & 31)]), y = asfloat(xr[32 + ((w >> 20) & 31)]), z = asfloat(xr[32 + (w >> 27)]);
+        precise float x = asfloat(xr[32 + rs1]), y = asfloat(xr[32 + rs2]), z = asfloat(xr[32 + (w >> 27)]);
         precise float p = x * y, r = ((w >> 2) & 3) == 0 ? p + z : ((w >> 2) & 3) == 1 ? p - z : ((w >> 2) & 3) == 2 ? z - p : (-p) - z;
         v = (asuint(r) & 0x7fffffff) > 0x7f800000 ? 0x7fc00000 : asuint(r);
         dst = 32 + rd;
     } else [branch] if (opc == 0x73) {
         // every system instruction reads the CSR its top bits name, and traps where it may not
-        uint n = w >> 20, src = (f3 & 4) ? (w >> 15) & 31 : a;
+        uint n = w >> 20, src = (f3 & 4) ? rs1 : a;
         dst = 64;
         [branch] if (((n >> 8) & 3) > priv) {
             raise(2, pc);
@@ -634,35 +639,39 @@ void step() {
         raise(2, w);
     }
     if (!trapped) xr[dst] = v;
-    if (quiet && !trapped) { pc = next; return; }
     [branch] if (core != 0 && trapped) {
         // a worker is given no trap: it stops where it is, its record in its mailbox (docs/machine/multicore.md)
         worker_fault();
         trapped = false;
         next = pc;
     }
-    bool no_trap = !trapped, handled = false;
-    uint pend = 0;
-    [branch] if (!trapped) {
-        uint m = mip & mie & 0x222;
-        pend = (m & 0x200) ? 0x200 : (m & 2) ? 2 : (m & 0x20) ? 0x20 : 0;
-        if (pend != 0) { trapped = true; tcause = 0x80000000 | firstbitlow(pend); tval = 0; }
-    }
     [branch] if (trapped) {
-        // every trap is the supervisor's; an interrupt waits while it has them off
-        handled = no_trap == false || priv != 1 || (mstatus & 2) != 0;
-        [branch] if (handled) {
-            sepc = no_trap ? next : pc;
-            scause = tcause;
-            stval = tval;
-            next = (stvec & 3) != 0 ? (stvec & ~3u) + 4 * (tcause & 0xffff) : stvec;
-            mstatus = (mstatus & ~0x122u) | ((mstatus & 2) << 4) | ((priv & 1) << 8);
-            priv = 1;
-        }
-        if (handled && no_trap && pend != 0x20) mip &= ~pend;   // (the timer's bit stays until the next deadline)
+        // every trap is the supervisor's
+        sepc = pc;
+        scause = tcause;
+        stval = tval;
+        next = (stvec & 3) != 0 ? (stvec & ~3u) + 4 * (tcause & 0xffff) : stvec;
+        mstatus = (mstatus & ~0x122u) | ((mstatus & 2) << 4) | ((priv & 1) << 8);
+        priv = 1;
+        quiet = false;
     }
-    quiet = no_trap && !handled && stall == 0 && (next & 3) == 0;   // (a jump not to a word: the next step traps)
     pc = next;
+}
+// After anything interrupts may see has changed: one taken if it is due (an interrupt waits while the supervisor has them
+// off), and whether the fast loop may go on from here (a jump not to a word: the step traps).
+void interrupts() {
+    uint m = mip & mie & 0x222, pend = (m & 0x200) ? 0x200 : (m & 2) ? 2 : (m & 0x20) ? 0x20 : 0;
+    [branch] if (pend != 0 && (priv != 1 || (mstatus & 2) != 0)) {
+        uint cause = firstbitlow(pend);
+        sepc = pc;
+        scause = 0x80000000 | cause;
+        stval = 0;
+        pc = (stvec & 3) != 0 ? (stvec & ~3u) + 4 * cause : stvec;
+        mstatus = (mstatus & ~0x122u) | ((mstatus & 2) << 4) | ((priv & 1) << 8);
+        priv = 1;
+        if (pend != 0x20) mip &= ~pend;   // (the timer's bit stays until the next deadline)
+    }
+    quiet = (pc & 3) == 0;
 }
 // The record of a worker's trap, the count last; a record that does not all fit is made in the next pass.
 void worker_fault() {
@@ -981,6 +990,7 @@ tick_out frag(v2f i) {
             // (one loop for a core and for a lane, whose indices are its runs one after another)
             [loop] for (;;) {
                 [loop] while (n < most && stall == 0) {
+                    [branch] if (!quiet) interrupts();
                     [branch] if (quiet) n += fast(most - n);
                     if (n >= most || stall != 0) break;
                     step();
