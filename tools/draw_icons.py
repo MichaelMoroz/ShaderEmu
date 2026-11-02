@@ -1,6 +1,7 @@
 """Draws the icons no set has a picture for, into linux/apps/icons (64 x 64, which
 tools/make_icons.py brings down): glxgears.png, the demo's three gears in its own colours,
-nxeyes.png, two eyes looking the same way, and halflife.png, an orange lambda in a ring.
+nxeyes.png, two eyes looking the same way, halflife.png, an orange lambda in a ring, and jk2.png, a blue
+light sword drawn up the diagonal (nothing of Jedi Outcast's own).
 
     python tools/draw_icons.py
 """
@@ -69,6 +70,23 @@ def lambda_ring():
     return picture
 
 
-for name, picture in (('glxgears', gears()), ('nxeyes', eyes()), ('halflife', lambda_ring())):
+def light_sword():
+    picture = Image.new('RGBA', (SIZE * UP, SIZE * UP), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(picture)
+    u = UP / 16
+    tip, guard, end = (900, 124), (330, 694), (150, 874)   # up the diagonal, the hilt at the lower left
+    for width, colour in ((150, (40, 110, 255, 70)), (110, (60, 140, 255, 140)), (70, (120, 190, 255, 255)), (34, (235, 245, 255, 255))):
+        draw.line(((tip[0] * u, tip[1] * u), (guard[0] * u, guard[1] * u)), fill=colour, width=round(width * u))
+        r = width / 2
+        draw.ellipse(((tip[0] - r) * u, (tip[1] - r) * u, (tip[0] + r) * u, (tip[1] + r) * u), fill=colour)
+    draw.line(((guard[0] * u, guard[1] * u), (end[0] * u, end[1] * u)), fill=(70, 70, 76, 255), width=round(96 * u))
+    for k in (0.2, 0.45, 0.7):   # the grip's rings
+        x, y = guard[0] + (end[0] - guard[0]) * k, guard[1] + (end[1] - guard[1]) * k
+        draw.line((((x - 34) * u, (y - 34) * u), ((x + 34) * u, (y + 34) * u)), fill=(30, 30, 34, 255), width=round(22 * u))
+    draw.line((((guard[0] - 60) * u, (guard[1] - 60) * u), ((guard[0] + 60) * u, (guard[1] + 60) * u)), fill=(170, 170, 180, 255), width=round(40 * u))
+    return picture
+
+
+for name, picture in (('glxgears', gears()), ('nxeyes', eyes()), ('halflife', lambda_ring()), ('jk2', light_sword())):
     picture.resize((SIZE, SIZE), Image.LANCZOS).save(os.path.join(OUT, name + '.png'))
     print('linux/apps/icons/%s.png' % name)

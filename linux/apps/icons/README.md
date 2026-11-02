@@ -15,3 +15,4 @@
 | `openttd.png` | OpenTTD (GPL-2.0) | `media/openttd.128.png` at the tag `linux/openttd/build.sh` names |
 | `quake3.png` | ioquake3 (GPL-2.0) | `misc/quake3.png` at the commit `linux/quake3/build.sh` names |
 | `aoe.png` | this project's | a temple on its steps with the sun behind, drawn for it (nothing of the game's) |
+| `jk2.png` | this project's | a blue light sword up the diagonal, drawn by `python tools/draw_icons.py` (nothing of Jedi Outcast's) |
