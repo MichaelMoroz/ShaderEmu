@@ -54,12 +54,14 @@ struct scene_note { int kind, x, y, width, height, atlas_x, atlas_y; unsigned in
 static struct scene_note scene_notes[SCENE_PARTS][SCENE_MOST] __attribute__((aligned(16)));
 static int scene_noted[SCENE_PARTS + 1] __attribute__((aligned(16)));	/* (a texel of its own: the worker adds to it) */
 /* What a worker stores here besides: in a texel of its own too (two cores never store to one 16 bytes). */
-static struct { int fill_count, missed, batched; uint32_t run_quads; int standing; } own __attribute__((aligned(16)));
+static struct { int fill_count, missed, batched; uint32_t run_quads; int standing, model_matrices; const GLfixed *part_projection; } own __attribute__((aligned(16)));
 #define fill_count own.fill_count
 #define missed own.missed
 #define batched own.batched
 #define run_quads own.run_quads
 #define standing own.standing	/* the tilted view: the rectangles now are objects', standing up */
+#define model_matrices own.model_matrices	/* (part_matrices) */
+#define part_projection own.part_projection
 static int scene_part = 1, scene_out, scene_owed, scene_owed_page, scene_owed_cursor;
 static int scene_at[2], scene_view[4];	/* the scene's origin on the screen, and the view its kept rectangles are cut to */
 #define PATH_CORES 3
@@ -615,6 +617,20 @@ tile_heights(unsigned int *to, int map_x, int map_y)
 	to[14] = (unsigned int)(h[(cy + 1) * 65 + cx] * (ONE / 4) / screen_h);
 }
 
+/*
+ * The part's projection, and whether the models' are loaded in its place: models one after another load
+ * only their own modelview, and the part's matrices come back when a rectangle is next put (run_end).
+ */
+static void
+part_matrices(void)
+{
+	glMatrixMode(GL_PROJECTION);
+	glLoadMatrixx(part_projection);
+	glMatrixMode(GL_MODELVIEW);
+	glLoadIdentity();
+	model_matrices = 0;
+}
+
 /* The matrices of the scene's parts: the ground's through the camera, the objects' in pixels. */
 static void
 tilt_part(int part)
@@ -622,8 +638,10 @@ tilt_part(int part)
 	if (!tilt.on)
 		return;
 	run_end();	/* (the batch so far with the matrices it was made under) */
+	part_projection = part == 1 || part < 0 ? whole : tilt.matrix;
+	model_matrices = 0;
 	glMatrixMode(GL_PROJECTION);
-	glLoadMatrixx(part == 1 || part < 0 ? whole : tilt.matrix);
+	glLoadMatrixx(part_projection);
 	glMatrixMode(GL_MODELVIEW);
 	glLoadIdentity();
 	standing = part == 1;
@@ -827,19 +845,18 @@ model_now(int x, int y, int which, int facing, int turret, int house)
 	td3d_model_matrix(step, o, pv, turns, model_sin(a + 64), model_sin(a), model_sin(b + 64), model_sin(b), (int32_t)x << 16,
 			  (int32_t)y << 16, gz, mv);
 	run_end();
-	glMatrixMode(GL_PROJECTION);
-	glLoadMatrixx(tilt.pixels);
-	glMatrixMode(GL_MODELVIEW);
+	if (!model_matrices) {
+		glMatrixMode(GL_PROJECTION);
+		glLoadMatrixx(tilt.pixels);
+		glMatrixMode(GL_MODELVIEW);
+		glDisable(GL_BLEND);
+		glDisable(GL_TEXTURE_2D);
+		glEnable(GL_DEPTH_TEST);	/* (it stays on: the parts' rectangles are tested too, tilt_part) */
+		model_matrices = 1;
+	}
 	glLoadMatrixx((const GLfixed *)mv);
-	glDisable(GL_BLEND);
-	glDisable(GL_TEXTURE_2D);
-	glEnable(GL_DEPTH_TEST);
 	seglPacked(models.data + model_word(p), models.data + models.coords, (GLsizei)model_word(p + 4),
 		   models.tables + (house * MODEL_TURNS + ((b + 16) >> 5 & 7)) * 256);
-	glLoadIdentity();	/* (the depth test stays on: the parts' rectangles are tested too, tilt_part) */
-	glMatrixMode(GL_PROJECTION);
-	glLoadMatrixx(whole);
-	glMatrixMode(GL_MODELVIEW);
 }
 
 /* A cell of the map: 24 pixels square at a place of the map, from the atlas. */
@@ -1487,6 +1504,8 @@ put_corners(GLuint name, unsigned int colour, int keyed, int x, int y, int width
 {
 	SEGLcorners *s = &cornered[batched];
 
+	if (model_matrices)
+		part_matrices();	/* (the first rectangle after models: the part's own matrices again) */
 	if (standing) {
 		if (!tilt_stand(x, y, width, height, s->xyz))
 			return;
