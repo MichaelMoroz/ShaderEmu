@@ -56,6 +56,7 @@ One file per subject. A doc names another by its file name, which is unique acro
 - [jk2.md](games/jk2.md) – Jedi Knight II: Jedi Outcast, the 2002 demo (begun: no picture yet, on rvc_cpu; private images only)
 - [micropolis.md](games/micropolis.md) – Micropolis
 - [nes.md](games/nes.md) – A NES
+- [opencnc3d.md](games/opencnc3d.md) – OpenCNC3D, the N64 Command & Conquer (begun: packs baked, the brain on rvc_cpu, no picture; private images only)
 - [openttd.md](games/openttd.md) – OpenTTD
 - [aoe.md](games/aoe.md) – Age of Empires, the 1997 trial (private images only)
 - [quake.md](games/quake.md) – Quake
@@ -80,6 +81,7 @@ One file per subject. A doc names another by its file name, which is unique acro
 - [blitter-plan.md](plans/blitter-plan.md) – Plan: a blitter in the commit pass
 - [cpu-benchmarks-plan.md](plans/cpu-benchmarks-plan.md) – Plan: the benchmarks of the era, on the machine
 - [jk2-plan.md](plans/jk2-plan.md) – Plan: Star Wars Jedi Knight II: Jedi Outcast, the 2002 demo
+- [opencnc3d-plan.md](plans/opencnc3d-plan.md) – Plan: OpenCNC3D on the machine
 - [simd-lanes-plan.md](plans/simd-lanes-plan.md) – Plan: lanes, a worker's pixels each on an index of their own
 - [original-x86-plan.md](plans/original-x86-plan.md) – Windows in a VRChat Shader — Project Handoff
 - [riscv-backport-plan.md](plans/riscv-backport-plan.md) – What gpu_vm's week can give the RISC-V machine (28 October 2026)
