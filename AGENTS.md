@@ -201,6 +201,18 @@
   the shell loop): an encoding of an extension we do not have runs as the base instruction it
   resembles, in rvc_cpu too. Zba/Zbb on the tick need a funct7 test of their own. A Quake gain
   under 1.5% is noise until a second 50 s run of two ticks says so.
+  The third round (`tick-costs.md`, "checks given up, small shapes, and FAST") gave up more such checks,
+  each in rvc_cpu too: a plain fence is no instruction in the fast loop; loads test no funct3 (lwu is lw)
+  and no 0, stores no `f3 < 3`; an atomic's funct5 under 16 none of ours is amoswap and lr's rs2 is not
+  looked at; jalr's funct3 is not looked at; fadd, fsub and fmul keep the card's NaN (`7fffffff` on NVIDIA,
+  `card_nan` in rvc_cpu): a program must not test a NaN's bits; `op_m` relies on D3D's division by zero
+  (divu all ones) and INT_MIN / -1. A guest that wants such an encoding trapped, or RISC-V's NaN from
+  them, changes the tick first.
+- `FAST` (`--define FAST` on the harness, `rvc_cpu --fast` or `RVC_TICK_FAST=1`; off by default, never
+  the default): a load or store in RAM not on its size takes its word's bytes, fdiv is the card's `a / b`,
+  an sc always succeeds, an opcode of no group is no instruction. 0.2 to 0.8% of a tick, and it breaks Red
+  Alert's and the NES's state, the IDE's breakpoints (the word 0) and fptest's fdiv (`tick-costs.md`,
+  "FAST"). A change to a FAST block changes rvc_cpu's `tick_fast` paths with it.
 - A round in Unity costs what a pass costs in the harness (the same fxc2 bytecode); what is
   left between them is 1.4 ms of every frame that is no round's (the room's cameras 0.65).
 - Doom's view is made by up to four worker cores from what the first core tells it between
