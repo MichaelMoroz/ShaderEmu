@@ -2,7 +2,9 @@
 // its samples where they lie, in the trial's files unpacked into memory (or in the ROM), so a sound costs a few stores: nothing is
 // mixed here. 16-bit samples must lie on an even address and the trial's DRS files have most waves on odd ones: such a wave is
 // copied once, when it is loaded, to memory of its own. A buffer has a voice only while it plays.
+#include <errno.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 #include "dsound.h"
 #include "aoe_port.h"
 #undef open
@@ -35,9 +37,10 @@ static unsigned rom_of(const void* at, int fd) {
     if (!f->phys) f->phys = snd_rom(f->fd, "Copyright", 9);
     // not in the ROM: the file in memory (tmpfs), mapped where it lies, whose address the card reads as it is (no MMU)
     if (!f->phys && !f->at) {
-        long n = lseek(f->fd, 0, SEEK_END);
-        void* p = n > 0 ? mmap(0, n, PROT_READ, MAP_PRIVATE, f->fd, 0) : MAP_FAILED;
+        struct stat st;
+        void* p = fstat(f->fd, &st) == 0 && st.st_size > 0 ? mmap(0, st.st_size, PROT_READ, MAP_PRIVATE, f->fd, 0) : MAP_FAILED;
         if (p != MAP_FAILED) f->at = p;
+        else if (log_on) fprintf(stderr, "aoesnd: file %d not mapped (%s)\n", f->fd, strerror(errno));
     }
     if (!f->phys && f->at) f->phys = (unsigned) (uintptr_t) f->at;
     return f->phys;
@@ -49,8 +52,8 @@ static unsigned file_phys(const char* path, int fd) {
     for (int i = 0; i < count; i++) if (!strcmp(seen[i].path, path)) return seen[i].phys;
     unsigned phys = snd_rom(fd, "RIFF", 4);
     if (!phys) {
-        long n = lseek(fd, 0, SEEK_END);
-        void* p = n > 0 ? mmap(0, n, PROT_READ, MAP_PRIVATE, fd, 0) : MAP_FAILED;
+        struct stat st;
+        void* p = fstat(fd, &st) == 0 && st.st_size > 0 ? mmap(0, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0) : MAP_FAILED;
         if (p != MAP_FAILED) phys = (unsigned) (uintptr_t) p;
     }
     if (phys && count < 16 && strlen(path) < sizeof seen[0].path) { strcpy(seen[count].path, path); seen[count++].phys = phys; }
@@ -199,6 +202,17 @@ IDirectSoundBuffer* aoe_sound_load(long id, const char* path) {
         if (mapped) { memcpy(head, mapped + offset, sizeof head); rom = rom_of(mapped, -1); }
         else if (lseek(fd, offset, SEEK_SET) == offset && read(fd, head, sizeof head) == (int) sizeof head) rom = rom_of(0, fd);
         if (rom) b = wave_buffer(head, sizeof head, rom + offset);
+        else if (!mapped && size > 0) {
+            // a resource file read, not mapped, and not in the ROM (one of the trial's in memory that could not be mapped): the wave
+            // read once into memory of its own
+            void* copy = 0;
+            if (!posix_memalign(&copy, 16, size) && pread(fd, copy, size, offset) == size) {
+                b = wave_buffer((const unsigned char*) copy, size < 64 ? size : 64, (unsigned) (uintptr_t) copy);
+                copied_waves++, copied_bytes += size;
+                if (log_on) fprintf(stderr, "aoesnd: resource %ld read into memory, %u waves, %u bytes so far\n", id, copied_waves, copied_bytes);
+            }
+            if (!b) free(copy);
+        }
     } else if (path && path[0]) {
         fd = _open(path, O_RDONLY);
         if (fd >= 0) {
