@@ -1,6 +1,7 @@
 # Plan: Tiberian Dawn in 3D, with free models
 
-Written 1 November 2026. Nothing has been built. It comes from reading `docs/games/tdawn.md`, `docs/machine/gpu.md` and OpenCNC3D's README and
+Written 1 November 2026. On 2 November the host's part was made and tested and the game's part written, not yet compiled for the
+machine ("What came of it", at the end; `docs/games/tdawn.md`, "In 3D"). It comes from reading `docs/games/tdawn.md`, `docs/machine/gpu.md` and OpenCNC3D's README and
 list of documents. When a page `docs/games/tdawn.md` has on this and this plan differ, the page is right.
 
 The idea is OpenCNC3D's (`github.com/freschism3000/OpenCNC3D`, GPL-3.0): the rules of the 2D game, drawn in 3D as the Nintendo 64's version was. Not its
@@ -74,3 +75,42 @@ Each shows something, and ends with its gate. Stop and report if a gate fails.
 2. **The look:** models by script could come out too plain to be worth it. Step 3's one tank, and step 4's first three kinds, show it cheaply. Then CC0 packs or the developer's own.
 3. **The number of draws in a battle.** A model's vertices stay in the ROM and a move or a turn is only its matrix, with no new sprite frame for each facing, so the cores' work should be like a sprite's or less. What grows is a command (64 bytes) and a matrix for each moving part, against 6 KB of texels a pass (some 7 texels a part: 100 parts a frame are about 2 passes, an estimate), the vertex shader's search over more commands, and the card's time for the triangles. Step 3 sets the budget before the set is made.
 4. **The world's frame:** the card's time with depth at 1280 x 720 in VR.
+
+## What came of it
+
+**2 November 2026**, on a computer with no guest toolchain (no WSL at first, then one whose shared home was in use): everything that runs on
+the host was made and tested there; the game's code was written against the fetched tree (commit `ce83b59` plus our patch) and passes a
+syntax check by the host's `gcc`/`g++` (64-bit, the game's defines), but **has not been compiled for the machine nor run**. No gate of a
+step below has been met: each needs the machine.
+
+- **Step 0.** The tilted matrix over the kept cells is written (`host_scene_tilt`, `td3d_clip_matrix`), and tested on the host against the
+  arithmetic it stands for (the matrix's pixel within 0.05 of it, depth inside -1 to 1 and growing away from the eye). No picture, no frames
+  a second: `game_par.py tdawn --card` and `--unity` are the owner's.
+- **Step 1.** Written: sprites standing up (scaled about their middle, the game's order kept, no depth), the ground's rectangles on the
+  map, the view's window unchanged (the camera is fitted inside it, so neither the radar nor the culling changes), clicks, the pointer and the
+  band through the game's input by the ray (`ShaderEmu_View_Pick`), the band and the bars where the camera shows them. A camera setting is
+  `TDAWN_PITCH` (35 to 85: at 30 or less the near row is behind the eye). OpenCNC3D's camera documents were not needed: the camera is
+  fitted to the game's window from its pitch alone (`td3d.h`).
+- **Step 2.** Heights: `linux/tdawn/td3d/heights.py` from the map's templates at image build, against the fetched tree's own table of them.
+  On the demo's five maps (`SCG01EA` to `SCG10EA`) it finds water, beaches, rivers and 88 to 540 cliff cells a map; the cliff lines all have
+  gaps, so no map has terraces: cliffs are ridges. Which side of a cliff is high is not in the game's data (OpenCNC3D's auto-heightmap
+  learnt it from the N64's maps): a table of the 38 cliff templates' high sides, made by looking at them (`td3d/tem.py` draws them), would
+  give terraces. Drawn: the cells' corners, the objects' and models' feet, the ray. Not drawn: the overlays and the shroud on the hills
+  (they need a four-cornered sprite in the blended pass, which `gles.c` has not), so heights are off by default.
+- **Step 3 and 4.** The tool (`linux/tdawn/models`: `mesh.py`'s boxes, wedges, prisms and tubes, `pack.py`'s packed file, `view.py`'s
+  pictures on the host) and 20 models made by script, all within the budget: 12 vehicles (MTNK, LTNK, HTNK, JEEP, BGGY, APC, HARV, MCV,
+  ARTY, FTNK, STNK, MSAM; 68 to 148 triangles) and 8 buildings (NUKE, SILO, PYLE, FACT, PROC, HQ, GTWR, GUN; 46 to 126), 1,884 triangles and
+  25,904 bytes in all. Turrets apart, house colours by the table, a `Kept` model costs a note. None was downloaded: there is no licence
+  question, and the plan's CC0 packs were not needed for these. Measured: nothing (the budget is to be set from the card, step 3's gate).
+  Soldiers, aircraft, trees and walls are sprites standing up.
+- **Step 6, in part.** `tools/test_all.py`'s `tdawn-3d-300` and `tdawn-3d-paths` (tag `td3d`) say the 3D view changes no rule.
+
+What needs the machine, in order (`docs/games/tdawn.md`, "In 3D", has the checks): build the game (`linux/tdawn/build.sh` and Red Alert's,
+which shares `host.c`), the image; `tools/test_all.py tdawn ralert` as before (2D unchanged), then `td3d`; captures of `TDAWN_VIEW=3d` on
+missions 1, 3 and 10 under `rvc_harness --cpu --warp`, with and without models and heights; `RVC_RACES` on a 3D run (the objects are drawn
+by a worker: `Model_Begin` stores only to `drawing`); then the card's numbers of step 0.
+
+What `gles.c` would need (its owner's: a change there moves every program's bytes): a sprite with a depth (the blended pass, tested), so
+that sprites and models hide each other rightly; and a quad of four corners with a colour in that pass, for the ground's rectangles over
+hills. And for the ROM: `seglPacked` takes memory from `seglMemory()`, so the models' file is copied into GPU memory (26 KB) rather than
+drawn where it lies in the ROM as Quake III's are; a call taking a ROM address would save that.
