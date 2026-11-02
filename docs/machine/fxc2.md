@@ -7,8 +7,8 @@ For this project it changes two things:
 - The `CPUTick` pass compiles in seconds, where FXC takes minutes, so the shader can be tuned on
   D3D11, the backend VRChat runs.
 - It compiles what FXC cannot: the big arrays as locals of the pass, which `shader_vm`
-  uses when it sees that compiler (`__FXC2__` is predefined by it). Under FXC the shader builds
-  with static arrays, zeroed every pass.
+  had as arguments, and statics not zeroed at every pass (`#pragma static_noinit`), which the tick's write cache and outputs are.
+  The tick no longer compiles under FXC, which was too slow and crashed on it.
 
 ## Using it with the harness
 
@@ -38,9 +38,7 @@ a newer FXC2 checkout and run the check at the end of this page.
   readback's `Map` asks for it. `RVC11_NO_FLUSH=1` leaves the flush out.
 
 The harness can hand fxc2's bytecode to D3D12 (`set RVC12_DXBC=1` with `--dxc`: every shader is then
-compiled by `d3dcompiler_47.dll`). The D3D11 build computes the timer value in the shader with
-doubles, the D3D12 build takes it from the host, so at long frames the two backends end in different
-states; with `--no-doubles` on D3D11 the hashes are equal.
+compiled by `d3dcompiler_47.dll`). Both take the timer value from the host (the tick has no doubles since 2 November 2026).
 
 ## What the shader uses from it
 

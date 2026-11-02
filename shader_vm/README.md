@@ -30,8 +30,8 @@ made from (`ShaderEmu/Sync shader sources from the repository`).
 
 ## What it is
 
-The state texture is the machine's (docs/machine/multicore.md): RAM from row 64, core 0's block
-and the workers' strip in rows 0-63, the worker geometry geotune lays out, the write cache of
+The state texture is the machine's (docs/machine/multicore.md): RAM from row 64, a slot of 64 x 8
+for each core in rows 0-63 and a block of 8 x 8 pixels in the targets, all found by shifts, the write cache of
 three tables of buckets of three texels, the mailboxes of `src/mc.h`. A core's texels are where
 `tick.hlsl`'s comment at `L1_AT` says, so the control pass, the host's reads
 and the GPU device's passes are as they were.

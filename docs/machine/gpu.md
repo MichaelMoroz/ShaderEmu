@@ -43,7 +43,7 @@ colour fragments. The CPU shader has no GPU code.
 | `0x8100001c` | lists drawn so far; it changes when a submitted list has been drawn |
 | `0x81000034` | the host's clock in milliseconds, updated once per frame |
 | `0x81000038` | copies made so far |
-| `0x8100003c` | host flags, written every frame. Bit 0: the guest should start its desktop when it boots. Bit 1: the host shows the console as four terminals (`docs/machine/console.md`). Bits 2-3: the workers' layout the host asks `geotune` for (0 its own pick; 1, 2, 3: small workers in 2, 4, 8 columns; `docs/machine/multicore.md`, "Packing the small workers"). Bits 8-15 and 16-23: the largest screen the host shows, width and height in 16s of pixels (0: it does not say) |
+| `0x8100003c` | host flags, written every frame. Bit 0: the guest should start its desktop when it boots. Bit 1: the host shows the console as four terminals (`docs/machine/console.md`). Bits 8-15 and 16-23: the largest screen the host shows, width and height in 16s of pixels (0: it does not say) |
 | `0x81000100` | a request for a page from the host, and its answer (`docs/system/fetch.md`) |
 | `0x81000300` | a 3D program's last whole frame, for a host that shows it in space (`docs/world/volume.md`) |
 | `0x81000320` | the counters' head: a core added, "ERGM" from a host that merges, merges so far, commits so far, a pass each (`docs/machine/multicore.md`, "Counters") |
@@ -471,8 +471,8 @@ stored beside it in its pass; `-DPROGRAM_COPY_ONLY` builds it alone for a quick 
 
 ## The ROM as one texture
 
-The ROM (the image's `rootfs.bin`) is one RGBAFloat texture, `_Data_ROM`: 2048 texels a row, texel 0 in the last
-row, a 16-byte texel a pixel read back by its bits (`asuint`). The tick, the commit, the gather, the GPU's draw
+The ROM (the image's `rootfs.bin`) is one RGBAFloat texture, `_Data_ROM`: 2048 texels a row, texel 0 in the first
+row (a word found by a mask and a shift, no `GetDimensions`), a 16-byte texel a pixel read back by its bits (`asuint`). The tick, the commit, the gather, the GPU's draw
 (`texture_word`), the sound, the lean tick and the world's shaders take a word as `asuint(_Data_ROM[p])[k]`, one load,
 and a copy out of the ROM one texel load.
 
@@ -486,7 +486,7 @@ and a copy out of the ROM one texel load.
   393,240 bytes differed in a file of NaN patterns, infinities,
   denormals and -0, and 0 of 281,828,352 in the ROM (2048 x 8601).
 - The Udon model still reads the ROM from lanes: "ShaderEmu/Import the ROM's lanes for the Udon
-  model" makes them. The device tree is still four lanes (a row).
+  model" makes them. RAM's start image, `_Data_RAM`, is such a texture too, read at `_Init` alone. The device tree has no texture: the kernel takes it from RAM.
 
 ## Blits in place of cameras
 

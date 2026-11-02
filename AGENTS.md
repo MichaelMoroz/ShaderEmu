@@ -3,6 +3,11 @@
   key or state is told over `GR_WMC_*`/`GR_WM_TELL` (no new request, no change to the client's library), what changes the window tree
   raises `gd_scene_gen`, and `python tools/test_all.py wm` must pass, with a look at `tools/wm_shots.py`'s pictures: the cases say places
   and states, not what is drawn. A program of which one window is enough calls `ui_single_instance()` (`ui_single.h`).
+- Tick simplification (2 November 2026, `docs/plans/tick-simplification-plan.md` has the numbers and what was not done). The tick needs fxc2 67 or later, the submodule
+  `tools/fxc2` (`git submodule update --init`; a new compiler is a commit moving it), and Unity's editor needs its `bin/unity` too: `c` and `ot` are statics under `#pragma static_noinit`,
+  which an older DLL ignores (448 zeroing instructions a pass); `xr` stays zeroed (without it 0.6 to 0.8% slower). The geometry is one row of cores
+  (`docs/machine/multicore.md`, "The geometry"): no division by a variable in it, a worker has 2^5 at most, a worker's quad is its whole block and its texels are in tiles,
+  each of which was measured (18%, 50%). The timer comes from the host: no doubles in the tick. The ROM and RAM's start image are one RGBAFloat texture each, from their first row.
 - The rules of the work (23 October 2026). We own the whole stack, from the games' and programs' sources down to the
   tick's DXBC instructions: the games and userland, the toolchain, the tick and the other shaders, and
   fxc2 (the submodule `tools/fxc2`), so a cost is fixed at whichever layer it is cheapest.
@@ -312,8 +317,7 @@
   `RAY_FIELD=0`/`RAY_LANES=0` are `nxray`'s ways back. In the tick HLSL evaluates both sides of `||`
   and `&&`: a call with side effects behind one ran for every pixel (every finished lane took itself
   for stuck). The field needs the host's primitive and points (`BackendOptions::laneField`; in Unity the
-  tick mesh's 17th triangle and `_FieldPoints`, wired but not yet run in the world). geotune's small workers (2^3) have 6 lanes
-  each: lanes gain from large caches, the field from neither.
+  tick mesh's 17th triangle and `_FieldPoints`, wired but not yet run in the world). Lanes gain from large caches, the field from neither.
 - Work longer than a pass goes on the lanes in steps (`docs/machine/lanes.md`, "Steps"; `mcw_field_steps`,
   `mcw_steps_left` is CSR `0x0ba`): a step keeps what it needs in its output, no registers are saved. A
   step stops only where what the pass has left covers the longest stretch to its next stop: run the

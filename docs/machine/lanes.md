@@ -71,9 +71,9 @@ run nothing.
 
 ## The field
 
-The field's pixels are rows 8-15 of the tick's targets' two bands (no core's block is there),
-248 across: 3,968 lanes. Their texels are rows 48 to 63 of the state (no core's tiles reach them),
-eight a lane. The tick's primitive after the 256 cores' draws it, as many rows as the posted job
+The field's pixels are rows 8 and 9 of the tick's targets, under the cores' row: 3,968 lanes.
+Their texels are tiles 5 and 6 of the state's slots from the ninth on (no worker's reach them, having five tiles),
+eight a lane, sixteen lanes a slot. The tick's primitive after the 256 cores' draws it, as many rows as the posted job
 wants, and the commit has a point for each of its 7,936 buckets, before the picture's; its state
 pass keeps of a lane's texels only the last words of its two tags (the commit's other rows are as
 they were). All under `LANE_FIELD`, which `shader_vm/main.shader` defines; the harness
@@ -194,15 +194,13 @@ themselves and check the library's paths. What only the card can show is run und
 workers' lanes and on the field, and `steptest`. `rvc_cpu` has no lanes: a program's output is checked there, its
 speed only on the card.
 
-How many lanes the workers have together goes by geotune's layout ("Packing the small workers" in
-[multicore.md](multicore.md)): its dense one, 16 workers of 2^5 and 239 of 2^3, has 1,866, and every worker
-at 2^5 (`--workers 8`) 6,885. Lanes gain from large caches, the field from neither.
+The workers together have 6,885 lanes, every worker at 2^5. Lanes gain from large caches, the field from neither.
 
 ## What is not done
 
 - The field in the world is wired and has not been run there: `MachineTickLean.shader` defines `LANE_FIELD`, the
-  tick's mesh has the field's primitive (`ShaderEmuBuilder`: 17 triangles), `Machine.shader`'s Unpack fills rows 48 to
-  63 from the targets while a job is posted, `MachineCommit.cginc` defines `LANE_FIELD` for `src/ram.cginc` (synced from
+  tick's mesh has the field's primitive (`ShaderEmuBuilder`: 17 triangles), `Machine.shader`'s Unpack fills tiles 5 and
+  6 of the slots from the targets while a job is posted, `MachineCommit.cginc` defines `LANE_FIELD` for `src/ram.cginc` (synced from
   `shader_vm/src/ram.h`), and the commit's points and `EmuMachine` have the field's 7,936 points
   (`_FieldPoints`). Unlike the harness, the world draws the primitive and the points every round, a job posted or
   not (with none posted they draw nothing), and does not count the field's instructions in its figures. To run it:

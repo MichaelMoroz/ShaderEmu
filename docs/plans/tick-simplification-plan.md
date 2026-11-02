@@ -4,6 +4,48 @@ Written 2 November 2026, nothing of it built. All on a branch, `tick-simple`, ea
 until the whole is measured. Numbers here are from one RTX 3090, this date. Optimizations are weighed together: a stage that
 loses alone is kept aside and tried again with the later ones, not dropped.
 
+## What came of it (2 November 2026, on the branch `tick-simple`)
+
+Numbers are one RTX 3090. Wall a frame or tick time, against the stage before, on the shell loop, Doom's timedemo and Quake at e1m1.
+
+| Stage | What | Result |
+|---|---|---|
+| 1 | fxc2 a submodule; `c` and `ot` statics under `static_noinit` | The disassembly as it was, line for line. `xr` under it: 0.6 to 0.8% slower, so it stays zeroed. `ubfe` on the whole tick: level within 0.3%, left off |
+| 2 | The dead out, 362 lines of functions and the properties | Shell -3.7%, Quake -4.5%, Doom level |
+| 3 | The host's timer, `csr_read`'s random number, `p.y`'s wrap | Shell -0.5%, Doom -0.8%, Quake +0.3% |
+| 4 | One row of cores, geotune out | Shell -1.7%, Doom -1.8%, Quake -2.5%, `nxray` -11.6%, `nxphys` -11.7%, the commit a third cheaper |
+| 5 | The ROM from its first row, RAM's image one texture | Level: these loads hardly read the ROM |
+| 6a | Every way of pairing, through the mirror | Below |
+| 6 | The port | **Not started**, by the rule of 6a |
+
+**Where stage 4 differs from the plan.** RAM stays at row 64 and the field's state is in tiles 5 and 6 of the slots, which no row had to move for. Workers are 2^5 at most, so decision 2 is 2^5.
+`TICK_GAP` stays, so the targets are 2056 wide (decision 3: without it Quake is 6% slower). A worker's texels are in tiles, not rows (rows: Quake 50% slower), and its quad its whole block.
+Sparse blocks, by bit reversal, were level. The old paths without `RAM_INPLACE` in `main.shader` went; `rvc_trace12`, on D3D12, still expects them and is not known to run.
+
+**Stage 6a.** Percent of tick time against the mirror in rows, only the active tick's mirror drawn. The figures earlier in this plan, -4.3 and -4.6, had the mirrors' draw order in them.
+
+| Way | Shell | Doom | Quake | Quake III | `nxray` |
+|---|---|---|---|---|---|
+| Pairs, rows 2048 wide | -1.5 | +1.6 | -1.9 | -0.5 | -3.8 |
+| Pairs, no `64 +` | -2.2 | +1.0 | -1.7 | -0.9 | -6.2 |
+| From an odd row (the control) | +0.8 | +1.8 | +1.0 | +1.0 | -1.6 |
+| Down, then along | -1.6 | +0.9 | -1.3 | -0.4 | -5.6 |
+| Rows 1024 wide | -1.5 | +1.0 | -1.7 | -0.5 | -0.9 |
+| In strips | -0.4 | +3.0 | -0.8 | +0.8 | -5.6 |
+| Tiles 2 x 2 | -1.0 | +2.0 | -0.4 | +0.1 | -8.8 |
+| Tiles 2 x 4 | +0.6 | +3.7 | -1.0 | +0.6 | +2.4 |
+| The map for fetches only | -0.6 | +1.5 | +0.1 | +0.3 | +0.3 |
+| For loads only | -0.4 | -0.2 | -1.1 | -0.9 | +6.8 |
+| Rows, no `fw1` | +6.9 | -1.2 | +6.1 | +1.9 | +11.5 |
+| Pairs, no `fw1` | +1.3 | -0.6 | +1.0 | +0.4 | +5.5 |
+| Pairs, a load keeping the other texel | +1.1 | +2.3 | +1.7 | +3.5 | -1.3 |
+
+Half-Life's data is not in an image made without WSL, so it is not among them. The pair's arithmetic in the commit and `ram()`, landing on today's addresses, cost nothing measurable (`nxray`, Doom, Quake, Quake III level), though no test here has the commit writing pairs.
+
+**Why no port.** On the games the best simple map is Doom +1.6, Quake -1.9, Quake III -0.5: about nothing, and the rule was that stage 6 does not start then. The port touches every device row, host readback and Unity pass, and AMD and Intel may gain nothing. Worth trying again if a program that matters looks like the shell loop or `nxray`, or the fetch changes. The mirror is in git nowhere: it is `RVC_MIRROR` in a patch, and is simple to make again from this.
+
+**Not done or not known.** No Unity project is on this computer, so nothing of Unity was compiled or run: the editor scripts, `EmuMachine` and the shaders need "Sync shader sources", "Import boot images" (`_ram.texels`), the world built anew and fxc2's `bin/unity`. The kernel was not rebuilt (no WSL): nothing needs it, but `linux/userland` and `programs/mc` changed in source only (`geotune` out of `emuinit`), and the prebuilt `emuinit` still looks for it and goes on. Decision 1 needs an AMD and an Intel card, so the ROM stays RGBAFloat. Nothing here ran on such a card.
+
 ## What is known
 
 **Dead** (read in the code, and for the device tree run):
