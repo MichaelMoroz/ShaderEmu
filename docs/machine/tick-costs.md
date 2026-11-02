@@ -89,6 +89,9 @@ operations counted do not predict.
 - **A function inlined in the loop has no `return` after its first test** (`ram_store`'s ways are an if and an else): fxc2
   makes a flag of a return, tested after.
 - **The loop is left by a bare break** (`pre_w` kept every turn, `pre_valid` worked out after the loop).
+- **No test the loop's end waits for on a common kind that only an encoding no program has would fail** (3 November
+  2026, second round): arithmetic's funct7 table was 2% of the shell loop. Arithmetic reads bit 30 of funct7 alone,
+  a branch's funct3 2 and 3 are beq and bne, and rvc_cpu makes such words as the tick does.
 - A smaller pass is not a faster one, and taking code out of the function can cost as much as adding it.
 - After any change to the fast loop's control flow, bring the function to Unity's copy verbatim.
 
@@ -256,3 +259,94 @@ far more than their reads (a 32-entry cache of texels was +18 to +30%), and a te
 is in ends, so a read ahead across a turn of the loop buys nothing on this card. Real runs move by 1 to 5% for changes far
 from what an instruction runs (registers, code taken out); frozen passes of one kind are exact and show what a change does to
 each kind, but not what it does to the fetch of real code (a bare break: -30% on a frozen jump a turn, level in real loads).
+
+## 3 November 2026, second round: tests the fast loop did not need
+
+The same RTX 3090 at 1,950 MHz, D3D11, fxc2 67, `RVC_TICK_ALT` from the snapshots of the round before (made with that
+round's image). ms of a frame's tick.
+
+**The kept set against `15c1e2a7` and `5ea93cfd`** (the new tick stamped and primary, the two beside it, one run each line):
+
+| Load | `15c1e2a7` | `5ea93cfd` | Now | against `15c1e2a7` | against `5ea93cfd` |
+|---|---|---|---|---|---|
+| Shell loop (40 s) | 1.7673 | 1.6807 | 1.6312 | -7.70% | -2.95% |
+| Shell loop, again | 1.7739 | 1.6888 | 1.6385 | -7.63% | -2.98% |
+| Quake, e1m1 (50 s) | 1.9240 | 1.8153 | 1.7949 | -6.71% | -1.12% |
+| Quake, again | 1.9169 | 1.8246 | 1.7812 | -7.08% | -2.38% |
+| Quake III (40 s) | 1.9819 | 1.8765 | 1.8493 | -6.69% | -1.45% |
+| `nxphys` (30 s) | 0.4181 | 0.4021 | 0.3945 | -5.64% | -1.89% |
+
+What it is, three changes:
+
+- **Arithmetic looks at no funct7 but bit 30.** The fast loop tested which funct7 each op and op-imm has (a table of 16
+  bits picked by funct7, shifted by funct3 and bit 5) so that an encoding of no extension of ours trapped as illegal. That
+  test was 2.0 to 2.6% of the shell loop. Now sub, sra and srai are bit 30, M is still funct7 1 of op (the group's test),
+  and anything else is made as the base instruction it resembles (`andn` is `and`, `slli` with a shift of 32 or more shifts
+  by its low five bits). rvc_cpu does the same (the line that made such encodings illegal is gone). A program built for
+  Zba or Zbb (`docs/plans/riscv-isa.md`) is now wrong on the tick, not stopped by SIGILL: such a plan changes the tick first.
+- **A branch's ok is from its word.** funct3 2 and 3 are `beq` and `bne` (in the general step and rvc_cpu too), and an
+  offset not on a word is bit 8 of the word, tested without waiting for `next`. Shell -0.3 to -0.7%, Quake -1.3%.
+- **Arithmetic shifts by `y`, not `y & 31`**: D3D's shifts take the amount's low five bits. Shell -0.2 to -0.4%, Quake -1.0
+  and -1.5%.
+
+**How noisy Quake is.** `[fastopt]` on the fast loop gave bytecode identical to the tree's (the same blob hash), and in 30
+to 45 s runs of three ticks it came out 0.7% and 1.7% faster than the tree on Quake, 0.4% slower on Quake III and 0.1% on
+the shell loop. The shell loop repeats within 0.1 to 0.3%; Quake wants 50 s runs of two ticks and a second run, and a gain
+under 1.5% on Quake is a guess until then. Two changes kept on 30 s runs (M before the atomics; op_m without returns and
+one division for its four) were level in 50 s runs (1.7463 against 1.7436, 1.7658 against 1.7653, a copy of the tick
+1.7476 and 1.7541) and were backed out. `nxphys` moved by 2 to 5% between runs of the same pair.
+
+**Experiments**, ms before and after, against the tree of that moment (the shell loop, then Quake; 30 s runs of three or
+four ticks unless said). Kept rows are in bold.
+
+| What | Shell | Quake | Verdict |
+|---|---|---|---|
+| The write cache as words (`uint cw[1792]`; a word stored and loaded by index, the tags four reads) | 1.6849 to 1.6873 | 1.7961 to 1.8164 | lost |
+| lui and auipc in the arithmetic group (`(w & 0x5b) == 0x13`), validity kept | 1.6849 to 1.7091 | 1.7961 to 1.8126 | lost |
+| **No validity test for arithmetic** | 1.6849 to 1.6488; 1.6887 to 1.6443; 1.6857 to 1.6512; 1.6941 to 1.6570 | 1.7961 to 1.7906; 1.8073 to 1.8026; 1.8240 to 1.8208 | **kept**, -2.0 to -2.6% shell; Quake III 1.8915 to 1.8769, `nxphys` 0.4161 to 0.4118 |
+| The validity as the group's test (M fails it) | 1.6887 to 1.7344 | | lost, +2.7% |
+| The validity by tests, no table | 1.6887 to 1.6802 | | -0.5% against -2.6% with none |
+| The validity ending the loop by the budget (no break of its own); the same by tests | 1.6857 to 1.6941; 1.6880 | 1.8073 to 1.8132; 1.8062 | lost: the loop's test waits for it as the break did |
+| A branch's ok from the word, funct3 tested too | 1.6975 to 1.6937 | | level |
+| Stores and branches one group, floats the next; the same with the branch first in it | 1.6975 to 1.6992; 1.7036 | | level |
+| (on no validity) lui and auipc in the arithmetic group | 1.6600 to 1.6882 | | lost |
+| (on no validity) mul in the arithmetic group by a select | 1.6614 to 1.7180 | | lost, +3.4% for one product and a select |
+| (on no validity) `pre_w` from the window after the loop, not written every turn | 1.6570 to 1.6606; 1.6720 to 1.6773 | | level |
+| (on no validity) a jump's ok from the word for jal | 1.6570 to 1.6590 | | level |
+| Probe: no ok for branches at all; none for lui, auipc and jal | 1.6727 to 1.6594; 1.6687 | | -0.8%, level (on the kept set, see below: level) |
+| Arithmetic with a tail of its own and a `continue` | 1.6720 to 1.7001 | 1.7948 to 1.8452 | lost |
+| Loads with no funct3 table (lwu is lw) | 1.6720 to 1.6604; 1.6694 to 1.6663 | 1.7971 to 1.8136 | level |
+| M under the arithmetic group, by a branch of its own | | 1.7948 to 1.8504 | lost |
+| **A branch's ok from bit 8 of its word, funct3 2 and 3 beq and bne** | 1.6694 to 1.6584; 1.6650 to 1.6601 | 1.7971 to 1.7724; 1.7952 to 1.7718 | **kept**; Quake III 1.8817 to 1.8758 |
+| The fetch taking the texel read ahead as it is when it enters at its first word | 1.6609 to 1.6665 | 1.7937 to 1.8172 | lost |
+| The loop's test at its end (`do ... while`) | 1.6609 to 1.6742 | 1.7937 to 1.8142 | lost |
+| A store's break in its own block; a load's after its read | 1.6552 to 1.7241; 1.6966 | 1.7981 to 1.8743; 1.8345 | lost: a break where it is found out is not always cheaper |
+| Arithmetic's results made for loads too, the load an `if` after them | 1.6511 to 1.6902 | 1.8045 to 1.8100 | lost |
+| The load the group's inner `if`, arithmetic its `else` | 1.6511 to 1.6884 | 1.8045 to 1.7942 | lost |
+| Arithmetic's selects by `f3 & 2` first | 1.6511 to 1.6544 | 1.8045 to 1.7877 | level |
+| Two texels remembered as absent; the absent texel forgotten only when it is the one stored | 1.6526 to 1.6675; 1.6553 | 1.7753 to 1.8089; 1.7831 | lost, level |
+| **Shifts by `y`, not `y & 31`** | 1.6663 to 1.6597; 1.6431 to 1.6402 | 1.7795 to 1.7615; 1.7748 to 1.7490 | **kept**; Quake III 1.8653 to 1.8592 |
+| The data texel read only when the remembered texels do not have it | 1.6663 to 1.6760 | | lost (as the round before found) |
+| A part of a word into a texel the cache has, written with no test of a change; the same with `at != 0` outside | 1.6658 to 1.6635; 1.6688 | 1.7795 to 1.7802; 1.7766 | level |
+| A load's shifts by `va << 3` and `up` from a table shifted by `f3 << 3` | 1.6154 to 1.6169 | 1.7535 to 1.7541 | level |
+| A store's shifts by `sa << 3` | 1.6154 to 1.6170 | 1.7535 to 1.7674 | level |
+| `ram_word`'s word picked by `o & 8` and `o & 4`; the fetch's turn by `pc & 8` and `pc & 4`; the store's word branches by them | 1.6154 to 1.6182; 1.6309 to 1.6302; 1.6321 | 1.7535 to 1.7739; 1.7620 to 1.7799; 1.8038 | level or lost |
+| slt by two compares, not signs turned over | 1.6309 to 1.6397 | | lost |
+| flw with the loads (`(w & 0x7b) == 0x03`), its funct3 tested; not tested | 1.6343 to 1.6540, 1.6379 to 1.6547; 1.6497 | 1.7716 to 1.7300 | lost: Quake -2.3%, the shell loop +1.0% and Quake III 1.8416 to 1.8598 |
+| flw with the loads and fsw with the stores | 1.6343 to 1.6868 | 1.7716 to 1.7870 | lost |
+| M before the atomics | 1.6343 to 1.6364; 1.6379 to 1.6371 | 1.7716 to 1.7519; 1.7652 to 1.7495; 50 s: level | level, backed out |
+| op_m without returns; and its four divisions one unsigned division of the magnitudes | 1.6335 to 1.6321; 1.6338, 1.6430 to 1.6431 | 1.7608 to 1.7550; 1.7503, 1.7783 to 1.7505; 50 s: level | level, backed out |
+| `[fastopt]` on the fast loop | 1.6175 to 1.6194 | 1.7728 to 1.7432; 1.7669 to 1.7538 | the same bytecode: the noise |
+| Probe: the general step without branches and jumps | 1.6175 to 1.6175 | 1.7669 to 1.7629 | level: the general step's size does not move the loop |
+| fp_all without returns, its dead sum gone | 1.6352 to 1.6361 | 1.7593 to 1.7694 | level (Quake III 1.8323 to 1.8337) |
+| Loads with no funct3 table and no `va != 0` | 1.6163 to 1.6178 | 1.7579 to 1.7621 | level |
+| On the kept set: no ok for branches; none for jumps; both | 1.6261 to 1.6352; 1.6259; 1.6252 | | level or lost |
+| `load_state`'s registers by an unrolled loop | 1.6292 to 1.6315; 1.6356 to 1.6367 | 1.7816 to 1.7694 | level (`nxphys` 0.4198 to 0.3967, 0.4155 to 0.4113, 0.3698 to 0.3782) |
+| rs2 read only by the kinds that use it | 1.6295 to 1.6870 | 1.7704 to 1.8284 | lost, +3.5%: the register reads want to be first |
+
+**What was learnt.** A test whose answer the loop's end waits for is dear on the commonest kind even when its operations
+are few: arithmetic's validity was 8 operations and 2% of the shell loop, and taking it off the loop's control (ending by
+the budget instead of a break) saved nothing, as the loop's own test then waited for it. An instruction's validity is
+cheaper given up where no program of ours has the encoding than tested. Moving work into the arithmetic path, even one
+product and a select, costs that path 1 to 3%; taking one operation out (`& 31`) was worth 0.2 to 0.4%. On Quake a run of
+30 s does not tell 1% from nothing: run 50 s, two ticks, twice.
