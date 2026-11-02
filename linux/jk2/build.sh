@@ -140,13 +140,15 @@ lines() {   # part, compiler and flags, then sources (with their extension)
     for f in "$@"; do b=$(basename "$(dirname "$f")")_$(basename "$f"); echo "$f $BUILD/$part/${b%.*}.o $cc"; done   # (folder_file.o: files.cpp is in two folders)
 }
 
+# (sys_shaderemu.cpp is the engine's on the build computer; on the machine the window part's, with the window)
+SYS_ENGINE="$HERE/sys_shaderemu.cpp"; [ "${JK2_HOST:-}" = 1 ] || { SYS_ENGINE=; rm -f "$BUILD/engine/jk2_sys_shaderemu.o"; }
 EF="$OPT $COMMON -D_JK2EXE -DJK2_MODE -I$S/code -I$S/lib/minizip/include -I$S/lib/minizip/include/minizip -I$S/lib/zlib/include"
 step "the engine"
 compile engine \
     "$(lines engine "$CXX $CXXSTD $EF" $(for f in $ENGINE; do echo "$S/code/$f.cpp"; done) \
         $(for f in $SHARED_CXX; do echo "$S/shared/$f.cpp"; done) \
         "$S/shared/sys/sys_main.cpp" "$S/shared/sys/sys_event.cpp" "$S/shared/sys/con_log.cpp" "$S/shared/sys/sys_unix.cpp" \
-        "$S/shared/sys/con_tty.cpp" "$HERE/sys_shaderemu.cpp")" \
+        "$S/shared/sys/con_tty.cpp" $SYS_ENGINE)" \
     "$(lines engine "$CC $EF" $(for f in $MP3; do echo "$S/code/mp3code/$f.c"; done) \
         $(for f in $SHARED_C; do echo "$S/shared/$f.c"; done) "$S/lib/minizip/ioapi.c" "$S/lib/minizip/unzip.c" \
         $(for f in $ZLIB; do echo "$S/lib/zlib/$f.c"; done))"
@@ -166,12 +168,15 @@ for o in "$BUILD"/game/cgame_*.o; do
 done
 # (q_shared.cpp of code/ and of the game would make one object name: the game's is in a folder of its own)
 
+# the GL the renderer calls: nullgl.c's nothing on the build computer; on the machine gl_jk2.c's (the GPU once a window
+# is open, nullgl.c's answers before), its calls renamed jk2_glX in the module below
+NULLGL="$HERE/nullgl.c"; [ "${JK2_HOST:-}" = 1 ] || NULLGL=
 RF="$OPT $COMMON -fno-gnu-unique -DRENDERER -D_JK2EXE -DJK2_MODE -I$S/code -I$S/code/rd-vanilla -I$S/code/rd-common -I$BUILD/include -I$S/lib/jpeg-9a/include -I$S/lib/jpeg-9a -I$S/lib/libpng/include -I$S/lib/zlib/include"
 step "the renderer"
 compile renderer \
     "$(lines renderer "$CXX $CXXSTD $RF" $(for f in $RENDERER; do echo "$S/code/$f.cpp"; done))" \
     "$(lines renderer "$CC $RF" $(for f in $SHARED_C; do echo "$S/shared/$f.c"; done) \
-        $(for f in $JPEG; do echo "$S/lib/jpeg-9a/$f.c"; done) $(for f in $PNG; do echo "$S/lib/libpng/$f.c"; done) "$HERE/nullgl.c")"
+        $(for f in $JPEG; do echo "$S/lib/jpeg-9a/$f.c"; done) $(for f in $PNG; do echo "$S/lib/libpng/$f.c"; done) $NULLGL)"
 
 # The game and the renderer were libraries with names of their own (q_shared's, Com_Printf, their globals): each is linked
 # into one object whose names stay inside it, but for its one entry, renamed (sys_shaderemu.cpp finds them). Section
@@ -199,9 +204,28 @@ module() {   # part, entries
 }
 module game GetGameAPI dllEntry vmMain
 module renderer GetRefAPI
+if [ "${JK2_HOST:-}" != 1 ]; then
+    $OBJCOPY $($NM -u "$BUILD/renderer.o" | awk '$2 ~ /^gl[A-Z]/ {print "--redefine-sym " $2 "=jk2_" $2}') "$BUILD/renderer.o"
+fi
+
+MACHINE=
+if [ "${JK2_HOST:-}" != 1 ]; then
+    # The window, the GPU and the workers' library (Half-Life's GL over Quake III's draws on gles.c): docs/games/jk2.md, "The picture"
+    step "the window"
+    PROGRAMS=$REPO/programs
+    MW=${SE_MW:-$WORK/src/microwindows}
+    [ -f "$MW/src/lib/libnano-X.a" ] || { echo "run linux/nanox/build.sh first"; exit 1; }
+    WF="$OPT -fno-pie -Wall -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable"
+    compile window \
+        "$(lines window "$CXX $CXXSTD $EF -DSE_WINDOW -I$MW/src/include" "$HERE/sys_shaderemu.cpp")" \
+        "$(lines window "$CC $WF -DSEGL_FLOAT -DMAX_TEXTURES=64 -idirafter $PROGRAMS/linux/include -I$MW/src/include -I$PROGRAMS/linux -I$REPO/linux/quake3" "$REPO/linux/quake3/gpu_shaderemu.c")" \
+        "$(lines window "$CC $WF -I$REPO/linux/quake3 -I$PROGRAMS/mc" "$HERE/gl_jk2.c")" \
+        "$(lines window "$CC -O2 -fno-common -fdata-sections -w -I$PROGRAMS/mc" "$PROGRAMS/mc/mcw.c" "$PROGRAMS/mc/mcwx.c")"
+    MACHINE="$BUILD/window/*.o $MW/src/lib/libnano-X.a"
+fi
 
 step "the program"
-$CXX $OPT -o "$BUILD/jk2" "$BUILD/engine"/*.o "$BUILD/game.o" "$BUILD/renderer.o" $LIBS
+$CXX $OPT -o "$BUILD/jk2" "$BUILD/engine"/*.o "$BUILD/game.o" "$BUILD/renderer.o" $MACHINE $LIBS
 $NM -n -C "$BUILD/jk2" > "$BUILD/jk2.nm"
 if [ "${JK2_HOST:-}" = 1 ]; then
     cp "$BUILD/jk2" "$OUT/jk2"
@@ -215,9 +239,16 @@ else
 #!/bin/sh
 # Jedi Outcast's demo (docs/games/jk2.md): settings and saved games in the folder the host keeps, else in /tmp
 P=/persistence; mkdir -p $P/jk2 2>/dev/null || P=/tmp
-exec jk2.bin +set fs_basepath /usr/share/jk2 +set fs_homepath $P/jk2 +set com_demo 1 "$@"
+# (Ctrl fires as in the other shooters and the world's controller: the demo binds it to use, which E is too; the
+# quotes keep the engine's command line from cutting the bind at its +); pictures a quarter of their size each way, the
+# GPU's memory being 36 MB of RAM (gl_jk2.c); triangles as glDrawElements, not strips of glArrayElement (four thousand
+# primitives a frame, each a draw of its own)
+exec jk2.bin +set fs_basepath /usr/share/jk2 +set fs_homepath $P/jk2 +set com_demo 1 +bind CTRL '"+attack"' +set r_picmip 2 +set r_primitives 2 "$@"
 EOF
     chmod 755 "$OUT/usr/bin/jk2"
+    # the Start menu's entry; data.py puts it into an image with the demo, never into the shared one
+    mkdir -p "$OUT/usr/share"
+    echo "Games/Jedi Outcast (demo)=jk2" > "$OUT/usr/share/nxapps.77-jk2"
     ls -l "$OUT/usr/bin/jk2.bin"
 fi
 step done

@@ -31,6 +31,209 @@ index 7cf2db8c..e8dc8ba1 100644
  			if(!hCrawl)
  			{
  				// failed, so go back to english
+diff --git a/code/client/cl_input.cpp b/code/client/cl_input.cpp
+index 94051760..12c752d9 100644
+--- a/code/client/cl_input.cpp
++++ b/code/client/cl_input.cpp
+@@ -239,6 +239,18 @@
+ 	float		val;
+ 	int			msec;
+ 
++#ifdef SHADEREMU
++	// (ShaderEmu: under fixedtime a key held at all in a frame is held for all of it: the share of the computer's
++	// milliseconds it was down made two runs of the same keys play two games; docs/games/jk2.md)
++	extern cvar_t *com_fixedtime;
++	if ( com_fixedtime && com_fixedtime->integer ) {
++		val = key->active || key->msec ? 1.0f : 0.0f;
++		key->msec = 0;
++		if ( key->active )
++			key->downtime = com_frameTime;
++		return val;
++	}
++#endif
+ 	msec = key->msec;
+ 	key->msec = 0;
+ 
+diff --git a/code/client/cl_main.cpp b/code/client/cl_main.cpp
+index 1a5c2446..aa845ee0 100644
+--- a/code/client/cl_main.cpp
++++ b/code/client/cl_main.cpp
+@@ -1127,6 +1127,9 @@
+ 	RIT(CM_DeleteCachedMap);
+ 	RIT(CM_DrawDebugSurface);
+ 	RIT(CM_PointContents);
++#ifdef SHADEREMU
++	RIT(CM_PointContentsGrid);
++#endif
+ 	RIT(Cvar_Get);
+ 	RIT(Cvar_Set);
+ 	RIT(Cvar_SetValue);
+diff --git a/code/qcommon/cm_public.h b/code/qcommon/cm_public.h
+index efb97b53..83ee931a 100644
+--- a/code/qcommon/cm_public.h
++++ b/code/qcommon/cm_public.h
+@@ -45,6 +45,10 @@
+ 
+ // returns an ORed contents mask
+ int			CM_PointContents( const vec3_t p, clipHandle_t model );
++#ifdef SHADEREMU
++void		CM_PointContentsGrid( const vec3_t origin, float step, int nx, int ny, int nz, int mask,
++				void ( *mark )( void *ctx, int x, int y, int z, int contents ), void *ctx );
++#endif
+ int			CM_TransformedPointContents( const vec3_t p, clipHandle_t model, const vec3_t origin, const vec3_t angles );
+ 
+ void		CM_BoxTrace ( trace_t *results, const vec3_t start, const vec3_t end,
+diff --git a/code/qcommon/cm_test.cpp b/code/qcommon/cm_test.cpp
+index 77a2265f..6735e0ae 100644
+--- a/code/qcommon/cm_test.cpp
++++ b/code/qcommon/cm_test.cpp
+@@ -680,4 +680,145 @@
+ 
+ }
+ 
+-
++#ifdef SHADEREMU
++/*
++==================
++CM_PointContentsGrid (ShaderEmu, docs/games/jk2.md)
++
++CM_PointContents( p, 0 ) & mask of every point origin + step * (x, y, z) of a grid, x < nx, y < ny, z < nz, without
++asking for each: a box of the grid's points goes down the tree whole while it lies on one side of a plane, and in a
++leaf it has one answer when each brush of the mask lies round all of it or apart from all of it. Anything nearer a
++plane than SE_GRID_MARGIN (a hundred times what a float's rounding can move a dot product here) is cut in two, down
++to a single point, which is asked as CM_PointContents asks: so the answers are its own. mark() is called for each
++point whose answer is not 0. (The weather's cache asked 13.5 million points of the demo's level one by one.)
++==================
++*/
++#define SE_GRID_MARGIN 0.25f
++typedef struct {
++	vec3_t origin;
++	float step;
++	int mask;
++	void ( *mark )( void *ctx, int x, int y, int z, int contents );
++	void *ctx;
++} seGrid_t;
++
++static int CM_SE_PointBrushes( const seGrid_t *g, const vec3_t p, const cLeaf_t *leaf )
++{
++	int contents = 0;
++	for ( int k = 0; k < leaf->numLeafBrushes; k++ ) {
++		const cbrush_t *b = &cmg.brushes[cmg.leafbrushes[leaf->firstLeafBrush + k]];
++		int i;
++		if ( !( b->contents & g->mask ) )
++			continue;
++		for ( i = 0; i < b->numsides; i++ )
++			if ( DotProduct( p, b->sides[i].plane->normal ) > b->sides[i].plane->dist )
++				break;
++		if ( i == b->numsides )
++			contents |= b->contents;
++	}
++	return contents & g->mask;
++}
++
++// the least and the most of normal . p - dist over the box
++static void CM_SE_Span( const cplane_t *plane, const vec3_t mins, const vec3_t maxs, float *low, float *high )
++{
++	float lo = -plane->dist, hi = -plane->dist;
++	for ( int i = 0; i < 3; i++ ) {
++		float a = plane->normal[i] * mins[i], b = plane->normal[i] * maxs[i];
++		lo += a < b ? a : b;
++		hi += a < b ? b : a;
++	}
++	*low = lo, *high = hi;
++}
++
++static void CM_SE_Grid_r( const seGrid_t *g, int num, const int lo[3], const int hi[3] )
++{
++	vec3_t mins, maxs;
++	for ( int i = 0; i < 3; i++ ) {
++		mins[i] = g->origin[i] + g->step * lo[i];
++		maxs[i] = g->origin[i] + g->step * ( hi[i] - 1 );
++	}
++	int one = hi[0] - lo[0] == 1 && hi[1] - lo[1] == 1 && hi[2] - lo[2] == 1;
++	if ( one ) {     // a point: as CM_PointContents finds it
++		vec3_t p;
++		for ( int i = 0; i < 3; i++ )
++			p[i] = g->origin[i] + g->step * lo[i];
++		int leafnum = CM_PointLeafnum_r( p, num, &cmg );
++		int contents = CM_SE_PointBrushes( g, p, &cmg.leafs[leafnum] );
++		if ( contents )
++			g->mark( g->ctx, lo[0], lo[1], lo[2], contents );
++		return;
++	}
++	int whole = 1, contents = 0;
++	while ( num >= 0 ) {
++		const cNode_t *node = cmg.nodes + num;
++		float low, high;
++		CM_SE_Span( node->plane, mins, maxs, &low, &high );
++		if ( low > SE_GRID_MARGIN )
++			num = node->children[0];
++		else if ( high < -SE_GRID_MARGIN )
++			num = node->children[1];
++		else {
++			whole = 0;
++			break;
++		}
++	}
++	if ( whole ) {
++		const cLeaf_t *leaf = &cmg.leafs[-1 - num];
++		for ( int k = 0; k < leaf->numLeafBrushes && whole; k++ ) {
++			const cbrush_t *b = &cmg.brushes[cmg.leafbrushes[leaf->firstLeafBrush + k]];
++			if ( !( b->contents & g->mask ) )
++				continue;
++			int inside = 1, apart = 0;
++			for ( int i = 0; i < b->numsides; i++ ) {
++				float low, high;
++				CM_SE_Span( b->sides[i].plane, mins, maxs, &low, &high );
++				if ( low > SE_GRID_MARGIN ) {
++					apart = 1;
++					break;
++				}
++				if ( high >= -SE_GRID_MARGIN )
++					inside = 0;
++			}
++			if ( apart )
++				continue;
++			if ( inside )
++				contents |= b->contents;
++			else
++				whole = 0;
++		}
++	}
++	if ( whole ) {
++		contents &= g->mask;
++		if ( contents )
++			for ( int z = lo[2]; z < hi[2]; z++ )
++				for ( int y = lo[1]; y < hi[1]; y++ )
++					for ( int x = lo[0]; x < hi[0]; x++ )
++						g->mark( g->ctx, x, y, z, contents );
++		return;
++	}
++	// in two along the longest side (num: the node where the box crossed a plane; above it both halves go the same way)
++	int axis = 0;
++	for ( int i = 1; i < 3; i++ )
++		if ( hi[i] - lo[i] > hi[axis] - lo[axis] )
++			axis = i;
++	int mid = ( lo[axis] + hi[axis] ) / 2, lo2[3] = { lo[0], lo[1], lo[2] }, hi1[3] = { hi[0], hi[1], hi[2] };
++	hi1[axis] = mid, lo2[axis] = mid;
++	if ( num < 0 )
++		num = 0;     // (a leaf with a brush across the box: from the top again, as the halves may lie in other leaves)
++	CM_SE_Grid_r( g, num, lo, hi1 );
++	CM_SE_Grid_r( g, num, lo2, hi );
++}
++
++void CM_PointContentsGrid( const vec3_t origin, float step, int nx, int ny, int nz, int mask,
++	void ( *mark )( void *ctx, int x, int y, int z, int contents ), void *ctx )
++{
++	seGrid_t g;
++	int lo[3] = { 0, 0, 0 }, hi[3] = { nx, ny, nz };
++	if ( !cmg.numNodes || nx <= 0 || ny <= 0 || nz <= 0 )
++		return;
++	VectorCopy( origin, g.origin );
++	g.step = step, g.mask = mask, g.mark = mark, g.ctx = ctx;
++	CM_SE_Grid_r( &g, 0, lo, hi );
++}
++#endif
 diff --git a/code/qcommon/common.cpp b/code/qcommon/common.cpp
 index aeaff246..187184e5 100644
 --- a/code/qcommon/common.cpp
@@ -71,11 +274,181 @@ index d0051ed6..79a87628 100644
  // Frees all blocks with the specified tag...
  //
  void Z_TagFree(memtag_t eTag)
+diff --git a/code/rd-common/tr_image_jpg.cpp b/code/rd-common/tr_image_jpg.cpp
+index a3ddb84a..fe42c2cf 100644
+--- a/code/rd-common/tr_image_jpg.cpp
++++ b/code/rd-common/tr_image_jpg.cpp
+@@ -59,6 +59,9 @@
+ 	Com_Printf("%s\n", buffer);
+ }
+ 
++#ifdef SHADEREMU
++int se_jpeg_shrink, se_jpeg_shrunk;	// halvings asked for (r_picmip, tr_image.cpp) and made by the decoder
++#endif
+ void LoadJPG( const char *filename, unsigned char **pic, int *width, int *height ) {
+ 	/* This struct contains the JPEG decompression parameters and pointers to
+ 	* working space (which is allocated as needed by the JPEG library).
+@@ -132,6 +135,15 @@
+ 	/* Make sure it always converts images to RGB color space. This will
+ 	* automatically convert 8-bit greyscale images to RGB as well.	*/
+ 	cinfo.out_color_space = JCS_RGB;
++#ifdef SHADEREMU
++	// (ShaderEmu: the fast IDCT, and at the size r_picmip wants)
++	cinfo.dct_method = JDCT_IFAST;
++	if ( se_jpeg_shrink > 0 ) {
++		cinfo.scale_num = 1;
++		cinfo.scale_denom = 1 << se_jpeg_shrink;
++		se_jpeg_shrunk = se_jpeg_shrink;
++	}
++#endif
+ 
+ 	/* Step 5: Start decompressor */
+ 
+diff --git a/code/rd-common/tr_public.h b/code/rd-common/tr_public.h
+index a0f0ace4..e1a2ddd9 100644
+--- a/code/rd-common/tr_public.h
++++ b/code/rd-common/tr_public.h
+@@ -84,6 +84,10 @@
+ 	bool				(*CM_CullWorldBox)					( const cplane_t *frustrum, const vec3pair_t bounds );
+ 	byte*				(*CM_ClusterPVS)					( int cluster );
+ 	int					(*CM_PointContents)					( const vec3_t p, clipHandle_t model );
++#ifdef SHADEREMU
++	void				(*CM_PointContentsGrid)				( const vec3_t origin, float step, int nx, int ny, int nz, int mask,
++															  void ( *mark )( void *ctx, int x, int y, int z, int contents ), void *ctx );
++#endif
+ 	void				(*S_RestartMusic)					( void );
+ 	qboolean			(*SND_RegisterAudio_LevelLoadEnd)	( qboolean bDeleteEverythingNotUsedThisLevel );
+ 
 diff --git a/code/rd-vanilla/tr_WorldEffects.cpp b/code/rd-vanilla/tr_WorldEffects.cpp
-index 5464b70b..29de8e86 100644
+index 5464b70b..6e6d897a 100644
 --- a/code/rd-vanilla/tr_WorldEffects.cpp
 +++ b/code/rd-vanilla/tr_WorldEffects.cpp
-@@ -1035,7 +1035,13 @@ public:
+@@ -428,8 +428,21 @@
+ ////////////////////////////////////////////////////////////////////////////////////////
+ // Outside Point Cache
+ ////////////////////////////////////////////////////////////////////////////////////////
++#ifdef SHADEREMU
++// A point of a weather zone whose contents are inside or outside: its bit (COutside::Cache's scan, made as a grid)
++struct SeOutsideScan
++{
++	void				*zone;
++	int					outside, inside;
++};
++static void SeOutsideMark( void *ctx, int x, int y, int z, int contents );
++#endif
++
+ class COutside
+ {
++#ifdef SHADEREMU
++	friend void SeOutsideMark( void *ctx, int x, int y, int z, int contents );
++#endif
+ #define COUTSIDE_STRUCT_VERSION 1	// you MUST increase this any time you change any binary (fields) inside this class, or cahced files will fuck up
+ public:
+ 	////////////////////////////////////////////////////////////////////////////////////
+@@ -707,8 +720,15 @@
+ 
+ 		// all this piece of code does really is fill in the bool "SWeatherZone::mMarkedOutside", plus the mPointCache[] for each zone,
+ 		//	so we can diskload those. Maybe.
++#ifdef SHADEREMU
++		// (no file of the cache read or kept: it is made in a moment, and a file made from the level is not kept with
++		// the demo; docs/games/jk2.md)
++		fileHandle_t f = 0;
++		if ( f )
++#else
+ 		fileHandle_t f = ReadCachedWeatherFile();
+ 		if ( f )
++#endif
+ 		{
+ 			for (int iZone=0; iZone<mWeatherZones.size(); iZone++)
+ 			{
+@@ -728,7 +748,9 @@
+ 			uint32_t		contents;
+ 			uint32_t		bit;
+ 
++#ifndef SHADEREMU
+ 			f = WriteCachedWeatherFile();
++#endif
+ 
+ 			// Iterate Over All Weather Zones
+ 			//--------------------------------
+@@ -744,6 +766,56 @@
+ 					Mins[x] += (POINTCACHE_CELL_SIZE/2);
+ 				}
+ 
++#ifdef SHADEREMU
++				// The same points' contents, the same marks (ShaderEmu: CM_PointContentsGrid, not 13.5 million questions)
++				{
++					SeOutsideScan scan = { &wz, 0, 0 };
++					ri.CM_PointContentsGrid( Mins.v, POINTCACHE_CELL_SIZE, wz.mWidth, wz.mHeight, wz.mDepth << 5,
++						CONTENTS_INSIDE | CONTENTS_OUTSIDE, SeOutsideMark, &scan );
++					if ( scan.outside && scan.inside )
++					{
++						Com_Error (ERR_DROP, "Weather Effect: Both Indoor and Outdoor brushs encountered in map.\n" );
++						return;
++					}
++					if ( ( scan.outside || scan.inside ) && !mCacheInit )
++					{
++						mCacheInit = true;
++						SWeatherZone::mMarkedOutside = scan.outside;
++					}
++					else if ( ( scan.outside || scan.inside ) && SWeatherZone::mMarkedOutside != !!scan.outside )
++					{
++						Com_Error (ERR_DROP, "Weather Effect: Both Indoor and Outdoor brushs encountered in map.\n" );
++						return;
++					}
++					// JK2_WEATHER_CHECK=1: the points asked one by one too, as before, and the words that differ counted
++					if ( getenv( "JK2_WEATHER_CHECK" ) )
++					{
++						int words = wz.miPointCacheByteSize / 4, wrong = 0;
++						uint32_t *grid = (uint32_t *)malloc( wz.miPointCacheByteSize );
++						memcpy( grid, wz.mPointCache, wz.miPointCacheByteSize );
++						memset( wz.mPointCache, 0, wz.miPointCacheByteSize );
++						for(z = 0; z < wz.mDepth; z++)
++							for(q = 0; q < 32; q++)
++								for(x = 0; x < wz.mWidth; x++)
++									for(y = 0; y < wz.mHeight; y++)
++									{
++										CurPos[0] = x			* POINTCACHE_CELL_SIZE;
++										CurPos[1] = y			* POINTCACHE_CELL_SIZE;
++										CurPos[2] = ((z << 5) + q)	* POINTCACHE_CELL_SIZE;
++										CurPos	  += Mins;
++										contents = ri.CM_PointContents(CurPos.v, 0);
++										if (contents&CONTENTS_INSIDE || contents&CONTENTS_OUTSIDE)
++											wz.mPointCache[((z * wz.mWidth * wz.mHeight) + (y * wz.mWidth) + x)] |= (1u << q);
++									}
++						for ( int i = 0; i < words; i++ )
++							wrong += wz.mPointCache[i] != grid[i];
++						Com_Printf( "jk2: the weather's cache of zone %d, %d x %d x %d points: %d of %d words wrong, %d points outside, %d inside\n",
++							zone, wz.mWidth, wz.mHeight, wz.mDepth << 5, wrong, words, scan.outside, scan.inside );
++						free( grid );
++					}
++				}
++				if ( 0 )
++#endif
+ 
+ 				// Start Scanning
+ 				//----------------
+@@ -879,6 +951,19 @@
+ 	}
+ };
+ COutside			mOutside;
++
++#ifdef SHADEREMU
++static void SeOutsideMark( void *ctx, int x, int y, int z, int contents )
++{
++	SeOutsideScan *scan = (SeOutsideScan *)ctx;
++	COutside::SWeatherZone *wz = (COutside::SWeatherZone *)scan->zone;
++	if ( contents & CONTENTS_OUTSIDE )
++		scan->outside++;
++	else
++		scan->inside++;
++	wz->mPointCache[( ( z >> 5 ) * wz->mWidth * wz->mHeight ) + ( y * wz->mWidth ) + x] |= 1u << ( z & 31 );
++}
++#endif
+ bool				COutside::SWeatherZone::mMarkedOutside = false;
+ 
+ 
+@@ -1035,7 +1120,13 @@
  		mImage = R_FindImageFile(texturePath, qfalse, qfalse, qfalse, GL_CLAMP);
  		if (!mImage)
  		{
@@ -105,6 +478,70 @@ index afbbb175..a5dbf9fd 100644
  	}
  	else
  	{
+diff --git a/code/rd-vanilla/tr_image.cpp b/code/rd-vanilla/tr_image.cpp
+index a13badd4..73f86498 100644
+--- a/code/rd-vanilla/tr_image.cpp
++++ b/code/rd-vanilla/tr_image.cpp
+@@ -554,6 +554,9 @@
+ 
+ ===============
+ */
++#ifdef SHADEREMU
++static int se_picmip_done;		// the picture's halvings of r_picmip its decoder made already
++#endif
+ static void Upload32( unsigned *data,
+ 						  GLenum format,
+ 						  qboolean mipmap,
+@@ -576,7 +579,11 @@
+ 	    // perform optional picmip operation
+ 	    //
+ 	    if ( picmip ) {
++#ifdef SHADEREMU
++		    for(i = se_picmip_done; i < r_picmip->integer; i++) {
++#else
+ 		    for(i = 0; i < r_picmip->integer; i++) {
++#endif
+ 			    R_MipMap( (byte *)data, width, height );
+ 			    width >>= 1;
+ 			    height >>= 1;
+@@ -703,7 +710,11 @@
+ 
+ 	    qglTexImage2D (GL_TEXTURE_2D, 0, *pformat, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, data );
+ 
++#ifdef SHADEREMU
++	    if (0)	// (ShaderEmu: the GPU draws level 0 alone; the levels under it were made for nothing)
++#else
+ 	    if (mipmap)
++#endif
+ 	    {
+ 		    int		miplevel;
+ 
+@@ -1087,12 +1098,25 @@
+ 	//
+ 	// load the pic from disk
+ 	//
++#ifdef SHADEREMU
++	// (ShaderEmu: a JPEG made smaller by r_picmip is decoded at that size, by libjpeg's scaled IDCT: docs/games/jk2.md)
++	extern int se_jpeg_shrink, se_jpeg_shrunk;
++	se_jpeg_shrink = allowPicmip ? ( r_picmip->integer < 3 ? r_picmip->integer : 3 ) : 0;
++	se_jpeg_shrunk = 0;
++#endif
+ 	R_LoadImage( name, &pic, &width, &height );
++#ifdef SHADEREMU
++	se_jpeg_shrink = 0;
++	se_picmip_done = se_jpeg_shrunk;
++#endif
+ 	if ( !pic ) {
+         return NULL;
+ 	}
+ 
+ 	image = R_CreateImage( ( char * ) name, pic, width, height, GL_RGBA, mipmap, allowPicmip, allowTC, glWrapClampMode );
++#ifdef SHADEREMU
++	se_picmip_done = 0;
++#endif
+ 	R_Free( pic );
+ 	return image;
+ }
 diff --git a/code/server/sv_game.cpp b/code/server/sv_game.cpp
 index 8cd596fb..b8e4be48 100644
 --- a/code/server/sv_game.cpp

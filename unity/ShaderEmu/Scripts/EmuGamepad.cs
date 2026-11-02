@@ -32,7 +32,7 @@ public class EmuGamepad : UdonSharpBehaviour
     // the mappings: a pointer (the desktop, the strategy games), two sticks, blocks, a pad, the hands
     private const int ForPointer = 0, ForShooter = 1, ForBlocks = 2, ForPad = 3, ForHands = 4;
     // the guest's programs that have a mapping of their own (linux/apps/gameid.h)
-    private const int GameDoom = 1, GameQuake = 2, GameClassiCube = 3, GameNes = 6, GameQuake3 = 7, GamePhysics = 8, GameHalfLife = 9;
+    private const int GameDoom = 1, GameQuake = 2, GameClassiCube = 3, GameNes = 6, GameQuake3 = 7, GamePhysics = 8, GameHalfLife = 9, GameJk2 = 10;
 
     private bool held;                      // the controller is in this visitor's hands
     private int scheme, mappedGame;
@@ -123,14 +123,14 @@ public class EmuGamepad : UdonSharpBehaviour
 
     private int SchemeOf(int game)
     {
-        return game == GameDoom || game == GameQuake || game == GameQuake3 || game == GameHalfLife ? ForShooter : game == GameClassiCube ? ForBlocks : game == GameNes ? ForPad
+        return game == GameDoom || game == GameQuake || game == GameQuake3 || game == GameHalfLife || game == GameJk2 ? ForShooter : game == GameClassiCube ? ForBlocks : game == GameNes ? ForPad
              : game == GamePhysics ? ForHands : ForPointer;
     }
 
     public string SchemeName()
     {
         int game = machine.gameId;
-        return scheme == ForShooter ? (game == GameDoom ? "SHOOTER (Doom)" : game == GameQuake3 ? "SHOOTER (Quake III)" : game == GameHalfLife ? "SHOOTER (Half-Life)" : "SHOOTER (Quake)") : scheme == ForBlocks ? "BLOCKS (ClassiCube)"
+        return scheme == ForShooter ? (game == GameDoom ? "SHOOTER (Doom)" : game == GameQuake3 ? "SHOOTER (Quake III)" : game == GameHalfLife ? "SHOOTER (Half-Life)" : game == GameJk2 ? "SHOOTER (Jedi Outcast)" : "SHOOTER (Quake)") : scheme == ForBlocks ? "BLOCKS (ClassiCube)"
              : scheme == ForPad ? "PAD (NES)" : scheme == ForHands ? "HANDS (Physics)" : "POINTER";
     }
 

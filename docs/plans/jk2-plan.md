@@ -114,8 +114,22 @@ Each ends with what it must show. If a gate fails, stop and report before going 
    a second. Waiting for the owner.*
 2. **The level drawn, no characters.** `tr_shaderemu`'s method behind OpenJK's renderer interface: the BSP, its shaders' first stages, light maps, the 2D of the HUD and the menus. *Gate: a flight through the
    level with a picture you would recognise, and a frame rate on the calibrated clock with Quake III's as its comparison.*
+   *2 November 2026 (the owner chose to go on past step 1's gate): a first picture, by the quicker way - rd-vanilla whole
+   over Half-Life's GL shim (`linux/jk2/gl_jk2.c`), not a renderer of our own. Captures under `rvc_harness --cpu --warp`
+   show the menus, the loading screen, the hangar's opening scene, the courts with their Stormtroopers, light maps and
+   snow. A frame of play is 11.35 million instructions of core 0 (7.8 with no picture), the load 11.4 billion (28.6 at step 1:
+   the snow's cache made from boxes of points, pictures at `r_picmip 2`); rd-vanilla's back end is 7.25 million of it. Not
+   measured on the calibrated clock (two frames a second at most: no need). The renderer of our own is still to do
+   (`docs/games/jk2.md`, "The picture").*
 3. **Ghoul2.** The three ways above on one character, then the most the demo's busiest room has, on the calibrated clock and the card. *Gate: one way chosen on numbers; the first person's hands and saber are drawn right.*
+   *2 November 2026: chosen on numbers, not built: the GPU's vertex shader. A Stormtrooper skinned by rd-vanilla on core 0 is
+   about 400 thousand instructions (140 a vertex), 14 in the busiest view of the start about 5.6 million a frame; its bones
+   on the GPU would be about 2 thousand a model. The hands and saber were not seen (`docs/games/jk2.md`, "Ghoul2").*
 4. **Input, sound, the desktop.** The window, keys and pointer as Quake III's. Sound through the existing layer, music and videos left out at first. An icon, `nxapps`, `gameid.h`. *Gate: the demo played from its start by a person, with a script of keys that holds as a test.*
+   *2 November 2026: keys and the pointer as Quake III's, the engine's mix played by a stream voice of the card, the Start
+   menu's entry, an icon, `GAME_JK2`; `JK2_KEYS` plays the start from the menu (New, Begin Game, a walk, a turn, a shot, a
+   death and the autosave's load) with the build computer's sums on `rvc_cpu`: `tools/test_all.py jk2` (long, on an image
+   with the pak). Not played by a person; the sound not heard.*
 5. **Speed.** By the `optimizing-games` skill: profile with `tools/prof.py`, the game's frame on a worker where it can be, Ghoul2 on workers if it is there, the script's and NPCs' costs, LTO and PGO. *Gate: the demo's busiest fight at the frame rate agreed at step 3, with `RVC_RACES` and `RVC_RACES_NEAR=4` at 0 undone, walked, not standing, and state sums held.*
 6. **In.** `tools/test_all.py jk2 --image` (the sum, on an image made so), `docs/games/jk2.md`, `AGENTS.md`'s note, and the world if the EULA allows.
 

@@ -293,6 +293,20 @@ CASES = [
          'nxkey drag:$((OX+220)),$((OY+40)):$((OX+420)),$((OY+240));sleep 4;killall aoe.bin;else echo AOE-NO-DATA; fi', wall=300,
          has=[r'^(aoeinput: order 425 110 1 0|AOE-NO-DATA)', r'^(aoeinput: drag -200 -100 0 625|AOE-NO-DATA)', r'^(aoeinput: order 380 150 1 0|AOE-NO-DATA)', r'^(aoeinput: box 220 40 420 240|AOE-NO-DATA)',
               r'^(aoeview: (\d+ \d+) selected 1\s+(?:aoe: step.*\s+)?aoeview: \2 selected 1|AOE-NO-DATA)']),
+    # Jedi Outcast's demo, on images made with its pak only (docs/games/jk2.md, "Checking it"): its start played by a script of
+    # keys from the menu (new game, a walk, a turn, a shot, the death and the autosave's load), and the build computer's sums;
+    # no window, so the picture is nullgl's and the sound mixed into nothing (the card's pace would move the sums)
+    case('jk2', 'games jk2 long', 'if [ -f /usr/share/jk2/base/assets0.pk3 ]; then JK2_KEYS="250:enter 330:at500,455 340:mouse1 1500:w+ 1700:w- '
+         '1700:right+ 1730:right- 1740:w+ 1900:w- 1900:mouse1+ 2000:mouse1-" JK2_FRAMES=2400 JK2_SUM=200 JK2_SEED=7 jk2 +set fixedtime 50 '
+         '+set com_maxfps 0; else echo JK2-NO-DATA; fi', wall=600,
+         has=[r'^.*(jk2sum: frame 800 time 41250 entities 645 sum b7b63862 draws cf778cae|JK2-NO-DATA)',
+              r'^.*(jk2sum: frame 1200 time 61250 entities 641 sum 5496b62c draws 8d82b4ce|JK2-NO-DATA)',
+              r'^.*(jk2sum: frame 1000 time 51250 entities 643 sum d946eeaa draws 7bf726e5|JK2-NO-DATA)']),
+    # the level played with no input for 4,000 frames: host_sum.sh's nine lines (the last two of them here)
+    case('jk2-sums', 'games jk2 long', 'if [ -f /usr/share/jk2/base/assets0.pk3 ]; then JK2_FRAMES=4000 JK2_SUM=400 JK2_SEED=7 jk2 +set fixedtime 50 '
+         '+set com_maxfps 0 +map demo; else echo JK2-NO-DATA; fi', wall=1200,
+         has=[r'^.*(jk2sum: frame 3200 time 161250 entities 639 sum 559c85a7 draws 810d9e76|JK2-NO-DATA)',
+              r'^.*(jk2sum: frame 3600 time 181250 entities 639 sum 286e9b16 draws 274198c2|JK2-NO-DATA)']),
     case('openttd-scroll', 'games openttd', X + 'OPENTTD_DRAW=cpu OPENTTD_PLAY=1 OPENTTD_PLAY_ODD=1 OPENTTD_PAUSE=1 OPENTTD_CHECK=1 openttd -g /usr/share/openttd/busy.sav',
          True, wall=400, has=[r'openttd: play round 1: .*checked (19\d|200), 0 differ \(0 pixels']),
     case('openttd-scroll-serial', 'games openttd', X + 'OPENTTD_DRAW=cpu OPENTTD_PLAY=1 OPENTTD_PAUSE=1 OPENTTD_CHECK=1 OPENTTD_WORKERS=0 openttd -g /usr/share/openttd/busy.sav',

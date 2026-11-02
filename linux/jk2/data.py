@@ -245,6 +245,9 @@ def main():
     shutil.copyfile(pak, os.path.join(overlay, 'usr', 'share', 'jk2', 'base', 'assets0.pk3'))
     for name in ('jk2.bin', 'jk2'):
         shutil.copyfile(os.path.join(built, 'usr', 'bin', name), os.path.join(overlay, 'usr', 'bin', name))
+    menu = os.path.join(built, 'usr', 'share', 'nxapps.77-jk2')
+    if os.path.exists(menu):
+        shutil.copyfile(menu, os.path.join(overlay, 'usr', 'share', 'nxapps.77-jk2'))
     print('jk2: in the image')
     return 0
 
