@@ -190,7 +190,7 @@ uint ram_word(uint o) {
     }
     uint4 tx = at != 0 ? c[at] : dr_v;
     uint w = idx(tx, (o >> 2) & 3);
-    return maybe && at == 0 && ovf_addr == o ? ovf_val : w;
+    return w;   // (a store with no room ends the pass: no load reads after it)
 }
 // `bits` into the word at RAM offset o under `mask`: the tables looked in one after another, each
 // one's bucket worked out only when the one before is full; a whole word into a texel the cache
