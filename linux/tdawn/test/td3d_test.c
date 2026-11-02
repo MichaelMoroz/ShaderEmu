@@ -118,10 +118,11 @@ camera(int w, int h, int pitch)
 	/* the GPU's matrix agrees with the arithmetic, wherever the window is on the screen */
 	{
 		int tac_x = 0, tac_y = 8, screen_w = 320, screen_h = 200;
-		int32_t m[16];
-		double mx, my, mz, lastz = -2;
+		int32_t m[16], px[16];
+		double mx, my, mz, lastz = -2, qx, qy, qz;
 
-		td3d_clip_matrix(&v, tac_x, tac_y, screen_w, screen_h, m);
+		td3d_clip_matrix(&v, tac_x, tac_y, screen_w, screen_h, screen_w, screen_h, m);
+		td3d_clip_matrix(&v, tac_x, tac_y, screen_w, screen_h, 1, 1, px);
 		for (y = 0; y <= h; y += 13)
 			for (x = 0; x <= w; x += 17)
 				for (z = 0; z <= 40; z += 20) {
@@ -134,6 +135,10 @@ camera(int w, int h, int pitch)
 					near_(my, PIX(sy) + tac_y, 0.05, what);
 					snprintf(what, sizeof what, "%dx%d at %d: matrix at %d,%d,%d depth inside -1..1", w, h, pitch, x, y, z);
 					expect(mz > -1 && mz < 1, what, mz, 0);
+					/* the same by the matrix for vertices in pixels (the models') */
+					by_matrix(px, x + tac_x, y + tac_y, z, screen_w, screen_h, &qx, &qy, &qz);
+					snprintf(what, sizeof what, "%dx%d at %d: pixels' matrix at %d,%d,%d", w, h, pitch, x, y, z);
+					expect(fabs(qx - mx) < 0.05 && fabs(qy - my) < 0.05 && fabs(qz - mz) < 1e-3, what, qx, mx);
 				}
 		/* nearer is less deep: the depth test can work */
 		for (y = 0; y <= h; y += 8) {
@@ -161,7 +166,7 @@ flat(void)
 	expect(sx == FIX(17) && sy == FIX(33) && k == TD3D_ONE, "the 2D view's screen is its ground", PIX(sx), 17);
 	td3d_to_ground(&v, FIX(17), FIX(33), 0, &gx, &gy);
 	expect(gx == FIX(17) && gy == FIX(33), "the 2D view's ground is its screen", PIX(gx), 17);
-	td3d_clip_matrix(&v, 0, 8, 320, 200, m);
+	td3d_clip_matrix(&v, 0, 8, 320, 200, 320, 200, m);
 	expect(m[0] == 2 * TD3D_ONE && m[5] == -2 * TD3D_ONE && m[12] == -TD3D_ONE, "the 2D view's matrix is host.c's", PIX(m[0]), 2);
 }
 
@@ -182,6 +187,67 @@ heights(void)
 	near_(PIX(td3d_height(NULL, FIX(30), FIX(5))), 0, 0, "no heights");
 }
 
+/* A model part's matrix (td3d_model_matrix) against the same turns made in doubles, and through the
+ * camera's matrix in pixels against td3d_to_screen of the same point: where a model's vertex lands. */
+static void
+model_matrices(void)
+{
+	struct td3d_view v;
+	int32_t px[16], mv[16];
+	int facing, turret, turns, bx, by, bz;
+	char what[160];
+	const int tac_x = 0, tac_y = 8, screen_w = 320, screen_h = 200;
+
+	td3d_view_make(&v, 240, 192, 60);
+	td3d_clip_matrix(&v, tac_x, tac_y, screen_w, screen_h, 1, 1, px);
+	for (turns = 0; turns < 2; turns++)
+		for (facing = 0; facing < 256; facing += 37)
+			for (turret = 0; turret < 256; turret += 53) {
+				double step = 0.0625, origin[3] = {-6.5, -9.0, 0.25}, pivot[3] = {1.0, -2.0, 5.5}, x = 130.0, y = 90.0, gz = 3.0;
+				double a = facing * 3.14159265358979 / 128, b = (turns ? turret : facing) * 3.14159265358979 / 128;
+				int32_t o[3] = {FIX(origin[0]), FIX(origin[1]), FIX(origin[2])}, pv[3] = {FIX(pivot[0]), FIX(pivot[1]), FIX(pivot[2])};
+
+				td3d_model_matrix(FIX(step), o, pv, turns, FIX(cos(a)), FIX(sin(a)), FIX(cos(b)), FIX(sin(b)), FIX(x), FIX(y),
+						  FIX(gz), mv);
+				for (bx = 0; bx <= 255; bx += 85)
+					for (by = 0; by <= 255; by += 51)
+						for (bz = 0; bz <= 255; bz += 255) {
+							/* in doubles: the point about the pivot, turned, then the pivot with the body */
+							double lx = origin[0] + step * bx, ly = origin[1] + step * by, lz = origin[2] + step * bz;
+							double wx, wy, mx, my, mz, sx, sy, sz, w;
+							int32_t ex, ey;
+							int i;
+
+							if (turns) {
+								wx = cos(a) * pivot[0] + sin(a) * pivot[1] + cos(b) * lx + sin(b) * ly;
+								wy = sin(a) * pivot[0] - cos(a) * pivot[1] + sin(b) * lx - cos(b) * ly;
+							} else {
+								wx = cos(a) * (pivot[0] + lx) + sin(a) * (pivot[1] + ly);
+								wy = sin(a) * (pivot[0] + lx) - cos(a) * (pivot[1] + ly);
+							}
+							mx = PIX(mv[0]) * bx + PIX(mv[4]) * by + PIX(mv[8]) * bz + PIX(mv[12]);
+							my = PIX(mv[1]) * bx + PIX(mv[5]) * by + PIX(mv[9]) * bz + PIX(mv[13]);
+							mz = PIX(mv[2]) * bx + PIX(mv[6]) * by + PIX(mv[10]) * bz + PIX(mv[14]);
+							snprintf(what, sizeof what, "model turns %d facing %d turret %d byte %d,%d,%d", turns, facing, turret, bx, by, bz);
+							near_(mx, x + wx, 0.02, what);
+							near_(my, y + wy, 0.02, what);
+							near_(mz, gz + pivot[2] + lz, 0.01, what);
+							/* through the camera in pixels: where td3d_to_screen has that point */
+							{
+								double in[4] = {mx, my, mz, 1}, out[4] = {0, 0, 0, 0};
+								for (i = 0; i < 16; i++)
+									out[i % 4] += PIX(px[i]) * in[i / 4];
+								w = out[3];
+								sx = (out[0] / w + 1) * 0.5 * screen_w, sy = (1 - out[1] / w) * 0.5 * screen_h, sz = out[2] / w;
+							}
+							td3d_to_screen(&v, FIX(mx - tac_x), FIX(my - tac_y), FIX(mz), &ex, &ey, NULL);
+							near_(sx, PIX(ex) + tac_x, 0.05, what);
+							near_(sy, PIX(ey) + tac_y, 0.05, what);
+							expect(sz > -1 && sz < 1, what, sz, 0);
+						}
+			}
+}
+
 int
 main(void)
 {
@@ -195,6 +261,7 @@ main(void)
 				camera(sizes[i][0], sizes[i][1], pitches[j]);
 	flat();
 	heights();
+	model_matrices();
 	printf("%s: %d checks, %d failed\n", failures ? "FAIL" : "PASS", checks, failures);
 	return failures != 0;
 }

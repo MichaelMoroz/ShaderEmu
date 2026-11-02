@@ -171,9 +171,11 @@ class Heights(unittest.TestCase):
 class Models(unittest.TestCase):
     def test_round_trip(self):
         made = build.models()
-        models, normals, coords_at = pack.unpack(pack.pack(made))
+        models, normals, materials, coords_at = pack.unpack(pack.pack(made))
         self.assertEqual([m["name"] for m in models], [m.name for m in made])
         self.assertEqual(coords_at % 16, 0)
+        self.assertEqual(materials[mesh.HOUSE], 0xFFFFFFFF)
+        self.assertEqual(materials[mesh.METAL], 150 << 16 | 150 << 8 | 140)
         for m, mm in zip(made, models):
             self.assertEqual(len(m.parts), len(mm["parts"]))
             for p, pp in zip(m.parts, mm["parts"]):

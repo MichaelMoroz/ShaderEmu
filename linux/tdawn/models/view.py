@@ -104,7 +104,7 @@ def png(path, rows):
 
 def sheet(data, path, facings=(0, 32, 64, 96, 128, 160, 192, 224)):
     """Every model of a file, a row each, at these facings; GDI's colours, Nod's for the second half."""
-    models, _, _ = pack.unpack(data)
+    models, _, _, _ = pack.unpack(data)
     rows = []
     for k, m in enumerate(models):
         size = 96 if m["kind"] == "unit" else 160

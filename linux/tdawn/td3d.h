@@ -154,29 +154,32 @@ td3d_stand(const struct td3d_view *v, int32_t x0, int32_t y0, int32_t x1, int32_
 
 /*
  * The GPU's projection for the tilted view (docs/machine/gpu.md: rows of a clip matrix, OpenGL's
- * conventions), in the units the scene's vertices are in: x across the whole window from 0 to 1
- * (screen_w game pixels), y down it from 0 to 1 (screen_h), z up in the same units as y. The
+ * conventions), in the units the vertices are in: a unit of x is unit_w of the screen's pixels
+ * (screen_w for host.c's kept quads and sprites, which go across the whole window from 0 to 1;
+ * 1 for vertices in pixels, the models'), y down by unit_h, z up in the same units as y. The
  * tactical window is at (tac_x, tac_y) of the screen. Column-major for glLoadMatrixx, as
  * OpenGL's are; scaled as a whole so that every number fits 16.16 (a clip matrix may be scaled:
  * what it draws is the same).
  */
 static inline void
-td3d_clip_matrix(const struct td3d_view *v, int tac_x, int tac_y, int screen_w, int screen_h, int32_t out[16])
+td3d_clip_matrix(const struct td3d_view *v, int tac_x, int tac_y, int screen_w, int screen_h, int unit_w, int unit_h,
+		 int32_t out[16])
 {
-	float row[4][4], most = 0, scale, sw = (float)screen_w, sh = (float)screen_h;
+	float row[4][4], most = 0, scale, sw = (float)screen_w, sh = (float)screen_h, uw = (float)unit_w, uh = (float)unit_h;
 	float n, far_, a, b;
 	int i, j;
 
 	if (!v->on) {
-		/* glOrthox(0, 1, 1, 0, -1, 1): host.c's whole window */
+		/* glOrthox(0, 1, 1, 0, -1, 1) over the units: host.c's whole window when they are the screen's */
 		static const int32_t whole[16] = {2 * TD3D_ONE, 0, 0, 0, 0, -2 * TD3D_ONE, 0, 0, 0, 0, -TD3D_ONE, 0, -TD3D_ONE, TD3D_ONE, 0, TD3D_ONE};
 		for (i = 0; i < 16; i++)
 			out[i] = whole[i];
+		out[0] = (int32_t)((int64_t)out[0] * unit_w / screen_w), out[5] = (int32_t)((int64_t)out[5] * unit_h / screen_h);
 		return;
 	}
-	/* depth and up as rows of (ux, uy, uz, 1): gx = ux sw - tac_x, gy = uy sh - tac_y, gz = uz sh */
-	float depth[4] = {0, -sh * v->fc, -sh * v->fs, (v->fyfar + (float)tac_y) * v->fc + v->feye * v->fs};
-	float up[4] = {0, -sh * v->fs, sh * v->fc, (v->fyfar + (float)tac_y) * v->fs - v->feye * v->fc};
+	/* depth and up as rows of (ux, uy, uz, 1): gx = ux uw - tac_x, gy = uy uh - tac_y, gz = uz uh */
+	float depth[4] = {0, -uh * v->fc, -uh * v->fs, (v->fyfar + (float)tac_y) * v->fc + v->feye * v->fs};
+	float up[4] = {0, -uh * v->fs, uh * v->fc, (v->fyfar + (float)tac_y) * v->fs - v->feye * v->fc};
 	/* sx depth = (tac_x + w/2) depth + F (gx - w/2) */
 	float cx = (float)tac_x + 0.5f * (float)v->w, cy = (float)tac_y + 0.5f * (float)v->h;
 	float sxd[4], syd[4];
@@ -184,7 +187,7 @@ td3d_clip_matrix(const struct td3d_view *v, int tac_x, int tac_y, int screen_w, 
 		sxd[j] = cx * depth[j];
 		syd[j] = cy * depth[j] - v->ff * up[j];
 	}
-	sxd[0] += v->ff * sw;
+	sxd[0] += v->ff * uw;
 	sxd[3] += -v->ff * ((float)tac_x + 0.5f * (float)v->w);
 	/* near and far for the depth test: a quarter of the nearest ground's depth, four times the far row's */
 	n = 0.25f * (v->ff - (float)v->h * v->fc);
@@ -227,6 +230,42 @@ td3d_height(const unsigned char *corners, int32_t mx, int32_t my)
 	else
 		z = h00 * TD3D_ONE + (h11 - h01) * fx + (h01 - h00) * fy;
 	return z / 4;	/* quarters of a pixel to pixels */
+}
+
+/*
+ * A model part's modelview (host.c's model_now; linux/tdawn/models/pack.py): its bytes b to the screen's
+ * pixels, as columns for glLoadMatrixx (16.16). A point of the part is origin + step b about its
+ * pivot; a part that turns (a turret) is turned by its own facing (cb, sb: the cosine and sine of
+ * it) about the pivot, which goes round with the body (ca, sa); one that does not turns with the body.
+ * Facings are clockwise from north, and the model's y ahead is up the screen: (c x + s y, s x - c y).
+ * It stands at (x, y) of the screen and gz above the ground (16.16 pixels).
+ */
+static inline int32_t
+td3d_mul(int32_t a, int32_t b)
+{
+	return (int32_t)(((int64_t)a * b) >> 16);
+}
+
+static inline void
+td3d_model_matrix(int32_t step, const int32_t origin[3], const int32_t pivot[3], int turns, int32_t ca, int32_t sa,
+		  int32_t cb, int32_t sb, int32_t x, int32_t y, int32_t gz, int32_t mv[16])
+{
+	int32_t t0, t1, c = turns ? cb : ca, s = turns ? sb : sa;
+	int i;
+
+	if (turns) {
+		t0 = td3d_mul(ca, pivot[0]) + td3d_mul(sa, pivot[1]) + td3d_mul(cb, origin[0]) + td3d_mul(sb, origin[1]);
+		t1 = td3d_mul(sa, pivot[0]) - td3d_mul(ca, pivot[1]) + td3d_mul(sb, origin[0]) - td3d_mul(cb, origin[1]);
+	} else {
+		t0 = td3d_mul(ca, pivot[0] + origin[0]) + td3d_mul(sa, pivot[1] + origin[1]);
+		t1 = td3d_mul(sa, pivot[0] + origin[0]) - td3d_mul(ca, pivot[1] + origin[1]);
+	}
+	for (i = 0; i < 16; i++)
+		mv[i] = 0;
+	mv[0] = td3d_mul(step, c), mv[1] = td3d_mul(step, s);
+	mv[4] = td3d_mul(step, s), mv[5] = -td3d_mul(step, c);
+	mv[10] = step;
+	mv[12] = x + t0, mv[13] = y + t1, mv[14] = pivot[2] + origin[2] + gz, mv[15] = TD3D_ONE;
 }
 
 #ifdef __cplusplus

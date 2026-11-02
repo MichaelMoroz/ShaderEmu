@@ -137,6 +137,27 @@ unsigned int host_cycles(void);
 void host_wait(void);
 
 /*
+ * The tilted view (docs/games/tdawn.md, "In 3D"; td3d.h). host_scene_tilt() gives the next scenes
+ * a camera (NULL: the 2D view, as before), where the tactical window is on the screen, and the
+ * map's corner heights (65 x 65, heights.py; NULL: flat). The ground's rectangles (parts 0 and 2)
+ * then lie on the map under the camera, the objects' (part 1) stand up where their middle is.
+ * Before host_scene_begin(), on the first core.
+ */
+struct td3d_view;
+void host_scene_tilt(const struct td3d_view *view, int tac_x, int tac_y, const unsigned char *heights);
+/*
+ * Models (linux/tdawn/models, the ROM's tdawn-models.dat): opened once (how many; -1: none), found
+ * by the game's name, and the colours of a house's models made from its two colours (0x00RRGGBB),
+ * on the first core before a scene draws them. A part is drawn by a kept rectangle of kind
+ * HOST_MODEL: x, y where it stands (as any rectangle's), w the model | part << 8, h the facing,
+ * ax the turret's (256ths of a turn, clockwise from north), ay the house.
+ */
+enum { HOST_MODEL = 5, HOST_HOUSES = 12 };
+int host_models_open(const char *path);
+int host_model_find(const char *name, int *parts);
+void host_model_house(int house, unsigned int main_colour, unsigned int dark_colour);
+
+/*
  * The first byte of a row that is not 0 (n if none) and the last (-1): a word at a time,
  * since most of a shape's frame is nothing.
  */

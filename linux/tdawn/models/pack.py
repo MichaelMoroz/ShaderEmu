@@ -9,7 +9,8 @@ second buffer, are all zero (no textures yet): one such buffer serves every part
 
     0   "TDM1"
     4   models (32 bits)          every number little-endian
-    8   where the 16 normals are: x, y, z, 0 a signed byte each, of 127
+    8   where the 16 normals are: x, y, z, 0 a signed byte each, of 127; then the 16 materials'
+        colours, a word each (0x00RRGGBB; 0xFFFFFFFF for the house's two, which the game gives)
     12  where the coordinates are (zero words, as many as the largest part's vertices)
     16  a model a 32 bytes:   name (8, NUL-padded), kind, parts, cells across, cells down (a byte each),
                               where its first part is (32 bits), bounds (6 x 16 bits, 16ths of a pixel), 4 spare
@@ -19,6 +20,8 @@ second buffer, are all zero (no textures yet): one such buffer serves every part
 """
 import math
 import struct
+
+from mesh import MATERIALS
 
 KINDS = {"unit": 0, "building": 1, "aircraft": 2, "infantry": 3, "terrain": 4}
 
@@ -96,6 +99,9 @@ def pack(models):
     normals_at = len(out)
     for n in NORMALS:
         out += struct.pack("<bbbb", *(int(round(v * 127)) for v in n), 0)
+    for k in range(16):
+        rgb = MATERIALS.get(k)
+        out += struct.pack("<I", 0xFFFFFFFF if rgb is None else rgb[0] << 16 | rgb[1] << 8 | rgb[2])
     _align(out)
     coords_at = len(out)
     out += b"\0" * (4 * most)
@@ -109,7 +115,8 @@ def pack(models):
 
 
 def unpack(data):
-    """[{name, kind, cells, bounds, parts: [{count, origin, step, pivot, turns, vertices: [(x, y, z, tag)]}]}]"""
+    """([{name, kind, cells, bounds, parts: [{count, origin, step, pivot, turns, vertices: [(x, y, z, tag)]}]}],
+    normals, materials, where the coordinates are)"""
     if data[:4] != b"TDM1":
         raise ValueError("not a models file")
     count, normals_at, coords_at = struct.unpack_from("<III", data, 4)
@@ -131,4 +138,5 @@ def unpack(data):
                           "vertices": [(w & 255, w >> 8 & 255, w >> 16 & 255, w >> 24) for w in words]})
         models.append({"name": name, "kind": kinds[kind], "cells": (cx, cy), "bounds": bounds, "parts": parts})
     normals = [struct.unpack_from("<bbb", data, normals_at + 4 * k) for k in range(16)]
-    return models, normals, coords_at
+    materials = list(struct.unpack_from("<16I", data, normals_at + 64))
+    return models, normals, materials, coords_at
