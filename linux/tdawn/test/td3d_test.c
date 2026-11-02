@@ -139,6 +139,12 @@ camera(int w, int h, int pitch)
 					by_matrix(px, x + tac_x, y + tac_y, z, screen_w, screen_h, &qx, &qy, &qz);
 					snprintf(what, sizeof what, "%dx%d at %d: pixels' matrix at %d,%d,%d", w, h, pitch, x, y, z);
 					expect(fabs(qx - mx) < 0.05 && fabs(qy - my) < 0.05 && fabs(qz - mz) < 1e-3, what, qx, mx);
+					/* a picture standing on this ground point with its lowest row there is a little nearer than it */
+					{
+						double rd = td3d_row_depth(&v, sy, FIX(z)), d = v.fb / (qz - v.fa);
+						snprintf(what, sizeof what, "%dx%d at %d: a row's depth at %d,%d,%d", w, h, pitch, x, y, z);
+						expect(rd < qz && (d < 1.5 * v.fn || rd > v.fa + v.fb / (d - 1.5)), what, rd, qz);
+					}
 				}
 		/* nearer is less deep: the depth test can work */
 		for (y = 0; y <= h; y += 8) {

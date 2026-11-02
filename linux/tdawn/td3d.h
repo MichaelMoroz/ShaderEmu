@@ -42,6 +42,7 @@ struct td3d_view {
 	/* for the clip matrix: depth at the window's near row, middle (16.16) */
 	int32_t near_depth;
 	float ff, fc, fs, fyfar, feye;	/* the same in floats, for the matrix */
+	float fn, fa, fb;	/* the depth test's near plane, and its number of a depth d: fa + fb / d */
 };
 
 static inline int32_t
@@ -67,6 +68,40 @@ td3d_view_make(struct td3d_view *v, int w, int h, int pitch)
 	v->f = td3d_fixed(v->ff), v->cosp = td3d_fixed(c), v->sinp = td3d_fixed(s);
 	v->yfar = td3d_fixed(v->fyfar), v->eye = td3d_fixed(v->feye);
 	v->near_depth = td3d_fixed(v->ff - (float)h * c);
+	/* near and far for the depth test: a quarter of the nearest ground's depth, four times the far row's */
+	{
+		float n = 0.25f * (v->ff - (float)h * c), far_ = 4.0f * v->ff;
+
+		v->fn = n;
+		v->fa = (far_ + n) / (far_ - n), v->fb = -2.0f * far_ * n / (far_ - n);
+	}
+}
+
+/*
+ * The depth test's number (z over w, as td3d_clip_matrix makes it) of the ground at height gz that row
+ * sy of the screen shows (16.16 pixels of the window), a pixel nearer the eye. A picture standing up
+ * drawn there with z = minus this in the window's flat matrix (host.c's `whole`: z over w is -z) is
+ * hidden by what stands in front of that ground and hides what stands behind it, and the ground under
+ * its lowest row does not hide it. 2D: 0.
+ */
+static inline float
+td3d_row_depth(const struct td3d_view *v, int32_t sy, int32_t gz)
+{
+	float ry, down, depth;
+
+	if (!v->on)
+		return 0.0f;
+	ry = (0.5f * (float)v->h - (float)sy * (1.0f / 65536)) / v->ff;	/* the ray's rise per unit ahead of the eye */
+	down = v->fs - ry * v->fc;	/* and how far it falls in the world per unit ahead */
+	/* (ground above the eye, which a low pitch and a hill can give, is met by a ray going up) */
+	depth = down > 1e-4f || down < -1e-4f ? (v->feye - (float)gz * (1.0f / 65536)) / down - 1.0f : 4.0f * v->ff;
+	if (depth <= 0)
+		depth = 4.0f * v->ff;
+	if (depth < 1.01f * v->fn)
+		depth = 1.01f * v->fn;
+	if (depth > 3.99f * v->ff)
+		depth = 3.99f * v->ff;
+	return v->fa + v->fb / depth;
 }
 
 /* depth and up (16.16) of a ground point given in 16.16 pixels */
@@ -166,7 +201,7 @@ td3d_clip_matrix(const struct td3d_view *v, int tac_x, int tac_y, int screen_w, 
 		 int32_t out[16])
 {
 	float row[4][4], most = 0, scale, sw = (float)screen_w, sh = (float)screen_h, uw = (float)unit_w, uh = (float)unit_h;
-	float n, far_, a, b;
+	float a, b;
 	int i, j;
 
 	if (!v->on) {
@@ -189,10 +224,8 @@ td3d_clip_matrix(const struct td3d_view *v, int tac_x, int tac_y, int screen_w, 
 	}
 	sxd[0] += v->ff * uw;
 	sxd[3] += -v->ff * ((float)tac_x + 0.5f * (float)v->w);
-	/* near and far for the depth test: a quarter of the nearest ground's depth, four times the far row's */
-	n = 0.25f * (v->ff - (float)v->h * v->fc);
-	far_ = 4.0f * v->ff;
-	a = (far_ + n) / (far_ - n), b = -2.0f * far_ * n / (far_ - n);
+	/* near and far for the depth test (td3d_view_make) */
+	a = v->fa, b = v->fb;
 	for (j = 0; j < 4; j++) {
 		row[0][j] = 2.0f / sw * sxd[j] - depth[j];
 		row[1][j] = depth[j] - 2.0f / sh * syd[j];
