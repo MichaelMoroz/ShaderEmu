@@ -183,18 +183,14 @@ uint ram_word(uint o) {
     uint t = o >> 4;
     [branch] if (t != dr_t) { dr_v = TEX(RAM_ADDR(t)); dr_t = t; }
     bool maybe = (o & bloom) == o;
-    uint at = 0;
-    [branch] if (maybe) {
-        at = t == m1_t ? m1_at : t == m2_t ? m2_at : 0;
-        [branch] if (at == 0 && t != absent_t) {
-            at = find(t);
-            if (at != 0) remember(t, at); else absent_t = t;
-        }
+    uint at = maybe ? (t == m1_t ? m1_at : t == m2_t ? m2_at : 0) : 0;
+    [branch] if (maybe && at == 0 && t != absent_t) {
+        at = find(t);
+        if (at != 0) remember(t, at); else absent_t = t;
     }
-    uint4 tx = dr_v;
-    [branch] if (at != 0) tx = c[at];   // (an if: a ?: read the cache's entry on every load, there or not)
+    uint4 tx = at != 0 ? c[at] : dr_v;
     uint w = idx(tx, (o >> 2) & 3);
-    return maybe && at == 0 && ovf_addr == o ? ovf_val : w;
+    return w;   // (a store with no room ends the pass: no load reads after it)
 }
 // `bits` into the word at RAM offset o under `mask`: the tables looked in one after another, each
 // one's bucket worked out only when the one before is full; a whole word into a texel the cache
@@ -227,32 +223,91 @@ void ram_store(uint o, uint v, uint mask) {
         bloom |= o;
         [branch] if (wi < 2) { if (wi == 0) c[at].x = v; else c[at].y = v; }
         else { if (wi == 2) c[at].z = v; else c[at].w = v; }
-        return;
-    }
-    uint4 texel;
-    [branch] if (at != 0) texel = c[at];
-    else {
-        [branch] if (t != dr_t) { dr_v = TEX(RAM_ADDR(t)); dr_t = t; }
-        texel = dr_v;
-    }
-    uint cur = at == 0 && ovf_addr == o && (o & bloom) == o ? ovf_val : idx(texel, wi);
-    uint val = (cur & ~mask) | (v & mask);
-    if (val == cur) return;
-    bloom |= o;
-    dirty |= 1u << ((o >> 22) & 31);
-    texel = put(texel, wi, val);
-    [branch] if (at != 0) {
-        c[at] = texel;
-    } else if (f0 != 0 || f1 != 0) {
-        uint b = f0 != 0 ? b0 : b1, f = f0 != 0 ? f0 : f1;
-        c[4 * b] = put(f0 != 0 ? tags0 : tags1, f - 1, tag);
-        c[4 * b + f] = texel;
-        OCC_SET(b);
-        remember(t, 4 * b + f);
-        absent_t = 0xffffffff;
     } else {
-        ovf_addr = o; ovf_val = val;   // made by the commit, which ends the pass here
-        stall = STALL_MEM; budget = 0;
+        // (no return in it: a return in a function inlined in the loop is a flag tested after it)
+        uint4 texel;
+        [branch] if (at != 0) texel = c[at];
+        else {
+            [branch] if (t != dr_t) { dr_v = TEX(RAM_ADDR(t)); dr_t = t; }
+            texel = dr_v;
+        }
+        uint cur = at == 0 && ovf_addr == o && (o & bloom) == o ? ovf_val : idx(texel, wi);
+        uint val = (cur & ~mask) | (v & mask);
+        [branch] if (val != cur) {
+            bloom |= o;
+            dirty |= 1u << ((o >> 22) & 31);
+            texel = put(texel, wi, val);
+            [branch] if (at != 0) {
+                c[at] = texel;
+            } else if (f0 != 0 || f1 != 0) {
+                uint b = f0 != 0 ? b0 : b1, f = f0 != 0 ? f0 : f1;
+                c[4 * b] = put(f0 != 0 ? tags0 : tags1, f - 1, tag);
+                c[4 * b + f] = texel;
+                OCC_SET(b);
+                remember(t, 4 * b + f);
+                absent_t = 0xffffffff;
+            } else {
+                ovf_addr = o; ovf_val = val;   // made by the commit, which ends the pass here
+                stall = STALL_MEM; budget = 0;
+            }
+        }
+    }
+}
+void ram_store_nc(uint o, uint v, uint mask) {   // ram_store for an o known to be in RAM
+    uint t = o >> 4, wi = (o >> 2) & 3, tag = t + 1, n = 1u << bits, b0 = 0, b1 = 0, f0 = 0, f1 = 0;
+    uint4 tags0 = 0, tags1 = 0;
+    uint at = t == m1_t ? m1_at : t == m2_t ? m2_at : 0;
+    [branch] if (at == 0) {
+        b0 = t & (n - 1);
+        [branch] if (OCC(b0)) tags0 = c[4 * b0];
+        uint e0 = slot(tags0, tag), e1 = 0;
+        f0 = slot(tags0, 0);
+        [branch] if (e0 == 0 && f0 == 0) {
+            b1 = n + H1(t, bits - 1);
+            [branch] if (OCC(b1)) tags1 = c[4 * b1];
+            e1 = slot(tags1, tag); f1 = slot(tags1, 0);
+            [branch] if (e1 == 0 && f1 == 0) {
+                b1 = BUCKET2(t, n);
+                tags1 = 0;
+                [branch] if (OCC(b1)) tags1 = c[4 * b1];
+                e1 = slot(tags1, tag); f1 = slot(tags1, 0);
+            }
+        }
+        at = e0 != 0 ? 4 * b0 + e0 : e1 != 0 ? 4 * b1 + e1 : 0;
+        if (at != 0) remember(t, at);
+    }
+    [branch] if (at != 0 && mask == 0xffffffff) {
+        bloom |= o;
+        [branch] if (wi < 2) { if (wi == 0) c[at].x = v; else c[at].y = v; }
+        else { if (wi == 2) c[at].z = v; else c[at].w = v; }
+    } else {
+        // (no return in it: a return in a function inlined in the loop is a flag tested after it)
+        uint4 texel;
+        [branch] if (at != 0) texel = c[at];
+        else {
+            [branch] if (t != dr_t) { dr_v = TEX(RAM_ADDR(t)); dr_t = t; }
+            texel = dr_v;
+        }
+        uint cur = at == 0 && ovf_addr == o && (o & bloom) == o ? ovf_val : idx(texel, wi);
+        uint val = (cur & ~mask) | (v & mask);
+        [branch] if (val != cur) {
+            bloom |= o;
+            dirty |= 1u << ((o >> 22) & 31);
+            texel = put(texel, wi, val);
+            [branch] if (at != 0) {
+                c[at] = texel;
+            } else if (f0 != 0 || f1 != 0) {
+                uint b = f0 != 0 ? b0 : b1, f = f0 != 0 ? f0 : f1;
+                c[4 * b] = put(f0 != 0 ? tags0 : tags1, f - 1, tag);
+                c[4 * b + f] = texel;
+                OCC_SET(b);
+                remember(t, 4 * b + f);
+                absent_t = 0xffffffff;
+            } else {
+                ovf_addr = o; ovf_val = val;   // made by the commit, which ends the pass here
+                stall = STALL_MEM; budget = 0;
+            }
+        }
     }
 }
 // a word anywhere (a on a word): RAM, the ROM, the clock chip, the timer
@@ -441,62 +496,59 @@ uint fast(uint room) {
         uint w = cur.x, opc = w & 0x7f, f3 = (w >> 12) & 7, rd = (w >> 7) & 31, rs1 = (w >> 15) & 31, rs2 = (w >> 20) & 31;
         uint a = xr[rs1], b = xr[rs2], next = pc + 4, v = 0, dst = rd == 0 ? 64 : rd;
         bool ok = true;
-        // arithmetic, loads, stores and floats a group, in it arithmetic and loads one
+        // arithmetic and loads a group, stores and floats the next (each test passed is a level of every kind after it)
         bool alu = (w & 0x5f) == 0x13 && (w & 0xfe00007f) != 0x02000033, ld = opc == 0x03;   // (flw and fsw are the floats')
-        [branch] if (alu || ld || opc == 0x23 || (w & 0x5f) == 0x07 || opc == 0x53) {
-            [branch] if (alu || ld) {
-                [branch] if (alu) {
-                    // op-imm and op: every result made, one chosen; signed is unsigned with the signs turned over
-                    bool reg = (w & 0x20) != 0, alt = (w & 0x40000000) != 0;
-                    uint y = reg ? b : imm_i(w), s = y & 31, turn = (f3 & 1) ? 0 : 0x80000000, f7 = w >> 25;
-                    uint r01 = (f3 & 1) ? a << s : ((reg && alt) ? a - y : a + y), r23 = (a ^ turn) < (y ^ turn) ? 1 : 0;
-                    uint r45 = (f3 & 1) ? (alt ? asuint(asint(a) >> s) : a >> s) : a ^ y, r67 = (f3 & 1) ? a & y : a | y;
-                    v = (f3 & 4) ? ((f3 & 2) ? r67 : r45) : ((f3 & 2) ? r23 : r01);
-                    ok = (((f7 == 0 ? 0xffffu : f7 == 0x20 ? 0x21fdu : 0x00ddu) >> (((w >> 2) & 8) | f3)) & 1) != 0;
-                } else {
-                    // lb lh lw lbu lhu, within one word of RAM
-                    uint va = a + imm_i(w), up = LOAD_UP(f3);
-                    ok = va != 0 && ((0x37u >> f3) & 1) != 0 && (va & 3) + (1u << (f3 & 3)) <= 4 && (va ^ 0x80000000) < RAM_MAX;
-                    [branch] if (ok) {
-                        uint x = ram_word(va & 0x7ffffffc) >> ((va & 3) * 8) << up;
-                        v = (f3 & 4) ? x >> up : asuint(asint(x) >> up);
-                    }
-                }
+        [branch] if (alu || ld) {
+            [branch] if (alu) {
+                // op-imm and op: every result made, one chosen; signed is unsigned with the signs turned over
+                bool reg = (w & 0x20) != 0, alt = (w & 0x40000000) != 0;
+                uint y = reg ? b : imm_i(w), s = y & 31, turn = (f3 & 1) ? 0 : 0x80000000, f7 = w >> 25;
+                uint r01 = (f3 & 1) ? a << s : ((reg && alt) ? a - y : a + y), r23 = (a ^ turn) < (y ^ turn) ? 1 : 0;
+                uint r45 = (f3 & 1) ? (alt ? asuint(asint(a) >> s) : a >> s) : a ^ y, r67 = (f3 & 1) ? a & y : a | y;
+                v = (f3 & 4) ? ((f3 & 2) ? r67 : r45) : ((f3 & 2) ? r23 : r01);
+                ok = (((f7 == 0 ? 0xffffu : f7 == 0x20 ? 0x21fdu : 0x00ddu) >> (((w >> 2) & 8) | f3)) & 1) != 0;
             } else {
-                [branch] if (opc == 0x23) {
-                    // sb sh sw, within one word of RAM
-                    uint sa = a + imm_s(w), off = sa & 3;
-                    ok = f3 < 3 && (sa & 0x80000000) != 0 && off + (1u << f3) <= 4;
-                    [branch] if (ok) ram_store(sa & 0x7ffffffc, b << (off * 8), (f3 == 2 ? 0xffffffff : f3 == 1 ? 0xffff : 0xff) << (off * 8));
-                    dst = 64;
-                } else [branch] if (opc == 0x53) {
-                    // (opcode 0x53 before flw and fsw: a program has more of them) floats: a sum, a difference, a product, and the light ones; the rest are the general step's
-                    uint f7 = w >> 25, fa = a, fb = xr[32 + rs2];
-                    [branch] if ((f7 & 0x68) != 0x68) fa = xr[32 + rs1];   // (an if: a ?: read the register either way)
-                    bool to_f = true;
-                    [branch] if ((f7 & 0x73) == 0 && f7 != 0x0c) {
-                        precise float x = asfloat(fa), y = asfloat(fb), sum = x + y, dif = x - y, prod = x * y;
-                        v = asuint(f7 == 0 ? sum : f7 == 4 ? dif : prod);
-                        v = (v & 0x7fffffff) > 0x7f800000 ? 0x7fc00000 : v;
-                    } else [branch] if (((0x50100030u >> (f7 >> 2)) & 1) != 0 && (f7 & 3) == 0 && (f7 != 0x70 || f3 == 0)) {
-                        v = fp_light(w, fa, fb, to_f, ok);
-                    } else {
-                        v = fp_all(w, fa, fb, to_f, ok);   // the divisions, roots and conversions too: a float never leaves the loop
-                    }
-                    dst = to_f ? 32 + rd : dst;
-                } else [branch] if (opc == 0x07) {
-                    // flw, a word of RAM
-                    uint va = a + imm_i(w);
-                    ok = va != 0 && f3 == 2 && (va & 0x80000003) == 0x80000000 && (va & 0x7ffffffc) < RAM_MAX;
-                    [branch] if (ok) v = ram_word(va & 0x7ffffffc);
-                    dst = 32 + rd;
+                // lb lh lw lbu lhu, within one word of RAM
+                uint va = a + imm_i(w), up = LOAD_UP(f3);
+                ok = va != 0 && ((0x37u >> f3) & 1) != 0 && (va & 3) + (1u << (f3 & 3)) <= 4 && (va ^ 0x80000000) < RAM_MAX;
+                // (read whether or not it may be: a read changes nothing, and a load that may not is the general step's)
+                uint x = ram_word(va & 0x7ffffffc) >> ((va & 3) * 8) << up;
+                v = (f3 & 4) ? x >> up : asuint(asint(x) >> up);
+            }
+        } else [branch] if (opc == 0x23 || (w & 0x5f) == 0x07 || opc == 0x53) {
+            [branch] if (opc == 0x23) {
+                // sb sh sw, within one word of RAM
+                uint sa = a + imm_s(w), off = sa & 3;
+                ok = f3 < 3 && (sa ^ 0x80000000) < RAM_MAX && off + (1u << f3) <= 4;
+                [branch] if (ok) ram_store_nc(sa & 0x7ffffffc, b << (off * 8), (f3 == 2 ? 0xffffffff : f3 == 1 ? 0xffff : 0xff) << (off * 8));
+                dst = 64;
+            } else [branch] if (opc == 0x53) {
+                // (opcode 0x53 before flw and fsw: a program has more of them) floats: a sum, a difference, a product, and the light ones; the rest are the general step's
+                uint f7 = w >> 25, fa = a, fb = xr[32 + rs2];
+                [branch] if ((f7 & 0x68) != 0x68) fa = xr[32 + rs1];   // (an if: a ?: read the register either way)
+                bool to_f = true;
+                [branch] if ((f7 & 0x73) == 0 && f7 != 0x0c) {
+                    precise float x = asfloat(fa), y = asfloat(fb), sum = x + y, dif = x - y, prod = x * y;
+                    v = asuint(f7 == 0 ? sum : f7 == 4 ? dif : prod);
+                    v = (v & 0x7fffffff) > 0x7f800000 ? 0x7fc00000 : v;
+                } else [branch] if (((0x50100030u >> (f7 >> 2)) & 1) != 0 && (f7 & 3) == 0 && (f7 != 0x70 || f3 == 0)) {
+                    v = fp_light(w, fa, fb, to_f, ok);
                 } else {
-                    // fsw, a word of RAM
-                    uint sa = a + imm_s(w);
-                    ok = f3 == 2 && (sa & 0x80000003) == 0x80000000;
-                    [branch] if (ok) ram_store(sa & 0x7ffffffc, xr[32 + rs2], 0xffffffff);
-                    dst = 64;
+                    v = fp_all(w, fa, fb, to_f, ok);   // the divisions, roots and conversions too: a float never leaves the loop
                 }
+                dst = to_f ? 32 + rd : dst;
+            } else [branch] if (opc == 0x07) {
+                // flw, a word of RAM
+                uint va = a + imm_i(w);
+                ok = va != 0 && f3 == 2 && (va & 0x80000003) == 0x80000000 && (va & 0x7ffffffc) < RAM_MAX;
+                v = ram_word(va & 0x7ffffffc);
+                dst = 32 + rd;
+            } else {
+                // fsw, a word of RAM
+                uint sa = a + imm_s(w);
+                ok = f3 == 2 && (sa & 0x80000003) == 0x80000000 && (sa & 0x7ffffffc) < RAM_MAX;
+                [branch] if (ok) ram_store_nc(sa & 0x7ffffffc, xr[32 + rs2], 0xffffffff);
+                dst = 64;
             }
         } else [branch] if (opc == 0x63) {
             bool lt = (f3 & 2) ? a < b : asint(a) < asint(b);
@@ -515,7 +567,7 @@ uint fast(uint room) {
             ok = a != 0 && (a & 0x80000003) == 0x80000000 && o < RAM_MAX && f5 < 16 && ((0x111fu >> f5) & 1) != 0 && (!lr || rs2 == 0);
             [branch] if (ok) {
                 uint old = sc ? 0 : ram_word(o);
-                [branch] if (sc ? sc_ok : !lr) ram_store(o, f5 == 0 ? old + b : f5 == 4 ? old ^ b : f5 == 8 ? old | b : f5 == 12 ? old & b : b, 0xffffffff);
+                [branch] if (sc ? sc_ok : !lr) ram_store_nc(o, f5 == 0 ? old + b : f5 == 4 ? old ^ b : f5 == 8 ? old | b : f5 == 12 ? old & b : b, 0xffffffff);
                 res_en = lr ? 1 : sc && sc_ok ? 0 : res_en;
                 res_addr = lr ? a : res_addr;
                 v = sc ? (sc_ok ? 0 : 1) : old;
@@ -535,13 +587,15 @@ uint fast(uint room) {
                 if (wr_) csr_write(cn, (f3 & 3) == 1 ? src : (f3 & 3) == 2 ? v | src : v & ~src);
             }
         } else ok = false;
-        if (!ok) { pre_w = w; pre_valid = true; break; }
+        pre_w = w;
+        if (!ok) break;
         xr[dst] = v;
         same = next == pc + 4 && (next & 12) != 0;
         cur = cur.yzwx;
         pc = next;
         n++;
     }
+    pre_valid = n < budget;   // (left by a break: the word is the general step's)
     clock += n;
     return n;
 }
