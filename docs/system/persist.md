@@ -59,6 +59,7 @@ the session only when the folder is saved.
 | `rays.width`, `rays.height`, `rays.turns`, `rays.shadows` | `nxray` | its bar's settings (a test with `RAY_FRAMES` takes none of them) |
 | `pathtrace.detail`, `.samples`, `.turns`, `.background`, `.background.colour`, `.live` | `nxpath` | the picture's settings |
 | `micropolis.speed`, `.autobudget`, `.disasters` | `nxmicropolis` | the speed (1 to 3), "Budget by itself", disasters on |
+| `aoe.eula`, `jk2.eula` | `cabinst` (the two games' starters) | the CRC-32 of the licence accepted, read out of the installer: it is not asked again while it is the same text (`docs/system/install.md`) |
 | `web.home`, `web.pictures`, `web.bookmarks`, `web.bookmark.N` | the browser | its home page, whether pictures are loaded, and up to 24 bookmarks, `ADDRESS TITLE` each (`docs/apps/web.md`) |
 
 Not in it: the games' own settings and saved games (their files, in their folders above),

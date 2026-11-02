@@ -11,17 +11,26 @@ The game goes into an image only when asked:
     pwsh tools\make_image.ps1 --aoe                                  # or AOE_IMAGE=1
     python linux/nommu/image.py NAME ROOT KERNEL --aoe
 
-**Turning this on is accepting the trial's EULA**, the licence that came with Microsoft's 1997 trial of Age of Empires: read it (`trial/eula.txt` in the cache) before you use the game, and do not ask for it if you do not accept it. The source is `archive.org/details/aoe-trial-1997` (`MSAoE.exe`, 24,786,864 bytes). That item states no licence of its own. The EULA allows copies of the whole trial, with the EULA, not for commercial purposes, and it limits reverse engineering and decompiling as far as the law allows: the decompiled code comes from the upstream project and is fetched, not kept here. An image with the game holds parts of the trial, so it is for your own use and is not to be passed on or sold.
+The licence is the trial's EULA, the one that came with Microsoft's 1997 trial of Age of Empires. The source is `archive.org/details/aoe-trial-1997` (`MSAoE.exe`, 24,786,864 bytes). That item states no licence of its own. The EULA allows copies of the whole trial, with the EULA, not for commercial purposes, and it limits reverse engineering and decompiling as far as the law allows: the decompiled code comes from the upstream project and is fetched, not kept here. So since 2 November 2026 an image holds **the installer itself, byte for byte**, and nothing taken out of it: the machine shows the EULA read out of it, and once it is accepted there unpacks the trial into memory ("The trial in the machine", `docs/system/install.md`).
 
 `linux/aoe/data.py OVERLAY` then does this:
 
 1. It fetches `MSAoE.exe` into the cache (`AOE_CACHE`, by default `~/.cache/shaderemu/aoe`), and refuses it unless its md5 and sha256 are those in the script.
-2. It unpacks it with 7-Zip and makes the data (`make_data.py`: `language.txt`, `aoe-fonts.bin`, and the files copied flat). A mark says which scripts made it, and a cache with the same mark is used as it is, with no network.
-3. It builds the program (`program.sh`, into `build/aoe/out`; `AOE_WSL_HOME` is a private home, `AOE_PROGRAM` a folder already made).
-4. It fetches the music's instruments into the same cache (`genmidi.op2`, DMXOPL's General MIDI bank, MIT, the commit OpenTTD fetches, against its checksum). If that fails the game goes in with no music.
-5. It puts the data, the bank, `aoe.bin`, `aoe` and the Start menu's line into that image's overlay, and never into the root.
+2. It builds the program (`program.sh`, into `build/aoe/out`; `AOE_WSL_HOME` is a private home, `AOE_PROGRAM` a folder already made): `aoe.bin`, the starter `aoe` and `aoeprep`.
+3. It fetches the music's instruments into the same cache (`genmidi.op2`, DMXOPL's General MIDI bank, MIT, the commit OpenTTD fetches, against its checksum). If that fails the game goes in with no music.
+4. It puts the installer as it is (`/usr/share/aoe/MSAoE.exe`), the bank, the programs and the Start menu's line into that image's overlay, and never into the root.
 
-If any step fails it says which, the image goes on without the game, and `test_all.py aoe` prints `AOE-NO-DATA` and passes. A plain build runs none of this and is byte for byte as before. `--save-prebuilt` turns the switch off, and what it saves comes from the root, so neither the data nor the game can be saved.
+If any step fails it says which, the image goes on without the game, and `test_all.py aoe` prints `AOE-NO-DATA` and passes. A plain build runs none of this and is byte for byte as before. `--save-prebuilt` turns the switch off, and what it saves comes from the root, so neither the installer nor the game can be saved. Nothing of the trial is unpacked or converted on the build computer any more (`make_data.py` and `dat34.py` are gone).
+
+## The trial in the machine
+
+The starter runs `cabinst` (`docs/system/install.md`): the EULA in a window, Accept only once it has been scrolled to its end, the registry's `aoe.eula` keeping an acceptance, then 105 of the cabinet's 129 files (34,085,752 bytes: the DRS files, the AI and personality files, maps, campaigns, songs, waves, `Empires.dat`, `language.dll`, the six faces) unpacked on the workers into `/tmp/aoe`, every session. The game reads the trial's own files from there (`AOE_DATA=/tmp/aoe`), with two made by `aoeprep` (`linux/aoe/prep.c`) the first time:
+
+- `language.txt`, from `language.dll`'s string table: the same bytes `make_data.py` made (2,276 strings).
+- `aoe-fonts.bin`, the six faces at 8 to 36 pixels, on the workers, by `linux/aoe/ttf.h`: the outlines' coverage without hinting, where `make_data.py` had FreeType's hinting through Pillow. Line heights and ascents are the same in all 174 fonts, 97.3% of the cells' widths and 97.1% of the pixels of cells of one width; side by side the text reads the same. FreeType is not in the machine, and a font library fetched and run was not wanted. So the menus' pictures are not the bytes they were; the state sums do not move.
+- `Empires.dat` is read as the trial has it (`dat34.py` copied it). The DRS files are the trial's own, whose waves lie mostly on odd addresses: the sound port copies such a wave once, at its load, to memory of its own ("Sound"). `genmidi.op2` stays in the ROM, linked into `/tmp/aoe`.
+
+On the card (2 November 2026), `aoe --unpack` from the command to its end: 16.6 s; the EULA read out 0.87 s, the files 6.25 s, `aoeprep` 0.26 s and 4.30 s. Memory on `rvc_cpu`, the `aoe` case's script at 800 x 600, 60 s into the game: 194,700 KB free with the trial in `/tmp` (36.8 MB of it there), where the data in the ROM left 230,900 KB; 245,944 KB at the shell. `test_all.py aoe-install` starts it on the desktop: Accept refused, then scrolled, accepted, the bar to the last file, `aoeprep`. The other `aoe` cases unpack first with the EULA answered on the terminal (`echo yes | aoe --unpack`) and play as before: the same sums.
 
 The program alone:
 
@@ -33,7 +42,7 @@ The program alone:
 
 ## What the trial is
 
-- Its `Empires.dat` says `VER 3.4`, and the game's 3.7 reader reads it to the exact byte (758,114). Only the version check changed, so no converter is needed: `dat34.py` copies.
+- Its `Empires.dat` says `VER 3.4`, and the game's 3.7 reader reads it to the exact byte (758,114). Only the version check changed, so no converter is needed: the game reads the trial's file.
 - 12 civilizations and Gaia, and 5 random maps; a type past the last is map 0.
 - Full pictures only for 800 x 600: `0xC62D` to `0xC630`, the game screens for 640 x 480, and the menus' are not in `Interfac.drs` ("Windowed").
 - No `BLKEDGE.DAT` (edges black) and no Roman button (`0xcf0d` is `0xc610`). Other `0xCF..` resources of the game screen are the Rise of Rome cultures' and have not been checked one by one.
@@ -272,7 +281,7 @@ The notes are made as OpenTTD's are: `linux/userland/shaderemu_fm.h` has the ban
 
 `--wav FILE` writes what those words sound like: `tools/sound_reference.py`'s FM, in the card's integers, with the effects' samples from the ROM at the clock values in the log (not interpolated). It is that model's mix and not a capture of the shader, since `rvc_cpu` mixes nothing and a capture wants the card. A song at the default level peaks at 5,442 of 32,767 alone, and with the effects of those runs at 22,119, none clipped. **Nobody has listened to it yet**: whether the instruments sound right is not checked by any of this, and it has not run on the card or in a world. The options' slider was not moved in a run, and `won.mid` and `lost.mid` were not reached by play: the first level the mixer gets is the only one exercised, and those two songs' notes were only read from the files.
 
-A MIDI file is game data: it comes from the trial's cache, with the rest (`KEEP` in `make_data.py`), and goes only into an image made with `--aoe`.
+A MIDI file is game data: it is unpacked from the trial's installer in the machine with the rest (`*.mid` of the starter's list), and the installer goes only into an image made with `--aoe`.
 
 ## What ends a round
 

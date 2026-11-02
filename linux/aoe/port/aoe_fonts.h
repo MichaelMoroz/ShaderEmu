@@ -1,4 +1,4 @@
-// The trial's TrueType faces rasterised when the image is made (linux/aoe/make_data.py, aoe-fonts.bin):
+// The trial's TrueType faces rasterised in the machine once the trial is unpacked (linux/aoe/prep.c, aoe-fonts.bin):
 // a bit a pixel, Latin-1. docs/games/aoe.md, "Text".
 #ifndef AOE_FONTS_H
 #define AOE_FONTS_H

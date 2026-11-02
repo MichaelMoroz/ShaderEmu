@@ -316,9 +316,10 @@ struct dec {
 	uint16_t *ring;
 	uint32_t rn, mask;
 	int last, bad;
+	uint32_t back_length, back_distance;	/* the copy BLOCK_BACK stopped at, its bits taken */
 };
 
-enum { BLOCK_OK, BLOCK_BAD, BLOCK_FULL };
+enum { BLOCK_OK, BLOCK_BAD, BLOCK_FULL, BLOCK_BACK };	/* BACK: a copy from before the bytes' window (wanted as values) */
 
 /* A code's symbol the slow way (longer than QB bits) from 15 bits or more in hold; -1 if none. */
 static inline int
@@ -464,7 +465,8 @@ symbols(struct dec *d, int wide)
 				int32_t s = (int32_t)n - (int32_t)distance;
 
 				if (distance - n > d->wlen) {
-					r = BLOCK_BAD;
+					r = BLOCK_BACK;
+					d->back_length = length, d->back_distance = distance;
 					break;
 				}
 				for (; to < stop; s++)
@@ -1064,4 +1066,189 @@ const char *
 m_inflate_stream_plain(const void *in, uint32_t in_size, void *out, uint32_t out_size, uint32_t *made, int workers)
 {
 	return inflate_stream(in, in_size, out, out_size, made, NULL, NULL, workers, 1);
+}
+
+/* ---------------------------------------------------------------- MSZip: a cabinet's folder */
+
+/*
+ * A Microsoft cabinet's MSZip folder is blocks of 32 KB of output (the folder's last may be less), each
+ * a deflate stream of its own whose dictionary is the block before it (docs/system/media.md, "A
+ * cabinet's blocks"). Every block is a job: it is inflated in bytes (the run's first with its window,
+ * which is known), and at its first copy from before itself goes on as values, a byte or a mark of the
+ * place in the block before (the bytes made so far become values). Then each eighth of a block with
+ * marks follows each back, through the values of the blocks before, to a byte: a round over every core
+ * with no core waiting for another, an eighth a piece so that a block of long chains is shared out.
+ */
+#define MZ_PARTS 8
+struct mz_block { uint32_t marks, bad, first, last; };	/* a texel each: its core's alone; marks in [first, last) */
+struct mz_dec { struct dec d; } __attribute__((aligned(16)));
+struct mszip {
+	const uint8_t *const *in;
+	const uint32_t *in_size, *plain;
+	uint32_t count, wlen;
+	uint8_t *out;
+	uint16_t *values;	/* WINDOW a block */
+	struct mz_block *b;
+	uint32_t *part_bad;	/* a texel a part */
+	struct mz_dec *dec;	/* a block's own */
+};
+
+uint32_t
+media_mszip_room(uint32_t count)
+{
+	return count * (uint32_t)(WINDOW * 2 + sizeof(struct mz_block) + MZ_PARTS * 16 + sizeof(struct mz_dec)) + 64;
+}
+
+static void
+mszip_inflate(void *ctx, uint32_t from, uint32_t to)
+{
+	struct mszip *z = ctx;
+	uint32_t k;
+
+	for (k = from; k < to; k++) {
+		struct dec *d = &z->dec[k].d;
+		struct mz_block *b = &z->b[k];
+		uint8_t *out = z->out + (size_t)k * WINDOW;
+		uint32_t plain = z->plain[k], marks = 0, first = 0, last = 0, i;
+		int r;
+
+		/* in bytes: the run's first with its window, another while it copies nothing from before itself */
+		bits_at(&d->b, z->in[k], z->in_size[k], 0);
+		d->out = out, d->n = 0, d->cap = plain;
+		d->window = k ? NULL : out - z->wlen, d->wlen = k ? 0 : z->wlen;
+		do
+			r = block(d, 0);
+		while (r == BLOCK_OK && !d->last);
+		if (r == BLOCK_BACK) {
+			/* on as values from that copy: the bytes so far are values, the copy is made, the block's symbols go on */
+			uint16_t *v = z->values + (size_t)k * WINDOW;
+			uint32_t n = d->n, length = d->back_length, distance = d->back_distance, stop = n + length;
+
+			for (i = 0; i < n; i++)
+				v[i] = out[i];
+			first = n;
+			if (distance > n + WINDOW || stop > WINDOW)
+				r = BLOCK_BAD;
+			else {
+				for (; n < stop; n++)
+					v[n] = distance > n ? (uint16_t)(MARK | (WINDOW - (distance - n))) : v[n - distance];
+				d->ring = v, d->mask = WINDOW - 1, d->rn = n;
+				r = symbols(d, 1);
+				while (r == BLOCK_OK && !d->last && d->rn <= plain)
+					r = block(d, 1);
+			}
+			if (r == BLOCK_OK && d->rn == plain) {
+				for (i = first; i < plain; i++) {
+					uint32_t x = v[i];
+
+					if (x & MARK)
+						marks++, last = i + 1;
+					else
+						out[i] = (uint8_t)x;
+				}
+			}
+			d->n = d->rn;
+		}
+		b->bad = r != BLOCK_OK || !d->last || d->n != plain;
+		b->marks = marks, b->first = first, b->last = last;
+	}
+}
+
+/* Each mark of a block's part followed back to a byte: through the values of the blocks before while they are marks, to
+ * a block made bytes whole, or to the window before the run. */
+static void
+mszip_marks(void *ctx, uint32_t from, uint32_t to)
+{
+	struct mszip *z = ctx;
+	uint32_t p;
+
+	for (p = from; p < to; p++) {
+		uint32_t k = p / MZ_PARTS, part = WINDOW / MZ_PARTS, lo = WINDOW - z->wlen, bad = 0, i, end;
+		uint16_t *v = z->values + (size_t)k * WINDOW;
+		uint8_t *out = z->out + (size_t)k * WINDOW;
+		const struct mz_block *b = &z->b[k];
+
+		i = p % MZ_PARTS * part, end = i + part;
+		if (!b->marks || i >= b->last || end <= b->first)
+			continue;
+		i = i > b->first ? i : b->first, end = end < b->last ? end : b->last;
+		for (; i < end; i++) {
+			uint32_t x = v[i], j, m = k;
+
+			if (!(x & MARK))
+				continue;
+			j = x & 0x7fff;
+			for (;;) {
+				if (!m) {
+					if (j < lo) {
+						bad = 1;
+						x = 0;
+					} else
+						x = z->out[(int32_t)j - (int32_t)WINDOW];
+					break;
+				}
+				m--;
+				if (!z->b[m].marks || j < z->b[m].first || j >= z->b[m].last) {
+					x = z->out[(size_t)m * WINDOW + j];
+					break;
+				}
+				x = z->values[(size_t)m * WINDOW + j];
+				if (!(x & MARK))
+					break;
+				j = x & 0x7fff;
+			}
+			/* (the value a byte too: a later block's chain through here ends here, from the next pass on) */
+			out[i] = (uint8_t)x, v[i] = (uint16_t)x;
+		}
+		z->part_bad[p * 4] = bad;
+	}
+}
+
+const char *
+media_mszip(const uint8_t *const *in, const uint32_t *in_size, const uint32_t *plain, uint32_t count, uint8_t *out,
+	    uint32_t wlen, void *room, int workers)
+{
+	struct mszip z;
+	mcw_for_opts o;
+	uint32_t k, marked = 0;
+	uint8_t *at = room;
+	int got;
+
+	if (!count)
+		return NULL;
+	if (((uintptr_t)out | (uintptr_t)room) & 15)
+		return "not on 16 bytes";
+	if (wlen > WINDOW)
+		wlen = WINDOW;
+	for (k = 0; k < count; k++)
+		if (plain[k] > WINDOW || (k + 1 < count && plain[k] != WINDOW))
+			return "a block not of 32 KB before the last";
+	crc_init();
+	memset(&z, 0, sizeof z);
+	z.in = in, z.in_size = in_size, z.plain = plain, z.count = count, z.wlen = wlen, z.out = out;
+	z.values = (uint16_t *)take_room(&at, count * WINDOW * 2);
+	z.b = (struct mz_block *)take_room(&at, count * (uint32_t)sizeof(struct mz_block));
+	z.part_bad = (uint32_t *)take_room(&at, count * MZ_PARTS * 16);
+	z.dec = (struct mz_dec *)take_room(&at, count * (uint32_t)sizeof(struct mz_dec));
+	memset(z.part_bad, 0, count * MZ_PARTS * 16);
+	got = m_workers_begin(count > 1 ? (int)count - 1 < workers ? (int)count - 1 : workers : 0);
+	memset(&o, 0, sizeof o);
+	o.workers = got;
+	o.grain = 1;
+	mcw_for_opt(count, mszip_inflate, &z, &o);
+	for (k = 0; k < count; k++) {
+		if (z.b[k].bad)
+			break;
+		marked += z.b[k].marks != 0;
+	}
+	if (k == count && marked)
+		mcw_for_opt(count * MZ_PARTS, mszip_marks, &z, &o);
+	m_workers_end();
+	for (k = 0; k < count; k++)
+		if (z.b[k].bad)
+			return "a block is damaged";
+	for (k = 0; k < count * MZ_PARTS; k++)
+		if (z.part_bad[k * 4])
+			return "a block is damaged";
+	return NULL;
 }

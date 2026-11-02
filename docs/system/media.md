@@ -492,6 +492,25 @@ A deflate stream someone else made (a `.gz`, a zip's entry) has no pieces, and
 
 `media_test gunzip FILE [WORKERS [OUT]]` prints the bytes, the CRC and the FNV-1a sum.
 
+## A cabinet's blocks
+
+A Microsoft cabinet's MSZip folder (the installers of `docs/system/install.md`) is blocks of 32 KB of output, each
+"CK" and a raw deflate stream that ends in its own final block, whose dictionary is the block before it. So where each
+block begins is known, and only the window is not:
+
+    room = memory of media_mszip_room(count) bytes;
+    why = media_mszip(in, in_size, plain, count, out, wlen, room, workers);   /* out - wlen .. out: the window */
+
+- Every block is a job. It inflates in bytes (the run's first with the window it is given), and at its first copy from
+  before itself goes on as 16-bit values from there (the bytes so far become values, `BLOCK_BACK` and the copy it
+  stopped at): a byte, or 0x8000 and the place in the block before. Its bytes go into their place at once.
+- Then each eighth of a block with marks follows each back, through the values of the blocks before while they are
+  marks, to a byte, and writes that byte as its value too: a block later in the round whose chain passes there ends
+  there from the next pass on. No core waits for another. The trial of Age of Empires has 43% of its bytes as marks,
+  7.2 blocks back on average: with the bytes written back, following them went from 8.5 s to 2.5 s (the card's model).
+- Every block but the run's last must be 32 KB. `cab.h` gives a round of 256 blocks and keeps the round's last block
+  as the next one's window.
+
 ## On the card
 
 The shader machine (`rvc_harness`, through `tools\gpu_queue.ps1`) runs `media_test` as above: real

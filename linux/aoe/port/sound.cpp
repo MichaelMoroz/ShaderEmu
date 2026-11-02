@@ -1,6 +1,7 @@
 // The game's DirectSound on the machine's sound card (docs/machine/sound.md, docs/games/aoe.md, "Sound"): a wave is a voice pointed at
-// its samples where they lie in the ROM, so a sound costs a few stores and no memory: nothing is copied or mixed here. make_data.py
-// puts every wave of the DRS files on an even address, which 16-bit samples need. A buffer has a voice only while it plays.
+// its samples where they lie, in the trial's files unpacked into memory (or in the ROM), so a sound costs a few stores: nothing is
+// mixed here. 16-bit samples must lie on an even address and the trial's DRS files have most waves on odd ones: such a wave is
+// copied once, when it is loaded, to memory of its own. A buffer has a voice only while it plays.
 #include <fcntl.h>
 #include "dsound.h"
 #include "aoe_port.h"
@@ -32,8 +33,30 @@ static unsigned rom_of(const void* at, int fd) {
     if (!f && !at && file_count < 8) { f = &files[file_count++]; f->at = 0; f->fd = fd; f->phys = 0; }
     if (!f) return 0;
     if (!f->phys) f->phys = snd_rom(f->fd, "Copyright", 9);
+    // not in the ROM: the file in memory (tmpfs), mapped where it lies, whose address the card reads as it is (no MMU)
+    if (!f->phys && !f->at) {
+        long n = lseek(f->fd, 0, SEEK_END);
+        void* p = n > 0 ? mmap(0, n, PROT_READ, MAP_PRIVATE, f->fd, 0) : MAP_FAILED;
+        if (p != MAP_FAILED) f->at = p;
+    }
+    if (!f->phys && f->at) f->phys = (unsigned) (uintptr_t) f->at;
     return f->phys;
 }
+// A file of its own (a wave), in the ROM or mapped where it lies in memory; kept mapped for the program's life
+static unsigned file_phys(const char* path, int fd) {
+    static struct { char path[64]; unsigned phys; } seen[16];
+    static int count;
+    for (int i = 0; i < count; i++) if (!strcmp(seen[i].path, path)) return seen[i].phys;
+    unsigned phys = snd_rom(fd, "RIFF", 4);
+    if (!phys) {
+        long n = lseek(fd, 0, SEEK_END);
+        void* p = n > 0 ? mmap(0, n, PROT_READ, MAP_PRIVATE, fd, 0) : MAP_FAILED;
+        if (p != MAP_FAILED) phys = (unsigned) (uintptr_t) p;
+    }
+    if (phys && count < 16 && strlen(path) < sizeof seen[0].path) { strcpy(seen[count].path, path); seen[count++].phys = phys; }
+    return phys;
+}
+static unsigned copied_waves, copied_bytes;
 
 HRESULT aoe_DirectSoundCreate(GUID*, IDirectSound** out, IUnknown*) {
     const char* e = getenv("AOE_SOUND");
@@ -147,7 +170,16 @@ static IDirectSoundBuffer* wave_buffer(const unsigned char* h, int have, unsigne
         else if (!memcmp(h + o, "data", 4)) {
             if (!format || format[0] != 1 || format[2] != 1) return 0;   // PCM and mono: all the trial has
             unsigned phys = at + o + 8; int bits = format[14];
-            if (bits == 16 && (phys & 1)) { fprintf(stderr, "aoe: a wave at an odd address (%08x): data of an older image\n", phys); return 0; }
+            if (bits == 16 && (phys & 1) && phys >= 0x80000000u) {
+                // in memory (the trial's own DRS files): its samples copied once to an even address
+                void* even = 0;
+                if (posix_memalign(&even, 16, n ? n : 16)) return 0;
+                memcpy(even, (const void*) (uintptr_t) phys, n);
+                phys = (unsigned) (uintptr_t) even;
+                copied_waves++, copied_bytes += n;
+                if (log_on) fprintf(stderr, "aoesnd: copied to an even address, %u waves, %u bytes so far\n", copied_waves, copied_bytes);
+            }
+            if (bits == 16 && (phys & 1)) { fprintf(stderr, "aoe: a wave at an odd address (%08x) in the ROM\n", phys); return 0; }
             IDirectSoundBuffer* b = new_buffer();
             b->phys = phys; b->bytes = n;
             b->wf.nSamplesPerSec = format[4] | format[5] << 8 | format[6] << 16; b->wf.wBitsPerSample = bits;
@@ -171,11 +203,11 @@ IDirectSoundBuffer* aoe_sound_load(long id, const char* path) {
         fd = _open(path, O_RDONLY);
         if (fd >= 0) {
             int n = read(fd, head, sizeof head);
-            unsigned rom = n > 0 ? snd_rom(fd, "RIFF", 4) : 0;
+            unsigned rom = n > 0 ? file_phys(path, fd) : 0;
             if (rom) b = wave_buffer(head, n, rom);
             close(fd);
         }
     }
-    if (log_on) fprintf(stderr, "aoesnd: load %ld %s: %s\n", id, path ? path : "", b ? "in the ROM" : "not played");
+    if (log_on) fprintf(stderr, "aoesnd: load %ld %s: %s\n", id, path ? path : "", !b ? "not played" : b->phys < 0x80000000u ? "in the ROM" : "in memory");
     return b;
 }

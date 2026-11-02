@@ -234,16 +234,22 @@ else
     mkdir -p "$OUT/usr/bin"
     "$CXXTC/bin/$T-strip" -o "$OUT/usr/bin/jk2.bin" "$BUILD/jk2"
     "$NM" -n -C "$BUILD/jk2" > "$WORK/src/jk2.nm"
-    # the starter: the demo's pak where data.py puts it (/usr/share/jk2/base), what the game writes where the host keeps it
+    # the starter: the demo's installer where data.py puts it (/usr/share/jk2), unpacked into memory once a session after
+    # its licence is accepted; what the game writes where the host keeps it
     cat > "$OUT/usr/bin/jk2" <<'EOF'
 #!/bin/sh
-# Jedi Outcast's demo (docs/games/jk2.md): settings and saved games in the folder the host keeps, else in /tmp
+# Jedi Outcast's demo (docs/games/jk2.md): LucasArts' installer lies unchanged in the ROM, and its pak is unpacked into
+# memory once a session, after the licence read out of it is accepted (cabinst, docs/system/install.md)
+cabinst --title "Jedi Outcast (demo)" --licence Disk1/Install/license.txt --key jk2.eula /usr/share/jk2/jk2demo.exe /tmp/jk2 \
+    Disk1/GameData/demo/assets0.pk3=base/assets0.pk3 || exit $?
+[ "$1" = --unpack ] && exit 0	# (only that: a test unpacks first, then plays)
+# settings and saved games in the folder the host keeps, else in /tmp
 P=/persistence; mkdir -p $P/jk2 2>/dev/null || P=/tmp
 # (Ctrl fires as in the other shooters and the world's controller: the demo binds it to use, which E is too; the
 # quotes keep the engine's command line from cutting the bind at its +); pictures a quarter of their size each way, the
 # GPU's memory being 36 MB of RAM (gl_jk2.c); triangles as glDrawElements, not strips of glArrayElement (four thousand
 # primitives a frame, each a draw of its own)
-exec jk2.bin +set fs_basepath /usr/share/jk2 +set fs_homepath $P/jk2 +set com_demo 1 +bind CTRL '"+attack"' +set r_picmip 2 +set r_primitives 2 "$@"
+exec jk2.bin +set fs_basepath /tmp/jk2 +set fs_homepath $P/jk2 +set com_demo 1 +bind CTRL '"+attack"' +set r_picmip 2 +set r_primitives 2 "$@"
 EOF
     chmod 755 "$OUT/usr/bin/jk2"
     # the Start menu's entry; data.py puts it into an image with the demo, never into the shared one

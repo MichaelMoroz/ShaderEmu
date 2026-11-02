@@ -39,6 +39,9 @@ KINDS_T = ('mkdir -p /tmp/t; cd /tmp/t; cp "/root/Music/Grieg - Hall of the Moun
 
 
 # Age of Empires' script at its window's size (tools/game_par.py has the same)
+# Age of Empires' trial unpacked from its installer in the ROM before the window system starts: its licence asked on the terminal,
+# answered (docs/system/install.md); the game reads the files in /tmp/aoe
+AOE_UNPACK = 'if [ -f /usr/share/aoe/MSAoE.exe ]; then echo yes | aoe --unpack > /dev/null; fi; '
 AOE_640 = '3000 click 320 196;3000 click 320 138;3000 click 190 454;2000 click 289 58;1000 rclick 425 110;1000 click 290 155;1000 click 163 388'
 
 
@@ -261,40 +264,57 @@ CASES = [
     # blitter's (OPENTTD_DRAW=cpu): rvc_cpu draws no GPU list, and the GPU's picture is checked under rvc_harness --cpu --warp
     # ("The picture on the GPU")
     # Age of Empires is on images made with --aoe only (docs/games/aoe.md): an image without its data says so and passes
-    case('aoe', 'games aoe', X + 'if [ -f /usr/share/aoe/Empires.dat ]; then AOE_SIZE=800 AOE_VIEW=inline AOE_TICK_MS=33 AOE_SUM_EVERY=500 AOE_SUM_END=1000 '
+    case('aoe', 'games aoe', AOE_UNPACK + X + 'if [ -f /tmp/aoe/Empires.dat ]; then AOE_SIZE=800 AOE_VIEW=inline AOE_TICK_MS=33 AOE_SUM_EVERY=500 AOE_SUM_END=1000 '
          'AOE_SCRIPT="3000 click 400 245;3000 click 400 172;3000 click 237 568;2000 click 369 118;1000 rclick 505 170;1000 click 370 215;1000 click 163 508" aoe; else echo AOE-NO-DATA; fi',
          wall=120, has=[r'^(aoesum: update 1000 time 99900 objects 4357 sum 5032c153|AOE-NO-DATA)']),
     # the music on the card's clock (docs/games/aoe.md, "Music"): songs in the game's order, cut short at 4 s of the card's so that many end in the run, and the state
     # sum as with no card: when a song ends is the card's, and the game must not feel it
-    case('aoe-music', 'games aoe', X + 'if [ -f /usr/share/aoe/Empires.dat ]; then AOE_MUSIC_LOG=1 AOE_MUSIC_CUT=4 AOE_VIEW=inline AOE_TICK_MS=33 AOE_SUM_EVERY=500 AOE_SUM_END=1000 '
+    case('aoe-music', 'games aoe', AOE_UNPACK + X + 'if [ -f /tmp/aoe/Empires.dat ]; then AOE_MUSIC_LOG=1 AOE_MUSIC_CUT=4 AOE_VIEW=inline AOE_TICK_MS=33 AOE_SUM_EVERY=500 AOE_SUM_END=1000 '
          'AOE_SCRIPT="' + AOE_640 + '" aoe; else echo AOE-NO-DATA; fi',
          wall=180, env={'RVC_SOUND': '1'},
          has=[r'^(aoemus: play \S*open\.mid, 1505 notes|AOE-NO-DATA)', r'^(aoemus: play \S*music1\.mid, 3766 notes|AOE-NO-DATA)', r'^(aoemus: play \S*music2\.mid, 5388 notes|AOE-NO-DATA)',
               r'^(aoesum: update 1000 time 99900 objects 4357 sum 5032c153|AOE-NO-DATA)']),
     # the window it opens as, 640 x 480 (docs/games/aoe.md, "Windowed"): the same game by the same script, at this size's places
-    case('aoe-640', 'games aoe', X + 'if [ -f /usr/share/aoe/Empires.dat ]; then AOE_VIEW=inline AOE_TICK_MS=33 AOE_SUM_EVERY=500 AOE_SUM_END=1000 '
+    case('aoe-640', 'games aoe', AOE_UNPACK + X + 'if [ -f /tmp/aoe/Empires.dat ]; then AOE_VIEW=inline AOE_TICK_MS=33 AOE_SUM_EVERY=500 AOE_SUM_END=1000 '
          'AOE_SCRIPT="' + AOE_640 + '" aoe; else echo AOE-NO-DATA; fi',
          wall=120, has=[r'^(aoesum: update 1000 time 99900 objects 4357 sum 5032c153|AOE-NO-DATA)']),
     # the map by the right button ("Controls"): a click is an order, a drag moves the view a pixel for a pixel and gives none, the selection stays
     # (the order after the drag has 1 selected), the left button's box is a box, the pointer at the window's edge and held there moves nothing
-    case('aoe-drag', 'games aoe', X + 'if [ -f /usr/share/aoe/Empires.dat ]; then AOE_TICK_MS=33 AOE_INPUT_LOG=1 AOE_SCRIPT="' + AOE_640.rsplit(';', 4)[0] + ';3000 ready;9000 view;9000 view;9000 view" aoe & '
+    case('aoe-drag', 'games aoe', AOE_UNPACK + X + 'if [ -f /tmp/aoe/Empires.dat ]; then AOE_TICK_MS=33 AOE_INPUT_LOG=1 AOE_SCRIPT="' + AOE_640.rsplit(';', 4)[0] + ';3000 ready;9000 view;9000 view;9000 view" aoe & '
          'while [ ! -e /tmp/aoe-ready ];do sleep 1;done;read OX OY </tmp/aoe-ready;sleep 2;nxkey $((OX+289)),$((OY+58));sleep 1;nxkey wheel:$((OX+639)),$((OY+200)):0;sleep 10;nxkey wheel:$((OX+300)),$((OY+200)):0;sleep 2;'
          'nxkey r:$((OX+425)),$((OY+110));sleep 3;nxkey rdrag:$((OX+400)),$((OY+200)):$((OX+200)),$((OY+100));sleep 4;nxkey r:$((OX+380)),$((OY+150));sleep 3;'
          'nxkey drag:$((OX+220)),$((OY+40)):$((OX+420)),$((OY+240));sleep 4;killall aoe.bin;else echo AOE-NO-DATA; fi', wall=300,
          has=[r'^(aoeinput: order 425 110 1 0|AOE-NO-DATA)', r'^(aoeinput: drag -200 -100 0 625|AOE-NO-DATA)', r'^(aoeinput: order 380 150 1 0|AOE-NO-DATA)', r'^(aoeinput: box 220 40 420 240|AOE-NO-DATA)',
               r'^(aoeview: (\d+ \d+) selected 1\s+(?:aoe: step.*\s+)?aoeview: \2 selected 1|AOE-NO-DATA)']),
-    # Jedi Outcast's demo, on images made with its pak only (docs/games/jk2.md, "Checking it"): its start played by a script of
+    # the trial's first start on the desktop (docs/system/install.md): its EULA read out of the installer in a window, Accept refused until
+    # the text has been scrolled to its end, then accepted by Tab and Enter, the bar to the last of 105 files, and aoeprep's strings and faces
+    case('aoe-install', 'games aoe desktop', X + 'if [ -f /usr/share/aoe/MSAoE.exe ]; then (sleep 6; nxkey a; sleep 1; nxkey pagedown; sleep 1; nxkey end; '
+         'sleep 1; nxkey tab enter) & CABINST_PRINT=1 aoe --unpack; echo INSTALL=$?; ls /tmp/aoe | wc -l; else echo AOE-NO-DATA; fi', True, wall=300,
+         has=[r'^(cabinst: licence eula\.txt: 5065 bytes, CRC-32 b81b406b|AOE-NO-DATA)', r'^(cabinst: licence shown, \d+ lines|AOE-NO-DATA)',
+              r'^(cabinst: accept refused: the licence is not read to its end|AOE-NO-DATA)', r'^(cabinst: licence at line \d+ of \d+, its end|AOE-NO-DATA)',
+              r'^(cabinst: accepted|AOE-NO-DATA)', r'^(cabinst: round 6: 34085752 of 34085752 bytes of the files, 105 of 105 whole|AOE-NO-DATA)',
+              r'^(aoeprep: 2276 strings .* 174 fonts|AOE-NO-DATA)', r'^(INSTALL=0|AOE-NO-DATA)', r'^(108|AOE-NO-DATA)']),
+    # Jedi Outcast's demo, on images made with its installer only (docs/games/jk2.md, "Checking it"): its start played by a script of
     # keys from the menu (new game, a walk, a turn, a shot, the death and the autosave's load), and the build computer's sums;
     # no window, so the picture is nullgl's and the sound mixed into nothing (the card's pace would move the sums)
-    case('jk2', 'games jk2 long', 'if [ -f /usr/share/jk2/base/assets0.pk3 ]; then JK2_KEYS="250:enter 330:at500,455 340:mouse1 1500:w+ 1700:w- '
+    # (its pak unpacked first, the licence answered on the terminal: no window system)
+    case('jk2', 'games jk2 long', 'if [ -f /usr/share/jk2/jk2demo.exe ]; then JK2_KEYS="250:enter 330:at500,455 340:mouse1 1500:w+ 1700:w- '
          '1700:right+ 1730:right- 1740:w+ 1900:w- 1900:mouse1+ 2000:mouse1-" JK2_FRAMES=2400 JK2_SUM=200 JK2_SEED=7 jk2 +set fixedtime 50 '
-         '+set com_maxfps 0; else echo JK2-NO-DATA; fi', wall=600,
+         '+set com_maxfps 0; else echo JK2-NO-DATA; fi', wall=600, more=['--expect', 'Type yes', '--send', 'yes\\n'],
          has=[r'^.*(jk2sum: frame 800 time 41250 entities 645 sum b7b63862 draws cf778cae|JK2-NO-DATA)',
               r'^.*(jk2sum: frame 1200 time 61250 entities 641 sum 5496b62c draws 8d82b4ce|JK2-NO-DATA)',
               r'^.*(jk2sum: frame 1000 time 51250 entities 643 sum d946eeaa draws 7bf726e5|JK2-NO-DATA)']),
     # the level played with no input for 4,000 frames: host_sum.sh's nine lines (the last two of them here)
-    case('jk2-sums', 'games jk2 long', 'if [ -f /usr/share/jk2/base/assets0.pk3 ]; then JK2_FRAMES=4000 JK2_SUM=400 JK2_SEED=7 jk2 +set fixedtime 50 '
-         '+set com_maxfps 0 +map demo; else echo JK2-NO-DATA; fi', wall=1200,
+    # the demo's first start on the desktop (docs/system/install.md): LucasArts' licence read out of the installer in a window, Accept
+    # refused until it is scrolled to its end, the pak unpacked into memory with the bar, and its CRC-32 7-Zip's (239abc19)
+    case('jk2-install', 'games jk2 desktop', X + 'if [ -f /usr/share/jk2/jk2demo.exe ]; then (sleep 6; nxkey a; sleep 1; nxkey pagedown; sleep 1; nxkey end; '
+         'sleep 1; nxkey tab enter) & CABINST_PRINT=1 CABINST_SUMS=1 jk2 --unpack; echo INSTALL=$?; else echo JK2-NO-DATA; fi', True, wall=300,
+         has=[r'^(cabinst: licence \\Disk1\\Install\\license\.txt: 3529 bytes, CRC-32 4361c574|JK2-NO-DATA)', r'^(cabinst: licence shown, \d+ lines|JK2-NO-DATA)',
+              r'^(cabinst: accept refused: the licence is not read to its end|JK2-NO-DATA)', r'^(cabinst: licence at line \d+ of \d+, its end|JK2-NO-DATA)',
+              r'^(cabinst: accepted|JK2-NO-DATA)', r'^(cabinst: round 9: 64001989 of 64001989 bytes of the files, 1 of 1 whole|JK2-NO-DATA)',
+              r'^(cabinst: sum 239abc19 64001989 \\Disk1\\GameData\\demo\\assets0\.pk3|JK2-NO-DATA)', r'^(INSTALL=0|JK2-NO-DATA)']),
+    case('jk2-sums', 'games jk2 long', 'if [ -f /usr/share/jk2/jk2demo.exe ]; then JK2_FRAMES=4000 JK2_SUM=400 JK2_SEED=7 jk2 +set fixedtime 50 '
+         '+set com_maxfps 0 +map demo; else echo JK2-NO-DATA; fi', wall=1200, more=['--expect', 'Type yes', '--send', 'yes\\n'],
          has=[r'^.*(jk2sum: frame 3200 time 161250 entities 639 sum 559c85a7 draws 810d9e76|JK2-NO-DATA)',
               r'^.*(jk2sum: frame 3600 time 181250 entities 639 sum 286e9b16 draws 274198c2|JK2-NO-DATA)']),
     case('openttd-scroll', 'games openttd', X + 'OPENTTD_DRAW=cpu OPENTTD_PLAY=1 OPENTTD_PLAY_ODD=1 OPENTTD_PAUSE=1 OPENTTD_CHECK=1 openttd -g /usr/share/openttd/busy.sav',
