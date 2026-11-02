@@ -1,0 +1,80 @@
+diff --git a/tiberiandawn/CMakeLists.txt b/tiberiandawn/CMakeLists.txt
+index 7a52827..9b706e9 100644
+--- a/tiberiandawn/CMakeLists.txt
++++ b/tiberiandawn/CMakeLists.txt
+@@ -216,8 +216,19 @@ if(BUILD_REMASTERTD)
+             RCFILE_PREFIX "RemasterTD"
+         )
+     endif()
+-    add_library(TiberianDawn SHARED 
++    # ShaderEmu: a static library linked into one program (no dlopen on the machine), with the
++    # host's helpers (brain_shaderemu.cpp, linux/opencnc3d)
++    if(OPENCNC3D_STATIC)
++        set(OPENCNC3D_BRAIN_KIND STATIC)
++        set(OPENCNC3D_BRAIN_SHADEREMU brain_shaderemu.cpp)
++        add_definitions(-DSHADEREMU_BRAIN)
++    else()
++        set(OPENCNC3D_BRAIN_KIND SHARED)
++        set(OPENCNC3D_BRAIN_SHADEREMU "")
++    endif()
++    add_library(TiberianDawn ${OPENCNC3D_BRAIN_KIND}
+         dllinterface.cpp
++        ${OPENCNC3D_BRAIN_SHADEREMU}
+         ${OPENCNC3D_EDITOR_IFACE}
+         sidebarglyphx.cpp
+         ${TIBDAWN_SRC}
+diff --git a/tiberiandawn/dllinterface.cpp b/tiberiandawn/dllinterface.cpp
+index bc47822..84dac45 100644
+--- a/tiberiandawn/dllinterface.cpp
++++ b/tiberiandawn/dllinterface.cpp
+@@ -7576,8 +7576,19 @@ void DLLExportClass::Debug_Heal_Unit(int x, int y)
+  *
+  * History: 4/15/2019 5:46PM - ST
+  **************************************************************************************************/
++#ifdef SHADEREMU_BRAIN
++// ShaderEmu: the host says whether the 1995 view is drawn into the hidden page at every tick
++// (brain_shaderemu.cpp, ShaderEmu_Legacy_Render): a host that draws the mission itself, as
++// OpenCNC3D's eyes do, does not read that page, and drawing it was 86% of a tick on the machine.
++extern bool ShaderEmu_Legacy_Render;
++#endif
+ bool DLLExportClass::Legacy_Render_Enabled(void)
+ {
++#ifdef SHADEREMU_BRAIN
++    if (!ShaderEmu_Legacy_Render) {
++        return false;
++    }
++#endif
+     if (GameToPlay == GAME_GLYPHX_MULTIPLAYER) {
+         unsigned int num_humans = 0U;
+         for (int i = 0; i < MPlayerCount; ++i) {
+diff --git a/tiberiandawn/event.h b/tiberiandawn/event.h
+index 6ea0d41..0a75855 100644
+--- a/tiberiandawn/event.h
++++ b/tiberiandawn/event.h
+@@ -269,7 +269,9 @@ public:
+ **	and packing rules differ between compilers and architectures, so it is asserted here
+ **	and the build enforces it forever rather than a reader trusting this comment.
+ */
++#ifndef SHADEREMU_BRAIN
+ static_assert(sizeof(EventClass) == 22, "EventClass is the network wire unit and must stay 22 bytes");
++#endif // ShaderEmu: no network on the machine, and RISC-V GCC has no ms_struct to lay the bitfields out with
+ 
+ 
+ #endif
+diff --git a/tiberiandawn/startup.cpp b/tiberiandawn/startup.cpp
+index 9a4c9f4..e1a7215 100644
+--- a/tiberiandawn/startup.cpp
++++ b/tiberiandawn/startup.cpp
+@@ -124,6 +124,12 @@ BOOL WINAPI DllMain(HINSTANCE instance, unsigned int fdwReason, void* lpvReserve
+ #ifdef REMASTER_BUILD
+ int main(int, char*[]);
+ 
++#ifdef SHADEREMU_BRAIN
++// ShaderEmu: the brain is linked into one program with a host of its own (linux/opencnc3d), whose
++// main is the program's; the game's is called by DLL_Startup alone.
++#define main TD_Main
++int TD_Main(int argc, char** argv);
++#endif
+ int DLL_Startup(const char* command_line_in)
+ {
+     /* Construct argc and argv from command_line_in. Remaster build requires
