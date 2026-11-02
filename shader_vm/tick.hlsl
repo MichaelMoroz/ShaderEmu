@@ -191,8 +191,7 @@ uint ram_word(uint o) {
             if (at != 0) remember(t, at); else absent_t = t;
         }
     }
-    uint4 tx = dr_v;
-    [branch] if (at != 0) tx = c[at];   // (an if: a ?: read the cache's entry on every load, there or not)
+    uint4 tx = at != 0 ? c[at] : dr_v;
     uint w = idx(tx, (o >> 2) & 3);
     return maybe && at == 0 && ovf_addr == o ? ovf_val : w;
 }
@@ -456,10 +455,9 @@ uint fast(uint room) {
                 // lb lh lw lbu lhu, within one word of RAM
                 uint va = a + imm_i(w), up = LOAD_UP(f3);
                 ok = va != 0 && ((0x37u >> f3) & 1) != 0 && (va & 3) + (1u << (f3 & 3)) <= 4 && (va ^ 0x80000000) < RAM_MAX;
-                [branch] if (ok) {
-                    uint x = ram_word(va & 0x7ffffffc) >> ((va & 3) * 8) << up;
-                    v = (f3 & 4) ? x >> up : asuint(asint(x) >> up);
-                }
+                // (read whether or not it may be: a read changes nothing, and a load that may not is the general step's)
+                uint x = ram_word(va & 0x7ffffffc) >> ((va & 3) * 8) << up;
+                v = (f3 & 4) ? x >> up : asuint(asint(x) >> up);
             }
         } else [branch] if (opc == 0x23 || (w & 0x5f) == 0x07 || opc == 0x53) {
             [branch] if (opc == 0x23) {
@@ -487,7 +485,7 @@ uint fast(uint room) {
                 // flw, a word of RAM
                 uint va = a + imm_i(w);
                 ok = va != 0 && f3 == 2 && (va & 0x80000003) == 0x80000000 && (va & 0x7ffffffc) < RAM_MAX;
-                [branch] if (ok) v = ram_word(va & 0x7ffffffc);
+                v = ram_word(va & 0x7ffffffc);
                 dst = 32 + rd;
             } else {
                 // fsw, a word of RAM
