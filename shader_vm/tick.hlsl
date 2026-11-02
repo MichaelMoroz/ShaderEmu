@@ -500,13 +500,14 @@ uint fast(uint room) {
         bool alu = (w & 0x5f) == 0x13 && (w & 0xfe00007f) != 0x02000033, ld = opc == 0x03;   // (flw and fsw are the floats')
         [branch] if (alu || ld) {
             [branch] if (alu) {
-                // op-imm and op: every result made, one chosen; signed is unsigned with the signs turned over
+                // op-imm and op: every result made, one chosen; signed is unsigned with the signs turned over.
+                // Of funct7 only bit 30 is looked at (sub, sra, srai): an encoding none of our extensions has is
+                // made as the one it resembles, not trapped (the test of funct7 was 2% of the shell loop)
                 bool reg = (w & 0x20) != 0, alt = (w & 0x40000000) != 0;
-                uint y = reg ? b : imm_i(w), s = y & 31, turn = (f3 & 1) ? 0 : 0x80000000, f7 = w >> 25;
+                uint y = reg ? b : imm_i(w), s = y & 31, turn = (f3 & 1) ? 0 : 0x80000000;
                 uint r01 = (f3 & 1) ? a << s : ((reg && alt) ? a - y : a + y), r23 = (a ^ turn) < (y ^ turn) ? 1 : 0;
                 uint r45 = (f3 & 1) ? (alt ? asuint(asint(a) >> s) : a >> s) : a ^ y, r67 = (f3 & 1) ? a & y : a | y;
                 v = (f3 & 4) ? ((f3 & 2) ? r67 : r45) : ((f3 & 2) ? r23 : r01);
-                ok = (((f7 == 0 ? 0xffffu : f7 == 0x20 ? 0x21fdu : 0x00ddu) >> (((w >> 2) & 8) | f3)) & 1) != 0;
             } else {
                 // lb lh lw lbu lhu, within one word of RAM
                 uint va = a + imm_i(w), up = LOAD_UP(f3);

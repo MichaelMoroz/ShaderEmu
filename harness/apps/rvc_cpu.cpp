@@ -1188,9 +1188,8 @@ static __declspec(noinline) int general_step(Core& c, u32 ins) {
     bool write = true, illegal = false;
     if (!W && calls_on && c.hart == 0) call_fast(c, c.clock - 1);   // (this one is counted in c.clock already)
     if ((zb_on || zbs_on || zicond_on) && (op == 0x13 || op == 0x33) && zb(ins, op, f3, f7, rs2, a, b, result)) { _InterlockedIncrement64((volatile long long*)&zb_run); op = 0x80; }   // (no opcode is 0x80)
-    // which funct7 each op and op-imm has, as the tick's general path: the rest are illegal
-    if ((op == 0x13 || (op == 0x33 && f7 != 1)) &&
-        !(((f7 == 0 ? 0xffffu : f7 == 0x20 ? 0x21fdu : 0x00ddu) >> (((ins >> 2) & 8) | f3)) & 1)) op = 0x81;
+    // (op and op-imm are as the tick makes them, which looks at no funct7 but its bit 5 (sub, sra, srai) and
+    // funct7 1 of op (M): an encoding no extension of ours has is made as one that it resembles, not trapped)
     switch (op) {
     case 0x80: break;
     case 0x37: result = ins & 0xfffff000; break;
