@@ -183,13 +183,10 @@ uint ram_word(uint o) {
     uint t = o >> 4;
     [branch] if (t != dr_t) { dr_v = TEX(RAM_ADDR(t)); dr_t = t; }
     bool maybe = (o & bloom) == o;
-    uint at = 0;
-    [branch] if (maybe) {
-        at = t == m1_t ? m1_at : t == m2_t ? m2_at : 0;
-        [branch] if (at == 0 && t != absent_t) {
-            at = find(t);
-            if (at != 0) remember(t, at); else absent_t = t;
-        }
+    uint at = maybe ? (t == m1_t ? m1_at : t == m2_t ? m2_at : 0) : 0;
+    [branch] if (maybe && at == 0 && t != absent_t) {
+        at = find(t);
+        if (at != 0) remember(t, at); else absent_t = t;
     }
     uint4 tx = at != 0 ? c[at] : dr_v;
     uint w = idx(tx, (o >> 2) & 3);
