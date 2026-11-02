@@ -300,14 +300,18 @@ void WIN_Present( window_t *window )
 	}
 	// JK2_KEYS="FRAME:KEY FRAME:KEY+ FRAME:KEY-": keys pressed and let go (KEY), held (KEY+) or let go (KEY-) at those
 	// frames, as the window's would be: a played start for a test (enter, escape, space, up, down, left, right,
-	// mouse1, mouse2, tab, shift, ctrl, a letter or digit)
+	// mouse1, mouse2, tab, shift, ctrl, a letter or digit), or atX,Y: the menus' pointer put at X, Y of their 640 x 480
 	static const char *keys = (const char *)-1;
-	static int let_go[8], let_go_count;
+	static int let_go[8], let_go_count, point_x = -1, point_y;
 	if ( keys == (const char *)-1 )
 		keys = getenv( "JK2_KEYS" );
 	for ( int i = 0; i < let_go_count; i++ )
 		Sys_QueEvent( 0, SE_KEY, let_go[i], qfalse, 0, NULL );
 	let_go_count = 0;
+	if ( point_x >= 0 ) {    // (the second half of atX,Y, a frame after the first: moves queued together are summed)
+		Sys_QueEvent( 0, SE_MOUSE, point_x, point_y, 0, NULL );
+		point_x = -1;
+	}
 	for ( const char *k = keys; k && *k; ) {
 		while ( *k == ' ' )
 			k++;
@@ -324,7 +328,12 @@ void WIN_Present( window_t *window )
 				{"space", A_SPACE}, {"up", A_CURSOR_UP}, {"down", A_CURSOR_DOWN}, {"left", A_CURSOR_LEFT},
 				{"right", A_CURSOR_RIGHT}, {"mouse1", A_MOUSE1}, {"mouse2", A_MOUSE2}, {"tab", A_TAB}, {"shift", A_SHIFT},
 				{"ctrl", A_CTRL} };
-			int key = len == 1 ? name[0] : 0;
+			int key = len == 1 ? name[0] : 0, x, y;
+			if ( sscanf( name, "at%d,%d", &x, &y ) == 2 ) {     // atX,Y: the menu's pointer to X, Y of 640 x 480
+				Com_Printf( "jk2: frame %d: pointer at %d, %d\n", se_frames, x, y );
+				Sys_QueEvent( 0, SE_MOUSE, -10000, -10000, 0, NULL );
+				point_x = x, point_y = y;
+			}
 			for ( unsigned i = 0; i < ARRAY_LEN( named ); i++ )
 				if ( (int)strlen( named[i].name ) == len && !strncmp( name, named[i].name, len ) )
 					key = named[i].key;

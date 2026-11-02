@@ -31,6 +31,29 @@ index 7cf2db8c..e8dc8ba1 100644
  			if(!hCrawl)
  			{
  				// failed, so go back to english
+diff --git a/code/client/cl_input.cpp b/code/client/cl_input.cpp
+index 94051760..12c752d9 100644
+--- a/code/client/cl_input.cpp
++++ b/code/client/cl_input.cpp
+@@ -239,6 +239,18 @@
+ 	float		val;
+ 	int			msec;
+ 
++#ifdef SHADEREMU
++	// (ShaderEmu: under fixedtime a key held at all in a frame is held for all of it: the share of the computer's
++	// milliseconds it was down made two runs of the same keys play two games; docs/games/jk2.md)
++	extern cvar_t *com_fixedtime;
++	if ( com_fixedtime && com_fixedtime->integer ) {
++		val = key->active || key->msec ? 1.0f : 0.0f;
++		key->msec = 0;
++		if ( key->active )
++			key->downtime = com_frameTime;
++		return val;
++	}
++#endif
+ 	msec = key->msec;
+ 	key->msec = 0;
+ 
 diff --git a/code/client/cl_main.cpp b/code/client/cl_main.cpp
 index 1a5c2446..aa845ee0 100644
 --- a/code/client/cl_main.cpp
