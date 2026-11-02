@@ -337,6 +337,9 @@ def run_card(name, g, image, log, show, limit, rvc='shader_vm', guest=(), unity=
     binary = name.split('-')[0]   # (which image ran, by the guest's own sum of the game)
     md5 = re.search(r'([0-9a-f]{32})  /usr/bin/' + binary + r'(\.bin)?\s', text)
     extra = (extra + '; ' if extra else '') + (f"{binary} {md5[1][:8]}" if md5 else 'no md5sum line')
+    prof = [l for l in err.splitlines() if l.startswith('[prof]')]   # (RVC_PASS_PROF=1 in the environment: the card's ms of a round's draws)
+    if prof:
+        extra = (extra + '; ' if extra else '') + 'the last ' + prof[-1]
     print(f"{name} (card{', unity ' + unity if unity else ''}): {r['fps']:.1f} frames a second ({frames} frames, {secs:.1f} s from the mark); {r['passes_s']:.0f} passes "
           f"a second, {r['passes']:.2f} a frame; core 0 {r['core0']:.2f}M a second, workers {r['workers']:.2f}M, all cores "
           f"{r['all']:.2f}M" + (f"; {extra}" if extra else '') + f"; {r['wall']:.0f} s on the card")
