@@ -1,3 +1,359 @@
+diff --git a/common/file.cpp b/common/file.cpp
+index d2e727d..5f61392 100644
+--- a/common/file.cpp
++++ b/common/file.cpp
+@@ -24,6 +24,14 @@ static void Resolve_File_Single(char* fname)
+ 
+ void Resolve_File(char* fname)
+ {
++#ifdef SHADEREMU_BRAIN
++    /*
++    ** Only the file's own name is looked for in any case: the folders are ours and named
++    ** exactly. Each step up reads a whole folder, and the root one is read from the ROM.
++    */
++    Resolve_File_Single(fname);
++    return;
++#endif
+ #ifndef _WIN32
+     // step through each sub-directory before going for the win
+     char* next = fname;
+diff --git a/common/file_posix.cpp b/common/file_posix.cpp
+index bcc4d64..45e36f9 100644
+--- a/common/file_posix.cpp
++++ b/common/file_posix.cpp
+@@ -29,6 +29,10 @@ public:
+     virtual void Close();
+ 
+ private:
++#ifdef SHADEREMU_BRAIN
++    struct ShaderEmu_Folder* Folder; /* the folder's names as kept, and how far into them this is */
++    int At;
++#endif
+     DIR* Directory;
+     struct dirent* DirEntry;
+     const char* FileFilter;
+@@ -38,10 +42,108 @@ private:
+     bool FindNextWithFilter();
+ };
+ 
++#ifdef SHADEREMU_BRAIN
++/*
++** A folder's names, read once. The game lists a folder for every file it looks for, to find it
++** in any spelling: 644 listings before Red Alert's first frame, ten million instructions.
++** Forgotten when the game writes or removes a file (rawfile.cpp) or makes a folder.
++*/
++#include <stdlib.h>
++struct ShaderEmu_Folder
++{
++    char* name;
++    struct dirent* entries;
++    unsigned char* opened; /* a name that could be opened when rawfile.cpp looked */
++    int count;
++};
++static ShaderEmu_Folder ShaderEmu_Folders[16];
++
++void ShaderEmu_Folders_Forget(void)
++{
++    for (int i = 0; i < 16; i++) {
++        free(ShaderEmu_Folders[i].name);
++        free(ShaderEmu_Folders[i].entries);
++        free(ShaderEmu_Folders[i].opened);
++        ShaderEmu_Folders[i].name = NULL;
++        ShaderEmu_Folders[i].entries = NULL;
++        ShaderEmu_Folders[i].opened = NULL;
++        ShaderEmu_Folders[i].count = 0;
++    }
++}
++
++static ShaderEmu_Folder* ShaderEmu_Folder_Of(const char* name)
++{
++    int free_at = -1;
++
++    for (int i = 0; i < 16; i++) {
++        if (ShaderEmu_Folders[i].name == NULL) {
++            free_at = free_at < 0 ? i : free_at;
++        } else if (strcmp(ShaderEmu_Folders[i].name, name) == 0) {
++            return &ShaderEmu_Folders[i];
++        }
++    }
++    DIR* directory = opendir(name);
++    if (directory == NULL) {
++        return NULL;
++    }
++    if (free_at < 0) {
++        ShaderEmu_Folders_Forget();
++        free_at = 0;
++    }
++    ShaderEmu_Folder* folder = &ShaderEmu_Folders[free_at];
++    int room = 0;
++    for (struct dirent* entry; (entry = readdir(directory)) != NULL;) {
++        if (folder->count == room) {
++            room = room ? room * 2 : 64;
++            folder->entries = (struct dirent*)realloc(folder->entries, room * sizeof(struct dirent));
++        }
++        folder->entries[folder->count++] = *entry;
++    }
++    closedir(directory);
++    folder->name = strdup(name);
++    folder->opened = (unsigned char*)calloc(folder->count + 1, 1);
++    return folder;
++}
++#endif
++
++#ifdef SHADEREMU_BRAIN
++/* What is known of a path before rawfile.cpp opens it only to see whether it is there (1,370 times before
++** Tiberian Dawn's first frame): 0, not among its folder's names; 1, there and opened before (`opened` says
++** that it was now); 2, not known. */
++int ShaderEmu_File_Listed(const char* path, bool opened)
++{
++    char folder_name[PATH_MAX];
++    const char* slash = strrchr(path, '/');
++    const char* name = slash ? slash + 1 : path;
++    size_t length = slash ? (size_t)(slash - path + 1) : 0;
++
++    if (length >= sizeof(folder_name) || !*name) {
++        return 2;
++    }
++    memcpy(folder_name, path, length);
++    folder_name[length] = 0;
++    ShaderEmu_Folder* folder = ShaderEmu_Folder_Of(length ? folder_name : ".");
++    if (folder == NULL || folder->opened == NULL) {
++        return 2;
++    }
++    for (int i = 0; i < folder->count; i++) {
++        if (strcmp(folder->entries[i].d_name, name) == 0) {
++            folder->opened[i] |= opened;
++            return folder->opened[i] ? 1 : 2;
++        }
++    }
++    return 0;
++}
++#endif
++
+ Find_File_Data_Posix::Find_File_Data_Posix()
+     : Directory(nullptr)
+     , DirEntry(nullptr)
+ {
++#ifdef SHADEREMU_BRAIN
++    Folder = NULL;
++    At = 0;
++#endif
+ }
+ 
+ Find_File_Data_Posix::~Find_File_Data_Posix()
+@@ -72,11 +174,21 @@ unsigned int Find_File_Data_Posix::GetTime() const
+ bool Find_File_Data_Posix::FindNextWithFilter()
+ {
+     while (true) {
++#ifdef SHADEREMU_BRAIN
++        DirEntry = Folder != NULL && At < Folder->count ? &Folder->entries[At++] : nullptr;
++#else
+         DirEntry = readdir(Directory);
++#endif
+         if (DirEntry == nullptr) {
+             return false;
+         }
++#ifdef SHADEREMU_BRAIN
++        /* (a name with no wildcard in it is compared: the same answer as matching it) */
++        if (strpbrk(FileFilter, "*?[\\") == NULL ? strcasecmp(FileFilter, DirEntry->d_name) == 0
++                                                  : fnmatch(FileFilter, DirEntry->d_name, FNM_PATHNAME | FNM_CASEFOLD) == 0) {
++#else
+         if (fnmatch(FileFilter, DirEntry->d_name, FNM_PATHNAME | FNM_CASEFOLD) == 0) {
++#endif
+             strcpy(FullName, DirName);
+             strcat(FullName, DirEntry->d_name);
+             break;
+@@ -96,29 +208,54 @@ bool Find_File_Data_Posix::FindFirst(const char* fname)
+     if (fdir != nullptr) {
+         strncat(DirName, fname, (fdir - fname + 1));
+         FileFilter = fdir + 1;
++#ifdef SHADEREMU_BRAIN
++        Folder = ShaderEmu_Folder_Of(DirName);
++#else
+         Directory = opendir(DirName);
++#endif
+     } else {
+         FileFilter = fname;
++#ifdef SHADEREMU_BRAIN
++        Folder = ShaderEmu_Folder_Of(".");
++#else
+         Directory = opendir(".");
++#endif
+     }
+ 
++#ifdef SHADEREMU_BRAIN
++    At = 0;
++    if (Folder == NULL) {
++        return false;
++    }
++#else
+     if (Directory == nullptr) {
+         return false;
+     }
++#endif
+ 
+     return FindNextWithFilter();
+ }
+ 
+ bool Find_File_Data_Posix::FindNext()
+ {
++#ifdef SHADEREMU_BRAIN
++    if (Folder == NULL) {
++        return false;
++    }
++#else
+     if (Directory == nullptr) {
+         return false;
+     }
++#endif
+     return FindNextWithFilter();
+ }
+ 
+ void Find_File_Data_Posix::Close()
+ {
++#ifdef SHADEREMU_BRAIN
++    Folder = NULL;
++    DirEntry = nullptr;
++#endif
+     if (Directory != nullptr) {
+         closedir(Directory);
+         Directory = nullptr;
+diff --git a/common/rawfile.cpp b/common/rawfile.cpp
+index b0e0525..d5bacba 100644
+--- a/common/rawfile.cpp
++++ b/common/rawfile.cpp
+@@ -55,6 +55,59 @@
+ 
+ #include "debugstring.h"
+ #include "rawfile.h"
++#ifdef SHADEREMU_BRAIN
++#include <sys/mman.h>
++/*
++** A file's bytes from `at` on as memory: the file's own pages, all there at once, and a page
++** the game writes to (a shape's header) becomes a copy of its own. Reading a mix into the heap
++** was the pages and a copy of them: 25 million instructions of Red Alert's start, and 24 MB.
++*/
++static struct
++{
++    void* data;
++    void* base;
++    size_t length;
++} ShaderEmu_Maps[16];
++
++void* ShaderEmu_Mix_Map(FILE* file, long at, int size)
++{
++    long page = at & ~4095L;
++    size_t length = (size_t)size + (size_t)(at - page);
++
++    for (int i = 0; i < 16; i++) {
++        if (ShaderEmu_Maps[i].data == NULL) {
++            void* base = mmap(NULL, length, PROT_READ, MAP_PRIVATE | MAP_POPULATE, fileno(file), page);
++            if (base == MAP_FAILED) {
++                return (NULL);
++            }
++            mprotect(base, length, PROT_READ | PROT_WRITE);
++            ShaderEmu_Maps[i].base = base;
++            ShaderEmu_Maps[i].length = length;
++            ShaderEmu_Maps[i].data = (char*)base + (at - page);
++            return (ShaderEmu_Maps[i].data);
++        }
++    }
++    return (NULL);
++}
++
++bool ShaderEmu_Mix_Unmap(void* data)
++{
++    for (int i = 0; i < 16; i++) {
++        if (ShaderEmu_Maps[i].data == data && data != NULL) {
++            munmap(ShaderEmu_Maps[i].base, ShaderEmu_Maps[i].length);
++            ShaderEmu_Maps[i].data = NULL;
++            return (true);
++        }
++    }
++    return (false);
++}
++
++void ShaderEmu_Folders_Forget(void); /* file_posix.cpp: the folders' names it keeps are not all there is now */
++int ShaderEmu_File_Listed(const char* path, bool opened);
++#define SHADEREMU_FOLDERS_FORGET() ShaderEmu_Folders_Forget()
++#else
++#define SHADEREMU_FOLDERS_FORGET()
++#endif
+ #include "file.h"
+ #include "wwstd.h"
+ 
+@@ -268,10 +321,12 @@ int RawFileClass::Open(int rights)
+ 
+         case WRITE:
+             Handle = raw_fopen(Filename, "wb");
++            SHADEREMU_FOLDERS_FORGET();
+             break;
+ 
+         case READ | WRITE:
+             Handle = raw_fopen(Filename, "rwb");
++            SHADEREMU_FOLDERS_FORGET();
+             break;
+         }
+ 
+@@ -341,10 +396,19 @@ int RawFileClass::Is_Available(int forced)
+     **	CD-ROM, this routine will return a failure condition. In all but the missing file
+     **	condition, go through the normal error recover channels.
+     */
++#ifdef SHADEREMU_BRAIN
++    int known = ShaderEmu_File_Listed(Filename, false);
++    if (known != 2) {
++        return (known);
++    }
++#endif
+     Handle = raw_fopen(Filename, "r");
+     if (Handle == nullptr) {
+         return (false);
+     }
++#ifdef SHADEREMU_BRAIN
++    ShaderEmu_File_Listed(Filename, true);
++#endif
+ 
+     /*
+     **	Since the file could be opened, then close it and return that the file exists.
+@@ -795,6 +859,7 @@ int RawFileClass::Delete(void)
+             Error(errno, false, Filename);
+             return (false);
+         }
++        SHADEREMU_FOLDERS_FORGET();
+         break;
+     }
+ 
+diff --git a/common/rawfile.h b/common/rawfile.h
+index 73a5a86..27c8b07 100644
+--- a/common/rawfile.h
++++ b/common/rawfile.h
+@@ -124,6 +124,14 @@ protected:
+ 
+     int Raw_Seek(int pos, int dir = SEEK_CUR);
+ 
++#ifdef SHADEREMU_BRAIN
++public:
++    FILE* ShaderEmu_File(void) const /* (mixfile.h maps a file it keeps in memory) */
++    {
++        return (Handle);
++    }
++#endif
++
+ private:
+     /*
+     **	This is the low level DOS handle. A -1 indicates an empty condition.
+@@ -131,6 +139,11 @@ private:
+     FILE* Handle;
+ };
+ 
++#ifdef SHADEREMU_BRAIN
++void* ShaderEmu_Mix_Map(FILE* file, long at, int size);
++bool ShaderEmu_Mix_Unmap(void* data);
++#endif
++
+ /***********************************************************************************************
+  * RawFileClass::File_Name -- Returns with the filename associate with the file object.        *
+  *                                                                                             *
 diff --git a/tiberiandawn/CMakeLists.txt b/tiberiandawn/CMakeLists.txt
 index 7a52827..9b706e9 100644
 --- a/tiberiandawn/CMakeLists.txt
@@ -23,6 +379,50 @@ index 7a52827..9b706e9 100644
          ${OPENCNC3D_EDITOR_IFACE}
          sidebarglyphx.cpp
          ${TIBDAWN_SRC}
+diff --git a/tiberiandawn/cell.cpp b/tiberiandawn/cell.cpp
+index c7ad7f4..131147e 100644
+--- a/tiberiandawn/cell.cpp
++++ b/tiberiandawn/cell.cpp
+@@ -73,6 +73,9 @@
+  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+ #include "function.h"
++#ifdef SHADEREMU_BRAIN
++void ShaderEmu_Clean_Mark(CELL cell); // map.cpp: the cells MapClass::Clean must look at
++#endif
+ 
+ /*
+ ** New sidebar for GlyphX multiplayer. ST - 3/26/2019 12:24PM
+@@ -566,6 +569,9 @@ void CellClass::Occupy_Down(ObjectClass* object)
+     object->Next = optr;
+ 
+     OccupierPtr = object;
++#ifdef SHADEREMU_BRAIN
++    ShaderEmu_Clean_Mark(Cell_Number());
++#endif
+     Map.Radar_Pixel(Cell_Number());
+ 
+     /*
+@@ -640,6 +646,9 @@ void CellClass::Occupy_Up(ObjectClass* object)
+     }
+     if (optr == object) {
+         OccupierPtr = object->Next;
++#ifdef SHADEREMU_BRAIN
++        ShaderEmu_Clean_Mark(Cell_Number());
++#endif
+         object->Next = 0;
+     } else {
+         while (optr) {
+@@ -708,6 +717,9 @@ void CellClass::Overlap_Down(ObjectClass* object)
+ 
+     if (!object)
+         return;
++#ifdef SHADEREMU_BRAIN
++    ShaderEmu_Clean_Mark(Cell_Number());
++#endif
+     int index;
+     for (index = 0; index < sizeof(Overlapper) / sizeof(Overlapper[0]); index++) {
+         if (Overlapper[index] == object)
 diff --git a/tiberiandawn/dllinterface.cpp b/tiberiandawn/dllinterface.cpp
 index bc47822..84dac45 100644
 --- a/tiberiandawn/dllinterface.cpp
@@ -61,6 +461,124 @@ index 6ea0d41..0a75855 100644
  
  
  #endif
+diff --git a/tiberiandawn/iomap.cpp b/tiberiandawn/iomap.cpp
+index f4f1ef3..c7e1bdc 100644
+--- a/tiberiandawn/iomap.cpp
++++ b/tiberiandawn/iomap.cpp
+@@ -217,9 +217,15 @@ void CellClass::Code_Pointers(void)
+  * HISTORY:                                                                                    *
+  *   01/02/1995 BR : Created.                                                                  *
+  *=============================================================================================*/
++#ifdef SHADEREMU_BRAIN
++void ShaderEmu_Clean_Mark(CELL cell);
++#endif
+ void CellClass::Decode_Pointers(void)
+ {
+     char bad[128];
++#ifdef SHADEREMU_BRAIN
++    ShaderEmu_Clean_Mark(Cell_Number());
++#endif
+ 
+     if (OccupierPtr != NULL) {
+         OccupierPtr = As_Object(TARGET_SAFE_CAST(OccupierPtr), false);
+diff --git a/tiberiandawn/map.cpp b/tiberiandawn/map.cpp
+index 1d2350b..3e22c31 100644
+--- a/tiberiandawn/map.cpp
++++ b/tiberiandawn/map.cpp
+@@ -1738,6 +1738,48 @@ int MapClass::Validate(void)
+  * HISTORY:                                                                                    *
+  *   4/14/2020 11:48AM ST : Created.                                                           *
+  *=============================================================================================*/
++#ifdef SHADEREMU_BRAIN
++/*
++** ShaderEmu: the cells Clean has to look at (linux/opencnc3d, docs/games/opencnc3d.md, "Clean").
++** Clean changes a cell only through a non-null occupier or overlapper, and a cell gets one only in
++** Occupy_Down, Occupy_Up, Overlap_Down and a load's Decode_Pointers, which mark it here. A cell
++** stays marked until Clean finds all its pointers null. The marked cells are walked in ascending
++** order, as the full walk does: its active_fail and limbo_fail carry from cell to cell.
++** ShaderEmu_Clean_Mode: 0 the marked cells, 1 every cell (the original), 2 the marked cells and a
++** count of unmarked cells with a pointer (ShaderEmu_Clean_Missed, which must stay 0).
++*/
++static unsigned ShaderEmu_Clean_Bits[MAP_CELL_TOTAL / 32];
++static unsigned ShaderEmu_Clean_Words[MAP_CELL_TOTAL / 32 / 32]; /* which words have a bit */
++/* the lowest set bit's number by a multiply (the machine has no count of trailing zeros) */
++static const unsigned char ShaderEmu_Debruijn[32] = {0,  1,  28, 2,  29, 14, 24, 3,  30, 22, 20,
++                                                     15, 25, 17, 4,  8,  31, 27, 13, 23, 21, 19,
++                                                     16, 7,  26, 12, 18, 6,  11, 5,  10, 9};
++static inline int ShaderEmu_Low_Bit(unsigned bits)
++{
++    return ShaderEmu_Debruijn[((bits & (0u - bits)) * 0x077CB531u) >> 27];
++}
++int ShaderEmu_Clean_Mode = 0;
++int ShaderEmu_Clean_Missed = 0;
++void ShaderEmu_Clean_Mark(CELL cell)
++{
++    if ((unsigned)cell < MAP_CELL_TOTAL) {
++        ShaderEmu_Clean_Bits[cell >> 5] |= 1u << (cell & 31);
++        ShaderEmu_Clean_Words[cell >> 10] |= 1u << ((cell >> 5) & 31);
++    }
++}
++static bool ShaderEmu_Cell_Empty(const CellClass& c)
++{
++    if (c.OccupierPtr != NULL) {
++        return false;
++    }
++    for (int i = 0; i < ARRAY_SIZE(c.Overlapper); i++) {
++        if (c.Overlapper[i] != NULL) {
++            return false;
++        }
++    }
++    return true;
++}
++#endif
+ void MapClass::Clean(void)
+ {
+     CELL cell;
+@@ -1756,7 +1798,27 @@ void MapClass::Clean(void)
+     /*------------------------------------------------------------------------
+     Check every cell on the map, even those that aren't displayed.
+     ------------------------------------------------------------------------*/
++#ifdef SHADEREMU_BRAIN
++    if (ShaderEmu_Clean_Mode == 2) {
++        for (cell = 0; cell < MAP_CELL_TOTAL; cell++) {
++            if (!(ShaderEmu_Clean_Bits[cell >> 5] & (1u << (cell & 31))) && !ShaderEmu_Cell_Empty((*this)[cell])) {
++                ShaderEmu_Clean_Missed++;
++            }
++        }
++    }
++    for (int group = 0; group < MAP_CELL_TOTAL / 32 / 32; group++) {
++        unsigned words = ShaderEmu_Clean_Mode == 1 ? ~0u : ShaderEmu_Clean_Words[group];
++        while (words) {
++        int word = group * 32 + ShaderEmu_Low_Bit(words);
++        words &= words - 1;
++        unsigned bits = ShaderEmu_Clean_Mode == 1 ? ~0u : ShaderEmu_Clean_Bits[word];
++        while (bits) {
++            int bit = ShaderEmu_Low_Bit(bits);
++            bits &= bits - 1;
++            cell = (CELL)(word * 32 + bit);
++#else
+     for (cell = 0; cell < MAP_CELL_TOTAL; cell++) {
++#endif
+ 
+         /*.....................................................................
+         Validate Occupier
+@@ -1845,6 +1907,16 @@ void MapClass::Clean(void)
+                 }
+             }
+         }
++#ifdef SHADEREMU_BRAIN
++        if (ShaderEmu_Cell_Empty((*this)[cell])) {
++            ShaderEmu_Clean_Bits[cell >> 5] &= ~(1u << (cell & 31));
++            if (ShaderEmu_Clean_Bits[cell >> 5] == 0) {
++                ShaderEmu_Clean_Words[cell >> 10] &= ~(1u << ((cell >> 5) & 31));
++            }
++        }
++        }
++        }
++#endif
+     }
+ }
+ 
 diff --git a/tiberiandawn/startup.cpp b/tiberiandawn/startup.cpp
 index 9a4c9f4..e1a7215 100644
 --- a/tiberiandawn/startup.cpp

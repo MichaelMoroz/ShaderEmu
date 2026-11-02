@@ -10,6 +10,7 @@
 // MISSIONS the mission's .INI and .BIN; both end in '/'.
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 extern "C" int ShaderEmu_Start(const char* content, const char* dir, const char* scen, int build_level, int seed);
 extern "C" int ShaderEmu_Advance(void);
@@ -17,6 +18,8 @@ extern "C" int ShaderEmu_Dump(void);
 extern "C" int ShaderEmu_Frame(void);
 extern "C" unsigned ShaderEmu_State_Sum(int* counts);
 extern "C" void ShaderEmu_Set_Legacy_Render(int on);
+extern "C" void ShaderEmu_Set_Clean(int mode);
+extern "C" int ShaderEmu_Clean_Missed_Count(void);
 
 // instructions so far: the machine's own count (rvc_cpu and the card), none on the build computer
 static unsigned instructions(void)
@@ -53,6 +56,12 @@ int main(int argc, char** argv)
     const char* render = getenv("OPENCNC3D_RENDER");
     ShaderEmu_Set_Legacy_Render(render && atoi(render));
     printf("ocnc: the 1995 view %s\n", render && atoi(render) ? "drawn every tick" : "not drawn");
+    // MapClass::Clean: the cells something was put in (default), OPENCNC3D_CLEAN=full every cell
+    // as the Remaster does, =check the marked ones and a count of what that missed
+    const char* clean = getenv("OPENCNC3D_CLEAN");
+    int clean_mode = clean && !strcmp(clean, "full") ? 1 : clean && !strcmp(clean, "check") ? 2 : 0;
+    ShaderEmu_Set_Clean(clean_mode);
+    printf("ocnc: Clean on %s\n", clean_mode == 1 ? "every cell" : clean_mode == 2 ? "the marked cells, checked" : "the marked cells");
     unsigned i0 = instructions();
     if (!ShaderEmu_Start(argv[1], argv[2], argv[3], 1, seed)) {
         printf("ocnc: %s did not start\n", argv[3]);
@@ -87,6 +96,8 @@ int main(int argc, char** argv)
         }
     }
     printf("ocnc: %d ticks, %u instructions a tick\n", t - 1, t > 1 ? (unsigned)(sum / (unsigned)(t - 1)) : 0);
+    if (clean_mode == 2)
+        printf("ocnc: Clean missed %d cells\n", ShaderEmu_Clean_Missed_Count());
     printf("ocnc: done\n");
     return 0;
 }
