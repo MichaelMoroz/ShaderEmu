@@ -3160,7 +3160,7 @@ index 20ff4f6..6cdac27 100644
 +#ifdef SHADEREMU
 +#include "common/host.h"
 +bool ShaderEmu_GL_On(int cells);
-+bool ShaderEmu_GL_Changed(void);
++bool ShaderEmu_GL_Changed(void), ShaderEmu_GL_Band(int x0, int y0, int x1, int y1); /* (gl.cpp: the tilted view's band) */
 +unsigned ShaderEmu_GL_Cycles; /* what the map's scene cost, for the figures (conquer.cpp) */
 +#endif
  #include "common/fading.h"
@@ -3241,7 +3241,7 @@ index 20ff4f6..6cdac27 100644
 +            unsigned began = host_cycles();
 +            ShaderEmu_GL_Draw(forced);
 +            ShaderEmu_GL_Cycles += host_cycles() - began;
-+            if (IsRubberBand) {
++            if (IsRubberBand && !ShaderEmu_GL_Band(BandX, BandY, NewX, NewY)) {
 +                LogicPage->Draw_Rect(BandX + TacPixelX, BandY + TacPixelY, NewX + TacPixelX, NewY + TacPixelY, WHITE);
 +            }
 +#ifdef SHADEREMU

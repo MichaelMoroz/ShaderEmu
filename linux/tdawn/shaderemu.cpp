@@ -72,9 +72,18 @@ void Move_Video_Mouse(float xrel, float yrel)
 {
 }
 
+// The tilted view (gl.cpp, docs/games/tdawn.md "In 3D"): a pixel over the map as the 2D view has that
+// point of the ground, so that the game's own code makes the same clicks of it. Nothing in 2D.
+#ifdef SHADEREMU_RA
+static inline void ShaderEmu_View_Pick(int&, int&) {} // (Red Alert has no tilted view yet)
+#else
+void ShaderEmu_View_Pick(int& x, int& y);
+#endif
+
 void Get_Video_Mouse(int& x, int& y)
 {
     host_pointer(&x, &y);
+    ShaderEmu_View_Pick(x, y);
 }
 
 void Set_Video_Cursor(void* cursor, int w, int h, int hotx, int hoty)
@@ -471,8 +480,10 @@ void WWKeyboardClassShaderEmu::Fill_Buffer_From_System(void)
                 if (dragged) {
                     break;
                 }
+                ShaderEmu_View_Pick(Press_X, Press_Y);
                 Put_Mouse_Message(VK_RBUTTON, Press_X, Press_Y, false);
             }
+            ShaderEmu_View_Pick(event.x, event.y);
             Put_Mouse_Message(event.key, event.x, event.y, !event.down);
             break;
         case HOST_QUIT:

@@ -5,6 +5,7 @@
 #include "common/host.h"
 #include "common/keyframe.h"
 #include "common/mcwx.h" // (mcw_self: which core draws)
+#include "common/td3d.h" // the tilted view (docs/games/tdawn.md, "In 3D")
 
 enum
 {
@@ -80,7 +81,8 @@ struct Kept
     bool away;  // or it drew nothing, being out of the view when the view was at...
     COORDINATE view;
     Quad quad[6];
-    bool barred; // with bars, put into the page every frame it is shown
+    unsigned char models; // of those, parts of a model (the tilted view: a scene draws so many at most)
+    bool barred;          // with bars, put into the page every frame it is shown
     BarsDraw bars;
 };
 enum { KEPT = 1024 };
@@ -99,6 +101,12 @@ static struct alignas(16) Drawing
     bool missed, not_here; // (the worker: a shape it could not draw, and of those one the game would have)
     bool full;             // no room in the atlas for a shape: its shapes are forgotten at the next scene
     unsigned misses;
+    // the tilted view's model of the object being drawn (Model_Begin): its own image's shapes are the model
+    const void* model_file; // NULL: none
+    int model, model_parts; // which, and the parts of models in this scene so far
+    bool model_done;
+    short model_x, model_y;
+    unsigned char model_facing, model_turret, model_house;
 } drawing = {NULL, 0, 0, 0, {0, 0, 0}, {0, 0}, 0, {0}, {0}, 0, 0, 0, -1, false, true, false, false, false, 0};
 #define recording drawing.recording
 #define shelf_x drawing.shelf_x
@@ -457,6 +465,8 @@ static void bars_pen(const Pen& p, const BarsDraw& b, int x, int y, int key)
     }
 }
 
+static void View_Point(int& x, int& y);
+
 // An object's bars and box from the map's pixels to the page, noted for the next scene.
 static void bars_put(const BarsDraw& b)
 {
@@ -470,14 +480,16 @@ static void bars_put(const BarsDraw& b)
     host_settle();
     Pen p = {page, LogicPage->Get_Width() + LogicPage->Get_XAdd() + LogicPage->Get_Pitch(),
              wx, wy, wx + WindowList[WINDOW_TACTICAL][WINDOWWIDTH] - 1, wy + WindowList[WINDOW_TACTICAL][WINDOWHEIGHT] - 1};
-    bars_pen(p, b, origin_x + b.x, origin_y + b.y, -1);
+    int bx = origin_x + b.x, by = origin_y + b.y;
+    View_Point(bx, by); // (the tilted view: over where it shows the object's middle)
+    bars_pen(p, b, bx, by, -1);
     if (bars.count == BARS) {
         ShaderEmu_GL_Touched = true; // (more than there is room for: the page is made all holes)
         return;
     }
     BarsDraw& to = bars.drawn[bars.count++];
     to = b;
-    to.x = (short)(origin_x + b.x), to.y = (short)(origin_y + b.y);
+    to.x = (short)bx, to.y = (short)by;
 }
 
 // TechnoClass::Draw_It's bars and box (x, y in the tactical window), drawn and kept with the
@@ -524,6 +536,7 @@ static void emit(int kind, int x, int y, int w, int h, int ax, int ay, unsigned 
             recording->whole = false;
             return;
         }
+        recording->models += kind == HOST_MODEL;
         Quad& q = recording->quad[recording->count++];
         q.x = (short)(x - origin_x), q.y = (short)(y - origin_y), q.w = (short)w, q.h = (short)h;
         q.ax = (short)ax, q.ay = (short)ay, q.kind = (unsigned char)kind, q.colour = colour;
@@ -553,6 +566,262 @@ static Kept* kept_of(ObjectClass* who)
     return NULL;
 }
 
+/*
+** The tilted view (docs/games/tdawn.md, "In 3D"; docs/plans/td3d-plan.md): TDAWN_VIEW=3d. A camera over
+** the map (td3d.h) is given to host.c every scene; the game's rules, its cells, its window on the map
+** and its order of drawing are as in 2D: what is drawn changes, and where a click lands on the map.
+** The camera fits the game's window (every pixel of the view is a point of it), so nothing the game
+** culls by its window is missed and every click is one the 2D view could have made.
+**   TDAWN_PITCH=N     degrees below the horizontal (60; 35 to 85)
+**   TDAWN_HEIGHTS=1   the map's heights (heights.py) under the cells, the objects and the clicks
+**   TDAWN_MODELS=0    sprites standing up for every object, no models
+*/
+enum { MODEL_PARTS_MOST = 200 }; // (a list's set has 256 matrix blocks: a part is one)
+static int view3d = -1;
+static struct td3d_view camera; // the first core's, written between scenes: the drawing core reads it
+static const unsigned char* heights_now; // this map's 65 x 65 corners, or NULL
+static unsigned char* heights_file;
+static long heights_size;
+static bool models_on;
+static signed char model_of_unit[UNIT_COUNT], model_of_building[STRUCT_COUNT];
+static unsigned char parts_of_model[256];
+static unsigned view_shown_ms; // when a scene was last made: a click is the map's only while it is shown
+
+static bool View_3D(void)
+{
+    if (view3d < 0) {
+        const char* view = getenv("TDAWN_VIEW");
+        view3d = view && !strcmp(view, "3d");
+    }
+    return view3d > 0;
+}
+
+static bool View_Asked(const char* name, bool otherwise)
+{
+    const char* value = getenv(name);
+    return value ? strcmp(value, "0") != 0 : otherwise;
+}
+
+// A colour of the game's palette (6 bits a channel) as 0x00RRGGBB.
+static unsigned View_Colour(int index)
+{
+    const unsigned char* c = &GamePalette[index * 3];
+    return (unsigned)(c[0] << 2) << 16 | (unsigned)(c[1] << 2) << 8 | (unsigned)(c[2] << 2);
+}
+
+// A mission begins (the first core): its heights, which kinds have a model, each house's colours.
+static void View_Scenario(void)
+{
+    heights_now = NULL;
+    if (!View_3D()) {
+        return;
+    }
+    if (View_Asked("TDAWN_HEIGHTS", false)) {
+        if (!heights_file) {
+            FILE* f = fopen("/usr/share/tdawn-heights.dat", "rb");
+            if (f) {
+                fseek(f, 0, SEEK_END);
+                heights_size = ftell(f);
+                fseek(f, 0, SEEK_SET);
+                heights_file = heights_size > 8 ? (unsigned char*)malloc(heights_size) : NULL;
+                if (heights_file && fread(heights_file, 1, heights_size, f) != (size_t)heights_size) {
+                    free(heights_file);
+                    heights_file = NULL;
+                }
+                fclose(f);
+            }
+        }
+        // "TDH1", a count, then a name (12) and where its 65 x 65 bytes are, a map each (heights.py)
+        unsigned count = heights_file && !memcmp(heights_file, "TDH1", 4) ? *(unsigned*)(heights_file + 4) : 0;
+        for (unsigned i = 0; i < count && 8 + 16 * (i + 1) <= (unsigned)heights_size; i++) {
+            const unsigned char* record = heights_file + 8 + 16 * i;
+            unsigned at = *(const unsigned*)(record + 12);
+            if (!strncmp((const char*)record, Scen.ScenarioName, 12) && at + 65 * 65 <= (unsigned)heights_size) {
+                heights_now = heights_file + at;
+            }
+        }
+        if (!heights_now) {
+            fprintf(stderr, "tdawn: no heights for %s: the map is flat\n", Scen.ScenarioName);
+        }
+    }
+    models_on = View_Asked("TDAWN_MODELS", true) && host_models_open("/usr/share/tdawn-models.dat") > 0;
+    for (int i = 0; i < UNIT_COUNT; i++) {
+        int parts = 0, m = models_on ? host_model_find(UnitTypeClass::As_Reference((UnitType)i).Name(), &parts) : -1;
+        model_of_unit[i] = (signed char)(m >= 0 && m < 128 ? m : -1);
+        if (m >= 0 && m < 128) {
+            parts_of_model[m] = (unsigned char)parts;
+        }
+    }
+    for (int i = 0; i < STRUCT_COUNT; i++) {
+        int parts = 0, m = models_on ? host_model_find(BuildingTypeClass::As_Reference((StructType)i).Name(), &parts) : -1;
+        model_of_building[i] = (signed char)(m >= 0 && m < 128 ? m : -1);
+        if (m >= 0 && m < 128) {
+            parts_of_model[m] = (unsigned char)parts;
+        }
+    }
+    // a house's models in its own colours: the two of its remap the palette's gold ramp has as main and dark
+    for (int i = 0; models_on && i < Houses.Count(); i++) {
+        HouseClass* house = Houses.Ptr(i);
+        unsigned char const* remap = house->Remap_Table(false, true);
+        if (remap && (int)house->Class->House >= 0 && (int)house->Class->House < HOST_HOUSES) {
+            host_model_house(house->Class->House, View_Colour(remap[177]), View_Colour(remap[180]));
+        }
+    }
+}
+
+// A point of the ground in the 2D view (x, y of the screen) where the tilted view shows it.
+static void View_Point(int& x, int& y)
+{
+    int tx = WindowList[WINDOW_TACTICAL][WINDOWX], ty = WindowList[WINDOW_TACTICAL][WINDOWY];
+    int32_t sx, sy;
+
+    if (view3d > 0 && camera.on && td3d_to_screen(&camera, (int32_t)(x - tx) << 16, (int32_t)(y - ty) << 16, 0, &sx, &sy, NULL)) {
+        x = tx + ((sx + 0x8000) >> 16);
+        y = ty + ((sy + 0x8000) >> 16);
+    }
+}
+
+/*
+** Where the pointer (x, y of the screen, in the game's pixels) is on the map, as the 2D view would
+** have that pixel: shaderemu.cpp gives the game this for every place it reads, so a click, the
+** pointer's shape over a unit and the band all go through the game's own code (Input, Click_Cell_Calc,
+** Close_Object), with the same cells and objects. Over hills the ray is met with the ground in three
+** steps. Only while the map is being shown: a dialog over it (no scenes) has the pointer as it is.
+*/
+void ShaderEmu_View_Pick(int& x, int& y)
+{
+    int tx = Map.TacPixelX, ty = Map.TacPixelY;
+    if (view3d <= 0 || !camera.on || !ShaderEmu_GL_Live || host_ms() - view_shown_ms > 250 || x < tx || y < ty
+        || x >= tx + camera.w || y >= ty + camera.h) {
+        return;
+    }
+    int32_t gx = 0, gy = 0, gz = 0;
+    for (int round = 0; round < 3; round++) {
+        if (!td3d_to_ground(&camera, (int32_t)(x - tx) << 16, (int32_t)(y - ty) << 16, gz, &gx, &gy)) {
+            return;
+        }
+        if (!heights_now) {
+            break;
+        }
+        gz = td3d_height(heights_now, gx + ((int32_t)(tx - origin_x) << 16), gy + ((int32_t)(ty - origin_y) << 16));
+    }
+    x = tx + MAX(0, MIN(camera.w - 1, (gx + 0x8000) >> 16));
+    y = ty + MAX(0, MIN(camera.h - 1, (gy + 0x8000) >> 16));
+}
+
+/*
+** TDAWN_PICK_CHECK=1, for a test (tools/test_all.py's tdawn-3d-300): at the first scene, the middle of
+** every cell in the window is put where the camera shows it, as a whole pixel, and picked back as a
+** click would be (flat): it must be the same cell every time.
+*/
+static void View_Pick_Check(int wide, int high)
+{
+    const unsigned char* heights = heights_now;
+    int tx = Map.TacPixelX, ty = Map.TacPixelY, points = 0, wrong = 0;
+
+    heights_now = NULL; // (View_Point is the flat ground's)
+    for (int cy = 0; cy < MAP_CELL_H; cy++) {
+        for (int cx = 0; cx < MAP_CELL_W; cx++) {
+            int x = origin_x + cx * 24 + 12, y = origin_y + cy * 24 + 12;
+            if (x < tx + 3 || y < ty + 3 || x > tx + wide - 4 || y > ty + high - 4) {
+                continue;
+            }
+            View_Point(x, y);
+            if (x < tx || y < ty || x >= tx + wide || y >= ty + high) {
+                continue; // (the camera does not show it: nearer rows are larger)
+            }
+            ShaderEmu_View_Pick(x, y);
+            points++;
+            wrong += (x - origin_x) / 24 != cx || (y - origin_y) / 24 != cy;
+        }
+    }
+    heights_now = heights;
+    fprintf(stderr, "tdawn: pick check at %d degrees: %d points, %d in another cell\n", camera.pitch, points, wrong);
+}
+
+// The band's corners (the tactical window's pixels) where the tilted view shows them, and the box round them.
+static void View_Band(int x0, int y0, int x1, int y1, int corner[4][2], int box_out[4])
+{
+    int tx = Map.TacPixelX, ty = Map.TacPixelY;
+    int at[4][2] = {{x0, y0}, {x1, y0}, {x1, y1}, {x0, y1}};
+
+    box_out[0] = box_out[1] = 0x7fffffff, box_out[2] = box_out[3] = -0x7fffffff;
+    for (int i = 0; i < 4; i++) {
+        int x = tx + at[i][0], y = ty + at[i][1];
+        View_Point(x, y);
+        corner[i][0] = x, corner[i][1] = y;
+        box_out[0] = MIN(box_out[0], x), box_out[1] = MIN(box_out[1], y);
+        box_out[2] = MAX(box_out[2], x), box_out[3] = MAX(box_out[3], y);
+    }
+}
+
+// The band being dragged (display.cpp), drawn where the tilted view has its corners. False: 2D, the game draws it.
+bool ShaderEmu_GL_Band(int x0, int y0, int x1, int y1)
+{
+    int corner[4][2], b[4];
+
+    if (view3d <= 0 || !camera.on) {
+        return false;
+    }
+    View_Band(x0, y0, x1, y1, corner, b);
+    for (int i = 0; i < 4; i++) {
+        LogicPage->Draw_Line(corner[i][0], corner[i][1], corner[(i + 1) & 3][0], corner[(i + 1) & 3][1], WHITE);
+    }
+    return true;
+}
+
+// An object about to be drawn: whether it is a model (a unit's or a building's kind that has one, room
+// for its parts in this scene), and how it stands. Its own image's shapes are the model then.
+static void Model_Begin(ObjectClass* object)
+{
+    if (!models_on) {
+        return; // (the 2D view: nothing stored)
+    }
+    drawing.model_file = NULL;
+    RTTIType kind = object->What_Am_I();
+    int m = kind == RTTI_UNIT       ? model_of_unit[((UnitClass*)object)->Class->Type]
+            : kind == RTTI_BUILDING ? model_of_building[((BuildingClass*)object)->Class->Type]
+                                    : -1;
+    if (m < 0 || drawing.model_parts + parts_of_model[m] > MODEL_PARTS_MOST) {
+        return;
+    }
+    TechnoClass* techno = (TechnoClass*)object;
+    COORDINATE at = object->Render_Coord();
+    drawing.model = m;
+    drawing.model_file = object->Class_Of().Get_Image_Data();
+    drawing.model_done = false;
+    drawing.model_x = (short)(origin_x + Lepton_To_Pixel(Coord_X(at)));
+    drawing.model_y = (short)(origin_y + Lepton_To_Pixel(Coord_Y(at)));
+    if (kind == RTTI_UNIT) {
+        UnitClass* unit = (UnitClass*)object;
+        drawing.model_facing = (unsigned char)unit->PrimaryFacing.Current();
+        drawing.model_turret =
+            (unsigned char)(unit->Class->IsTurretEquipped ? unit->SecondaryFacing.Current() : unit->PrimaryFacing.Current());
+    } else {
+        // (a building does not turn; its gun's way is its facing)
+        drawing.model_facing = 0;
+        drawing.model_turret = (unsigned char)techno->PrimaryFacing.Current();
+    }
+    drawing.model_house = (unsigned char)object->Owner();
+}
+
+static void Model_End(void)
+{
+    if (models_on) {
+        drawing.model_file = NULL;
+    }
+}
+
+// The model's parts, once, as rectangles of kind HOST_MODEL (host.h): kept with the object as its others are.
+static void Model_Emit(void)
+{
+    int m = drawing.model;
+    for (int part = 0; part < parts_of_model[m]; part++) {
+        emit(HOST_MODEL, drawing.model_x, drawing.model_y, m | part << 8, drawing.model_facing, drawing.model_turret,
+             drawing.model_house, 0);
+    }
+    drawing.model_parts += parts_of_model[m];
+}
 
 // Room in the atlas, on a shelf of pictures about as high.
 static bool room(int w, int h, int& x, int& y)
@@ -847,6 +1116,14 @@ bool ShaderEmu_GL_Shape(void const* file, int frame, int x, int y, int window, i
 {
     if (!ShaderEmu_GL_Emitting || window != WINDOW_TACTICAL || !file || frame == -1) {
         return false;
+    }
+    // (the tilted view: a unit's or a building's own shapes, its turret's and shadow's too, are its model)
+    if (drawing.model_file == file) {
+        if (!drawing.model_done) {
+            drawing.model_done = true;
+            Model_Emit();
+        }
+        return true;
     }
     // (as the game does: an aircraft's or a bullet's shadow)
     if ((flags & (SHAPE_FADING | SHAPE_PREDATOR)) == (SHAPE_FADING | SHAPE_PREDATOR)) {
@@ -1152,17 +1429,19 @@ static void Behind_Draw(void)
     COORDINATE view = Map.TacticalCoord;
 
     ShaderEmu_GL_Emitting = true;
+    drawing.model_parts = 0;
     for (int i = 0; i < behind_count; i++) {
         Kept* k = behind[i].k;
         if (!behind[i].copy) {
             if (!behind[i].away) {
                 host_quads(k->quad, k->count);
                 ShaderEmu_GL_Quads += k->count;
+                drawing.model_parts += k->models;
                 if (k->barred) {
                     bars_put(k->bars);
                 }
             } else if (k) {
-                k->count = 0, k->whole = false, k->away = true, k->view = view; // (as Render left it, drawing nothing)
+                k->count = k->models = 0, k->whole = false, k->away = true, k->view = view; // (as Render left it, drawing nothing)
             }
             continue;
         }
@@ -1171,12 +1450,14 @@ static void Behind_Draw(void)
         ShaderEmu_GL_Objects[2]++;
         recording = k;
         if (k) {
-            k->count = 0;
+            k->count = k->models = 0;
             k->whole = true;
             k->barred = false;
         }
         drawing.missed = false;
+        Model_Begin(behind[i].copy);
         bool drew = behind[i].copy->Render(true);
+        Model_End();
         recording = NULL;
         if (k) {
             k->whole = k->whole && drew && !ShaderEmu_GL_Touched && !drawing.missed;
@@ -1259,6 +1540,7 @@ void DisplayClass::ShaderEmu_GL_Draw(bool forced)
         tile_w = MapCellWidth + 2;
         tile_h = MapCellHeight + 2;
         forced = true;
+        View_Scenario();
         static bool asked;
         if (!asked && getenv("TDAWN_ATLAS")) {
             forget_every = atoi(getenv("TDAWN_ATLAS"));
@@ -1294,6 +1576,27 @@ void DisplayClass::ShaderEmu_GL_Draw(bool forced)
     shown_y0 = Cell_Y(corner) - 1;
     shown_x1 = Cell_X(corner) + wide / 24 + 2;
     shown_y1 = Cell_Y(corner) + high / 24 + 2;
+    origin_x = TacPixelX + base_x; // (the tilted view's pick and its models: where the map's corner is)
+    origin_y = TacPixelY + base_y;
+    if (View_3D()) {
+        static int pitch = -1;
+        if (pitch < 0) {
+            pitch = getenv("TDAWN_PITCH") ? atoi(getenv("TDAWN_PITCH")) : TD3D_PITCH;
+        }
+        if (camera.w != wide || camera.h != high || camera.pitch != pitch) {
+            td3d_view_make(&camera, wide, high, pitch);
+        }
+        host_scene_tilt(&camera, TacPixelX, TacPixelY, heights_now);
+        view_shown_ms = host_ms();
+        static int pick_check = -1;
+        if (pick_check < 0) {
+            pick_check = getenv("TDAWN_PICK_CHECK") != NULL;
+        }
+        if (pick_check == 1 && camera.on) {
+            pick_check = 2;
+            View_Pick_Check(wide, high);
+        }
+    }
     host_scene_begin(TacPixelX + base_x, TacPixelY + base_y);
     host_scene_view(TacPixelX, TacPixelY, TacPixelX + wide, TacPixelY + high);
     origin_x = TacPixelX + base_x;
@@ -1356,7 +1659,9 @@ void DisplayClass::ShaderEmu_GL_Draw(bool forced)
     if (under) {
         host_scene_part(0, 0);
     }
-    for (int cy = Cell_Y(corner); under && cy < MAP_CELL_H && (y = base_y + cy * 24) < high; cy++) {
+    // (the tilted view over hills: raised ground near the eye shows rows below the window's, two more of them)
+    int below = view3d > 0 && heights_now ? 48 : 0;
+    for (int cy = Cell_Y(corner); under && cy < MAP_CELL_H && (y = base_y + cy * 24) < high + below; cy++) {
         int run = -1; // where a run of cells not seen yet began
         for (int cx = Cell_X(corner); cx < MAP_CELL_W && (x = base_x + cx * 24) < wide; cx++) {
             CELL cell = XY_Cell(cx, cy);
@@ -1406,6 +1711,7 @@ void DisplayClass::ShaderEmu_GL_Draw(bool forced)
     mark = host_cycles();
     host_scene_part(1, 0);
     unsigned away = 0;
+    drawing.model_parts = 0;
     bool drawn_behind = !all && Behind_Note(refresh, scenes, away);
     behind_here += !drawn_behind;
     for (LayerType layer = LAYER_GROUND; layer < LAYER_COUNT && !drawn_behind; layer++) {
@@ -1426,6 +1732,7 @@ void DisplayClass::ShaderEmu_GL_Draw(bool forced)
                 if (k->whole && (k->count || k->barred) && object->IsDown && !object->IsInLimbo) {
                     host_quads(k->quad, k->count); // (those of them in the view, where they are on the map now)
                     ShaderEmu_GL_Quads += k->count;
+                    drawing.model_parts += k->models;
                     if (k->barred) {
                         bars_put(k->bars);
                     }
@@ -1437,11 +1744,13 @@ void DisplayClass::ShaderEmu_GL_Draw(bool forced)
             ShaderEmu_GL_Objects[2]++;
             recording = k;
             if (k) {
-                k->count = 0;
+                k->count = k->models = 0;
                 k->whole = true;
                 k->barred = false;
             }
+            Model_Begin(object);
             bool drew = object->Render(true);
+            Model_End();
             recording = NULL;
             if (k) {
                 k->whole = k->whole && drew && !ShaderEmu_GL_Touched;
@@ -1481,7 +1790,11 @@ void DisplayClass::ShaderEmu_GL_Draw(bool forced)
     ShaderEmu_GL_Parts[2] += host_cycles() - mark;
     ShaderEmu_GL_Emitting = false;
     // (what the game draws over the map after this: a band being dragged, its messages)
-    if (IsRubberBand) {
+    if (IsRubberBand && view3d > 0 && camera.on) {
+        int corner[4][2], b[4];
+        View_Band(BandX, BandY, NewX, NewY, corner, b);
+        ShaderEmu_GL_Mark(b[0] - 1, b[1] - 1, b[2] + 1, b[3] + 1);
+    } else if (IsRubberBand) {
         ShaderEmu_GL_Mark(TacPixelX + MIN(BandX, NewX) - 1, TacPixelY + MIN(BandY, NewY) - 1,
                           TacPixelX + MAX(BandX, NewX) + 1, TacPixelY + MAX(BandY, NewY) + 1);
     }

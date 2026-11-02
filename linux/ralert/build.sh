@@ -25,7 +25,7 @@ MEDIA=${RALERT_MEDIA:-$WORK/src/libmedia/libmedia.a}
 git -C "$VC" checkout -q -f "$COMMIT" && git -C "$VC" clean -q -fd
 git -C "$VC" apply "$TD/vanilla-conquer.patch"
 [ ! -s "$HERE/vanilla-conquer.patch" ] || git -C "$VC" apply "$HERE/vanilla-conquer.patch"
-cp "$TD/cxxrt.cpp" "$TD/shaderemu.cpp" "$TD/soundio_shaderemu.cpp" "$TD/host.c" "$TD/host.h" "$VC/common/"
+cp "$TD/cxxrt.cpp" "$TD/shaderemu.cpp" "$TD/soundio_shaderemu.cpp" "$TD/host.c" "$TD/host.h" "$TD/td3d.h" "$VC/common/"
 cp "$REPO/programs/mc/mc.h" "$REPO/programs/mc/mcw.h" "$REPO/programs/mc/mcw.c" "$REPO/programs/mc/mcwx.h" "$REPO/programs/mc/mcwx.c" "$VC/common/"
 cp "$HERE/gl.cpp" "$VC/redalert/"
 # The worker cores' side (docs/machine/multicore.md): mcw.c is the library every program has for them,
