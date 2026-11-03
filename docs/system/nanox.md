@@ -209,7 +209,7 @@ bits of its properties, which any program reads with `GrGetWindowInfo` (`GR_WM_P
 
 - **A program or the bar tells the window manager** with `GrSetWMProperties(window, flags GR_WM_FLAGS_COMMAND, props GR_WMC_*,
   background its argument)`: a frame to a zone, shaded, on top, to a desktop, a desktop shown, a window brought forward from
-  wherever it is, a process that is starting.
+  wherever it is, a process that is starting, a window that wants the extra buttons (`GR_WMC_BUTTONS`, `docs/machine/input.md`, "More of a mouse and the hands").
 - **The window manager tells the bar** with a hotkey event to whoever grabbed the Windows key (`wm_tell_bar`): `ch` is
   `GR_WM_TELL(what)`, `subwid` the frame, `rootx` and `rooty` the arguments. With no bar, Tab goes round as it did.
 

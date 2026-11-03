@@ -120,7 +120,10 @@ public class EmuPointer : UdonSharpBehaviour
     private bool[] onEdge = new bool[2];    // it is off the picture and held on its edge: in the margin, or run off with a button held
     private int owner = 1;                  // the hand the machine's pointer follows
     private float stick;                    // the right stick, up positive
-    private float turned;                   // notches of the wheel not sent yet
+    private float stickX, moveX, moveY;     // the right stick across, the left one across and up
+    // notches not sent yet of the four wheels: the right hand's (or the mouse's) up and across, the left hand's up and across
+    private float[] turnedOf = new float[4];
+    private bool jumpDown, stilled;         // the jump button is held; the player stands still while a stick scrolls
     private bool started;
     private bool aimShown;                  // an aim's beam is on
     private bool[] landedOn = new bool[2];  // a hand's beam is on something of the room's
@@ -678,8 +681,10 @@ public class EmuPointer : UdonSharpBehaviour
             else danger.Point(true, memoryU[hand], memoryV[hand], burning[hand]);
         }
 
+        // (a sitter's are told while seated: their program has the controller's hands)
+        machine.moreButtons = target[0] == Display || target[1] == Display || away ? MoreButtons(player) : 0;
         // (the pointer is the controller's, but where a beam is on the room's screen: the only display it reaches then)
-        if (away && !holoFlat && target[0] != Display && target[1] != Display) { LetGo(); return; }
+        if (away && !holoFlat && target[0] != Display && target[1] != Display) { LetGo(); Still(player, false); return; }
         // The machine has one pointer: a hand holding a button on the display keeps it, then
         // the hand that had it, then whichever points there.
         int other = 1 - owner;
@@ -696,23 +701,91 @@ public class EmuPointer : UdonSharpBehaviour
             machine.SetPointer(outX, outY, buttons);
             machine.pointerOwn = onTube[owner];
             drove = away;
-            // the wheel: the mouse's on desktop, the right stick in VR at up to 12 notches a second
-            if (player.IsUserInVR()) turned += away ? 0f : stick * 12f * Time.deltaTime;   // (a sitter's stick turns them)
-            else turned += Input.GetAxis("Mouse ScrollWheel") * 10f;
-            int notches = (int)turned;
-            if (notches != 0)
-            {
-                turned -= notches;
-                machine.Wheel(notches);
-            }
+            Wheels(player);
         }
         else if (!away)   // (with a controller held the pointer and its buttons are still the sticks')
         {
             steadyFrom = false;
             drove = false;
             machine.SetPointerButtons(0);
-            turned = 0f;
+            for (int w = 0; w < 4; w++) turnedOf[w] = 0f;
+            Still(player, false);
         }
+    }
+
+    // ---- more of a mouse and the hands (docs/machine/input.md, "More of a mouse and the hands") ----
+
+    // The buttons word past the pointer's three: a mouse's side buttons on a desktop; in a headset
+    // bit 7, and from bit 8 the hands' own buttons, whichever hand has the pointer.
+    private int MoreButtons(VRCPlayerApi player)
+    {
+        if (!player.IsUserInVR()) return (Input.GetMouseButton(3) ? 8 : 0) | (Input.GetMouseButton(4) ? 16 : 0);
+        return 0x80 | (useDown[0] ? 0x100 : 0) | (gripDown[0] ? 0x200 : 0) | (useDown[1] ? 0x400 : 0) | (gripDown[1] ? 0x800 : 0)
+            | (Input.GetAxis("Oculus_CrossPlatform_PrimaryThumbstick") > 0.5f ? 0x1000 : 0)
+            | (Input.GetAxis("Oculus_CrossPlatform_SecondaryThumbstick") > 0.5f ? 0x2000 : 0)
+            | (Input.GetAxis("Oculus_CrossPlatform_Button4") > 0.5f ? 0x4000 : 0)
+            | (Input.GetAxis("Oculus_CrossPlatform_Button2") > 0.5f ? 0x8000 : 0)
+            | (jumpDown ? 0x10000 : 0);
+    }
+
+    // The wheels. On a desktop the mouse's (with Shift held it is tilted: across). In a headset each
+    // hand's stick is that hand's wheel while its beam is on the display, at up to 12 notches a second:
+    // the right one is the wheel it always was, the left one a second wheel; the player stands still
+    // while a stick scrolls, or the left would walk and the right turn them.
+    private void Wheels(VRCPlayerApi player)
+    {
+        if (!player.IsUserInVR())
+        {
+            float wheel = Input.GetAxis("Mouse ScrollWheel") * 10f;
+            if (Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift)) turnedOf[1] -= wheel;   // (up is left, as a tilt)
+            else turnedOf[0] += wheel;
+        }
+        else if (!away)   // (a sitter's sticks are the controller's: they turn and walk them)
+        {
+            float rate = 12f * Time.deltaTime;
+            bool right = target[1] == Display, left = target[0] == Display;
+            turnedOf[0] = right ? turnedOf[0] + stick * rate : 0f;
+            turnedOf[1] = right ? turnedOf[1] + stickX * rate : 0f;
+            turnedOf[2] = left ? turnedOf[2] + moveY * rate : 0f;
+            turnedOf[3] = left ? turnedOf[3] + moveX * rate : 0f;
+            Still(player, (right && (stick != 0f || stickX != 0f)) || (left && (moveX != 0f || moveY != 0f)));
+        }
+        for (int w = 0; w < 4; w++)
+        {
+            int notches = (int)turnedOf[w];
+            if (notches == 0) continue;
+            turnedOf[w] -= notches;
+            // (the mouse's wheel is the pointer's own; a stick's is its hand's)
+            int from = w >= 2 ? EmuMachine.WheelOfLeftHand : player.IsUserInVR() ? EmuMachine.WheelOfRightHand : EmuMachine.WheelOfPointer;
+            machine.Scroll(from, (w & 1) != 0, notches);
+        }
+    }
+
+    private void Still(VRCPlayerApi player, bool on)
+    {
+        if (on == stilled) return;
+        stilled = on;
+        player.Immobilize(on);
+    }
+
+    public override void InputLookHorizontal(float value, UdonInputEventArgs args)
+    {
+        stickX = Mathf.Abs(value) < 0.25f ? 0f : value;
+    }
+
+    public override void InputMoveHorizontal(float value, UdonInputEventArgs args)
+    {
+        moveX = Mathf.Abs(value) < 0.25f ? 0f : value;
+    }
+
+    public override void InputMoveVertical(float value, UdonInputEventArgs args)
+    {
+        moveY = Mathf.Abs(value) < 0.25f ? 0f : value;
+    }
+
+    public override void InputJump(bool value, UdonInputEventArgs args)
+    {
+        jumpDown = value;
     }
 
     public override void InputLookVertical(float value, UdonInputEventArgs args)

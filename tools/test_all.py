@@ -722,6 +722,18 @@ CASES = [
     case('wm-gpu', 'desktop wm', "nxreg set bar.pinned 'sh -c glxgears'; export UI_ASK_PRINT=1 UI_LAUNCH=print; " + WM + "glxgears >/dev/null & P=$!; sleep 3; nxkey 49,586; sleep 4; nxwintest list; nxkey enter; sleep 6; nxwintest list; "
          "kill -0 $P 2>/dev/null || echo FIRST-GONE; cat /proc/gpu | head -3; nxreg unset bar.pinned", wall=120,
          has=[r'^FIRST-GONE', r'^win \d .*gears']),
+    # more of a mouse and the hands (docs/machine/input.md): the wheel tilted, the left hand's stick as a second wheel, the right hand's,
+    # the side buttons and a hand's trigger, as rvc_cpu's --scroll and --pointer-button give them; a window that asked (GR_WMC_BUTTONS)
+    # has them as button events of their own, evdev has REL_HWHEEL, REL_DIAL, REL_MISC and BTN_SIDE, BTN_EXTRA, BTN_TRIGGER_HAPPY3
+    case('input-more', 'desktop', X + 'nxinput 6', wall=120,
+         more=['--scroll', '5,x,2', '--scroll', '5.5,ly,-1', '--scroll', '5.6,lx,1', '--scroll', '6,ry,1', '--pointer-button', '0x419,6.5,7'],
+         has=[r'^nx down 0x200 ', r'^nx down 0x2000 ', r'^nx down 0x8000 ', r'^nx down 0x20 ', r'^nx down 0xc00 ', r'^nx up 0xc00 ',
+              r'^ev rel 6 2', r'^ev rel 7 -1', r'^ev rel 9 1', r'^ev rel 8 1', r'^ev key 0x113 1', r'^ev key 0x114 1', r'^ev key 0x2c2 1',
+              r'^word 0x419', r'^nxinput done']),
+    # and a window that did not ask has the usual buttons alone: most programs take any button that goes down for a click
+    case('input-plain', 'desktop', X + 'nxinput 6 plain', wall=120,
+         more=['--scroll', '5,x,2', '--scroll', '5.5,ly,-1', '--scroll', '6,ry,1', '--pointer-button', '0x419,6.5,7'],
+         has=[r'^nx down 0x20 ', r'^nx down 0x1 ', r'^ev rel 6 2', r'^nxinput done'], never=[r'^nx (down|up) 0x(200|2000|c00|c01) ']),
     # a pointer that has no edge (a beam: docs/system/nanox.md, "A drag that leaves the screen"): its moves stop short of the edge and the button comes up there,
     # after a step that would have reached it. A mouse's slow last steps to the same place, or a wait there, do not snap
     case('wm-snap-beam', 'desktop wm', WM + "nxwintest plain a & sleep 2; nxkey hold:150,32 to:400,100 to:690,100 to:750,100 drop:750,100 1000; nxwintest list", wall=120,

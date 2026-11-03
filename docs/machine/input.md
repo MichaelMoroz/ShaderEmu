@@ -9,7 +9,7 @@ is separate.
 |---|---|
 | `0x81000020` | pointer x, in display pixels |
 | `0x81000024` | pointer y |
-| `0x81000028` | buttons: bit 0 left, bit 1 right, bit 2 middle |
+| `0x81000028` | buttons: bit 0 left, bit 1 right, bit 2 middle; 3 and up below ("More of a mouse and the hands") |
 | `0x8100002c` | number of key events written so far |
 | `0x81000030` | keyboard owner: a program that takes its keys from this device writes `0x6b657973` here, and 0 when it stops |
 | `0x81000080` | ring of the last 32 key events, one word each |
@@ -24,11 +24,74 @@ is separate.
   reader has lost some and should restart from the current count.
 - At most four key events arrive per frame; the host queues the rest.
 - A notch of the pointer's wheel travels in the same ring, as a "press" of a code that is no
-  key: `0x3fe` up, `0x3ff` down. It needs no release.
+  key: `0x3fe` up, `0x3ff` down, `0x3fc` left, `0x3fd` right (the wheel tilted). It needs no
+  release. Bits 12-13 say whose wheel it is: 0 the pointer's own (a mouse's), 1 the left
+  hand's stick, 2 the right hand's (below).
 - The four state words share one RAM texel, so a reader sees one consistent set.
 - A host that also feeds typed keys to the console (the harness window does) does so only
   while no display is up (control word 0, the display's mode, is 0) and the keyboard has no
   owner. Otherwise a key typed into a window would also be typed at the console's shell.
+
+## More of a mouse and the hands
+
+A game can use more than three buttons and a wheel: a mouse's side buttons, a wheel tilted, and in
+a headset two hands, each with a stick, a trigger, a grip and buttons. They come in the same words,
+the same evdev device and the same window system, without a new request or a change to Nano-X's
+client library (3 November 2026; `linux/apps/input_words.h` names them for C).
+
+The buttons word at `0x81000028`:
+
+| Bit | |
+|---|---|
+| 0, 1, 2 | the pointer's left, right, middle (a trigger or a click; a grip or the right click) |
+| 3, 4 | a mouse's side buttons: back, forward |
+| 7 | the bits below are told (a headset) |
+| 8, 9 | the left hand's trigger, grip |
+| 10, 11 | the right hand's trigger, grip |
+| 12, 13 | the left stick pressed in, the right one |
+| 14, 15 | the upper face button of the left hand (Y), of the right (B) |
+| 16 | the jump button (A) |
+
+The hands' bits are whichever hand has the pointer or not: a game tells the hands apart by them,
+while bits 0 and 1 stay the pointer's. The world tells them while a beam is on the display or the
+sitter holds the controller (`EmuPointer.MoreButtons`, `EmuMachine.moreButtons`), and 0 otherwise.
+
+The wheels, in the key ring (above): the pointer's own (a mouse's, `0x3fc` to `0x3ff`), and in a
+headset each hand's stick while that hand's beam is on the display, at up to 12 notches a second
+in each axis: the right stick was always the wheel, and is now across too; the left stick is a
+second wheel. The player stands still (`Immobilize`) while a stick scrolls, or the left stick would
+walk and the right one turn them. On a desktop, the mouse's wheel with Shift held is the wheel
+tilted (Unity has no axis for a tilt), and the side buttons are bits 3 and 4.
+
+**From Linux** (`linux/kernel/shaderemu_input.c`), on `/dev/input/event1`:
+
+| What | evdev |
+|---|---|
+| the pointer's wheel and the right hand's, up | `REL_WHEEL` |
+| the same, across | `REL_HWHEEL` |
+| the left hand's stick, up | `REL_DIAL` |
+| and across | `REL_MISC` |
+| bits 3, 4 | `BTN_SIDE`, `BTN_EXTRA` |
+| bits 8 to 16 | `BTN_TRIGGER_HAPPY1` to `BTN_TRIGGER_HAPPY9` (`0x2c0` + bit - 8) |
+
+**In Nano-X** a window asks for them with `GrSetWMProperties(window, flags GR_WM_FLAGS_COMMAND,
+props GR_WMC_BUTTONS, background 1)`; then it and the windows in it get button events of their own
+for `GR_BUTTON_SCROLLLEFT`, `_SCROLLRIGHT` (the wheel tilted, the right stick across), `GR_BUTTON_BACK`,
+`_FORWARD`, and `GR_BUTTON_SCROLL2UP`, `_2DN`, `_2LEFT`, `_2RIGHT` (the second wheel: the left hand's
+stick), down in one report and up in the next as the wheel's are (`nano-X.h`, `GR_BUTTON_EXTRA`). They
+go to the window under the pointer (or the one that has it grabbed) and up to the window that asked.
+A window that did not ask is told nothing of them: most programs take any button that goes down for a
+click. The usual buttons' events are as they were, their buttons word without these. The hands' own
+buttons are no Nano-X event: a program reads the word, which costs a load.
+
+**To test without the world**: `rvc_cpu` and `rvc_harness` take `--scroll S,W,N` (at second S, N notches
+of wheel W: `y`, `x` the pointer's, `ly`, `lx` the left hand's, `ry`, `rx` the right hand's),
+`--input-event S,HEX` (any ring event), and `--pointer-button B,S,T` in hex (`0x419`: left, back,
+forward and the right hand's trigger). The harness's window gives the side buttons and a tilted wheel
+(`WM_XBUTTON*`, `WM_MOUSEHWHEEL`). `nxinput [SECONDS [plain]]` prints what each of the three ways
+gives, and `test_all.py input-more`, `input-plain` hold them. What only Unity can show: the hands' bits
+(`Oculus_CrossPlatform_*` axes read with `Input.GetAxis`), the sticks as wheels and `Immobilize`
+stopping VRChat's own turn; none was run there (compiled against the world's assemblies).
 
 ## A beam as the pointer, steadied (the VRChat world)
 
@@ -84,7 +147,7 @@ its own"). The cursor does not wait for it where the display is drawn under the 
 | Device | Events |
 |---|---|
 | `/dev/input/event0` "ShaderEmu keyboard" | `EV_KEY` for the key codes, with the kernel's auto-repeat |
-| `/dev/input/event1` "ShaderEmu pointer" | `EV_ABS` `ABS_X`, `ABS_Y` in display pixels; `EV_KEY` `BTN_LEFT`, `BTN_RIGHT`, `BTN_MIDDLE`; `EV_REL` `REL_WHEEL` |
+| `/dev/input/event1` "ShaderEmu pointer" | `EV_ABS` `ABS_X`, `ABS_Y` in display pixels; `EV_KEY` `BTN_LEFT`, `BTN_RIGHT`, `BTN_MIDDLE`; `EV_REL` `REL_WHEEL`; and those of "More of a mouse and the hands" |
 
 Nano-X's keyboard driver (`kbd_shaderemu.c`) reports a key's release as the key its press
 was, whatever Ctrl or Shift have done meanwhile: another key's release is one a game drops.
