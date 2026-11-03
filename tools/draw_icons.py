@@ -1,8 +1,7 @@
 """Draws the icons no set has a picture for, into linux/apps/icons (64 x 64, which
 tools/make_icons.py brings down): glxgears.png, the demo's three gears in its own colours,
-nxeyes.png, two eyes looking the same way, halflife.png, an orange lambda in a ring, jk2.png, a blue
-light sword drawn up the diagonal (nothing of Jedi Outcast's own), and opencnc3d.png, three green crystals on a tilted tile of
-ground (nothing of OpenCNC3D's or the cartridge's).
+nxeyes.png, two eyes looking the same way, halflife.png, an orange lambda in a ring, and jk2.png, a blue
+light sword drawn up the diagonal (nothing of Jedi Outcast's own).
 
     python tools/draw_icons.py
 """
@@ -88,22 +87,6 @@ def light_sword():
     return picture
 
 
-def crystals():
-    picture = Image.new('RGBA', (SIZE * UP, SIZE * UP), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(picture)
-    u = UP / 16
-    ground = [(512, 560), (980, 790), (512, 1010), (44, 790)]   # a tile of ground seen tilted
-    draw.polygon([(x * u, y * u) for x, y in ground], fill=(120, 96, 58, 255), outline=(62, 48, 28, 255))
-    draw.line([(x * u, y * u) for x, y in ground + ground[:1]], fill=(62, 48, 28, 255), width=round(28 * u))
-    for cx, base, top, half in ((330, 820, 330, 92), (560, 860, 130, 118), (760, 790, 420, 84)):   # three crystals
-        left, right, peak = (cx - half, base), (cx + half, base), (cx, top)
-        mid = (cx + half * 0.15, base - (base - top) * 0.25)
-        draw.polygon([(p[0] * u, p[1] * u) for p in (left, peak, mid)], fill=(70, 200, 60, 255))
-        draw.polygon([(p[0] * u, p[1] * u) for p in (mid, peak, right)], fill=(28, 120, 30, 255))
-        draw.line([(p[0] * u, p[1] * u) for p in (left, peak, right, mid, left)], fill=(12, 60, 14, 255), width=round(20 * u), joint='curve')
-    return picture
-
-
-for name, picture in (('glxgears', gears()), ('nxeyes', eyes()), ('halflife', lambda_ring()), ('jk2', light_sword()), ('opencnc3d', crystals())):
+for name, picture in (('glxgears', gears()), ('nxeyes', eyes()), ('halflife', lambda_ring()), ('jk2', light_sword())):
     picture.resize((SIZE, SIZE), Image.LANCZOS).save(os.path.join(OUT, name + '.png'))
     print('linux/apps/icons/%s.png' % name)

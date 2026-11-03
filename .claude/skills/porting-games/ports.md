@@ -118,24 +118,12 @@ checked. Paths are from the repository root; each game's doc is `docs/games/NAME
 - **Checks**: `JK2_KEYS` scripts of keys by frame, `fixedtime`; `test_all.py jk2` and `jk2-sums` (long,
   on an image with the pak) against `host_sum.sh` and the build computer.
 
-## OpenCNC3D (the N64 Command & Conquer on PC), private image only
+## OpenCNC3D (removed 3 November 2026)
 
-- **Source**: OpenCNC3D pinned, sparse; its brain is Vanilla Conquer ce83b59 with its own patch, then
-  `linux/opencnc3d/opencnc3d.patch`; `build.sh` makes the brain, `game.sh` the program
-  (`app/opencnc3d.cpp` and `game/cnc_eyes.cpp` unchanged, OpenTTD's C++ compiler with libstdc++).
-- **Data**: the owner's EU cartridge (`bake.py`, SHA-1 checked) baked by OpenCNC3D's `bake5.py` over our
-  `bake/pk4mod.py` and `bake/n64_terrain.py` (its own baker is lost), checked by its `packinspect.py`; the
-  DOS data by HTTP range from archive.org discs (`data.py`); `play.py` runs its 12 bake scripts into the
-  play folder (52 MB); `overlay.py` into a private image. Nothing baked from the cartridge is committed.
-- **Files**: `brain_shaderemu.cpp` (the brain's host, sums), `brain_link.c` (`dlopen`/`dlsym` from a
-  table), `sdl_nanox.c` (91 SDL2 functions over Nano-X), `gl_ocnc.c` (its GL onto Half-Life's shim:
-  draws split at 4,096 vertices, units tracked), `host.cpp`, `host_sum.sh`, `check_objects.py`.
-- **Tricks**: `-Wl,-u` for each of the brain's 76 entry points; the 1995 view not drawn
-  (`OPENCNC3D_RENDER=1`); `MapClass::Clean` on marked cells (`OPENCNC3D_CLEAN=full|check`);
-  `OPENCNC3D_CLOCK=instret` with `OPENCNC3D_FRAMEPROF=1`; `--flowtest` is its own autopilot through the
-  menu into a mission.
-- **Checks**: the INIs' objects (60 of 60, 73 of 73), 11 sums over 3,000 ticks the same on the build
-  computer and `rvc_cpu` (SCG01EA ends `7ed86914`).
+- Ported to its menu and a mission drawn, then removed as not worth its cost (about 0.19 fps after a first
+  speed round, and only the owner's cartridge dump could run it). Its files are in git at `95b3960b`:
+  `linux/opencnc3d/` (`sdl_nanox.c` 91 SDL2 functions over Nano-X, `brain_link.c` a `dlopen` from a table,
+  `gl_ocnc.c` a GL wrapper onto Half-Life's shim, the pack baker) and `docs/games/opencnc3d.md`.
 
 ## Tiberian Dawn and Red Alert (Vanilla Conquer)
 

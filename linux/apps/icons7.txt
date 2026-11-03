@@ -37,7 +37,6 @@ nxmicropolis            micropolis
 openttd,openttd.bin     openttd
 aoe,aoe.bin             aoe
 jk2,jk2.bin             jk2
-opencnc3d               opencnc3d
 nes,nes.bin             devices/input-gaming
 imdemo                  apps/preferences-desktop-theme
 nxray                   apps/digikam

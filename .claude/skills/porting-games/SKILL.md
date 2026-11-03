@@ -10,6 +10,9 @@ The machine runs about 5.5 million instructions a second on its first core at fu
 see each other's stores one pass (8,192 instructions) later. Everything below is how the existing ports got there. Read the newest port first: OpenTTD
 (`linux/openttd/`, `docs/games/openttd.md`) is the cleanest template of the whole path.
 
+OpenCNC3D, named in places below, was removed on 3 November 2026: its `linux/opencnc3d/` files are in git at
+`95b3960b` (`ports.md`).
+
 Reference files beside this one:
 
 - `ports.md` - every port: where its source comes from, its platform files, its tricks, its sums
