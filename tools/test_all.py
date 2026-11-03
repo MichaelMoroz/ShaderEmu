@@ -853,8 +853,8 @@ CASES = [
               r'volume_frames: frames: .*empty worlds over a second: 0', r'volume_frames: exit 0']),
     # Jedi Outcast from the seat (an image with the demo; docs/world/holodeck.md): the level loaded flat, then the sitter's stick walks
     # it ("seat: 2 ... move 127 0 0", JK2_SEAT=1), the world with its HUD, no empty world over a second
-    case('jk2-seat', 'games jk2 long holodeck', X + 'if [ -f /usr/share/jk2/jk2demo.exe ]; then JK2_SEAT=1 jk2 +map demo; else echo JK2-NO-DATA; fi',
-         until='move 127 0 0', wall=18000, volume=True, checkpoint='No Weather Zones Encountered',
+    case('jk2-seat', 'games jk2 holodeck', 'if [ -f /usr/share/jk2/jk2demo.exe ]; then jk2 --unpack; nano-X -p & sleep 2; JK2_SEAT=1 jk2 +map demo; '
+         'else echo JK2-NO-DATA; fi', until='move 127 0 0', wall=600, volume=True,
          more=['--expect', 'Type yes', '--send', 'yes\\n', '--host', '00000112,0,0,0,0,00007f00,0,0'],
          has=[r'(seat: 2 aim .* move 127 0 0|JK2-NO-DATA)', r'(volume_frames: exit 0|JK2-NO-DATA)']),
     # Half-Life from the seat (an image with Uplink's data): the menu at the level's second 10 (flat) closed by Escape at the guest's
