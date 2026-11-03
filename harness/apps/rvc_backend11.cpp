@@ -143,6 +143,10 @@ public:
             a.settings.defines.push_back({"GPU_AMP", "1"});
             if (!buildPasses(gpu_, amp, {"GPUDraw"}, a, gpuAmp_, err)) return false;
         }
+        if (opt.hudShader && !gpuPasses_.empty() && !buildPasses(gpu_, *opt.hudShader, {"HUDDraw"}, bo, hudPasses_, gpuErr)) {
+            fprintf(stderr, "[harness] the HUD's capture disabled: %s\n", gpuErr.c_str());
+            hudPasses_.clear();
+        }
         if (opt.soundShader && !gpuPasses_.empty() &&
             (!buildPasses(gpu_, *opt.soundShader, {"SoundMix"}, bo, soundPasses_, gpuErr) || !createSoundTarget(gpuErr))) {
             fprintf(stderr, "[harness] sound card disabled: %s\n", gpuErr.c_str());
@@ -556,6 +560,58 @@ public:
         if (FAILED(gpu_.ctx->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &m))) return false;
         bool ok = memoryViewWriteBmp(path, td.Width, td.Height, (const uint8_t*)m.pData, m.RowPitch);
         gpu_.ctx->Unmap(staging.Get(), 0);
+        return ok;
+    }
+    // The last volume frame's flat draws as the holodeck's HUD layer draws them (hud.shader; GpuHolodeckHudPass.cginc in
+    // Unity): over a plain grey, the four blendings in their order, into a target of the GPU's size, then a BMP.
+    bool hudCapture(Material& mat, const std::string& path) override {
+        if (hudPasses_.empty() || !gpuBlend_[0]) return false;
+        ID3D11DeviceContext* ctx = gpu_.ctx.Get();
+        D3D11_TEXTURE2D_DESC td{};
+        td.Width = td.Height = kGpuTarget;
+        td.MipLevels = td.ArraySize = 1;
+        td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        td.SampleDesc.Count = 1;
+        td.BindFlags = D3D11_BIND_RENDER_TARGET;
+        ComPtr<ID3D11Texture2D> color, staging;
+        ComPtr<ID3D11RenderTargetView> rtv;
+        if (FAILED(gpu_.device->CreateTexture2D(&td, nullptr, &color)) ||
+            FAILED(gpu_.device->CreateRenderTargetView(color.Get(), nullptr, &rtv)))
+            return false;
+        const float grey[4] = {0.25f, 0.25f, 0.25f, 1.0f};
+        ctx->ClearRenderTargetView(rtv.Get(), grey);
+        ctx->OMSetRenderTargets(1, rtv.GetAddressOf(), nullptr);
+        D3D11_VIEWPORT vp{0, 0, (float)kGpuTarget, (float)kGpuTarget, 0, 1};
+        ctx->RSSetViewports(1, &vp);
+        ctx->RSSetState(gpu_.rasterNoCull.Get());
+        ctx->IASetInputLayout(nullptr);
+        ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        GpuPass& pass = hudPasses_[0];
+        ID3D11ShaderResourceView* state = stateSrv();
+        for (int p = 0; p < 4; ++p) {
+            mat.setInt("_VolumePass", p);
+            mat.bind(ctx, pass, gpu_);
+            for (auto& t : pass.vsLayout.textures)
+                if (t.name == "_State") ctx->VSSetShaderResources(t.slot, 1, &state);
+            for (auto& t : pass.psLayout.textures)
+                if (t.name == "_State") ctx->PSSetShaderResources(t.slot, 1, &state);
+            ctx->OMSetBlendState(gpuBlend_[p].Get(), nullptr, 0xffffffff);
+            ctx->OMSetDepthStencilState(nullptr, 0);
+            ctx->Draw(kGpuTriangles * 3, 0);
+        }
+        ID3D11ShaderResourceView* none = nullptr;
+        for (auto& t : pass.vsLayout.textures) ctx->VSSetShaderResources(t.slot, 1, &none);
+        for (auto& t : pass.psLayout.textures) ctx->PSSetShaderResources(t.slot, 1, &none);
+        ctx->OMSetRenderTargets(0, nullptr, nullptr);
+        td.Usage = D3D11_USAGE_STAGING;
+        td.BindFlags = 0;
+        td.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        D3D11_MAPPED_SUBRESOURCE m{};
+        if (FAILED(gpu_.device->CreateTexture2D(&td, nullptr, &staging))) return false;
+        ctx->CopyResource(staging.Get(), color.Get());
+        if (FAILED(ctx->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &m))) return false;
+        bool ok = memoryViewWriteBmp(path, td.Width, td.Height, (const uint8_t*)m.pData, m.RowPitch);
+        ctx->Unmap(staging.Get(), 0);
         return ok;
     }
     void viewText(const std::vector<std::vector<std::string>>& columns) override { view_.setText(gpu_.ctx.Get(), columns); }
@@ -1265,7 +1321,7 @@ private:
     }
 
     Gpu gpu_;
-    std::vector<GpuPass> passes_, gpuPasses_, soundPasses_, unpackPasses_, pointPasses_, copyPasses_;
+    std::vector<GpuPass> passes_, gpuPasses_, soundPasses_, unpackPasses_, pointPasses_, copyPasses_, hudPasses_;
     bool scatter_ = true;   // the cores' stores committed as points (with the tick in eight targets; --define NO_SCATTER: as bands)
     // TICK_MRT: the tick's eight targets
     bool mrt_ = false;

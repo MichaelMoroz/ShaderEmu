@@ -371,6 +371,22 @@ platform's clip space is upside down there. "ShaderEmu/Add the holodecks' HUD la
 built scene. Compiled with fxc against Unity's includes (the same warnings as `GpuVolumePass.cginc`) and the Editor and
 runtime scripts with csc; not run in Unity or a headset.
 
+A picture of the layer without Unity (4 November 2026): `rvc_harness --cpu --host 00000112,0,0,0,0,00007f00,0,0 ... --save-state F.snap
+--hud-capture F.bmp` draws, as the run ends, the last volume frame's flat draws the way the HUD layer does (`shader_vm/hud.shader`: the
+same `volume_flat_command` and `gpu_vertex_sized`, `_VolumePass` 0 to 3 with the HUD's blendings in its order, no depth) over a
+plain grey, and `python tools/hud_shot.py F.snap F.bmp OUT.png` crops it to the frame's picture by the volume words. Pictures of
+4 November: Doom (the border, the status bar, the weapon), Quake (the status bar), Quake III (the HUD, the cross-hair, the scores),
+Half-Life (health, suit, the flashlight's icon) and ClassiCube (nothing: its 2D is in space). The first of Doom showed its sky over
+the whole view: the rectangle of sky behind everything (`sky()` in `doom_gl.c`) is a flat draw, so the layer put it before the
+world; from the seat it is no longer drawn (the room has the sky ceilings laid as a panorama, and its own sky behind them).
+
+Transitions by cases (4 November 2026; `test_all.py` runs `volume_frames.py` on a case's `--volume-log` when the case says
+`volume=True`): `quake-seated` opens the menu (30 frames flat), kills (the level made again: 14 s of no frame, then the world) and
+changes the level (one flat frame, 18 s of load, then the world with its HUD), 0 empty worlds; `halflife-seated` (an image with
+Uplink) opens the menu from `HL_SCRIPT` (flat for 9 s, Escape closes it), kills, and goes to `hldemo2` (one empty frame as the old
+level goes, 63 s of load, 3 flat frames, then the world; the new level's player has no suit, so no HUD); `jk2-seat` loads the demo's
+level flat and walks it from the seat.
+
 `rvc_cpu --volume-log FILE` writes a line for each whole frame a program gives a host (its words, its draws in space, flat
 and text), and `python tools/volume_frames.py FILE` prints them as runs of a kind: a flat screen, a world with or without
 draws over it, or an empty world (not flat and nothing in space: the room would show nothing; over a second is an exit 1).

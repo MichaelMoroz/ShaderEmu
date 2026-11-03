@@ -328,6 +328,7 @@ extern int maketic, viewangleoffset;
 
 static int dragging;		/* the left button is held on the game: the pointer's travel turns the view */
 static int seated;		/* 1 with tracked hands, 2 with a mouse */
+int doom_seated;		/* (the same, for doom_gl.c's sky: a holodeck's seat has a sky of its own) */
 static unsigned mouse_count;
 static short hand_turn, turn_of[BACKUP_TICS];	/* the right hand's turn, and as each tic's move was made */
 
@@ -338,7 +339,7 @@ sitter(void)
 	int now = !host || !SEGL_HOST_HOLODECK(host) ? 0 : SEGL_HOST_HANDS(host) ? 1 : SEGL_HOST_KIND(host) == 2 ? 2 : 0;
 
 	if (now != seated) {
-		seated = now;
+		seated = doom_seated = now;
 		dragging = 0;
 		hand_turn = now == 1 ? SEGL_HOST_HAND_YAW(host, 1) : 0;
 		mouse_count = host ? SEGL_HOST_MOUSE_X(host) : 0;

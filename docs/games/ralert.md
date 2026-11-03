@@ -251,6 +251,11 @@ instead of 320. The sidebar's picture keeps its 400 rows; below it is black. `te
 view 624 x 528, 26 cells), a soldier selected by a click, Repair pressed where the sidebar now has it, put back 640 x 400 (the view
 480 x 384) and Repair where it always was; the `ralert-*` sums as before, `ralert-window` under `RVC_RACES` 0 undone; captures of both.
 
-The counts: GCC (13.3) stopped with an internal error in `TabClass::Draw_Credits_Tab` while reading `ralert.profile`'s counts of the
-changed `tab.cpp`, so that file's counts are taken out of the profile (92 lines); the rest are kept, and functions changed elsewhere
-are compiled without theirs, as always. No speed is claimed for this change: the counts were not made again.
+The counts (4 November 2026). Red Alert is now compiled with paths from where the compiler runs (`tdawn-relative`, as Tiberian
+Dawn): a function that is not public is known in the counts by a sum with its source's path, which with whole paths held only in
+the folder the counts were made in. The counts were made again after the layout change (both sides, `RALERT_HUNT=50`, 800 frames,
+`tab.cpp` counted too and compiled without GCC's error), and measured with `game_par.py --calibrated --runs 3`, guest frames a
+second at the default size: the Soviet mission 85.8 (7.47 passes a frame) and the Allied 61.3 (10.57) with the new counts, 86.7
+(7.39) and 61.7 (10.51) with the old ones on the same code, 86.7 and 61.7 for the tree before the layout work built here, 86.8 and
+61.8 for `linux/prebuilt`'s program. The new counts were 1.0% and 0.6% slower, so the old ones are kept (without `tab.cpp`'s, which
+stop GCC 13.3 with an internal error in `TabClass::Draw_Credits_Tab`): the layout change costs nothing measurable.

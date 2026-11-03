@@ -169,6 +169,7 @@ struct Options {
     std::string isa = "base"; // "base" RV32IMAF, or "zb" with Zba and Zbb (the shader's ZB)
     std::string vizCapture;   // BMP of the memory view, written at exit
     std::string gpuCapture;   // BMP of the GPU device's colour target, written at exit
+    std::string hudCapture;   // BMP of the last volume frame's flat draws as the holodeck's HUD layer draws them, at exit
     bool cpuFresh = true;     // every band the processor wrote goes to the GPU each frame, as on the card (--cpu-stale: four times a second)
     std::string raLog;        // per frame: pc, the return address register (who called a leaf function) and instructions
     std::string pcLog;        // per frame: the guest's pc and the instructions it ran, as two uint32
@@ -291,6 +292,8 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
   --readback-batch N   D3D11: read the rows of N frames back with one Map (1); the console's
                        output and typed input then come N frames later
   --gpu-capture FILE   save the GPU device's whole colour target as a BMP at exit
+  --hud-capture FILE   save the last seated frame's flat draws (the HUD layer's: hud.shader) over grey as a BMP at exit;
+                       python tools/hud_shot.py SNAPSHOT FILE OUT.png crops it to the picture (docs/world/holodeck.md)
   --cpu-stale          with --cpu: RAM the processor wrote outside the GPU's memory goes to the GPU four times a
                        second, not every frame (a list then reads a program's memory as it was up to 0.25 s before)
   --no-sound           leave out the sound card (<rvc>/sound.shader, docs/machine/sound.md)
@@ -491,6 +494,7 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--viz-capture") { o.vizCapture = next("--viz-capture"); o.viz = true; }
         else if (a == "--no-gpu") o.noGpu = true;
         else if (a == "--gpu-capture") o.gpuCapture = next("--gpu-capture");
+        else if (a == "--hud-capture") o.hudCapture = next("--hud-capture");
         else if (a == "--cpu-fresh") o.cpuFresh = true;
         else if (a == "--cpu-stale") o.cpuFresh = false;
         else if (a == "--no-sound") o.noSound = true;
@@ -947,6 +951,15 @@ int main(int argc, char** argv) {
             return 1;
         }
         bo.soundShader = &soundShader;
+    }
+    // --hud-capture: the holodeck's HUD layer's pass, built only when asked for
+    SLShader hudShader;
+    if (bo.gpuShader && !opt.hudCapture.empty()) {
+        if (!loadShaderLab((deviceDir / "hud.shader").u8string(), hudShader, err)) {
+            fprintf(stderr, "[harness] %s\n", err.c_str());
+            return 1;
+        }
+        bo.hudShader = &hudShader;
     }
     // The world's blits (src/amp.h): their order probe is a shader of its own.
     SLShader ampShader;
@@ -2434,6 +2447,8 @@ int main(int argc, char** argv) {
                 opt.soundCapture.c_str());
     if (!opt.gpuCapture.empty() && exitCode != 1)
         fprintf(stderr, "\n[harness] GPU target %s %s\n", backend.gpuCapture(opt.gpuCapture) ? "written to" : "capture FAILED:", opt.gpuCapture.c_str());
+    if (!opt.hudCapture.empty() && exitCode != 1)
+        fprintf(stderr, "\n[harness] the HUD layer %s %s\n", backend.hudCapture(mat, opt.hudCapture) ? "written to" : "capture FAILED:", opt.hudCapture.c_str());
     if (!opt.vizCapture.empty() && backend.viewOpen() && exitCode != 1) {
         backend.viewRender(false);
         bool ok = backend.viewCapture(opt.vizCapture);

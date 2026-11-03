@@ -52,7 +52,10 @@ elif [ -f "$HERE/ralert.profile" ]; then
     # (the counts' sum in the flags: make knows nothing of the .gcda files, linux/tdawn/build.sh)
     PGO="-fprofile-use -fprofile-partial-training -fprofile-correction -Wno-missing-profile -Wno-coverage-mismatch -DSHADEREMU_COUNTS=$(sha1sum "$HERE/ralert.profile" | cut -c1-12)"
 fi
+# (paths from where the compiler runs, as Tiberian Dawn's: the counts of a function that is not public then hold in any folder)
+[ -x "$WORK/bin/tdawn-relative" ] || { echo "run linux/tdawn/build.sh first"; exit 1; }
 cmake -S "$SRC" -B "$BUILD" -DCMAKE_TOOLCHAIN_FILE="$WORK/src/tdawn-toolchain.cmake" -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_CXX_COMPILER_LAUNCHER="$WORK/bin/tdawn-relative" \
     -DSDL2=OFF -DOPENAL=OFF -DNETWORKING=OFF -DBUILD_VANILLATD=OFF -DSHADEREMU=ON \
     -DSHADEREMU_GLES="$WORK/src/tdawn-gles.o" -DSHADEREMU_NANOX="$MW/src/lib/libnano-X.a" \
     -DCMAKE_CXX_FLAGS="-O2 -fno-pie -fno-lifetime-dse -w -DSHADEREMU -DSHADEREMU_RA $GLINC $LTO $PGO" -DCMAKE_CXX_FLAGS_RELEASE="-DNDEBUG" \
