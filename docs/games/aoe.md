@@ -416,11 +416,17 @@ and the view's job finished first. The window's page is kept for each size (`aoe
 more GPU memory. `test_all.py aoe-layout` plays to the game, maximises the window (794 x 545: 800 x 600 at the game screen), clicks its
 middle (400, 299 of the picture), puts it back (640 x 480) and clicks again (320, 240): 41 to 43 world updates every 5 s throughout.
 
-Not done: the menus. A menu is laid out once, when it is made (`TEasy_Panel` scales its places from 640 x 480 to the size then), and
-given another size it kept its places on the larger page, so a click went to the button below. So at a menu the change waits, through
-the menus after it, until the game screen comes. Making the main menu again at the new size (destroyed and made, as the game does when
-it goes back to it) took no more input in its one try (in `aoe-resize` neither the click nor the next tiling reached the game), and was
-taken out.
+The menus (4 November 2026). A menu is laid out once, when it is made (`TEasy_Panel` scales its places from 640 x 480 to the size
+then), and given another size it kept its places on the larger page, so a click went to the button below. So a menu that holds nothing
+chosen is made again at the new size, as the game makes it when it goes there from another menu: the main menu, the single player menu
+and the multiplayer start (`remake_menu`; the new one shown, then the old one, renamed meanwhile, destroyed). Another menu (one with
+settings, a list or a scenario chosen in it) keeps its layout, and the change waits, through the menus after it, until one of those or
+the game screen comes. Making a menu at 800 x 600 draws its 800-pixel picture three times (`setCurrentPanel`'s focus, redraw and
+`UpdateWindow`), about 41 million instructions each, half a minute of the guest's on `rvc_cpu`'s clock: what was taken for a stop
+on 3 November was this (`RVC_PROF`: `setCurrentPanel` 48.9% of core 0, then the menu's idle loop). `/tmp/aoe-layout` says the
+layout a menu now has, for a test: `aoe-resize` maximises at the main menu (made again at 800 x 600), clicks Single Player, tiles the
+window at the right half (the single player menu made again at 640 x 480) and clicks Random Map. Captures (`rvc_harness --cpu`,
+`--save-state`, `tools/snapshot_screen.py`): the main menu at 800 x 600 maximised and at 640 x 480 put back.
 
 The view on its worker draws through copies of the page's area and of its save area (`aoe_view_post`), and those kept the old size: the
 view was drawn at 640 x 354 in the corner of the larger page. Before the change the view is given back the real areas

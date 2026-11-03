@@ -188,6 +188,25 @@ CASES = [
     case('tdawn-move', 'games tdawn long', X + TD + 'TDAWN_SCEN=3 TDAWN_MOVE=100,8,0 TDAWN_SUMS=1 TDAWN_FRAMES=600 tdawn FROMINSTALL', True, count=[(r'^tdsum: ', 600)]),
     case('tdawn-move-refresh', 'games tdawn long', X + TD + 'TDAWN_SCEN=3 TDAWN_MOVE=100,8,0 TDAWN_SUMS=1 TDAWN_REFRESH=1 TDAWN_FRAMES=600 tdawn FROMINSTALL', True,
          same=[(r'^(tdsum: .*)', 'tdawn-move')]),
+    # docs/games/tdawn.md, "The window's size": the sidebar opened (Tab), the window maximised: the screen laid out at 392 x 272 with the
+    # sidebar at its right edge, a click on a unit of the map selects it and one on the sidebar's Repair (where it is now) presses it;
+    # put back, 320 x 200 again and Repair where it always was
+    case('tdawn-window', 'games tdawn desktop', 'nx; sleep 3; (' + TD + 'TDAWN_SCEN=10 TDAWN_INPUT_LOG=1 tdawn FROMINSTALL 2>&1 | grep -v tdstat &); '
+         'sleep 60; nxkey tab; sleep 3; nxkey ctrl+f10; sleep 20; set -- $(nxwintest list | grep Tiberian); P=${5%,*}; Q=${5#*,}; S=$6; W=${S%x*}; '
+         'H=${S#*x}; nxkey $((P+3+82*(W-6)/392)),$((Q+26+89*(H-29)/272)); sleep 5; nxkey $((P+3+330*(W-6)/392)),$((Q+26+84*(H-29)/272)); sleep 5; '
+         'nxkey ctrl+f10; sleep 20; set -- $(nxwintest list | grep Tiberian); P=${5%,*}; Q=${5#*,}; nxkey $((P+3+258*2)),$((Q+26+84*2)); sleep 5; '
+         'killall game', True, wall=600,
+         has=[r'tdawn: the screen laid out at 392x272 \(the view 312x264\)', r'tdawn: 1 selected', r'tdawn: the screen laid out at 320x200 \(the view 240x192\)'],
+         count=[(r'tdawn: the sidebar.s repair button pressed', 2)]),
+    # docs/games/ralert.md, "The window's size": the same for Red Alert (scale 1): maximised 792 x 544 (the view 624 x 528), a soldier
+    # selected, Repair pressed where the sidebar now has it; put back, 640 x 400 and Repair where it always was
+    case('ralert-window', 'games ralert desktop', 'nx; sleep 3; (TDAWN_AUTO=1 RALERT_SIDE=allies RALERT_SEED=7 TDAWN_INPUT_LOG=1 ralert 2>&1 | grep -v ralstat &); '
+         'sleep 90; nxkey ctrl+f10; sleep 25; set -- $(nxwintest list | grep "Red Alert"); P=${5%,*}; Q=${5#*,}; S=$6; W=${S%x*}; H=${S#*x}; '
+         'nxkey $((P+3+214*(W-6)/792)),$((Q+26+199*(H-29)/544)); sleep 5; nxkey $((P+3+660*(W-6)/792)),$((Q+26+158*(H-29)/544)); sleep 5; '
+         'nxkey ctrl+f10; sleep 25; set -- $(nxwintest list | grep "Red Alert"); P=${5%,*}; Q=${5#*,}; nxkey $((P+3+508)),$((Q+26+158)); sleep 5; '
+         'killall game', True, wall=600,
+         has=[r'ralert: the screen laid out at 792x544 \(the view 624x528\)', r'ralert: [1-9]\d* selected', r'ralert: the screen laid out at 640x400 \(the view 480x384\)'],
+         count=[(r'ralert: the sidebar.s repair button pressed', 2)]),
     # docs/games/tdawn.md, "A mission won": the demo's first mission won, its score screen, the next mission played
     case('tdawn-won', 'games tdawn', X + TD + 'TDAWN_SCEN=1 TDAWN_WIN=100 TDAWN_FRAMES=300 tdawn FROMINSTALL', True, wall=400,
          has=[r'^tdawn: score: ends', r'done at frame 300: SCG10EA, .* state 325b1830'], never=[r'Segmentation fault', r'out of memory']),
@@ -306,12 +325,16 @@ CASES = [
          has=[r"^(aoe: the machine's copy by the first core|AOE-NO-DATA)", r'^(aoecheck: 0 pixels differ \(first at 0,20\), 0 of 7 checks|AOE-NO-DATA)'],
          never=[r'aoecheck: [1-9]']),
     # its window resized ("Windowed", 3 November 2026): the picture is stretched over it, and a click where a button is drawn lands on it,
-    # maximised (Single Player at the main menu's 320,196) and tiled at the right half (Random Map at 320,138), by the window's size now
+    # maximised (Single Player at the main menu's 320,196) and tiled at the right half (Random Map at 320,138), by the window's size now;
+    # each menu made again in the layout of the window's size first ("Two layouts": the main menu at 800 x 600, the single player menu at 640)
     case('aoe-resize', 'games aoe desktop', AOE_UNPACK + 'nx; sleep 3; ' + 'if [ -f /tmp/aoe/Empires.dat ]; then AOE_DEBUG=1 AOE_SCRIPT="3000 ready" aoe & '
-         'while [ ! -e /tmp/aoe-size ];do sleep 1;done;sleep 2;nxkey ctrl+alt+up;sleep 3;read OX OY W H </tmp/aoe-size;echo SIZE $W $H;'
-         'nxkey $((OX+320*W/640)),$((OY+196*H/480));sleep 8;nxkey ctrl+alt+right;sleep 3;read OX OY W H </tmp/aoe-size;echo SIZE $W $H;'
-         'nxkey $((OX+320*W/640)),$((OY+138*H/480));sleep 8;killall aoe.bin;else echo AOE-NO-DATA; fi', wall=300,
-         has=[r'^(SIZE (?!640 480)\d+ \d+|AOE-NO-DATA)', r'^(aoe: panel Single Player Menu|AOE-NO-DATA)', r'^(aoe: panel MP Setup Screen|AOE-NO-DATA)']),
+         'while [ ! -e /tmp/aoe-size ];do sleep 1;done;sleep 2;nxkey ctrl+alt+up;'
+         'until [ "$(cat /tmp/aoe-layout 2>/dev/null)" = 800 ];do sleep 1;done;sleep 2;read OX OY W H </tmp/aoe-size;echo SIZE $W $H;'
+         'nxkey $((OX+320*W/640)),$((OY+196*H/480));sleep 8;nxkey ctrl+alt+right;'
+         'until [ "$(cat /tmp/aoe-layout 2>/dev/null)" = 640 ];do sleep 1;done;sleep 2;read OX OY W H </tmp/aoe-size;echo SIZE $W $H;'
+         'nxkey $((OX+320*W/640)),$((OY+138*H/480));sleep 8;killall aoe.bin;else echo AOE-NO-DATA; fi', wall=600,
+         has=[r'^(SIZE (?!640 480)\d+ \d+|AOE-NO-DATA)', r'^(aoe: panel Single Player Menu|AOE-NO-DATA)', r'^(aoe: panel MP Setup Screen|AOE-NO-DATA)',
+              r'^(aoe: Main Menu made again at 800 x 600|AOE-NO-DATA)', r'^(aoe: Single Player Menu made again at 640 x 480|AOE-NO-DATA)']),
     # the layout follows the window in play ("Two layouts"): maximised it is 800 x 600, put back 640 x 480, the game goes on and a click in
     # the window's middle is the picture's middle in each; the menus before the game kept theirs
     case('aoe-layout', 'games aoe desktop', AOE_UNPACK + 'nx; sleep 3; if [ -f /tmp/aoe/Empires.dat ]; then AOE_TICK_MS=33 AOE_INPUT_LOG=1 '

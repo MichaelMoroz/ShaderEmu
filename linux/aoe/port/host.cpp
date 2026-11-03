@@ -228,12 +228,13 @@ static const char* chat_text;   // the script's chat: its text, typed once the l
 static unsigned long chat_at;
 extern unsigned long aoe_updates, aoe_world_ms;
 extern "C" int aoe_layout_waiting(void);
+extern "C" int aoe_layout_remakes(const char* name);
 void aoe_panel_changed(const char* n) {
     step_from = timeGetTime();
     if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: panel %s at %lu, frame %ld\n", n, step_from, frames);
     // a layout that waited at a menu (port/aoe_layout.cpp): made where the next message is handled
     int waiting = aoe_layout_waiting();
-    if (waiting && !strcmp(n, "Game Screen")) aoe_post(AOE_WM_LAYOUT, waiting, 0);
+    if (waiting && (!strcmp(n, "Game Screen") || aoe_layout_remakes(n))) aoe_post(AOE_WM_LAYOUT, waiting, 0);
 }
 static int mark_read, mark_a, mark_b;
 void aoe_view_check_draw(int whole);
