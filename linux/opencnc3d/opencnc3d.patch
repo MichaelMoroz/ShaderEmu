@@ -424,7 +424,7 @@ index c7ad7f4..131147e 100644
      for (index = 0; index < sizeof(Overlapper) / sizeof(Overlapper[0]); index++) {
          if (Overlapper[index] == object)
 diff --git a/tiberiandawn/dllinterface.cpp b/tiberiandawn/dllinterface.cpp
-index bc47822..84dac45 100644
+index bc47822..443b8f1 100644
 --- a/tiberiandawn/dllinterface.cpp
 +++ b/tiberiandawn/dllinterface.cpp
 @@ -7576,8 +7576,19 @@ void DLLExportClass::Debug_Heal_Unit(int x, int y)
@@ -447,6 +447,161 @@ index bc47822..84dac45 100644
      if (GameToPlay == GAME_GLYPHX_MULTIPLAYER) {
          unsigned int num_humans = 0U;
          for (int i = 0; i < MPlayerCount; ++i) {
+@@ -8211,6 +8222,18 @@ void OpenCNC3D_Note_Line(TechnoClass* firer, int which, COORDINATE source, COORD
+     r.type[sizeof(r.type) - 1] = 0;
+ }
+ 
++#ifdef SHADEREMU_BRAIN
++// ShaderEmu: the dumps the renderer reads back print through a printer of ours (brain_shaderemu.cpp), into
++// memory while the renderer captures them, as vprintf otherwise (docs/games/opencnc3d.md, "The object dump").
++extern "C" int ShaderEmu_Dump_Printf(const char* fmt, ...);
++#define printf ShaderEmu_Dump_Printf
++#include "se_dump.h"
++// the cells the dump's cell lines are made of, in their order (brain_shaderemu.cpp)
++extern "C" int ShaderEmu_Dump_Cells(int* cells);
++#define SE_CELLS_FOR(cell) for (int se_i = 0, cell; se_i < se_n && ((cell = se_cells[se_i]), 1); se_i++)
++#else
++#define SE_CELLS_FOR(cell) for (int cell = 0; cell < MAP_CELL_TOTAL; cell++)
++#endif
+ /**************************************************************************************************
+  * OpenCNC3D_Dump_Objects -- TEMPORARY INSTRUMENTATION (project OpenCNC3D).
+  *
+@@ -8762,6 +8785,69 @@ static void OpenCNC3D_Print_One(const char* kind, ObjectClass* obj, int heapid)
+     }
+ 
+ 
++#ifdef SHADEREMU_BRAIN
++    /* ShaderEmu: the line's numbers as a record while the renderer captures with records (se_dump.h). */
++    if (ShaderEmu_Dump_On >= 2) {
++        ShaderEmu_ObjRec* rec = ShaderEmu_Obj_Next();
++        if (rec != NULL) {
++            int* v = rec->v;
++            rec->kind = kind;
++            rec->type = obj->Class_Of().IniName;
++            rec->owner = owner;
++            rec->mission = mission ? mission : "-";
++            v[SE_OBJ_newcell] = (int)cell;
++            v[SE_OBJ_x] = cx;
++            v[SE_OBJ_y] = cy;
++            v[SE_OBJ_inicell] = oldcell;
++            v[SE_OBJ_centercell] = (int)ccell;
++            v[SE_OBJ_str] = (int)obj->Strength;
++            v[SE_OBJ_max] = (int)obj->Class_Of().MaxStrength;
++            v[SE_OBJ_limbo] = (int)obj->IsInLimbo;
++            v[SE_OBJ_down] = (int)obj->IsDown;
++            v[SE_OBJ_lx] = lx;
++            v[SE_OBJ_ly] = ly;
++            v[SE_OBJ_clx] = clx;
++            v[SE_OBJ_cly] = cly;
++            v[SE_OBJ_fw] = fw;
++            v[SE_OBJ_fh] = fh;
++            v[SE_OBJ_face] = face;
++            v[SE_OBJ_tface] = tface;
++            v[SE_OBJ_id] = heapid;
++            v[SE_OBJ_sel] = selected;
++            v[SE_OBJ_nav] = navcell;
++            v[SE_OBJ_tar] = tarcell;
++            v[SE_OBJ_doing] = doing;
++            v[SE_OBJ_dostage] = dostage;
++            v[SE_OBJ_dying] = dying;
++            v[SE_OBJ_makecnt] = makecnt;
++            v[SE_OBJ_dimw] = dimw;
++            v[SE_OBJ_door] = doorstage;
++            v[SE_OBJ_status] = status;
++            v[SE_OBJ_blush] = blush;
++            v[SE_OBJ_flash] = flash;
++            v[SE_OBJ_tcx] = tcx;
++            v[SE_OBJ_tcy] = tcy;
++            v[SE_OBJ_pips] = pips;
++            v[SE_OBJ_maxpips] = maxpips;
++            v[SE_OBJ_alt] = alt;
++            v[SE_OBJ_cloak] = cloak;
++            v[SE_OBJ_cstage] = cstage;
++            v[SE_OBJ_repairing] = repairing;
++            v[SE_OBJ_wrench] = wrench;
++            v[SE_OBJ_poweroff] = obj->What_Am_I() == RTTI_BUILDING ? ((BuildingClass*)obj)->IsPowerOff : 0;
++            v[SE_OBJ_harv] = harv;
++            v[SE_OBJ_rotating] = rotating;
++            v[SE_OBJ_navset] = navset;
++            v[SE_OBJ_driving] = driving;
++            v[SE_OBJ_primary] = primary;
++            v[SE_OBJ_group] = group;
++            v[SE_OBJ_flashme] = flashme;
++            v[SE_OBJ_act] = act;
++            if (ShaderEmu_Dump_On == 2)
++                return;
++        }
++    }
++#endif
+     printf("OBJ|%s|%s|%s|newcell=%d|x=%d|y=%d|inicell=%d|centercell=%d|str=%d|max=%d|limbo=%d|down=%d|mission=%s"
+            "|lx=%d|ly=%d|clx=%d|cly=%d|fw=%d|fh=%d|face=%d|tface=%d|id=%d"
+            "|sel=%d|nav=%d|tar=%d|doing=%d|dostage=%d|dying=%d|makecnt=%d|dimw=%d|door=%d|status=%d"
+@@ -9090,6 +9176,10 @@ extern "C" __declspec(dllexport) int __cdecl OpenCNC3D_Dump_Objects(void)
+                (int)hp->Capacity);
+     }
+ 
++#ifdef SHADEREMU_BRAIN
++    static int se_cells[MAP_CELL_TOTAL];
++    const int se_n = ShaderEmu_Dump_Cells(se_cells);
++#endif
+     /*
+     **	OpenCNC3D tiberium presentation. The renderer draws tiberium from the engine's
+     **	own cell table: one line per cell whose Overlay is a tiberium patch, with
+@@ -9097,7 +9187,7 @@ extern "C" __declspec(dllexport) int __cdecl OpenCNC3D_Dump_Objects(void)
+     **	per-axis cell coordinates on the engine's MEGAMAPS grid, the same space as
+     **	the OBJ lines' x/y fields (identical numbers for legacy 64-wide missions).
+     */
+-    for (int cell = 0; cell < MAP_CELL_TOTAL; cell++) {
++    SE_CELLS_FOR(cell) {
+         const CellClass& c = Map[(CELL)cell];
+         if (c.Overlay >= OVERLAY_TIBERIUM1 && c.Overlay <= OVERLAY_TIBERIUM12) {
+ #ifdef MEGAMAPS
+@@ -9125,7 +9215,7 @@ extern "C" __declspec(dllexport) int __cdecl OpenCNC3D_Dump_Objects(void)
+     **	which gives a nuclear missile piece; steel=0 is the ordinary wood crate. The
+     **	renderer draws a different sprite for each.
+     */
+-    for (int cell = 0; cell < MAP_CELL_TOTAL; cell++) {
++    SE_CELLS_FOR(cell) {
+         const CellClass& c = Map[(CELL)cell];
+         if (c.Overlay == OVERLAY_WOOD_CRATE || c.Overlay == OVERLAY_STEEL_CRATE) {
+ #ifdef MEGAMAPS
+@@ -9159,7 +9249,7 @@ extern "C" __declspec(dllexport) int __cdecl OpenCNC3D_Dump_Objects(void)
+     **	is #ifdef OBSOLETE, so a field placed by the scenario stays for the whole mission.
+     **	Not added to `total`, for the same reason TIB| and WALL| are not.
+     */
+-    for (int cell = 0; cell < MAP_CELL_TOTAL; cell++) {
++    SE_CELLS_FOR(cell) {
+         const CellClass& c = Map[(CELL)cell];
+         if (c.Overlay < OVERLAY_V12 || c.Overlay > OVERLAY_V18)
+             continue;
+@@ -9205,7 +9295,7 @@ extern "C" __declspec(dllexport) int __cdecl OpenCNC3D_Dump_Objects(void)
+     **
+     **	Not added to `total`: TIB| is not either, and OBJDUMP-END's total counts objects.
+     */
+-    for (int cell = 0; cell < MAP_CELL_TOTAL; cell++) {
++    SE_CELLS_FOR(cell) {
+         const CellClass& c = Map[(CELL)cell];
+         if (c.Overlay == OVERLAY_NONE)
+             continue;
+@@ -9262,7 +9352,7 @@ extern "C" __declspec(dllexport) int __cdecl OpenCNC3D_Dump_Objects(void)
+     **	Not added to `total`, for the same reason TIB| and WALL| are not: OBJDUMP-END's
+     **	total counts OBJECTS, and a smudge is a property of the ground.
+     */
+-    for (int cell = 0; cell < MAP_CELL_TOTAL; cell++) {
++    SE_CELLS_FOR(cell) {
+         const CellClass& c = Map[(CELL)cell];
+         if (c.Smudge == SMUDGE_NONE)
+             continue;
+@@ -9419,6 +9509,9 @@ extern "C" __declspec(dllexport) int __cdecl OpenCNC3D_Dump_Selection(void)
+     fflush(stdout);
+     return CurrentObject.Count();
+ }
++#ifdef SHADEREMU_BRAIN
++#undef printf
++#endif
+ 
+ /**************************************************************************************************
+  * OpenCNC3D_Sel_Info -- TEMPORARY INSTRUMENTATION (project OpenCNC3D).
 diff --git a/tiberiandawn/event.h b/tiberiandawn/event.h
 index 6ea0d41..0a75855 100644
 --- a/tiberiandawn/event.h
@@ -596,6 +751,610 @@ index 9a4c9f4..e1a7215 100644
  int DLL_Startup(const char* command_line_in)
  {
      /* Construct argc and argv from command_line_in. Remaster build requires
+diff --git a/opencnc3d/game/cnc_eyes.cpp b/opencnc3d/game/cnc_eyes.cpp
+index ef9b4b3..492a3ad 100644
+--- a/opencnc3d/game/cnc_eyes.cpp
++++ b/opencnc3d/game/cnc_eyes.cpp
+@@ -4259,9 +4259,38 @@ static void obj_str_field(char** f, int nf, const char* key, char* out, size_t o
+ /* The brain's instrumentation talks by printing to stdout. Run one of those calls with
+    stdout pointed at a scratch file and hand the file back, rewound, so the caller can
+    parse it. This is the one place the renderer plays games with file descriptors. */
++#ifdef SHADEREMU_OCNC
++/* ShaderEmu: the brain prints the dumps this reads into memory, by a printer of its own for their %d and %s
++   (linux/opencnc3d/brain_shaderemu.cpp), and the lines are read from there; an object's OBJ| line comes as a
++   record of its numbers instead (se_dump.h), read by refresh_objects through the same keys. musl's printf, the
++   scratch file through the kernel and the parse of the OBJ| lines were 5.4 million instructions a tick on the
++   machine (docs/games/opencnc3d.md, "The object dump"). OPENCNC3D_DUMP=file is the scratch file as before, =text
++   the lines in memory with the OBJ| lines too, =check the records and the lines both, compared (DUMPRECS| at
++   exit) and the printer's lines against printf's (DUMPCHECK|). */
++#include "se_dump.h"
++static int g_dumpMode = -1;     /* ShaderEmu_Dump_On's mode for a capture: 0 the file, 1 text, 2 records, 3 both */
++#endif
+ static FILE* capture_brain_call(int (*fn)(void))
+ {
+     if (!fn) return NULL;
++#ifdef SHADEREMU_OCNC
++    if (g_dumpMode < 0) {
++        const char* e = getenv("OPENCNC3D_DUMP");
++        g_dumpMode = !e ? 2 : !strcmp(e, "file") ? 0 : !strcmp(e, "text") ? 1 : !strcmp(e, "check") ? 3 : 2;
++    }
++    if (g_dumpMode) {
++        static char nothing[1] = { '\n' };
++        if (g_capture) { fclose(g_capture); g_capture = NULL; }
++        ShaderEmu_Dump_Len = 0;
++        ShaderEmu_Obj_Count = 0;
++        ShaderEmu_Dump_On = g_dumpMode;
++        fn();
++        ShaderEmu_Dump_On = 0;
++        g_capture = ShaderEmu_Dump_Len ? fmemopen(ShaderEmu_Dump_Buf, ShaderEmu_Dump_Len, "r")
++                                       : fmemopen(nothing, 1, "r");
++        return g_capture;
++    }
++#endif
+     fflush(stdout);
+     const int outputDescriptor = fileno(stdout);
+     if (outputDescriptor < 0) return NULL;
+@@ -5380,6 +5409,299 @@ static void efx_air_shots(int frameno)
+ }
+ 
+ static void laser_stamp(int frameno);   /* laser_mod.h: the Obelisk's beams, on the dump's frame */
++/* An OBJ| line's object, from its fields: the line split at its pipes (f, nf), or (ShaderEmu) a record of
++   the brain's (se_dump.h) read through the same keys. Once per object of every dump, in the dump's order. */
++static const char* obj_head_str(char** f, int k) { return f[k]; }
++static int obj_head_int(char** f, int k) { return int_after_eq(f[k]); }
++#ifdef SHADEREMU_OCNC
++struct ObjRecView { const ShaderEmu_ObjRec* r; };
++/* a key's place in the record, by its address (the keys are literals), then by its name */
++static int obj_rec_index(const char* key)
++{
++    static const char* keys[64];
++    static signed char at[64];
++    const unsigned h = ((unsigned)(uintptr_t)key * 2654435761u) >> 26;
++    if (keys[h] == key) return at[h];
++    int i = SE_OBJ_COUNT - 1;
++    while (i >= 0 && strcmp(ShaderEmu_Obj_Names[i], key) != 0) i--;
++    keys[h] = key;
++    at[h] = (signed char)i;
++    return i;
++}
++static int obj_field(const ObjRecView& f, int, const char* key, int dflt)
++{
++    const int i = obj_rec_index(key);
++    return i >= 0 ? f.r->v[i] : dflt;
++}
++static void obj_str_field(const ObjRecView& f, int, const char* key, char* out, size_t outn)
++{
++    const char* v = !strcmp(key, "mission") ? f.r->mission : "-";
++    size_t n = 0;
++    for (; v[n] && n + 1 < outn; n++) out[n] = v[n];
++    if (outn) out[n] = 0;
++}
++static const char* obj_head_str(const ObjRecView& f, int k) { return k == 1 ? f.r->kind : k == 2 ? f.r->type : f.r->owner; }
++static int obj_head_int(const ObjRecView& f, int k)
++{
++    return f.r->v[k == 5 ? SE_OBJ_x : k == 6 ? SE_OBJ_y : k == 9 ? SE_OBJ_str : SE_OBJ_max];
++}
++/* OPENCNC3D_DUMP=check: the brain gave each object both ways; every field of the line against its record */
++static unsigned long g_recLines, g_recBad;
++static void obj_rec_report(void)
++{
++    fprintf(stderr, "DUMPRECS|lines=%lu|differ=%lu\n", g_recLines, g_recBad);
++}
++static void obj_rec_check(char** f, int nf, unsigned k)
++{
++    if (!g_recLines++) atexit(obj_rec_report);
++    if (k >= ShaderEmu_Obj_Count) { g_recBad++; fprintf(stderr, "DUMPRECS|no record for a line\n"); return; }
++    const ShaderEmu_ObjRec& r = ShaderEmu_Obj_Recs[k];
++    bool bad = nf != 4 + SE_OBJ_COUNT + 1 || strcmp(f[1], r.kind) || strcmp(f[2], r.type) || strcmp(f[3], r.owner);
++    char m[64];
++    str_field(f, nf, "mission", m, sizeof m);
++    bad = bad || strcmp(m, r.mission);
++    for (int i = 0; i < SE_OBJ_COUNT && !bad; i++)
++        bad = field(f, nf, ShaderEmu_Obj_Names[i], -12345) != r.v[i];
++    if (bad) { g_recBad++; fprintf(stderr, "DUMPRECS|DIFFER|%s|%s|id=%d\n", f[2], r.type, r.v[SE_OBJ_id]); }
++}
++#endif
++template <class F> static void obj_take(F f, int nf)
++{
++
++    SimObject o;
++    o.rideKey = -1;                 /* only the rider build sets this */
++    o.rideDX = o.rideDZ = 0.0f;
++    o.kind = kind_from(obj_head_str(f, 1));
++    snprintf(o.type, sizeof(o.type), "%s", obj_head_str(f, 2));
++    o.mtype[0] = 0;
++    if (const char* art = type_art_alias(o.type)) {
++        snprintf(o.mtype, sizeof(o.mtype), "%s", o.type);
++        snprintf(o.type, sizeof(o.type), "%s", art);
++    }
++    snprintf(o.house, sizeof(o.house), "%s", obj_head_str(f, 3));
++    o.cx = obj_head_int(f, 5);
++    o.cy = obj_head_int(f, 6);
++    o.str = obj_head_int(f, 9);
++    o.maxstr = obj_head_int(f, 10);
++
++    /* The geometry block. clx/cly is the engine's own Center_Coord in leptons (256 per
++       cell): for a building that is the footprint centre, computed from the BSIZE the
++       type declares in bdata.cpp -- BuildingClass::CenterOffset[Class->Size]. Nothing
++       here is a table the renderer keeps; the engine is asked. */
++    o.fw = obj_field(f, nf, "fw", 1);
++    o.fh = obj_field(f, nf, "fh", 1);
++    /* Target_Coord's cell (see SimObject::tcx). The default is the anchor cell, so an
++       older brain reads exactly as it did before the field existed. */
++    o.tcx = obj_field(f, nf, "tcx", o.cx);
++    o.tcy = obj_field(f, nf, "tcy", o.cy);
++    /* Default -1, not 0: 0 is a legitimate "empty harvester" and would draw a full
++       empty strip on a brain that does not export the pair at all. */
++    o.alt     = obj_field(f, nf, "alt", 0);
++    /* RED ALERT COUNTS AN AIRCRAFT'S HEIGHT IN LEPTONS (AircraftClass::Height, its
++       FLIGHT_LEVEL 256), Tiberian Dawn in pixels (Altitude, FLIGHT_LEVEL 24), and every
++       reader here (the lift, the rotors, where a craft shot down explodes) takes
++       Tiberian Dawn's scale: Red Alert's is brought to it once, here */
++    if (g_raModule && o.alt > 0) o.alt = (o.alt * 24 + 128) / 256;
++    o.act     = obj_field(f, nf, "act", -1);
++    o.pips    = obj_field(f, nf, "pips", -1);
++    o.maxpips = obj_field(f, nf, "maxpips", -1);
++    o.face = obj_field(f, nf, "face", -1);
++    o.tface = obj_field(f, nf, "tface", -1);
++    o.id = obj_field(f, nf, "id", -1);
++    o.lx = obj_field(f, nf, "lx", -1);
++    o.ly = obj_field(f, nf, "ly", -1);
++    obj_str_field(f, nf, "mission", o.mission, sizeof(o.mission));
++    /* nav= and tar= are the brain's navcell/tarcell. See SimObject::nav. */
++    o.nav = obj_field(f, nf, "nav", -1);
++    o.tar = obj_field(f, nf, "tar", -1);
++    o.doing = obj_field(f, nf, "doing", -1);
++    o.dostage = obj_field(f, nf, "dostage", -1);
++    o.ammo = obj_field(f, nf, "ammo", -1);
++    o.dying = obj_field(f, nf, "dying", 0);
++    o.remap = obj_field(f, nf, "remap", -1);
++    o.makecnt = obj_field(f, nf, "makecnt", -1);
++    /* A brain that predates the door= export degrades to -1, which the war factory
++       arm reads as "no door information" and holds the door shut. */
++    o.doorstage = obj_field(f, nf, "door", -1);
++    o.status = obj_field(f, nf, "status", -1);
++    /* See SimObject::harv. Zero, not -1: zero is the engine's own "no" for all four
++       and it is what closes the harvester arm on a brain that does not export them. */
++    o.harv     = obj_field(f, nf, "harv", 0);
++    o.rotating = obj_field(f, nf, "rotating", 0);
++    o.navset   = obj_field(f, nf, "navset", 0);
++    o.driving  = obj_field(f, nf, "driving", 0);
++    o.dimw = obj_field(f, nf, "dimw", 0);
++    /* An older brain with no limbo= key degrades to 0, i.e. the old behaviour --
++       which is exactly what field()'s default is for. */
++    o.limbo = obj_field(f, nf, "limbo", 0);
++    o.blush = obj_field(f, nf, "blush", 0);
++    /* WHOSE BLUSH IT IS. blush= is the 1995 bit every machine shares; flashme= is the
++       engine's per-house answer (Get_Flashing_Flags for the player at this machine),
++       and it is what decides whether the blush is DRAWN. Without it the defender
++       watched their own units blush as the attacker clicked them and read the
++       attacker's targeting off it (the first online playtest). A brain without the
++       field reads -1 and the shared bit stands, which is the old picture. */
++    o.flashme = obj_field(f, nf, "flashme", -1);
++    if (o.flashme == 0) o.blush = 0;
++    o.cloak  = obj_field(f, nf, "cloak", 0);
++    o.cstage = obj_field(f, nf, "cstage", 0);
++    /* Both default to 0, i.e. "not repairing", so an older brain draws no wrench
++       rather than a stuck one. */
++    o.poweroff = obj_field(f,nf,"poweroff",0);
++    o.repairing = obj_field(f, nf, "repairing", 0);
++    o.wrench    = obj_field(f, nf, "wrench", 0);
++    /* Defaults to 0, i.e. "not the primary factory", so an older brain draws no label
++       rather than one standing over an arbitrary building. */
++    o.primary   = obj_field(f, nf, "primary", 0);
++    o.flash = obj_field(f, nf, "flash", 0);
++    /* -1, not 0: 0 is control group 1, and a brain without the export must read as
++       "in no group" rather than putting every unit in the first one. */
++    o.group = obj_field(f, nf, "group", -1);
++    o.ylift = 0.0f;
++    o.deck = 0.0f;                 /* resolved below, once the building cells exist */
++    o.stand = 0.0f;                /* resolved below, once the pads have been built  */
++    o.wobmode = -1;
++    int clx = obj_field(f, nf, "clx", -1);
++    int cly = obj_field(f, nf, "cly", -1);
++    if (clx >= 0 && cly >= 0) {
++        o.ex = (float)clx / 256.0f;
++        o.ez = (float)cly / 256.0f;
++    } else {
++        o.ex = (float)o.cx + 0.5f;     /* old brain build: top-left cell centre */
++        o.ez = (float)o.cy + 0.5f;
++    }
++    o.wx = o.ex;
++    o.wz = o.ez;
++    /* --legacy reproduces the defect exactly: draw at the centre of the TOP-LEFT cell,
++       whatever the footprint, and ignore the facing. The ground truth ex/ez stays put
++       so the same instrument measures both. */
++    if (g_legacy) { o.wx = (float)o.cx + 0.5f; o.wz = (float)o.cy + 0.5f; o.face = -1; }
++    tread_advance(o.id, o.ex, o.ez);
++    if (o.dying && o.id >= 0)
++        efx_note_dying(o.id, o.wx, o.wz, o.dostage, obj_is_gdi(o));
++    /* A DEAD BUILDING'S CLOCK STARTS HERE, in the per-tick parse, and NOT in the draw.
++       The first version recorded it lazily inside construction_frac, which is only
++       reached from a draw: under --script a plain `tick` advances the sim without
++       drawing a frame, so a building could live and die inside its whole eight-tick
++       window without the shed ever being told. It also made the phase advance with
++       FRAMES rather than engine ticks, which is the wrong clock and would not have
++       survived two --shot runs.
++
++       `dying` is no use here: it is set only inside the RTTI_INFANTRY arm of the dump
++       (dllinterface.cpp:7939-7947), so a building never carries it. Strength reaching
++       zero is the observable, and the window is the engine's own CountDown = 8, set in
++       BuildingClass::Take_Damage's RESULT_DESTROYED arm (building.cpp:1562). */
++    /* AND THE RECORD IS ERASED WHEN THE SLOT COMES BACK ALIVE. Heap ids are
++       recycled -- this file documents it below ("a heap slot recycled into a new
++       object on the tick after the old one died") -- so without this the SECOND
++       building to die in a given slot finds the FIRST one's death frame, its phase
++       clamps to 1.0 on the tick it dies, and it vanishes with no shed at all. */
++    if (o.kind == K_BUILDING && o.id >= 0 && o.str > 0)
++        g_deathFirstFrame.erase(o.id);
++    if (o.kind == K_BUILDING && o.id >= 0 && !o.limbo && o.str <= 0
++        && g_deathFirstFrame.find(o.id) == g_deathFirstFrame.end()) {
++        g_deathFirstFrame[o.id] = g_engineFrame;
++        printf("DEATHSHED|%s|%s|id=%d|begin|frame=%d\n", o.type, o.house, o.id,
++               g_engineFrame);
++        fflush(stdout);
++        /* and the pieces are queued from the SAME observation, so the shed and the
++           shatter can never disagree about when the building died.
++           A REMASTERED BUILDING UNDER ENHANCED IS NOT SHATTERED: its own collapse
++           (ebld_mod.h) takes it, and the decision is latched here, at the one
++           observation of the death. The mesh index goes as -1 rather than the call
++           being skipped, because the shatter's pulse fires above its own early-outs
++           and is not this system's to stand down; -1 is the early-out that follows
++           it, so no piece spawns and no SHATTER| line is printed. */
++        const bool ebldOwns = ebld_claims_death(o);
++        shatter_note_death(o.id, ebldOwns ? -1 : mesh_for(o), draw_facing(o),
++                           mesh_house(o), o.wx, o.wz, o.fw, o.fh, g_engineFrame,
++                           o.type, false, 0.0f, 0.0f, 0.0f);
++        /* AND THE GROUND JOLTS. Buildings only, and scaled by the footprint, so a
++           Construction Yard is felt three times as hard as a Guard Tower. A VEHICLE
++           DEATH TAPS THE GROUND TOO NOW, but through shake_tap and at SHAKE_VEHICLE,
++           about a third of a Guard Tower: a firefight kills them several a second, so
++           they get the strictly-largest-wins rule that stops a screen of them from
++           re-arming the shake forever. The shake block carries it.
++           0.028 rather than the 0.020 this shipped with, at the project owner's ask.
++           At the default shake_amount of 1.0 that is about 3.7 screen pixels of peak
++           throw for a 2x2 building at the standard zoom, against 2.6 before. The F5
++           dial still scales it from 0 to 3. */
++        {
++            const int fw = o.fw > 0 ? o.fw : 1, fh = o.fh > 0 ? o.fh : 1;
++            /* (a remastered building under Enhanced jolts as the lab's Destroy does:
++               its file's own cells, ebld_mod.h) */
++            const float cells = (float)(fw > fh ? fw : fh);
++            shake_note(0.028f * (ebldOwns ? ebld_death_cells(o, cells) : cells));
++            cinematic_audio_note(CIN_COLLAPSE, o.ex, o.ez, cells);
++        }
++    }
++    if (o.kind == K_BUILDING && !o.limbo) {
++        /* Stamp this building's cells with its own origin key. */
++        const int key = o.cy * g_gridW + o.cx;
++        /* AND THE GROUND TAKES THE WEIGHT OF A NEW ONE. A building whose origin cell
++           did not carry its key last tick has just arrived, and one that is arriving
++           in BSTATE_CONSTRUCTION is one a player has just put down: the mission's own
++           pre-placed structures arrive complete, so they are not this, and a building
++           revealed by scouting was already in the map because the footprint map is
++           built from the dump rather than from what can be seen. Selling shares that
++           build state and is excluded by the same test, because a building being sold
++           is not new.
++
++           A THIRD OF A DEMOLITION, scaled by the footprint the same way, so a
++           Construction Yard is felt three times a Guard Tower and none of them is
++           felt as hard as something dying. Through shake_tap rather than shake_note:
++           a base going up puts several of these down in a few seconds and the tap's
++           strictly-largest-wins rule is what stops them re-arming the shake forever,
++           which is the same reason a vehicle death uses it.
++
++           ENHANCED ONLY, and that gate is the reason this is not simply next to the
++           death jolt. The shake itself is not behind the post chain and never has
++           been: the camera moves on this tier and on Classic alike, which is right
++           for a building coming apart because that has jolted the ground since the
++           beginning. A jolt when one goes UP is new, and Classic is the tier that has
++           to keep drawing the picture this project has always drawn. Without this
++           test the first structure a player puts down makes a Classic frame differ
++           from the frame it drew yesterday, which is the one thing that tier may not
++           do. A run that places nothing is unaffected either way, which is why the
++           screenshot gates never saw it.
++
++           THIS PLAYER'S OWN BUILDINGS ONLY. The jolt used to fire for every house's
++           placement anywhere on the map, and in a match that is a tell: every player
++           felt every other player's base going up, wherever they were looking, and
++           could say who was building from it (the first online playtest). A building
++           going up is the builder's own event; a building coming DOWN still jolts
++           everybody, as it always has, because a demolition is something the whole
++           map hears. */
++        /* THE ROCKS FEEL EVERY HOUSE'S STRUCTURE GO UP, where the camera only feels
++           the player's own: the ground is the world's, the shake is the player's. */
++        if (g_fx.enabled && o.doing == DOSMAKE_BSTATE_CONSTRUCTION
++            && o.cx >= 0 && o.cy >= 0 && o.cx < g_gridW && o.cy < g_gridH
++            && g_bldCellPrev[o.cy * g_gridW + o.cx] != key)
++            foliage3d_building_placed(o.ex, o.ez, o.fw, o.fh);
++        if (g_fx.enabled && o.doing == DOSMAKE_BSTATE_CONSTRUCTION
++            && g_playerHouse[0] && !strcmp(o.house, g_playerHouse)
++            && o.cx >= 0 && o.cy >= 0
++            && o.cx < g_gridW && o.cy < g_gridH
++            && g_bldCellPrev[o.cy * g_gridW + o.cx] != key
++            /* (a placement whose jolt is later than the press plays it itself) */
++            && !eplc_owns_jolt(o.type)) {
++            const int fw = o.fw > 0 ? o.fw : 1, fh = o.fh > 0 ? o.fh : 1;
++            shake_tap(0.009f * (float)(fw > fh ? fw : fh));
++            cinematic_audio_note_as(CIN_PLACE, o.ex, o.ez, (float)(fw > fh ? fw : fh),
++                                    eplc_splashes(o.type));
++        }
++        for (int dy = 0; dy < (o.fh > 0 ? o.fh : 1); dy++)
++            for (int dx = 0; dx < (o.fw > 0 ? o.fw : 1); dx++) {
++                const int px = o.cx + dx, py = o.cy + dy;
++                if (px >= 0 && px < g_gridW && py >= 0 && py < g_gridH) {
++                    g_bldCellNow[py * g_gridW + px] = key;
++                    g_bldCellHouseNow[py * g_gridW + px] = (signed char)obj_is_gdi(o);
++                }
++            }
++    }
++    g_objects.push_back(o);
++}
++
+ static void refresh_objects(void)
+ {
+     /* The sidebar mirror is refreshed on the same heartbeat as the object list, so a
+@@ -5431,6 +5753,16 @@ static void refresh_objects(void)
+         return;
+     char line[512];
+     int frameno = g_engineFrame;
++#ifdef SHADEREMU_OCNC
++    /* the objects that came as records (se_dump.h), in the dump's order: before every other line of it, as
++       their lines were (only OBJDUMP-BEGIN is before them, and nothing reads it) */
++    unsigned se_rec = 0;
++    if (g_dumpMode >= 2)
++        for (unsigned k = 0; k < ShaderEmu_Obj_Count; k++) {
++            ObjRecView v = { &ShaderEmu_Obj_Recs[k] };
++            obj_take(v, SE_OBJ_COUNT + 5);
++        }
++#endif
+     while (fgets(line, sizeof(line), g_capture)) {
+         if (!strncmp(line, "OBJDUMP-END", 11)) {
+             const char* fr = strstr(line, "frame=");
+@@ -5609,239 +5941,10 @@ static void refresh_objects(void)
+         }
+         if (nf < 10) continue;
+         field_cols_line(g_objCols, f, nf);
+-
+-        SimObject o;
+-        o.rideKey = -1;                 /* only the rider build sets this */
+-        o.rideDX = o.rideDZ = 0.0f;
+-        o.kind = kind_from(f[1]);
+-        snprintf(o.type, sizeof(o.type), "%s", f[2]);
+-        o.mtype[0] = 0;
+-        if (const char* art = type_art_alias(o.type)) {
+-            snprintf(o.mtype, sizeof(o.mtype), "%s", o.type);
+-            snprintf(o.type, sizeof(o.type), "%s", art);
+-        }
+-        snprintf(o.house, sizeof(o.house), "%s", f[3]);
+-        o.cx = int_after_eq(f[5]);
+-        o.cy = int_after_eq(f[6]);
+-        o.str = int_after_eq(f[9]);
+-        o.maxstr = int_after_eq(f[10]);
+-
+-        /* The geometry block. clx/cly is the engine's own Center_Coord in leptons (256 per
+-           cell): for a building that is the footprint centre, computed from the BSIZE the
+-           type declares in bdata.cpp -- BuildingClass::CenterOffset[Class->Size]. Nothing
+-           here is a table the renderer keeps; the engine is asked. */
+-        o.fw = obj_field(f, nf, "fw", 1);
+-        o.fh = obj_field(f, nf, "fh", 1);
+-        /* Target_Coord's cell (see SimObject::tcx). The default is the anchor cell, so an
+-           older brain reads exactly as it did before the field existed. */
+-        o.tcx = obj_field(f, nf, "tcx", o.cx);
+-        o.tcy = obj_field(f, nf, "tcy", o.cy);
+-        /* Default -1, not 0: 0 is a legitimate "empty harvester" and would draw a full
+-           empty strip on a brain that does not export the pair at all. */
+-        o.alt     = obj_field(f, nf, "alt", 0);
+-        /* RED ALERT COUNTS AN AIRCRAFT'S HEIGHT IN LEPTONS (AircraftClass::Height, its
+-           FLIGHT_LEVEL 256), Tiberian Dawn in pixels (Altitude, FLIGHT_LEVEL 24), and every
+-           reader here (the lift, the rotors, where a craft shot down explodes) takes
+-           Tiberian Dawn's scale: Red Alert's is brought to it once, here */
+-        if (g_raModule && o.alt > 0) o.alt = (o.alt * 24 + 128) / 256;
+-        o.act     = obj_field(f, nf, "act", -1);
+-        o.pips    = obj_field(f, nf, "pips", -1);
+-        o.maxpips = obj_field(f, nf, "maxpips", -1);
+-        o.face = obj_field(f, nf, "face", -1);
+-        o.tface = obj_field(f, nf, "tface", -1);
+-        o.id = obj_field(f, nf, "id", -1);
+-        o.lx = obj_field(f, nf, "lx", -1);
+-        o.ly = obj_field(f, nf, "ly", -1);
+-        obj_str_field(f, nf, "mission", o.mission, sizeof(o.mission));
+-        /* nav= and tar= are the brain's navcell/tarcell. See SimObject::nav. */
+-        o.nav = obj_field(f, nf, "nav", -1);
+-        o.tar = obj_field(f, nf, "tar", -1);
+-        o.doing = obj_field(f, nf, "doing", -1);
+-        o.dostage = obj_field(f, nf, "dostage", -1);
+-        o.ammo = obj_field(f, nf, "ammo", -1);
+-        o.dying = obj_field(f, nf, "dying", 0);
+-        o.remap = obj_field(f, nf, "remap", -1);
+-        o.makecnt = obj_field(f, nf, "makecnt", -1);
+-        /* A brain that predates the door= export degrades to -1, which the war factory
+-           arm reads as "no door information" and holds the door shut. */
+-        o.doorstage = obj_field(f, nf, "door", -1);
+-        o.status = obj_field(f, nf, "status", -1);
+-        /* See SimObject::harv. Zero, not -1: zero is the engine's own "no" for all four
+-           and it is what closes the harvester arm on a brain that does not export them. */
+-        o.harv     = obj_field(f, nf, "harv", 0);
+-        o.rotating = obj_field(f, nf, "rotating", 0);
+-        o.navset   = obj_field(f, nf, "navset", 0);
+-        o.driving  = obj_field(f, nf, "driving", 0);
+-        o.dimw = obj_field(f, nf, "dimw", 0);
+-        /* An older brain with no limbo= key degrades to 0, i.e. the old behaviour --
+-           which is exactly what field()'s default is for. */
+-        o.limbo = obj_field(f, nf, "limbo", 0);
+-        o.blush = obj_field(f, nf, "blush", 0);
+-        /* WHOSE BLUSH IT IS. blush= is the 1995 bit every machine shares; flashme= is the
+-           engine's per-house answer (Get_Flashing_Flags for the player at this machine),
+-           and it is what decides whether the blush is DRAWN. Without it the defender
+-           watched their own units blush as the attacker clicked them and read the
+-           attacker's targeting off it (the first online playtest). A brain without the
+-           field reads -1 and the shared bit stands, which is the old picture. */
+-        o.flashme = obj_field(f, nf, "flashme", -1);
+-        if (o.flashme == 0) o.blush = 0;
+-        o.cloak  = obj_field(f, nf, "cloak", 0);
+-        o.cstage = obj_field(f, nf, "cstage", 0);
+-        /* Both default to 0, i.e. "not repairing", so an older brain draws no wrench
+-           rather than a stuck one. */
+-        o.poweroff = obj_field(f,nf,"poweroff",0);
+-        o.repairing = obj_field(f, nf, "repairing", 0);
+-        o.wrench    = obj_field(f, nf, "wrench", 0);
+-        /* Defaults to 0, i.e. "not the primary factory", so an older brain draws no label
+-           rather than one standing over an arbitrary building. */
+-        o.primary   = obj_field(f, nf, "primary", 0);
+-        o.flash = obj_field(f, nf, "flash", 0);
+-        /* -1, not 0: 0 is control group 1, and a brain without the export must read as
+-           "in no group" rather than putting every unit in the first one. */
+-        o.group = obj_field(f, nf, "group", -1);
+-        o.ylift = 0.0f;
+-        o.deck = 0.0f;                 /* resolved below, once the building cells exist */
+-        o.stand = 0.0f;                /* resolved below, once the pads have been built  */
+-        o.wobmode = -1;
+-        int clx = obj_field(f, nf, "clx", -1);
+-        int cly = obj_field(f, nf, "cly", -1);
+-        if (clx >= 0 && cly >= 0) {
+-            o.ex = (float)clx / 256.0f;
+-            o.ez = (float)cly / 256.0f;
+-        } else {
+-            o.ex = (float)o.cx + 0.5f;     /* old brain build: top-left cell centre */
+-            o.ez = (float)o.cy + 0.5f;
+-        }
+-        o.wx = o.ex;
+-        o.wz = o.ez;
+-        /* --legacy reproduces the defect exactly: draw at the centre of the TOP-LEFT cell,
+-           whatever the footprint, and ignore the facing. The ground truth ex/ez stays put
+-           so the same instrument measures both. */
+-        if (g_legacy) { o.wx = (float)o.cx + 0.5f; o.wz = (float)o.cy + 0.5f; o.face = -1; }
+-        tread_advance(o.id, o.ex, o.ez);
+-        if (o.dying && o.id >= 0)
+-            efx_note_dying(o.id, o.wx, o.wz, o.dostage, obj_is_gdi(o));
+-        /* A DEAD BUILDING'S CLOCK STARTS HERE, in the per-tick parse, and NOT in the draw.
+-           The first version recorded it lazily inside construction_frac, which is only
+-           reached from a draw: under --script a plain `tick` advances the sim without
+-           drawing a frame, so a building could live and die inside its whole eight-tick
+-           window without the shed ever being told. It also made the phase advance with
+-           FRAMES rather than engine ticks, which is the wrong clock and would not have
+-           survived two --shot runs.
+-
+-           `dying` is no use here: it is set only inside the RTTI_INFANTRY arm of the dump
+-           (dllinterface.cpp:7939-7947), so a building never carries it. Strength reaching
+-           zero is the observable, and the window is the engine's own CountDown = 8, set in
+-           BuildingClass::Take_Damage's RESULT_DESTROYED arm (building.cpp:1562). */
+-        /* AND THE RECORD IS ERASED WHEN THE SLOT COMES BACK ALIVE. Heap ids are
+-           recycled -- this file documents it below ("a heap slot recycled into a new
+-           object on the tick after the old one died") -- so without this the SECOND
+-           building to die in a given slot finds the FIRST one's death frame, its phase
+-           clamps to 1.0 on the tick it dies, and it vanishes with no shed at all. */
+-        if (o.kind == K_BUILDING && o.id >= 0 && o.str > 0)
+-            g_deathFirstFrame.erase(o.id);
+-        if (o.kind == K_BUILDING && o.id >= 0 && !o.limbo && o.str <= 0
+-            && g_deathFirstFrame.find(o.id) == g_deathFirstFrame.end()) {
+-            g_deathFirstFrame[o.id] = g_engineFrame;
+-            printf("DEATHSHED|%s|%s|id=%d|begin|frame=%d\n", o.type, o.house, o.id,
+-                   g_engineFrame);
+-            fflush(stdout);
+-            /* and the pieces are queued from the SAME observation, so the shed and the
+-               shatter can never disagree about when the building died.
+-               A REMASTERED BUILDING UNDER ENHANCED IS NOT SHATTERED: its own collapse
+-               (ebld_mod.h) takes it, and the decision is latched here, at the one
+-               observation of the death. The mesh index goes as -1 rather than the call
+-               being skipped, because the shatter's pulse fires above its own early-outs
+-               and is not this system's to stand down; -1 is the early-out that follows
+-               it, so no piece spawns and no SHATTER| line is printed. */
+-            const bool ebldOwns = ebld_claims_death(o);
+-            shatter_note_death(o.id, ebldOwns ? -1 : mesh_for(o), draw_facing(o),
+-                               mesh_house(o), o.wx, o.wz, o.fw, o.fh, g_engineFrame,
+-                               o.type, false, 0.0f, 0.0f, 0.0f);
+-            /* AND THE GROUND JOLTS. Buildings only, and scaled by the footprint, so a
+-               Construction Yard is felt three times as hard as a Guard Tower. A VEHICLE
+-               DEATH TAPS THE GROUND TOO NOW, but through shake_tap and at SHAKE_VEHICLE,
+-               about a third of a Guard Tower: a firefight kills them several a second, so
+-               they get the strictly-largest-wins rule that stops a screen of them from
+-               re-arming the shake forever. The shake block carries it.
+-               0.028 rather than the 0.020 this shipped with, at the project owner's ask.
+-               At the default shake_amount of 1.0 that is about 3.7 screen pixels of peak
+-               throw for a 2x2 building at the standard zoom, against 2.6 before. The F5
+-               dial still scales it from 0 to 3. */
+-            {
+-                const int fw = o.fw > 0 ? o.fw : 1, fh = o.fh > 0 ? o.fh : 1;
+-                /* (a remastered building under Enhanced jolts as the lab's Destroy does:
+-                   its file's own cells, ebld_mod.h) */
+-                const float cells = (float)(fw > fh ? fw : fh);
+-                shake_note(0.028f * (ebldOwns ? ebld_death_cells(o, cells) : cells));
+-                cinematic_audio_note(CIN_COLLAPSE, o.ex, o.ez, cells);
+-            }
+-        }
+-        if (o.kind == K_BUILDING && !o.limbo) {
+-            /* Stamp this building's cells with its own origin key. */
+-            const int key = o.cy * g_gridW + o.cx;
+-            /* AND THE GROUND TAKES THE WEIGHT OF A NEW ONE. A building whose origin cell
+-               did not carry its key last tick has just arrived, and one that is arriving
+-               in BSTATE_CONSTRUCTION is one a player has just put down: the mission's own
+-               pre-placed structures arrive complete, so they are not this, and a building
+-               revealed by scouting was already in the map because the footprint map is
+-               built from the dump rather than from what can be seen. Selling shares that
+-               build state and is excluded by the same test, because a building being sold
+-               is not new.
+-
+-               A THIRD OF A DEMOLITION, scaled by the footprint the same way, so a
+-               Construction Yard is felt three times a Guard Tower and none of them is
+-               felt as hard as something dying. Through shake_tap rather than shake_note:
+-               a base going up puts several of these down in a few seconds and the tap's
+-               strictly-largest-wins rule is what stops them re-arming the shake forever,
+-               which is the same reason a vehicle death uses it.
+-
+-               ENHANCED ONLY, and that gate is the reason this is not simply next to the
+-               death jolt. The shake itself is not behind the post chain and never has
+-               been: the camera moves on this tier and on Classic alike, which is right
+-               for a building coming apart because that has jolted the ground since the
+-               beginning. A jolt when one goes UP is new, and Classic is the tier that has
+-               to keep drawing the picture this project has always drawn. Without this
+-               test the first structure a player puts down makes a Classic frame differ
+-               from the frame it drew yesterday, which is the one thing that tier may not
+-               do. A run that places nothing is unaffected either way, which is why the
+-               screenshot gates never saw it.
+-
+-               THIS PLAYER'S OWN BUILDINGS ONLY. The jolt used to fire for every house's
+-               placement anywhere on the map, and in a match that is a tell: every player
+-               felt every other player's base going up, wherever they were looking, and
+-               could say who was building from it (the first online playtest). A building
+-               going up is the builder's own event; a building coming DOWN still jolts
+-               everybody, as it always has, because a demolition is something the whole
+-               map hears. */
+-            /* THE ROCKS FEEL EVERY HOUSE'S STRUCTURE GO UP, where the camera only feels
+-               the player's own: the ground is the world's, the shake is the player's. */
+-            if (g_fx.enabled && o.doing == DOSMAKE_BSTATE_CONSTRUCTION
+-                && o.cx >= 0 && o.cy >= 0 && o.cx < g_gridW && o.cy < g_gridH
+-                && g_bldCellPrev[o.cy * g_gridW + o.cx] != key)
+-                foliage3d_building_placed(o.ex, o.ez, o.fw, o.fh);
+-            if (g_fx.enabled && o.doing == DOSMAKE_BSTATE_CONSTRUCTION
+-                && g_playerHouse[0] && !strcmp(o.house, g_playerHouse)
+-                && o.cx >= 0 && o.cy >= 0
+-                && o.cx < g_gridW && o.cy < g_gridH
+-                && g_bldCellPrev[o.cy * g_gridW + o.cx] != key
+-                /* (a placement whose jolt is later than the press plays it itself) */
+-                && !eplc_owns_jolt(o.type)) {
+-                const int fw = o.fw > 0 ? o.fw : 1, fh = o.fh > 0 ? o.fh : 1;
+-                shake_tap(0.009f * (float)(fw > fh ? fw : fh));
+-                cinematic_audio_note_as(CIN_PLACE, o.ex, o.ez, (float)(fw > fh ? fw : fh),
+-                                        eplc_splashes(o.type));
+-            }
+-            for (int dy = 0; dy < (o.fh > 0 ? o.fh : 1); dy++)
+-                for (int dx = 0; dx < (o.fw > 0 ? o.fw : 1); dx++) {
+-                    const int px = o.cx + dx, py = o.cy + dy;
+-                    if (px >= 0 && px < g_gridW && py >= 0 && py < g_gridH) {
+-                        g_bldCellNow[py * g_gridW + px] = key;
+-                        g_bldCellHouseNow[py * g_gridW + px] = (signed char)obj_is_gdi(o);
+-                    }
+-                }
+-        }
+-        g_objects.push_back(o);
++#ifdef SHADEREMU_OCNC
++        if (g_dumpMode == 3) { obj_rec_check(f, nf, se_rec++); continue; }
++#endif
++        obj_take(f, nf);
+     }
+ 
+     /* THE DESYNC ALARM'S INPUT: the same dump this loop just read, hashed, once per engine
 diff --git a/opencnc3d/game/gmwipe_mod.h b/opencnc3d/game/gmwipe_mod.h
 index 858a52a..b1b6334 100644
 --- a/opencnc3d/game/gmwipe_mod.h

@@ -47,5 +47,14 @@ void* dlsym(void* handle, const char* name) {
     snprintf(error, sizeof error, "%s is not in the brain linked in", name);
     return 0;
 }
+// The 1995 view (DLLExportClass::Legacy_Render_Enabled, brain_shaderemu.cpp): CNC_Advance_Instance drew the DOS game's
+// view into its hidden page at every tick, 3.69 million instructions of a 3.77 million tick in play, and OpenCNC3D's eyes
+// never read that page. Off, as in opencnc3d-brain, unless OPENCNC3D_RENDER=1; the game's sums are the same either way
+// (docs/games/opencnc3d.md, "The 1995 view").
+void ShaderEmu_Set_Legacy_Render(int on);
+__attribute__((constructor)) static void brain_link_render(void) {
+    const char* render = getenv("OPENCNC3D_RENDER");
+    ShaderEmu_Set_Legacy_Render(render && atoi(render));
+}
 int dlclose(void* handle) { (void)handle; return 0; }
 char* dlerror(void) { return error[0] ? error : 0; }

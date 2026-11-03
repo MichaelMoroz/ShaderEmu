@@ -376,6 +376,52 @@ private image made so (`build/images/ocnc3`), its desktop started by `nx` and `o
 captured under `rvc_harness --cpu --warp`: OpenCNC3D's DOS menu in an 806 x 574 window, the crystals in its caption and
 on the bar's button. The Start menu itself was not opened in that capture.
 
+## Speed, first round (3 November 2026; stopped by the owner, unfinished)
+
+The aim was 15 frames a second in play. Measured calibrated (`rvc_cpu --pass-model` with `tools/card_model.json`,
+`RVC_WCACHE=1 RVC_ADFAULT=1`), GDI mission 1 under `opencnc3d --classic --flowtest 3000` with `OPENCNC3D_FRAMEPROF=1`
+(milliseconds of the guest's clock a frame, one frame a FRAMEPROF line at this speed), and with `tools/prof.py` on
+the ELF in the private home. Not measured on the card.
+
+**Where a frame went** (`prof.py`, two frames in play, 156.2 million instructions of core 0): the game ticks at its
+own clock (15 to 18 a second) and runs up to 5 ticks a frame to catch up, so at 14 s a frame every frame ran 5.
+A tick was 3.77 million in `CNC_Advance_Instance`, of which **3.69 million the 1995 view** (`GScreenClass::Render`:
+the game program never turned it off, only `opencnc3d-brain` did), and 5.38 million in `perf_trace_refresh_objects`:
+the brain printing the object dump through musl's `printf` into a scratch file (30 thousand instructions an
+object), and the renderer reading it back and parsing it. The drawing was 9.5 million a frame; the sea's 5.8 of it
+were `sinf`/`cosf` of arguments up to 32,768 radians, which musl reduces in software doubles (5,255 instructions a
+call, 2,018 calls a frame).
+
+What was changed, each a switch back to the old way:
+
+| Step | Where | Frame (calibrated) |
+|---|---|---:|
+| before (`build/images/ocnc3` of 2 November) | | 13.3 to 14.8 s (events + tick + refresh 10.3 s) |
+| the 1995 view off in the game program too (`brain_link.c`, a constructor; `OPENCNC3D_RENDER=1` draws it) | | 8.9 to 10.5 s (6.0 s) |
+| the dump's printer (`ShaderEmu_Dump_Printf`, `brain_shaderemu.cpp`: `%d` and `%s` straight into memory, any other conversion `vsnprintf`'s) and the capture read from memory by `fmemopen` (`capture_brain_call`, `OPENCNC3D_DUMP=file` the scratch file); the renderer's `sinf`, `cosf`, `sincosf` in floats (`fastmath.c`, renamed in its objects by `game.sh`; within 3.4e-7 of the true values, simulated in float32 over 40,000 arguments) | water 1,073 to 105 ms | 6.6 to 9.3 s (4.5 to 7.1 s) |
+| an object's OBJ\| line as a record of its numbers (`se_dump.h`; the brain fills it in `OpenCNC3D_Print_One`, the renderer reads it through the same keys: the OBJ\| parse is `obj_take`, a template over the line's fields or the record; `OPENCNC3D_DUMP=text` the lines), and the dump's five walks over the 16,384 cells of the MEGAMAPS grid made one over the legacy map's 64 x 64 (`ShaderEmu_Dump_Cells`) | | 3.9 to 6.6 s (1.9 to 4.8 s) |
+
+So about 0.07 frames a second before and 0.19 after (calibrated, a frame of 3.9 to 6.6 s): far from 15, which is
+about 366 thousand instructions of core 0 a frame.
+
+**Checks.** `OPENCNC3D_DUMP=check` formats every dump line by the printer and by `vsnprintf` and compares
+(`DUMPCHECK|`), compares every record with its line field by field (`DUMPRECS|`), and counts cells outside the
+64 x 64 with an overlay or a smudge (`DUMPCELLS|`): 0 lines differ, 0 records differ over the frames run (about
+25 dumps; the counts at exit were not reached, as the runs were stopped). The game's own `STATICCELLS|verdict=AGREE`.
+The brain's sums: only the dump's printing and the cell walk changed in the brain (nothing the game's state reads),
+and `host_sum.sh` on the build computer after the change gives the 11 sums of both missions in the table above (SCG01EA ends `7ed86914` at tick 3000, SCB01EA `1a15acc0`), 60 of 60 and 73 of 73 objects. Not done: the
+sums on `rvc_cpu`, a picture compared before and after (the drawing is the same code but for the sines), the card.
+A changed net hash: in a network game the desync alarm hashes the dump's text, which no longer has the OBJ| lines.
+
+**What was next**, by the last profile: what is left of a tick's refresh (the remaining text lines' `sscanf`s and
+`strpbrk`s, per-tick grid copies in `refresh_objects`), then the frame's catch-up (a frame of 5 ticks while it is
+slow); the drawing, now about 2 to 3 s a frame: the sidebar redrawn and uploaded whole every frame (`sb_draw_panel`
+1.74 million, `db_surface_to_rgba`, `glTexSubImage2D` 0.7), the terrain (1.78) and shroud (1.70) sent vertex by
+vertex through the shim every frame (kept in GPU memory as Half-Life's `gl_kept.c` does), soft doubles in the
+renderer (`__muldf3` and friends, about 1 million a frame); then the brain on a worker and the drawing a frame
+behind. Even with all of that done the frame was estimated at several hundred thousand to a few million
+instructions, so 15 frames a second needs the drawing moved off core 0 as well.
+
 ## Licences
 
 OpenCNC3D is GPL-3.0 and its brain carries EA's GPL with the Section 7 terms of `brain/vanilla/License.txt`; its code
