@@ -18,6 +18,7 @@
 #include "ui.h"
 #include "ui_icons.h"
 #include "ui_menu.h"
+#include "ui_pad.h"
 #include "ui_files.h"
 #include "ui_ask.h"
 #include "shaderemu_sound.h"
@@ -31,7 +32,8 @@
 #define TILE 16
 #define RING 64			/* cells of the map layer each way: 1,024 pixels, which wraps */
 #define ONE 65536
-#define EVENTS (GR_EVENT_MASK_EXPOSURE | GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_BUTTON_DOWN | GR_EVENT_MASK_BUTTON_UP | \
+#define MAP_MOST 960		/* the map area at most, each way: the ring (RING tiles, 1,024 pixels) wraps beyond */
+#define EVENTS (GR_EVENT_MASK_UPDATE | GR_EVENT_MASK_EXPOSURE | GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_BUTTON_DOWN | GR_EVENT_MASK_BUTTON_UP | \
 		GR_EVENT_MASK_MOUSE_MOTION | GR_EVENT_MASK_CLOSE_REQ | GR_EVENT_MASK_UPDATE)
 
 static const char *const tool_names[MP_TOOLS] = {
@@ -45,6 +47,7 @@ static const char *const scenario_names[8] = {"Dullsville, 1900", "San Francisco
 
 static GR_WINDOW_ID window, view;
 static int screen_w, screen_h, wide, high, view_w, view_h, map_w, map_h;
+static struct ui_pad pad;
 static int scroll_x, scroll_y;		/* the map's pixel at the map area's top left */
 static int tool = MP_ROAD;
 static int hover_x = -1, hover_y = -1;	/* the tile under the pointer, or -1 */
@@ -261,6 +264,18 @@ clamp_scroll(void)
 	scroll_y = scroll_y > most_y ? most_y : scroll_y;
 	scroll_x = scroll_x < 0 ? 0 : scroll_x;
 	scroll_y = scroll_y < 0 ? 0 : scroll_y;
+}
+
+/* The window's parts for its size (docs/games/micropolis.md, "The windows"): the map area grows with the window up to
+ * MAP_MOST each way, the menus above it and the two lines under it as wide as the window. */
+static void
+lay_out(int w, int h)
+{
+	wide = w < 400 ? 400 : w, high = h < 300 ? 300 : h;
+	view_w = wide, view_h = high - BAR - STATUS;
+	view_w = view_w > PANEL + MAP_MOST ? PANEL + MAP_MOST : view_w;
+	view_h = view_h > MAP_MOST ? MAP_MOST : view_h;
+	map_w = view_w - PANEL, map_h = view_h;
 }
 
 /* The ring's cells under the view, from the engine's map; with `animate`, a step of its
@@ -1177,6 +1192,26 @@ events(int wait_ms)
 				draw_bar(), draw_status();
 			dirty = 1;
 			break;
+		case GR_EVENT_TYPE_UPDATE:
+			/* a new size: the map area as large as the window gives, the same city's place in its middle */
+			if (e.update.wid == window && e.update.utype == GR_UPDATE_SIZE && (e.update.width != wide || e.update.height != high)) {
+				int mx = scroll_x + map_w / 2, my = scroll_y + map_h / 2;
+
+				seglSettle();
+				lay_out(e.update.width, e.update.height);
+				GrResizeWindow(view, view_w, view_h);
+				seglWindowChanged();
+				scroll_x = mx - map_w / 2, scroll_y = my - map_h / 2;
+				clamp_scroll();
+				fill_ring(0);
+				draw_bar(), draw_status();
+				dirty = 1;
+				if (report) {
+					printf("nxmicropolis: the window is %dx%d, the map %dx%d at %d,%d\n", wide, high, map_w, map_h, scroll_x, scroll_y);
+					fflush(stdout);
+				}
+			}
+			break;
 		case GR_EVENT_TYPE_BUTTON_DOWN:
 			if (e.button.wid != window)
 				break;
@@ -1186,7 +1221,16 @@ events(int wait_ms)
 					if (e.button.x >= bar_menus[i].x && e.button.x < bar_menus[i].x + bar_menus[i].w)
 						open_menu(i);
 			} else if (e.button.y < BAR + view_h) {
-				if (ui_wheel(&e))
+				int k = ui_pad_arrow(&e);
+
+				if (k) {	/* (a notch of the left hand's stick: the map a step that way) */
+					scroll_by(k == MWKEY_LEFT ? -64 : k == MWKEY_RIGHT ? 64 : 0, k == MWKEY_UP ? -64 : k == MWKEY_DOWN ? 64 : 0);
+					if (report) {
+						printf("nxmicropolis: pad scrolls the map to %d,%d\n", scroll_x, scroll_y);
+						fflush(stdout);
+					}
+				}
+				else if (ui_wheel(&e))
 					scroll_by(0, ui_wheel(&e) > 0 ? 64 : -64);
 				else
 					press(e.button.x, e.button.y - BAR, e.button.changebuttons);
@@ -1238,10 +1282,11 @@ main(int argc, char **argv)
 	screen_w = info.cols, screen_h = info.rows;
 	wide = info.cols - 20 < 880 ? info.cols - 20 : 880;
 	high = info.rows - 70 < 640 ? info.rows - 70 : 640;
-	view_w = wide, view_h = high - BAR - STATUS;
-	map_w = view_w - PANEL, map_h = view_h;
+	lay_out(wide, high);
 	ui_init();
-	window = GrNewWindowEx(UI_FIXED, "Micropolis", GR_ROOT_WINDOW_ID, -1, -1, wide, high, UI_FACE);
+	/* (resizable: a larger window shows more of the map, lay_out) */
+	window = GrNewWindowEx(GR_WM_PROPS_APPWINDOW, "Micropolis", GR_ROOT_WINDOW_ID, -1, -1, wide, high, UI_FACE);
+	ui_pad_ask(window);
 	view = GrNewWindow(window, 0, BAR, view_w, view_h, 0, BLACK, BLACK);
 	GrMapWindow(view);
 	GrMapWindow(window);
@@ -1311,6 +1356,15 @@ main(int argc, char **argv)
 			}
 			hear();
 			status_now();
+			/* a controller's buttons (docs/machine/input.md, "Game controls"): A pauses and goes on */
+			ui_pad_poll(&pad);
+			if (pad.down & INPUT_JUMP) {
+				act(A_PAUSE);
+				if (report) {
+					printf("nxmicropolis: pad %s\n", shown.paused ? "pauses" : "goes on");
+					fflush(stdout);
+				}
+			}
 			/* the other windows once a second, the map's every other */
 			if (++refresh % 10 == 0) {
 				if (refresh % 20 == 0)

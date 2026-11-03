@@ -255,6 +255,12 @@ CASES = [
     case('micropolis', 'games', 'MICROPOLIS_SUM=/usr/share/micropolis/cities/haight.cty,1000 nxmicropolis; '
          'MICROPOLIS_SUM=1,500 nxmicropolis; MICROPOLIS_SUM=8,1500 nxmicropolis',
          sums=[(r'micropolis: .* ticks: .* sum ([0-9a-f]+)', ['909517ac', 'e14d1a50', '75e86f73'])]),
+    # its window made larger shows more of the map ("The window"), and a controller: the left stick's notches pan the map, A pauses
+    case('micropolis-window', 'games micropolis desktop', 'nx; sleep 3; MICROPOLIS_REPORT=1 nxmicropolis & sleep 50; nxkey ctrl+alt+up; sleep 40; killall nxmicropolis',
+         True, wall=400, more=['--pointer-sweep', '0', '--pointer-circle', '400,300,0', '--scroll', '60,lx,1', '--scroll', '62,ly,-1',
+                               '--pointer-button', '0x10080,64,64.5'],
+         has=[r'nxmicropolis: the window is \d+x\d+, the map (7[0-9][0-9]|8[0-9][0-9]|9[0-6]\d)x\d+', r'nxmicropolis: pad scrolls the map to',
+              r'nxmicropolis: pad pauses']),
     # OpenTTD (docs/games/openttd.md): two new games of test.cfg without a window, the sums of the native build's run
     case('openttd', 'games', 'cp /usr/share/openttd/test.cfg /tmp/t.cfg; OPENTTD_SUM=1 openttd.bin -v null:ticks=500 -s null -m null -g -G 1 -c /tmp/t.cfg; '
          'OPENTTD_SUM=1 openttd.bin -v null:ticks=2000 -s null -m null -g -G 2 -c /tmp/t.cfg',

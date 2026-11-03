@@ -78,7 +78,14 @@ and UBSan, Haight-Ashbury for 3,000 ticks and every scenario for 1,500 ran clean
   and the demand for zones on the left, the map, and two status lines (the city, the date,
   the funds, the population, the speed and the tool; the last message). The left button uses
   the tool (roads, rails and wires along a drag), the right button drags the map, and the
-  wheel and the arrows scroll it. Space pauses.
+  wheel and the arrows scroll it. Space pauses. A controller's left stick pans the map a notch
+  at a time and A pauses (`docs/machine/input.md`, "Game controls").
+- **The window**: it can be made larger or maximised, and the map area grows with it, up to
+  960 pixels each way (`lay_out`; beyond that the ring of 64 x 64 tiles the GPU draws from
+  would show a tile twice); the same place of the city stays in the middle. On the default
+  800 x 600 screen it starts 780 x 530 (a map of 700 x 468) and maximised is 794 x 545 (714 x
+  483); `MICROPOLIS_REPORT=1` prints each new size. `test_all.py micropolis-window` maximises
+  it, pans by the stick and pauses by A.
 - **Map**: the whole city at two pixels a tile, with the view's rectangle. Its layers are the
   original's: zones of each kind, transport, power (powered, unpowered, conductors),
   population, growth, traffic, pollution, crime, land value and the fire and police cover. A
