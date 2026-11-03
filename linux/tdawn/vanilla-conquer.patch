@@ -2141,10 +2141,10 @@ index 44e1c18..e1ad2c7 100644
      enum
      {
 diff --git a/tiberiandawn/conquer.cpp b/tiberiandawn/conquer.cpp
-index a8aebd8..70ed241 100644
+index a8aebd8..f437c55 100644
 --- a/tiberiandawn/conquer.cpp
 +++ b/tiberiandawn/conquer.cpp
-@@ -98,6 +98,663 @@ extern void Send_Statistics_Packet(void);
+@@ -98,6 +98,672 @@ extern void Send_Statistics_Packet(void);
  extern char* __nheapbeg;
  bool InMainLoop = false;
  
@@ -2362,6 +2362,15 @@ index a8aebd8..70ed241 100644
 +        build = text ? atoi(text) : 0;
 +        text = getenv("TDAWN_SELECT");
 +        select = text ? atoi(text) : 0;
++    }
++    // (TDAWN_INPUT_LOG: how many of the player's things are selected, when that changes: a click on the map seen)
++    static int selected = -1, said = -1;
++    if (said < 0) {
++        said = getenv("TDAWN_INPUT_LOG") != NULL;
++    }
++    if (said && CurrentObject.Count() != selected) {
++        selected = CurrentObject.Count();
++        fprintf(stderr, "tdawn: %d selected at frame %d\n", selected, (int)Frame);
 +    }
 +    if (Frame >= 20 && Frame < 20 + scroll) {
 +        static const DirType way[8] = {DIR_E, DIR_S, DIR_W, DIR_N, DIR_SE, DIR_NE, DIR_NW, DIR_SW};
@@ -2808,7 +2817,7 @@ index a8aebd8..70ed241 100644
  #ifndef ARRAY_SIZE
  #define ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
  #endif
-@@ -842,7 +1499,7 @@ static void Message_Input(KeyNumType& input)
+@@ -842,7 +1508,7 @@ static void Message_Input(KeyNumType& input)
      unsigned short magic_number;
      unsigned short crc;
  #endif
@@ -2817,7 +2826,7 @@ index a8aebd8..70ed241 100644
  
      /*
      **	Check keyboard input for a request to send a message.
-@@ -1126,12 +1783,31 @@ bool Color_Cycle(void)
+@@ -1126,12 +1792,31 @@ bool Color_Cycle(void)
      static CountDownTimerClass _ftimer(BT_SYSTEM, 0);
      static bool _up = false;
      bool changed = false;
@@ -2850,7 +2859,7 @@ index a8aebd8..70ed241 100644
          _ftimer.Set(TIMER_SECOND / 8);
  
  /*
-@@ -1165,7 +1841,7 @@ bool Color_Cycle(void)
+@@ -1165,7 +1850,7 @@ bool Color_Cycle(void)
      /*
      **	Process the color cycling effects -- water.
      */
@@ -2859,7 +2868,7 @@ index a8aebd8..70ed241 100644
          unsigned char colors[3];
  
          _timer.Set(TIMER_SECOND / 4);
-@@ -1184,6 +1860,12 @@ bool Color_Cycle(void)
+@@ -1184,6 +1869,12 @@ bool Color_Cycle(void)
      */
      if (changed) {
          Wait_Vert_Blank();
@@ -2872,7 +2881,7 @@ index a8aebd8..70ed241 100644
          Set_Palette(GamePalette);
          return (true);
      }
-@@ -1222,6 +1904,20 @@ void Call_Back(void)
+@@ -1222,6 +1913,20 @@ void Call_Back(void)
      if (SampleType) {
          Theme.AI();
          Speak_AI();
@@ -2893,7 +2902,7 @@ index a8aebd8..70ed241 100644
      }
  
  #ifdef NETWORKING
-@@ -1516,7 +2212,7 @@ static void Sync_Delay(void)
+@@ -1516,7 +2221,7 @@ static void Sync_Delay(void)
              if (input) {
                  Keyboard_Process(input);
              }
@@ -2902,7 +2911,64 @@ index a8aebd8..70ed241 100644
          }
  
          Frame_Limiter(FL_NONE);
-@@ -1611,20 +2307,47 @@ bool Main_Loop()
+@@ -1542,6 +2247,42 @@ static void Sync_Delay(void)
+ extern void Check_For_Focus_Loss(void);
+ void Reallocate_Big_Shape_Buffer(void);
+ 
++/*
++** ShaderEmu: the screen laid out again at the window's size (docs/games/tdawn.md, "The window's size"): between two of the
++** main loop's turns, the pages made again at the size the window asks for (the 320 art kept, ShaderEmu_Low_Res), the
++** radar, power bar and sidebar at the new right edge, the view as large as is left, the buttons where those say and
++** everything drawn again. The game's state is not touched but for the view's place, which stays inside the map.
++*/
++extern bool ShaderEmu_Pages(int w, int h);
++extern "C" int host_relayout_wanted(int* width, int* height);
++static void ShaderEmu_Relayout(int w, int h)
++{
++    int old_w = SeenBuff.Get_Width(), old_h = SeenBuff.Get_Height();
++
++    Hide_Mouse();
++    VisiblePage.Un_Init();
++    HiddenPage.Un_Init();
++    if (!ShaderEmu_Pages(w, h)) {
++        fprintf(stderr, "tdawn: the screen stays %dx%d (no GPU memory for %dx%d)\n", old_w, old_h, w, h);
++        w = old_w, h = old_h;
++    }
++    VisiblePage.Init(w, h, NULL, 0, (GBC_Enum)(GBC_VISIBLE | GBC_VIDEOMEM));
++    HiddenPage.Init(w, h, NULL, 0, (GBC_Enum)GBC_VIDEOMEM);
++    VisiblePage.Attach_DD_Surface(&HiddenPage);
++    SeenBuff.Attach(&VisiblePage, 0, 0, GBUFF_INIT_WIDTH, GBUFF_INIT_HEIGHT);
++    HidPage.Attach(&HiddenPage, 0, 0, GBUFF_INIT_WIDTH, GBUFF_INIT_HEIGHT);
++    ScreenWidth = w;
++    ScreenHeight = h;
++    WindowList[0][WINDOWWIDTH] = SeenBuff.Get_Width();
++    WindowList[0][WINDOWHEIGHT] = SeenBuff.Get_Height();
++    Map.ShaderEmu_Layout();
++    Map.Init_IO();
++    Map.Flag_To_Redraw(true);
++    Show_Mouse();
++    fprintf(stderr, "tdawn: the screen laid out at %dx%d (the view %dx%d)\n", w, h, WindowList[WINDOW_TACTICAL][WINDOWWIDTH],
++            WindowList[WINDOW_TACTICAL][WINDOWHEIGHT]);
++}
++
+ bool Main_Loop()
+ {
+     KeyNumType input; // Player input.
+@@ -1549,6 +2290,13 @@ bool Main_Loop()
+     int y;
+     int framedelay;
+ 
++    {
++        int w, h;
++        if (host_relayout_wanted(&w, &h)) {
++            ShaderEmu_Relayout(w, h);
++        }
++    }
++
+     //	InMainLoop = true;
+ 
+     /*
+@@ -1611,20 +2359,47 @@ bool Main_Loop()
      } else {
          FrameTimer.Set(Options.GameSpeed);
      }
@@ -2951,7 +3017,7 @@ index a8aebd8..70ed241 100644
              //			HidPage.Unlock();
          }
      }
-@@ -1650,7 +2373,17 @@ bool Main_Loop()
+@@ -1650,7 +2425,17 @@ bool Main_Loop()
      /*
      **	AI logic operations are performed here.
      */
@@ -2970,7 +3036,7 @@ index a8aebd8..70ed241 100644
  
      //	Heap_Dump_Check( "After Logic.AI" );
  
-@@ -1659,8 +2392,24 @@ bool Main_Loop()
+@@ -1659,8 +2444,24 @@ bool Main_Loop()
      **	a message has expired & been removed, and the entire map must be updated.
      */
      if (Messages.Manage()) {
@@ -2997,7 +3063,7 @@ index a8aebd8..70ed241 100644
      }
  
      //
-@@ -1710,6 +2459,9 @@ bool Main_Loop()
+@@ -1710,6 +2511,9 @@ bool Main_Loop()
          PlayerRestarts = false;
          Map.Help_Text(TXT_NONE);
          Set_Video_Cursor_Clip(false);
@@ -3007,7 +3073,7 @@ index a8aebd8..70ed241 100644
          Do_Win();
          Set_Video_Cursor_Clip(true);
      }
-@@ -1726,6 +2478,9 @@ bool Main_Loop()
+@@ -1726,6 +2530,9 @@ bool Main_Loop()
          PlayerRestarts = false;
          Map.Help_Text(TXT_NONE);
          Set_Video_Cursor_Clip(false);
@@ -3017,7 +3083,7 @@ index a8aebd8..70ed241 100644
          Do_Lose();
          Set_Video_Cursor_Clip(true);
      }
-@@ -1736,6 +2491,9 @@ bool Main_Loop()
+@@ -1736,6 +2543,9 @@ bool Main_Loop()
          PlayerRestarts = false;
          Map.Help_Text(TXT_NONE);
          Set_Video_Cursor_Clip(false);
@@ -3027,7 +3093,7 @@ index a8aebd8..70ed241 100644
          Do_Restart();
          Set_Video_Cursor_Clip(true);
      }
-@@ -2242,6 +3000,10 @@ void Play_Movie(char const* name, ThemeType theme, bool clrscrn)
+@@ -2242,6 +3052,10 @@ void Play_Movie(char const* name, ThemeType theme, bool clrscrn)
                  InMovie = true;
                  VQA_Play(vqa, VQAMODE_RUN);
                  VQA_Close(vqa);
@@ -3038,7 +3104,7 @@ index a8aebd8..70ed241 100644
                  // Resume_Audio_Thread();
                  InMovie = false;
                  Free_Interpolated_Palettes();
-@@ -2642,6 +3404,70 @@ void CC_Draw_Line(int x, int y, int x1, int y1, unsigned char color, int frame,
+@@ -2642,6 +3456,70 @@ void CC_Draw_Line(int x, int y, int x1, int y1, unsigned char color, int frame,
   *   02/21/1995 JLB : Created.                                                                 *
   *=============================================================================================*/
  //#pragma off(unreferenced)
@@ -3109,7 +3175,7 @@ index a8aebd8..70ed241 100644
  void CC_Draw_Shape(void const* shapefile,
                     int shapenum,
                     int x,
-@@ -2656,6 +3482,19 @@ void CC_Draw_Shape(void const* shapefile,
+@@ -2656,6 +3534,19 @@ void CC_Draw_Shape(void const* shapefile,
      char* shape_pointer;
      uintptr_t shape_size;
  
@@ -3129,7 +3195,7 @@ index a8aebd8..70ed241 100644
      if (shapefile && shapenum != -1) {
  
          /*
-@@ -3919,7 +4758,7 @@ void const* Hires_Retrieve(const char* name)
+@@ -3919,7 +4810,7 @@ void const* Hires_Retrieve(const char* name)
  {
      char filename[30];
  
@@ -3138,7 +3204,7 @@ index a8aebd8..70ed241 100644
          sprintf(filename, "H%s", name);
      } else {
          strcpy(filename, name);
-@@ -3928,7 +4767,7 @@ void const* Hires_Retrieve(const char* name)
+@@ -3928,7 +4819,7 @@ void const* Hires_Retrieve(const char* name)
  }
  int Get_Resolution_Factor(void)
  {
@@ -3147,7 +3213,7 @@ index a8aebd8..70ed241 100644
  }
  
  /**************************************************************************************************
-@@ -3976,6 +4815,21 @@ void Shake_The_Screen(int shakes, HousesType house)
+@@ -3976,6 +4867,21 @@ void Shake_The_Screen(int shakes, HousesType house)
      }
  #else
      shakes += shakes;
@@ -5748,10 +5814,36 @@ index 596a8f7..cb485b6 100644
  
              /*
 diff --git a/tiberiandawn/sidebar.cpp b/tiberiandawn/sidebar.cpp
-index f76e29c..1e6c92b 100644
+index f76e29c..9506514 100644
 --- a/tiberiandawn/sidebar.cpp
 +++ b/tiberiandawn/sidebar.cpp
-@@ -176,7 +176,7 @@ void SidebarClass::One_Time(void)
+@@ -171,12 +171,33 @@ SidebarClass::SidebarClass(void)
+ void SidebarClass::One_Time(void)
+ {
+     PowerClass::One_Time();
++    ShaderEmu_Places();
++    Column[0].One_Time(0);
++    Column[1].One_Time(1);
++
++    /*
++    **	Load the sidebar shape in at this time. (Hi-Res sidebar is theater dependant)
++    */
++    if (SidebarShape1 == NULL) {
++        SidebarShape1 = Hires_Retrieve("SIDE1.SHP");
++    }
++    if (SidebarShape2 == NULL) {
++        SidebarShape2 = Hires_Retrieve("SIDE2.SHP");
++    }
++}
++
++/*
++** ShaderEmu: the sidebar's places for the screen's size, from One_Time and when the screen is laid out again at the
++** window's size (ShaderEmu_Layout; docs/games/tdawn.md, "The window's size").
++*/
++void SidebarClass::ShaderEmu_Places(void)
++{
+     /*
+     ** Set up the pixel offsets and widths and heights used to render the
      ** sidebar.  They are now variables because we need to change them for
      ** variable resolutions.
      */
@@ -5760,6 +5852,96 @@ index f76e29c..1e6c92b 100644
      SideBarWidth = SIDEBARWIDTH * factor;
      SideX = SeenBuff.Get_Width() - SideBarWidth;
      SideY = Map.RadY + Map.RadHeight + 1;
+@@ -216,17 +237,26 @@ void SidebarClass::One_Time(void)
+     Column[1].X = Column[0].X + (StripClass::STRIP_WIDTH * factor) + spacing - 1;
+     Column[1].Y = SideY + TopHeight + 1;
+ 
+-    Column[0].One_Time(0);
+-    Column[1].One_Time(1);
++}
+ 
+-    /*
+-    **	Load the sidebar shape in at this time. (Hi-Res sidebar is theater dependant)
+-    */
+-    if (SidebarShape1 == NULL) {
+-        SidebarShape1 = Hires_Retrieve("SIDE1.SHP");
+-    }
+-    if (SidebarShape2 == NULL) {
+-        SidebarShape2 = Hires_Retrieve("SIDE2.SHP");
++/*
++** ShaderEmu: the screen laid out again at another size (conquer.cpp's ShaderEmu_Relayout): the radar's, the power bar's
++** and the sidebar's places from the screen's right edge, as One_Time made them, and the view as large as is left. The
++** buttons go where these say at the next Init_IO.
++*/
++void SidebarClass::ShaderEmu_Layout(void)
++{
++    RadX = SeenBuff.Get_Width() - RadWidth;
++    RadarButton.X = RadX + RadOffX;
++    PowX = SeenBuff.Get_Width() - RadWidth;
++    PowHeight = SeenBuff.Get_Height() - PowY;
++    PowerButton.X = PowX;
++    PowerButton.Height = PowHeight;
++    ShaderEmu_Places();
++    if (IsSidebarActive) {
++        Set_View_Dimensions(0, Map.Get_Tab_Height(), SeenBuff.Get_Width() - SideBarWidth);
++    } else {
++        Set_View_Dimensions(0, Map.Get_Tab_Height());
+     }
+ }
+ 
+@@ -341,17 +371,17 @@ void SidebarClass::Init_IO(void)
+             ShapeButtonClass* SBCUpgrade = (ShapeButtonClass*)Upgrade;
+             ShapeButtonClass* SBCZoom = (ShapeButtonClass*)Zoom;
+ 
+-            Repair->X = 484;
++            Repair->X = SideX + 4;
+             Repair->Y = 160;
+             SBCRepair->ReflectButtonState = true;
+             SBCRepair->Set_Shape(Hires_Retrieve(repair_shp));
+ 
+-            Upgrade->X = 480 + 57;
++            Upgrade->X = SideX + 57;
+             Upgrade->Y = 160;
+             SBCUpgrade->ReflectButtonState = true;
+             SBCUpgrade->Set_Shape(Hires_Retrieve(sell_shp));
+ 
+-            Zoom->X = 480 + 110;
++            Zoom->X = SideX + 110;
+             Zoom->Y = 160;
+             SBCZoom->Set_Shape(Hires_Retrieve(map_shp));
+         } else {
+@@ -368,7 +398,7 @@ void SidebarClass::Init_IO(void)
+             TBCZoom->Set_Text("Map");
+             TBCZoom->Set_Style(TPF_6POINT | TPF_NOSHADOW | TPF_CENTER);
+ 
+-            Repair->X = 242;
++            Repair->X = SideX + 2;
+             Repair->Y = 80;
+             Repair->Width = 32;
+             Repair->Height = 9;
+@@ -888,6 +918,9 @@ void SidebarClass::AI(KeyNumType& input, int x, int y)
+         }
+ 
+         if (input == (BUTTON_REPAIR | KN_BUTTON)) {
++            if (getenv("TDAWN_INPUT_LOG")) { // (ShaderEmu: a click on the sidebar's button seen)
++                fprintf(stderr, "tdawn: the sidebar's repair button pressed\n");
++            }
+             Repair_Mode_Control(-1);
+         }
+ 
+diff --git a/tiberiandawn/sidebar.h b/tiberiandawn/sidebar.h
+index b633a44..928db0f 100644
+--- a/tiberiandawn/sidebar.h
++++ b/tiberiandawn/sidebar.h
+@@ -50,6 +50,8 @@ public:
+     **	These constants are used to control the sidebar rendering. They are instantiated
+     **	as enumerations since C++ cannot use "const" in this context.
+     */
++    void ShaderEmu_Places(void); // (the screen laid out at the window's size: sidebar.cpp)
++    void ShaderEmu_Layout(void);
+     int SideX;            // x position for side bar
+     int SideY;            // y position for side bar
+     int SideBarWidth;     // width of the sidebar
 diff --git a/tiberiandawn/sounddlg.cpp b/tiberiandawn/sounddlg.cpp
 index 65c12fd..d8b8087 100644
 --- a/tiberiandawn/sounddlg.cpp

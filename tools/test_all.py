@@ -188,6 +188,16 @@ CASES = [
     case('tdawn-move', 'games tdawn long', X + TD + 'TDAWN_SCEN=3 TDAWN_MOVE=100,8,0 TDAWN_SUMS=1 TDAWN_FRAMES=600 tdawn FROMINSTALL', True, count=[(r'^tdsum: ', 600)]),
     case('tdawn-move-refresh', 'games tdawn long', X + TD + 'TDAWN_SCEN=3 TDAWN_MOVE=100,8,0 TDAWN_SUMS=1 TDAWN_REFRESH=1 TDAWN_FRAMES=600 tdawn FROMINSTALL', True,
          same=[(r'^(tdsum: .*)', 'tdawn-move')]),
+    # docs/games/tdawn.md, "The window's size": the sidebar opened (Tab), the window maximised: the screen laid out at 392 x 272 with the
+    # sidebar at its right edge, a click on a unit of the map selects it and one on the sidebar's Repair (where it is now) presses it;
+    # put back, 320 x 200 again and Repair where it always was
+    case('tdawn-window', 'games tdawn desktop', 'nx; sleep 3; (' + TD + 'TDAWN_SCEN=10 TDAWN_INPUT_LOG=1 tdawn FROMINSTALL 2>&1 | grep -v tdstat &); '
+         'sleep 60; nxkey tab; sleep 3; nxkey ctrl+f10; sleep 20; set -- $(nxwintest list | grep Tiberian); P=${5%,*}; Q=${5#*,}; S=$6; W=${S%x*}; '
+         'H=${S#*x}; nxkey $((P+3+82*(W-6)/392)),$((Q+26+89*(H-29)/272)); sleep 5; nxkey $((P+3+330*(W-6)/392)),$((Q+26+84*(H-29)/272)); sleep 5; '
+         'nxkey ctrl+f10; sleep 20; set -- $(nxwintest list | grep Tiberian); P=${5%,*}; Q=${5#*,}; nxkey $((P+3+258*2)),$((Q+26+84*2)); sleep 5; '
+         'killall game', True, wall=600,
+         has=[r'tdawn: the screen laid out at 392x272 \(the view 312x264\)', r'tdawn: 1 selected', r'tdawn: the screen laid out at 320x200 \(the view 240x192\)'],
+         count=[(r'tdawn: the sidebar.s repair button pressed', 2)]),
     # docs/games/tdawn.md, "A mission won": the demo's first mission won, its score screen, the next mission played
     case('tdawn-won', 'games tdawn', X + TD + 'TDAWN_SCEN=1 TDAWN_WIN=100 TDAWN_FRAMES=300 tdawn FROMINSTALL', True, wall=400,
          has=[r'^tdawn: score: ends', r'done at frame 300: SCG10EA, .* state 325b1830'], never=[r'Segmentation fault', r'out of memory']),

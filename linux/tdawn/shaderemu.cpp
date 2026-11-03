@@ -334,6 +334,19 @@ VideoSurfaceShaderEmu* VideoSurfaceShaderEmu::Visible;
 VideoSurfaceShaderEmu* VideoSurfaceShaderEmu::Hidden;
 bool VideoSurfaceShaderEmu::Stale;
 
+// The pages at another size (the game's ShaderEmu_Relayout, docs/games/tdawn.md, "The window's size"): called with the two
+// pages' surfaces gone (Un_Init), so that the next two of that size are the GPU's pages again. False with no GPU memory.
+bool ShaderEmu_Pages(int w, int h)
+{
+    if (VideoSurfaceShaderEmu::Visible || VideoSurfaceShaderEmu::Hidden || host_relayout(w, h) < 0) {
+        return false;
+    }
+    game_w = w;
+    game_h = h;
+    VideoSurfaceShaderEmu::Stale = false;
+    return true;
+}
+
 // what a frame's showing cost, for the figures conquer.cpp prints (TDAWN_STATS)
 unsigned ShaderEmu_Show_Cycles;
 unsigned ShaderEmu_Shows;
