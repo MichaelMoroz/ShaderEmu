@@ -80,6 +80,10 @@ static int _paints;                ///< pictures painted, for the play lines
 static bool _drawn;                ///< a list is with the GPU: settle before writing the picture
 static int _pointer_x, _pointer_y; ///< where the pointer was last, for moves while OpenTTD holds it
 static unsigned _keys_down;        ///< bit 0-3 the arrows (as _dirkeys), 4 Tab
+/* A controller (docs/machine/input.md, "Game controls"): a notch of the left hand's stick (the second wheel) holds
+ * its arrow for PAD_HOLD_MS, so the main view scrolls the way the stick is pushed; the right stick is the wheel (zoom). */
+static std::chrono::steady_clock::time_point _pad_until[4];  ///< left, up, right, down: held until then
+static constexpr int PAD_HOLD_MS = 120;
 static GR_KEYMOD _modifiers;
 
 #define EVENTS (GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_KEY_UP | GR_EVENT_MASK_BUTTON_DOWN | GR_EVENT_MASK_BUTTON_UP | \
@@ -107,6 +111,11 @@ std::optional<std::string_view> VideoDriver_ShaderEmu::Start(const StringList &)
 	_window = GrNewWindowEx(GR_WM_PROPS_APPWINDOW, "OpenTTD", GR_ROOT_WINDOW_ID, -1, -1, _cur_resolution.width,
 			_cur_resolution.height, 0);
 	GrSelectEvents(_window, EVENTS);
+	{
+		GR_WM_PROPERTIES props;   // the extra buttons: the second wheel pans (InputLoop)
+		props.flags = GR_WM_FLAGS_COMMAND, props.props = GR_WMC_BUTTONS, props.background = 1;
+		GrSetWMProperties(_window, &props);
+	}
 	/* OpenTTD draws its own pointer, the tool's picture: the window system's is hidden over it */
 	static const GR_BITMAP none[16] = {};
 	GrSetCursor(_window, 16, 16, 0, 0, 0, 0, const_cast<GR_BITMAP *>(none), const_cast<GR_BITMAP *>(none));
@@ -514,6 +523,14 @@ bool VideoDriver_ShaderEmu::PollEvent()
 				_cursor.wheel_moved = true;
 				break;
 			}
+			if (e.button.changebuttons & (GR_BUTTON_SCROLL2LEFT | GR_BUTTON_SCROLL2UP | GR_BUTTON_SCROLL2RIGHT | GR_BUTTON_SCROLL2DN)) {
+				GR_BUTTON b = e.button.changebuttons;
+				int dir = (b & GR_BUTTON_SCROLL2LEFT) ? 0 : (b & GR_BUTTON_SCROLL2UP) ? 1 : (b & GR_BUTTON_SCROLL2RIGHT) ? 2 : 3;
+				_pad_until[dir] = std::chrono::steady_clock::now() + std::chrono::milliseconds(PAD_HOLD_MS);
+				if (getenv("OPENTTD_PAD_LOG") != nullptr) fmt::print(stderr, "openttd: pad pans {}\n", dir == 0 ? "left" : dir == 1 ? "up" : dir == 2 ? "right" : "down");
+				break;
+			}
+			if (e.button.changebuttons & GR_BUTTON_EXTRA) break;   // (the wheel tilted, the side buttons: nothing of OpenTTD's)
 			if (e.button.changebuttons & GR_BUTTON_L) {
 				if (_rightclick_emulate && (e.button.modifiers & MWKMOD_CTRL)) {
 					_right_button_down = true;
@@ -532,7 +549,7 @@ bool VideoDriver_ShaderEmu::PollEvent()
 		case GR_EVENT_TYPE_BUTTON_UP:
 			_modifiers = e.button.modifiers;
 			PointerAt(e.button.x, e.button.y);
-			if (e.button.changebuttons & (GR_BUTTON_SCROLLUP | GR_BUTTON_SCROLLDN)) break;
+			if (e.button.changebuttons & (GR_BUTTON_SCROLLUP | GR_BUTTON_SCROLLDN | GR_BUTTON_EXTRA)) break;
 			if (_rightclick_emulate) {
 				_right_button_down = false;
 				_left_button_down = false;
@@ -1452,6 +1469,9 @@ void VideoDriver_ShaderEmu::InputLoop()
 	/* Tab held runs the game fast, as on other systems */
 	this->fast_forward_key_pressed = (_keys_down & 16) && !(_modifiers & MWKMOD_ALT);
 	_dirkeys = _keys_down & 15;
+	for (int d = 0; d < 4; d++) {   // a controller's stick, a notch held a moment (_pad_until)
+		if (_pad_until[d] > std::chrono::steady_clock::now()) _dirkeys |= 1 << d;
+	}
 	/* OPENTTD_SCROLL=1, for measuring: the arrows held down and right, then up and left, two seconds each */
 	static const bool scroll_test = getenv("OPENTTD_SCROLL") != nullptr;
 	if (scroll_test && _game_mode == GM_NORMAL) {

@@ -416,6 +416,15 @@ G_BuildTiccmd_seat(doom_cmd *cmd)
 			cmd->buttons |= 1;
 		if (!menuactive && (SEGL_HOST_HAND_TRIGGER(host, 0) || SEGL_HOST_JUMP(host)))
 			cmd->buttons |= 2;
+	} else {
+		/* a controller with the beam on the display (docs/machine/input.md, "Game controls"): the jump button
+		   (A) or B uses (bits 16 and 15 of the buttons word, linux/apps/input_words.h) */
+		extern int menuactive;
+		const char *words = (const char *)seglPalette();
+		unsigned buttons = words ? ((const volatile uint32_t *)(words - REG_PALETTE + REG_INPUT))[2] : 0;
+
+		if (!menuactive && (buttons & 0x18000))
+			cmd->buttons |= 2;
 	}
 	if (seated == 2) {
 		/* (the keys they walk by come as the left stick: no window need have the keyboard) */
