@@ -113,7 +113,17 @@ static TDrawArea* area_real;
 
 static int first_copy_ok = -1;   // the first core's CSR 0x8b0: 1 when the machine has the copy (aoe_view_first_copy)
 struct AoeViewStack aoe_view_stack;
-
+// A picture with the view drawn again since the last present (the caption's frames: host.cpp)
+int aoe_view_drew;
+// (a present with no view drawn while the view draws others, in a game, is the same picture: not a frame; a menu's are frames)
+static unsigned last_drew_at;
+int aoe_view_new_picture(void) {
+    unsigned t = my_time();
+    int d = aoe_view_drew || (unsigned) (t - last_drew_at) > 5000;   // (a second of the machine's 5 kHz)
+    if (aoe_view_drew) last_drew_at = t;
+    aoe_view_drew = 0;
+    return d;
+}
 static void job(uint32_t view, uint32_t) {
     job_counts.start = my_instructions();
     // the stack this job runs on (aoe_cores.h, aoe_view_core): noted once, the same worker's each time
@@ -160,6 +170,7 @@ void aoe_view_post(RGE_View* view) {
 
     if (first_copy_ok < 0) { unsigned v; __asm__ volatile("csrr %0, 0x8b0" : "=r"(v)); first_copy_ok = v == 1; if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: the machine's copy %s\n", first_copy_ok ? "by the first core" : "none: by words"); }
     aoe_asm_for_worker();
+    aoe_view_drew = 1;
     walked.v = 0;
     st.view = view;
     st.busy = 1;

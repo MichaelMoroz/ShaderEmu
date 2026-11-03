@@ -118,7 +118,9 @@ void aoe_present(void) {
         if (frames == picdump) for (int r = 0; r < 30; r++) { fprintf(stderr, "aoegrid %02d ", r); for (int c = 0; c < 40; c++) { unsigned g = 0; for (int y = 0; y < 20; y++) for (int x = 0; x < 20; x++) g = g * 31 + page[(r * 20 + y) * aoe_w + c * 20 + x]; fprintf(stderr, "%02x", (g ^ g >> 8 ^ g >> 16) & 255); } fprintf(stderr, "\n"); }
         if (frames == picdump && getenv("AOE_PICROWS")) for (int y = aoe_h - 126; y < aoe_h; y++) { fprintf(stderr, "aoerow "); for (int x = 0; x < 260; x++) fprintf(stderr, "%02x", page[y * aoe_w + x]); fprintf(stderr, "\n"); }
     }
-    if (window_open) aoe_win_present();
+    // the caption's rate counts pictures that show something new: a present between two slices with no view drawn is not one
+    extern int aoe_view_new_picture(void);
+    if (window_open) { if (!aoe_view_new_picture()) aoe_win_not_a_frame(); aoe_win_present(); }
 }
 void aoe_before_blit(void) { if (window_open) aoe_win_settle(); }
 void aoe_window_make(int, int, const char*) {}

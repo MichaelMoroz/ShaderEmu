@@ -9,6 +9,7 @@ struct aoe_event { int kind, a, b, c; };
 unsigned char *aoe_win_open(int w, int h, const char *title);
 void aoe_win_palette(const unsigned char *rgbx);
 void aoe_win_present(void);
+void aoe_win_not_a_frame(void);   /* the next present shows nothing new: not counted in the caption's rate */
 void aoe_win_settle(void);
 void aoe_win_origin(int *x, int *y);
 void aoe_win_map(int *x, int *y);
