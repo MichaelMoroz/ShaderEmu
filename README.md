@@ -83,6 +83,7 @@ menu lists those with a window; the machine's own reader has these docs at `/usr
 | Micropolis (`nxmicropolis`) | the city simulator of 1989 (MicropolisCore's engine) with its cities and scenarios, the map on the GPU | `docs/games/micropolis.md` |
 | Thwaite, Nova the Squirrel (`nes`) | a NES: Nofrendo with two free games, or any `.nes` of a mapper it has | `docs/games/nes.md` |
 | Pinball (`nxpinball`) | a table of our own | `docs/apps/pinball.md` |
+| Solitaire (`nxsolitaire`) | Klondike, cards drawn by us, played by clicks or drags | `docs/apps/solitaire.md` |
 | Tetris, Mines (`nxtetris`, `nxmine`) | small games on the desktop | `docs/system/nanox.md` |
 | Network (`nxgame`) | Quake, Quake III, OpenTTD and Doom hosted and joined between machines | `docs/system/lan.md` |
 

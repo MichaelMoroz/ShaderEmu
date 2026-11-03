@@ -24,6 +24,7 @@ the folder and not saved is lost with the rest.
 | `quake3/` | the settings | the starter's `fs_homepath` |
 | `vanilla-conquer/` | Tiberian Dawn's and Red Alert's settings and saved games | the starters' `XDG_CONFIG_HOME` |
 | `classicube/` | `options.txt` | a link from the game's folder |
+| `nxsolitaire/` | `game`, the game in play when the window closed; `stats`, the statistics | `nxsolitaire` itself (`docs/apps/solitaire.md`) |
 | `micropolis/` | saved cities, `*.cty` | Micropolis's Save and Save as (`docs/games/micropolis.md`) |
 | `openttd/` | `openttd.cfg` (some 10 KB), `save/*.sav`, not compressed (92 KB a new 64 by 64 map, 30 KB packed with its folder; 246 KB and 49 KB at 128 by 128; 1.2 MB and 226 KB, too much, for `busy.sav`) | the starter's `XDG_CONFIG_HOME` and `XDG_DATA_HOME` (`docs/games/openttd.md`) |
 
@@ -58,6 +59,7 @@ the session only when the folder is saved.
 | `files.details`, `files.order` | Files | the list or the icons; the list's order |
 | `rays.width`, `rays.height`, `rays.turns`, `rays.shadows` | `nxray` | its bar's settings (a test with `RAY_FRAMES` takes none of them) |
 | `pathtrace.detail`, `.samples`, `.turns`, `.background`, `.background.colour`, `.live` | `nxpath` | the picture's settings |
+| `nxsolitaire.draw` | `nxsolitaire` | 1 or 3 cards turned from the stock |
 | `micropolis.speed`, `.autobudget`, `.disasters` | `nxmicropolis` | the speed (1 to 3), "Budget by itself", disasters on |
 | `aoe.eula`, `jk2.eula` | `cabinst` (the two games' starters) | the CRC-32 of the licence accepted, read out of the installer: it is not asked again while it is the same text (`docs/system/install.md`) |
 | `web.home`, `web.pictures`, `web.bookmarks`, `web.bookmark.N` | the browser | its home page, whether pictures are loaded, and up to 24 bookmarks, `ADDRESS TITLE` each (`docs/apps/web.md`) |

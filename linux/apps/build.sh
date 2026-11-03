@@ -35,7 +35,7 @@ fi
 build_one() {
     local p=$1 more=""
     [ $p = nxpersist ] && more="$ZLIB -I$LZ/include $LZ/lib/liblzma.a"
-    [ $p = nxcalc ] && more="-lm"
+    [ $p = nxcalc ] || [ $p = nxsolitaire ] && more="-lm"
     # the monitor and Paint move pictures with the worker cores (ui_bulk.h) and the browser
     # makes its strips there: the library every program has for them
     [ $p = nxview ] || [ $p = nxmon ] || [ $p = nxpaint ] || [ $p = nxweb ] && more="-I$REPO/programs/mc $REPO/programs/mc/mcw.c"
@@ -48,7 +48,7 @@ build_one() {
     riscv32-linux-strip -o "$OUT/bin/$p" "$WORK/src/apps/$p"
 }
 pids=()
-for p in nxedit nxfiles nxpaint nxview nxsettings nxmon nxweb nxkey nxfuzz nxicon nxask nxnet open nxpersist nxreg nxtetris nxmine nxpinball nxeyes nxclock nxterm nxcalc cabinst; do
+for p in nxedit nxfiles nxpaint nxview nxsettings nxmon nxweb nxkey nxfuzz nxicon nxask nxnet open nxpersist nxreg nxtetris nxmine nxpinball nxsolitaire nxeyes nxclock nxterm nxcalc cabinst; do
     build_one $p & pids+=($!)
 done
 # archives unpacked on the worker cores (unarc.c: open --unpack runs it first, docs/system/open.md)
@@ -60,6 +60,8 @@ for pid in "${pids[@]}"; do wait $pid || failed=1; done
 [ $failed = 0 ] || { echo "a program did not build"; exit 1; }
 # the Start menu lists what the nxapps.* files name (linux/nanox/nxbar.c)
 printf '%s\n' "Utilities/Editor=nxedit" "Utilities/Files=nxfiles" "Utilities/Paint=nxpaint" "Other/Web=nxweb" "Utilities/Monitor=nxmon" "Utilities/Network=nxnet" "Utilities/Settings=nxsettings" > "$OUT/share/nxapps.20-apps"
+# the card game among the games of linux/nanox/build.sh's list (after Pinball)
+echo "Games/Solitaire=nxsolitaire" > "$OUT/share/nxapps.11-solitaire"
 # two pictures for the viewer and for its test (tools/make_test_pictures.py made them)
 cp "$HERE"/pictures/picture-*.png "$HERE"/pictures/picture-*.jpg "$OUT/share/" 2>/dev/null || true
 # the Start menu's last folder: the desktop over again, and the machine stopped

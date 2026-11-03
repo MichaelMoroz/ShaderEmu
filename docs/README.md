@@ -46,6 +46,7 @@ One file per subject. A doc names another by its file name, which is unique acro
 - [web.md](apps/web.md) – The browser
 - [physics.md](apps/physics.md) – Rigid boxes on every core
 - [pinball.md](apps/pinball.md) – Pinball
+- [solitaire.md](apps/solitaire.md) – Solitaire (Klondike)
 - [raytrace.md](apps/raytrace.md) – Rays on every core
 
 ## games
