@@ -15,8 +15,8 @@ of the machine's own network itself: `docs/apps/web.md`, "Addresses the machine 
 | `0x8100010c` | offset: the part of the answer wanted begins at this byte (0 for the first) |
 | `0x81000110` | requests answered: the host sets it to the request's number |
 | `0x81000114` | bytes of the whole answer; 262,144 of them at most are handed over at a time |
-| `0x81000118` | status: 200 for a page, 201 for a file with its header (below), the HTTP status otherwise; 1: an address this host may not open until its user hands it over (ask again); 3: one it never may; 0 or 2: no answer; 415: a picture the host could not decode |
-| `0x8100011c` | a picture's width, and its height from bit 16 |
+| `0x81000118` | status: 200 for a page, 201 for a file with its header (below), the HTTP status otherwise; 1: an address this host may not open until its user hands it over (ask again); 3: one it never may; 0 or 2: no answer; 415: a picture the host could not decode; 413: a picture over 2048 pixels a side |
+| `0x8100011c` | a picture's width in bits 0 to 14, `FETCH_RGBA` (bit 15, `0x8000`) when its pixels are RGBA bytes, and its height from bit 16; 0 when the answer is bytes |
 | `0x81000120` | the address, up to 255 bytes |
 | `0x816c0000` | the answer, 256 KB |
 
@@ -27,15 +27,36 @@ of the machine's own network itself: `docs/apps/web.md`, "Addresses the machine 
 - The control pass writes the three answer words and the 0x4000 texels of data in that frame
   (`gpu_control` in `src/gpu.h`). Words and bytes arrive together, so a guest that sees its
   number in the answer word can read the data at once.
-- A picture is fetched and decoded by the host and arrives as pixels, a word each (red in the
-  low byte, sRGB, over white), every pixel of it as it was decoded: nothing is scaled. The
-  host sets `_FetchDeliver` to 2 with the picture in `_HostImage` and its size in `_FetchW`,
-  `_FetchH` (the answer's fourth word; its length is four bytes a pixel). A part is 65,536
-  pixels: the guest asks for the rest with the same address and an offset in bytes, as for a
-  file (below), and the host keeps the texture until the last part is delivered (`open.c`,
-  and `check_reply` in `nxweb.c`, which writes a picture's parts to its file as they come).
-  The guest decodes nothing. The harness alone shrinks a picture to fit 256 x 256 (WIC, 65,536
-  pixels at most, `_FetchDeliver` 1). VRChat's own loader gives a world at most 2048 pixels a side.
+- A picture is fetched and decoded by the host and arrives as pixels at its full size, nothing
+  scaled: a pixel is four bytes, red, green, blue and alpha in that order (a word `R | G << 8 |
+  B << 16 | A << 24`), sRGB, the alpha as the picture has it and laid over nothing, rows from the
+  top; the size word says `FETCH_RGBA` (3 November 2026; before, a word `0x00RRGGBB` laid over
+  white, which the guest's readers still take when the bit is clear). The world sets
+  `_FetchDeliver` to 2 with the picture in `_HostImage` and its size in `_FetchW`, `_FetchH`; the
+  harness decodes it with WIC and hands the bytes as any answer's (`_FetchDeliver` 1, the size
+  word in `_FetchInfo`). The answer's length is four bytes a pixel. A part is 65,536 pixels: the
+  guest asks for the rest with the same address and an offset in bytes, as for a file (below),
+  and the host keeps the picture until the last part is delivered. The guest decodes nothing:
+  `nxweb` lays the pixels over white into a PPM file as they come (`check_reply`), `open`
+  keeps them as a TGA of 32 bits, alpha and all (`/tmp/open/NAME.tga`, which the viewer opens).
+- **Which loader.** VRChat's picture loader (`VRCImageDownloader`) takes PNG and JPEG up to 2048
+  pixels a side, follows redirects and gives a texture at full size; its text loader
+  (`VRCStringDownloader`) gives whatever bytes came. A picture (kind 1) and a file (kind 3) go to
+  the picture loader unless the last piece of the address's path ends in something else (`.gif`,
+  `.txt`, `.zip`, ...: `MayBePicture` in `EmuMachine.cs`): an address with no ending, a redirect or
+  a query (an image host's link, `https://picsum.photos/400`) is tried as a picture. When the
+  picture loader cannot read what came and gives no HTTP status (a GIF with no ending, a page,
+  any file), the same address goes to the text loader and the guest gets its bytes, status 200
+  with the size word 0: `nxweb` keeps a picture's bytes (up to 4 MB, in parts) and decodes them
+  with libmedia when it draws them (a GIF), `open` keeps a file as it came.
+- **What the guest gets when the picture loader says no**: the server's own status when its
+  message has one (`HTTP/1.1 404`: 404); 413 for a picture over 2048 pixels a side and 403 for an
+  address VRChat may not open (untrusted URLs off), both read from the words of VRChat's error
+  (`large` or `2048`, `access`, `trusted` or `allow`): neither has been seen in a client, and
+  an error worded otherwise goes to the text loader as above. VRChat starts one picture download
+  every five seconds and one text download every five seconds: a request waits its turn there, and
+  gives up with status 2 after 20 s. The harness answers 413 for a PNG or JPEG over 2048 a side
+  and gives a GIF or anything that is no PNG or JPEG as bytes, as the world does.
 - Under Linux a program maps both through `/dev/gpu`: the words at offset `0x01000000`, the
   data at `0x016c0000`. Nano-X's texture area ends below that.
 - One request at a time; there is no lock between programs. A program waits until the
@@ -71,17 +92,17 @@ of the machine's own network itself: `docs/apps/web.md`, "Addresses the machine 
   it keeps of the guest's folder `/persistence` (`docs/system/persist.md`). So is `host:name`, the
   player's name (`docs/system/persist.md`, "The player's name").
 - The harness fetches with WinINet on a thread (`rvc_harness.cpp`), any `http` or `https`
-  address or a file of its own that `--open` named (`file://` and a path; any other gets status 3), up to 16 MB, and decodes pictures with
-  WIC: a PNG asked for as a file is looked into for the mark there. Its backends draw a second zone over the data's
-  eight rows in the frame of delivery.
-- The VRChat world (`EmuMachine.cs`) uses `VRCStringDownloader` for pages and
-  `VRCImageDownloader` for pictures (VRChat starts one download of each kind every five
-  seconds). A file is asked for through the picture loader when its address ends in `.png`,
-  `.jpg` or `.jpeg`, without smaller copies, and the control pass reads the file's bytes out
-  of the texture itself (`packed_word` in `src/gpu.h`, `_FetchDeliver` 3, `_FetchOffset`):
-  no Udon loop touches them. Any other address is a text download, whose bytes Udon packs
-  6,000 a frame. It hands a binary file over unchanged, and the picture loader refuses a GIF, so a
-  GIF stays a text download (`EmuMachine.fetchTest` loads `fetchTestUrl` both ways eight seconds
+  address or a file of its own that `--open` named (`file://` and a path; any other gets status 3), up to 16 MB, and decodes PNG
+  and JPEG with WIC: a PNG asked for as a file is looked into for the mark there. `--host-file URL=FILE`
+  answers an address with a file of this computer as if it had been downloaded (a test with no
+  network). Its backends draw a second zone over the data's eight rows in the frame of delivery.
+- The VRChat world (`EmuMachine.cs`) uses `VRCStringDownloader` for pages and sheets and
+  `VRCImageDownloader` for pictures and files that may be pictures (above, "Which loader";
+  VRChat starts one download of each kind every five seconds), without smaller copies, and the
+  control pass reads a picture's pixels, or a file's bytes, out of the texture itself
+  (`fetch_word` and `packed_word` in `src/gpu.h`, `_FetchDeliver` 2 and 3, `_FetchOffset`): no
+  Udon loop touches them. A text download's bytes Udon packs 6,000 a frame. It hands a binary
+  file over unchanged, and the picture loader refuses a GIF, so a GIF is a text download (`EmuMachine.fetchTest` loads `fetchTestUrl` both ways eight seconds
   after start and logs `[FetchTest]` lines). Discord's attachments want their signature
   (`?ex=...&is=...&hm=...`): without it Discord answers 404. A world can only load addresses it was built with, or one a visitor types into a
   `VRCUrlInputField`: so it knows the sites of `linux/apps/web/sites.txt` (the browser's home
@@ -154,3 +175,13 @@ the sites of `linux/apps/web/sites.txt` as the browser would and writes two thin
   repository.
 
 `/usr/share/web-css.html` and `web-layout.html` are the browser's own test pages.
+
+## Checking the pictures' pixels
+
+Under `rvc_harness --cpu` (no card) with `--host-file` for addresses of `https://test.invalid/` (3 November 2026):
+a PNG of 300 x 200 with an alpha that varies, given by an address with no ending, reached `nxweb` as pixels with
+`FETCH_RGBA` and its PPM over white had the MD5 Pillow gives for the same picture (`b92ca2dc`); `open` of it made
+`/tmp/open/alpha.tga`, MD5 `62fc68d1` as Pillow's TGA of it; a GIF with no ending came as its 326 bytes, which `nxweb`
+drew (64 x 48, by libmedia) and `open` kept; a PNG of 2100 x 40 was answered 413 and both said why; a JPEG came as
+pixels. A capture of the page was looked at. Not run: any of it in VRChat (`EmuMachine.cs`'s loader choice,
+fallback and error words, and `fetch_word`'s new bytes under Unity), which this computer has no project for.

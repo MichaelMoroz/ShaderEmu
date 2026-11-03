@@ -26,6 +26,7 @@
 #define FETCH_MOST 0x40000	/* bytes the host hands over at a time (docs/system/fetch.md) */
 #define REG_ASKED 64		/* requests made, the address's length, the kind, the offset */
 #define REG_REPLY 68		/* requests answered, bytes in all, status, a picture's size */
+#define FETCH_RGBA 0x8000	/* in a picture's size: its pixels are red, green, blue and alpha bytes */
 #define REG_ADDRESS 72
 #define KIND_FILE 3
 #define HEADER 256		/* of a file a picture carried: mark, length, CRC-32, name */
@@ -260,6 +261,8 @@ why_of(int status)
 		snprintf(why, sizeof why, "refused (%d)", status);
 	else if (status == 415)
 		snprintf(why, sizeof why, "a picture the host could not decode (415)");
+	else if (status == 413)
+		snprintf(why, sizeof why, "a picture over the 2048 pixels a side the host's loader takes (413)");
 	else if (status >= 400 && status < 500)
 		snprintf(why, sizeof why, "the server would not give it (%d)", status);
 	else if (status >= 500)
@@ -329,37 +332,53 @@ fetch(const char *address, char *path, size_t room)
 	packed = status == 201;
 	mkdir(FOLDER, 0777);
 	if (!packed && regs[REG_REPLY + 3] != 0) {
-		/* a picture the host could only give as pixels: a word each, in parts of 65,536,
-		 * kept as a PPM file (a part's bytes made first and written at once: a byte a call
-		 * was 76 instructions a pixel, this is 12) */
-		static uint8_t rgb[FETCH_MOST / 4 * 3];
-		uint32_t w = regs[REG_REPLY + 3] & 0xffff, h = regs[REG_REPLY + 3] >> 16, i, done = 0;
+		/* a picture the host could only give as pixels: a word each, in parts of 65,536. With
+		 * FETCH_RGBA its four bytes are red, green, blue and alpha (VRChat's picture loader, the
+		 * harness: docs/system/fetch.md), kept as a TGA of 32 bits with its alpha; else 0x00RRGGBB
+		 * (a host from before), kept as a PPM file. A part's bytes are made first and written at
+		 * once: a byte a call was 76 instructions a pixel, this is 12. */
+		static uint8_t rgb[FETCH_MOST];
+		uint32_t size = regs[REG_REPLY + 3], w = size & 0x7fff, h = size >> 16, i, done = 0;
+		int rgba = (size & FETCH_RGBA) != 0;
 
 		name_from(address, name, sizeof name - 4);
-		snprintf(path, room, FOLDER "/%s.ppm", name);
+		snprintf(path, room, FOLDER "/%s.%s", name, rgba ? "tga" : "ppm");
 		if (w == 0 || h == 0 || (file = fopen(path, "wb")) == NULL) {
 			snprintf(why, sizeof why, "the picture cannot be kept in " FOLDER);
 			printf("open: the picture of %s cannot be kept\n", address);
 			return 0;
 		}
-		fprintf(file, "P6\n%u %u\n255\n", (unsigned)w, (unsigned)h);
+		if (rgba) {
+			/* TGA: uncompressed true colour, 32 bits a pixel with 8 of alpha, rows from the top */
+			uint8_t head[18] = { 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, (uint8_t)w, (uint8_t)(w >> 8), (uint8_t)h, (uint8_t)(h >> 8), 32, 0x28 };
+
+			fwrite(head, 1, sizeof head, file);
+		} else
+			fprintf(file, "P6\n%u %u\n255\n", (unsigned)w, (unsigned)h);
 		for (;;) {
 			uint32_t here = w * h - done < FETCH_MOST / 4 ? w * h - done : FETCH_MOST / 4;
 
 			uint8_t *to = rgb;
 
-			for (i = 0; i < here; i++, to += 3) {
-				uint32_t c = ((const uint32_t *)fetched)[i];
+			if (rgba)
+				for (i = 0; i < here; i++, to += 4) {
+					uint32_t c = ((const uint32_t *)fetched)[i];
 
-				to[0] = c >> 16, to[1] = c >> 8, to[2] = c;
-			}
-			fwrite(rgb, 3, here, file);
+					to[0] = c >> 16, to[1] = c >> 8, to[2] = c, to[3] = c >> 24;	/* (TGA's order: blue first) */
+				}
+			else
+				for (i = 0; i < here; i++, to += 3) {
+					uint32_t c = ((const uint32_t *)fetched)[i];
+
+					to[0] = c >> 16, to[1] = c >> 8, to[2] = c;
+				}
+			fwrite(rgb, rgba ? 4 : 3, here, file);
 			done += here;
 			progress_show(done, (unsigned long long)w * h, progress_megabytes(done * 3ull, w * h * 3ull));
 			if (done >= w * h)
 				break;
 			status = ask(address, done * 4, 40);
-			if (status != 200 || regs[REG_REPLY + 3] != (w | h << 16)) {
+			if (status != 200 || regs[REG_REPLY + 3] != size) {
 				why_of(status);
 				snprintf(why + strlen(why), sizeof why - strlen(why), ", after %u of %u pixels", (unsigned)done, (unsigned)(w * h));
 				printf("open: the host stopped at %u of %u pixels (%d)\n", (unsigned)done, (unsigned)(w * h), status);

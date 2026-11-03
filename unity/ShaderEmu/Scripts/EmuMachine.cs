@@ -218,6 +218,7 @@ public class EmuMachine : UdonSharpBehaviour
     private string openDue = "";       // an address the visitor gave, not handed to the guest yet
     private int openCount;
     private VRCImageDownloader imageLoader;
+    private VRCUrl heldUrl;            // the address being loaded: the text loader's, when the picture loader cannot
     private Texture2D hostImage;
     private string[] wanted = new string[4];
     private float[] wantedAt = new float[4];
@@ -828,12 +829,14 @@ public class EmuMachine : UdonSharpBehaviour
         fetchStarted = Time.time;
         FetchSays("Loading " + address);
         heldAddress = address;
-        heldImage = fetchKind == 1 || (fetchKind == KindFile && IsPicture(address));
+        heldUrl = url;
+        heldImage = (fetchKind == 1 || fetchKind == KindFile) && MayBePicture(address);
         if (heldImage)
         {
-            // a picture: VRChat fetches and decodes it into a texture, whose pixels the control
-            // pass copies into the guest's memory as they are, 65,536 a part. Asked for as a file
-            // it may carry one in its pixels (docs/system/fetch.md).
+            // a picture: VRChat fetches and decodes it into a texture at its full size, whose
+            // pixels the control pass copies into the guest's memory as they are, red, green, blue
+            // and alpha bytes, 65,536 a part. Asked for as a file it may carry one in its pixels
+            // (docs/system/fetch.md). What the loader cannot take goes to the text loader then.
             if (imageLoader == null) imageLoader = new VRCImageDownloader();
             TextureInfo info = new TextureInfo();
             info.GenerateMipMaps = false;
@@ -845,12 +848,20 @@ public class EmuMachine : UdonSharpBehaviour
         }
     }
 
-    // VRChat gives a world a picture only through its picture loader: by the address's ending.
-    private bool IsPicture(string address)
+    // Whether an address goes to VRChat's picture loader first: unless the last piece of its path
+    // ends in what is no PNG or JPEG (.gif, .txt, .zip...). An address with no ending, a redirect or a
+    // query (https://picsum.photos/400, an image host's link) is tried as a picture; the loader follows
+    // redirects and reads what it is given, where the text loader handed over what came, not a picture.
+    private bool MayBePicture(string address)
     {
         int cut = address.IndexOf('?');
         string path = (cut < 0 ? address : address.Substring(0, cut)).ToLower();
-        return path.EndsWith(".png") || path.EndsWith(".jpg") || path.EndsWith(".jpeg");
+        int hash = path.IndexOf('#');
+        if (hash >= 0) path = path.Substring(0, hash);
+        int slash = path.LastIndexOf('/'), dot = path.LastIndexOf('.');
+        if (dot <= slash || path.Length - dot > 6) return true;   // no ending: try it
+        string ending = path.Substring(dot + 1);
+        return ending == "png" || ending == "jpg" || ending == "jpeg";
     }
 
     // What a fetch has come to: on the wall's panel, and at this visitor's classroom place.
@@ -1017,13 +1028,36 @@ public class EmuMachine : UdonSharpBehaviour
             Debug.Log("[FetchTest] picture failed: " + result.Error + " " + result.ErrorMessage + " after " + (Time.time - fetchTestAt).ToString("F1") + " s");
         if (fetchState != FetchLoading) return;
         fetchLength = 0;
-        // a server's refusal reads "HTTP/1.1 404 Not Found": its code, else 415 (not a picture)
-        fetchStatus = 415;
+        // a server's refusal reads "HTTP/1.1 404 Not Found": its code
+        fetchStatus = 0;
         string message = result.ErrorMessage;
+        string kind = ("" + result.Error + " " + message).ToLower();
         int at = message == null ? -1 : message.IndexOf("HTTP/1.1 ");
         int code;
         if (at >= 0 && message.Length >= at + 12 && int.TryParse(message.Substring(at + 9, 3), out code) && code >= 400)
             fetchStatus = code;
+        // over VRChat's 2048 pixels a side: 413; an address VRChat may not open (untrusted URLs off): 403
+        // (by the words of its error: neither has been seen in a client, docs/system/fetch.md)
+        else if (kind.Contains("large") || kind.Contains("2048"))
+            fetchStatus = 413;
+        else if (kind.Contains("access") || kind.Contains("trusted") || kind.Contains("allow"))
+            fetchStatus = 403;
+        if (fetchStatus == 0 && heldUrl != null)
+        {
+            // not a picture to the loader (a GIF with no ending, a page, any file): what the address
+            // holds as its bytes, through the text loader, as any other file's
+            if (imageLoader != null)
+            {
+                imageLoader.Dispose();
+                imageLoader = null;
+            }
+            heldImage = false;
+            fetchStarted = Time.time;
+            FetchSays("Not a picture to VRChat's loader (" + message + "): loading its bytes");
+            VRCStringDownloader.LoadUrl(heldUrl, (IUdonEventReceiver)this);
+            return;
+        }
+        if (fetchStatus == 0) fetchStatus = 415;
         fetchState = FetchReady;
         FetchSays("Picture not loaded: " + message);
     }

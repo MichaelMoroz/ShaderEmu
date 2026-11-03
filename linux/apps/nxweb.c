@@ -46,6 +46,8 @@
 #define SHEET_MOST (3 << 18)
 #define REG_REQUEST 64		/* words of the control block: requests made, length of the address, kind, offset */
 #define REG_REPLY 68		/* requests answered, bytes, status, a picture's width | height << 16 */
+#define FETCH_RGBA 0x8000	/* in a picture's size: its pixels are red, green, blue and alpha bytes */
+#define PICTURE_BYTES_MOST (4 << 20)	/* a picture that comes as its file's bytes: no more than this */
 #define REG_ADDRESS 72		/* the address, 256 bytes */
 #define REG_PIXMAPS (0x1800 / 4 + 28)	/* pixmaps the GPU keeps, counted by the screen's driver */
 #define REG_HOST 15		/* bits 8-15, 16-23: the GPU's target as this host has it, in 16s of pixels (0: not said) */
@@ -119,7 +121,7 @@ static struct picture {
 static int picture_count;
 static int asking = -1;		/* the picture the request that is out is for, or -1: the page */
 static FILE *part_file;		/* a picture that comes in parts: its file, its size, pixels so far */
-static int part_w, part_h, part_done;
+static int part_w, part_h, part_done, part_bytes;	/* (part_bytes: a picture coming as its file's bytes) */
 static unsigned pictures_decoding;	/* (NXWEB_TIME) the first core's instructions decoding the page's pictures */
 static int pictures_now;	/* a picture is decoded when asked for, not after the view is shown (NXWEB_CHECK) */
 static int pictures_later;	/* decodings asked for so far: the next `later` */
@@ -221,6 +223,8 @@ why_of(char *why, int room, int code)
 		snprintf(why, room, "refused (%d)", code);
 	else if (code == 415)
 		snprintf(why, room, "unsupported format");
+	else if (code == 413)
+		snprintf(why, room, "over 2048 pixels a side (413)");
 	else if (code == 3)
 		snprintf(why, room, "an address the host may not open");
 	else if (code == 0 || code == 2)
@@ -238,6 +242,8 @@ picture_fail(struct picture *p, const char *why)
 	p->later = 0;
 	snprintf(p->why, sizeof p->why, "%.63s", why);
 	failed_due = 1;
+	if (print)
+		printf("nxweb: picture %.80s failed: %s\n", p->address, p->why), fflush(stdout);
 }
 
 static void
@@ -3126,7 +3132,8 @@ check_reply(void)
 	}
 	if (asking >= 0) {
 		struct picture *p = &pictures[asking];
-		int w = regs[REG_REPLY + 3] & 0xffff, h = regs[REG_REPLY + 3] >> 16, i, here;
+		uint32_t size = regs[REG_REPLY + 3];
+		int w = size & 0x7fff, h = size >> 16, i, here, rgba = (size & FETCH_RGBA) != 0;
 		FILE *file = part_file;
 
 		part_file = NULL;
@@ -3134,6 +3141,42 @@ check_reply(void)
 		p->asked = time(NULL);
 		if (code == 1)
 			by_hand_note();
+		if (code == 200 && !size && n > 0 && (part_bytes || !file)) {
+			/* a picture as its file's bytes (a GIF: VRChat's picture loader takes PNG and JPEG
+			 * only, and the world gives the rest as its text loader has them, docs/system/fetch.md):
+			 * kept as it came, in parts of 256 KB, and decoded by libmedia when it is first drawn */
+			if (!file) {
+				snprintf(p->file, sizeof p->file, "/tmp/nxweb-%d-%d.got", (int)getpid(), asking);
+				if ((file = fopen(p->file, "wb")) == NULL) {
+					picture_fail(p, "cannot be written to /tmp");
+					asking = -1;
+					return;
+				}
+				part_done = 0, part_bytes = 1;
+			}
+			here = n - part_done < FETCH_MOST ? n - part_done : FETCH_MOST;
+			fwrite((const void *)fetched, 1, (size_t)here, file);
+			part_done += here;
+			if (part_done < n && part_done < PICTURE_BYTES_MOST) {
+				part_file = file;
+				ask_part(p->address, 1, (uint32_t)part_done);
+				return;
+			}
+			fclose(file);
+			part_bytes = 0;
+			asking = -1;
+			if (part_done < n) {
+				picture_fail(p, "over 4 MB");
+				return;
+			}
+			picture_local(p, p->file);
+			if (print)
+				printf("nxweb: picture %d as bytes: %d, %d x %d\n", (int)(p - pictures), part_done, p->w, p->h), fflush(stdout);
+			if (p->state == PICTURE_HERE)
+				picture_arrived(p, (int)(p - pictures));
+			return;
+		}
+		part_bytes = 0;
 		if (code != 200 || w <= 0 || h <= 0 || (file && (w != part_w || h != part_h)) ||
 		    (!file && (file = fopen(p->file, "wb")) == NULL)) {
 			if (code == 200)
@@ -3147,7 +3190,9 @@ check_reply(void)
 			asking = -1;
 			return;
 		}
-		/* a word a pixel, 0x00RRGGBB, kept as a PPM file; 65,536 pixels a part */
+		/* a word a pixel, kept as a PPM file; 65,536 pixels a part. With FETCH_RGBA its bytes are red,
+		 * green, blue and alpha, laid over white here, as the page is (docs/system/fetch.md); else
+		 * 0x00RRGGBB, over white already (a host from before 3 November 2026) */
 		if (!ftell(file)) {
 			fprintf(file, "P6\n%d %d\n255\n", w, h);
 			part_done = 0;
@@ -3158,6 +3203,13 @@ check_reply(void)
 		for (i = 0; i < here; i++) {
 			uint32_t c = ((const uint32_t *)fetched)[i];
 
+			if (rgba) {
+				uint32_t a = c >> 24, k;
+
+				for (k = 0; k < 24; k += 8)
+					fputc((int)(((c >> k & 255) * a + 255 * (255 - a) + 127) / 255), file);
+				continue;
+			}
 			fputc(c >> 16 & 255, file);
 			fputc(c >> 8 & 255, file);
 			fputc(c & 255, file);
@@ -3175,6 +3227,8 @@ check_reply(void)
 		p->w = w;
 		p->h = h;
 		p->state = PICTURE_HERE;
+		if (print)
+			printf("nxweb: picture %d as pixels: %d x %d%s\n", (int)(p - pictures), w, h, rgba ? " with alpha" : ""), fflush(stdout);
 		picture_arrived(p, (int)(p - pictures));
 		return;
 	}

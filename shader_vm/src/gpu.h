@@ -937,7 +937,9 @@ uint mc_stat_cores() {
 // With _FetchDeliver 2 it is a picture the host still has as a texture of its own (_HostImage,
 // any size, sRGB, rows bottom up): _FetchW by _FetchH pixels of it, a word each, rows from the
 // top, of which this part begins at byte _FetchOffset (a host that hands over the picture's
-// own size hands over its pixels as they are).
+// own size hands over its pixels as they are). A pixel is its four bytes red, green, blue and
+// alpha in that order, the alpha not laid over anything (3 November 2026; before, 0x00RRGGBB over
+// white): the reply's size word has FETCH_RGBA set to say so (docs/system/fetch.md).
 // A file carried by a picture (docs/system/fetch.md): its bytes are the pixels' red, green and blue,
 // rows from the top (the texture's are bottom up). The first 256 are a header: a mark, the
 // file's length, its CRC-32, its name.
@@ -973,9 +975,8 @@ uint fetch_word(uint n) {
         uint2 at = uint2(n % _FetchW, _FetchH - 1 - n / _FetchW);
         float4 c = _HostImage.Load(int3(min(at * size / uint2(_FetchW, _FetchH), size - 1), 0));
         float3 seen = c.rgb <= 0.0031308 ? c.rgb * 12.92 : 1.055 * pow(abs(c.rgb), 1.0 / 2.4) - 0.055;
-        seen = lerp(1.0, seen, c.a);   // what shows through is the page
-        uint3 b = (uint3)(saturate(seen) * 255.0 + 0.5);
-        return (b.r << 16) | (b.g << 8) | b.b;
+        uint4 b = (uint4)(saturate(float4(seen, c.a)) * 255.0 + 0.5);
+        return b.r | (b.g << 8) | (b.b << 16) | (b.a << 24);
     }
     uint4 b = (uint4)(_HostData.Load(int3(n & 255, n >> 8, 0)) * 255.0 + 0.5);
     return b.r | (b.g << 8) | (b.b << 16) | (b.a << 24);
@@ -1111,7 +1112,8 @@ uint4 gpu_control(uint2 pos) {
         if (index == FETCH_REPLY) {
             // (a file a picture carries says its own length; 201 is "a file with its header")
             if (fetch_packed()) return uint4(_FetchSeq, 256 + packed_word(12), 201, 0);
-            return uint4(_FetchSeq, _FetchLength, _FetchStatus, _FetchInfo | _FetchW | (_FetchH << 16));
+            // (FETCH_RGBA: the size word's bit 15, a picture's pixels as RGBA bytes; a host's own _FetchInfo says it itself)
+            return uint4(_FetchSeq, _FetchLength, _FetchStatus, _FetchInfo | _FetchW | (_FetchH << 16) | ((_FetchW | _FetchH) != 0 ? 0x8000u : 0u));
         }
         if (index >= FETCH_DATA && index < FETCH_DATA + 0x4000) {
             uint n = (index - FETCH_DATA) * 4;
