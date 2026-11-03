@@ -332,6 +332,39 @@ index bb539e4c..d545805c 100644
  					S_UpdateBackgroundTrack_Actual( pMusicInfoFadeOut, qfalse, s_musicVolume->value );	// inactive-checked internally
  	/*
  					static int iPrevFadeVol = 0;
+diff --git a/code/client/snd_mem.cpp b/code/client/snd_mem.cpp
+index 97b4f4b4..f1c4d9e8 100644
+--- a/code/client/snd_mem.cpp
++++ b/code/client/snd_mem.cpp
+@@ -26,6 +26,10 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
+ 
+ #include "snd_local.h"
+ #include "cl_mp3.h"
++#ifdef SHADEREMU
++// a sound's MP3 decoded by the workers (sys_shaderemu.cpp; -1: by the engine, as before)
++int SE_SoundMP3( const void *data, int size, void *out, int bytes, int rate, int channels );
++#endif
+ 
+ #include <string>
+ 
+@@ -812,7 +816,16 @@ static qboolean S_LoadSound_Actual( sfx_t *sfx )
+ 					byte *pbUnpackBuffer = (byte *) Z_Malloc( iRawPCMDataSize+10 +2304 /* <g> */, TAG_TEMP_WORKSPACE, qfalse );	// won't return if fails
+ 
+ 					{
+-						int iResultBytes = MP3_UnpackRawPCM( sLoadName, data, size, pbUnpackBuffer, qfalse );
++						int iResultBytes = -1;
++#ifdef SHADEREMU
++						{
++							int iRate, iWidth, iChannels;
++							if ( !C_MP3_GetHeaderData( data, size, &iRate, &iWidth, &iChannels, qfalse ) && iWidth == 2 )
++								iResultBytes = SE_SoundMP3( data, size, pbUnpackBuffer, iRawPCMDataSize, iRate, iChannels );
++						}
++						if ( iResultBytes < 0 )
++#endif
++						iResultBytes = MP3_UnpackRawPCM( sLoadName, data, size, pbUnpackBuffer, qfalse );
+ 
+ 						if (iResultBytes!= iRawPCMDataSize){
+ 							Com_Printf(S_COLOR_YELLOW"**** MP3 %s final unpack size %d different to previous value %d\n",sLoadName,iResultBytes,iRawPCMDataSize);
 diff --git a/code/client/snd_mix.cpp b/code/client/snd_mix.cpp
 index d245590d..aa9de400 100644
 --- a/code/client/snd_mix.cpp
@@ -2048,6 +2081,71 @@ index 04c5aa25..c80c7579 100644
  			return;
  			break;
  		case CLASS_ATST://much too big to grip!
+diff --git a/lib/minizip/unzip.c b/lib/minizip/unzip.c
+index e93e46c8..73028c25 100644
+--- a/lib/minizip/unzip.c
++++ b/lib/minizip/unzip.c
+@@ -138,6 +138,24 @@ typedef struct unz_file_info64_internal_s
+ 
+ /* file_in_zip_read_info_s contain internal information about a file in zipfile,
+     when reading and decompress it */
++
++#ifdef SHADEREMU
++/* The machine (docs/games/jk2.md, "The load"): a file read out of the pak is not summed, which was 0.65 billion of the
++   level's load on the first core; the installer and the pak are checked whole where they are unpacked (cabinst).
++   JK2_PAK_CRC=1 sums and checks each file again. */
++#include <stdlib.h>
++static int se_pak_crc(void)
++{
++    static int on = -1;
++    if (on < 0) on = getenv("JK2_PAK_CRC") && atoi(getenv("JK2_PAK_CRC"));
++    return on;
++}
++#define SE_CRC32(c, b, n) (se_pak_crc() ? crc32((c), (b), (n)) : (c))
++#else
++#define se_pak_crc() 1
++#define SE_CRC32(c, b, n) crc32((c), (b), (n))
++#endif
++
+ typedef struct
+ {
+     char  *read_buffer;         /* internal buffer for compressed data */
+@@ -1788,7 +1806,7 @@ extern int ZEXPORT unzReadCurrentFile  (unzFile file, voidp buf, unsigned len)
+ 
+             pfile_in_zip_read_info->total_out_64 = pfile_in_zip_read_info->total_out_64 + uDoCopy;
+ 
+-            pfile_in_zip_read_info->crc32 = crc32(pfile_in_zip_read_info->crc32,
++            pfile_in_zip_read_info->crc32 = SE_CRC32(pfile_in_zip_read_info->crc32,
+                                 pfile_in_zip_read_info->stream.next_out,
+                                 uDoCopy);
+             pfile_in_zip_read_info->rest_read_uncompressed-=uDoCopy;
+@@ -1825,7 +1843,7 @@ extern int ZEXPORT unzReadCurrentFile  (unzFile file, voidp buf, unsigned len)
+ 
+             pfile_in_zip_read_info->total_out_64 = pfile_in_zip_read_info->total_out_64 + uOutThis;
+ 
+-            pfile_in_zip_read_info->crc32 = crc32(pfile_in_zip_read_info->crc32,bufBefore, (uInt)(uOutThis));
++            pfile_in_zip_read_info->crc32 = SE_CRC32(pfile_in_zip_read_info->crc32,bufBefore, (uInt)(uOutThis));
+             pfile_in_zip_read_info->rest_read_uncompressed -= uOutThis;
+             iRead += (uInt)(uTotalOutAfter - uTotalOutBefore);
+ 
+@@ -1869,7 +1887,7 @@ extern int ZEXPORT unzReadCurrentFile  (unzFile file, voidp buf, unsigned len)
+             pfile_in_zip_read_info->total_out_64 = pfile_in_zip_read_info->total_out_64 + uOutThis;
+ 
+             pfile_in_zip_read_info->crc32 =
+-                crc32(pfile_in_zip_read_info->crc32,bufBefore,
++                SE_CRC32(pfile_in_zip_read_info->crc32,bufBefore,
+                         (uInt)(uOutThis));
+ 
+             pfile_in_zip_read_info->rest_read_uncompressed -=
+@@ -2024,7 +2042,7 @@ extern int ZEXPORT unzCloseCurrentFile (unzFile file)
+ 
+ 
+     if ((pfile_in_zip_read_info->rest_read_uncompressed == 0) &&
+-        (!pfile_in_zip_read_info->raw))
++        (!pfile_in_zip_read_info->raw) && se_pak_crc())
+     {
+         if (pfile_in_zip_read_info->crc32 != pfile_in_zip_read_info->crc32_wait)
+             err=UNZ_CRCERROR;
 diff --git a/shared/qcommon/q_math.c b/shared/qcommon/q_math.c
 index b15b3dba..c1d43b55 100644
 --- a/shared/qcommon/q_math.c

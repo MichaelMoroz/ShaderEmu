@@ -884,7 +884,47 @@ void SE_MixSettle( void )
 {
 	jk2MixSettle();
 }
+
+// A sound effect's MP3 decoded by libmedia on the workers, for S_LoadSound (docs/games/jk2.md, "The load"): the level's
+// load decoded about 220 of them on this core, one after another, 1.65 billion instructions. Only where libmedia has the
+// same rate and channels and the engine's length to a frame, or -1 and the engine decodes it.
+// JK2_SOUNDS=engine is the way before.
+int SE_SoundMP3( const void *data, int size, void *out, int bytes, int rate, int channels )
+{
+	static int workers = -1;
+	if ( workers < 0 ) {
+		const char *how = getenv( "JK2_SOUNDS" );
+		workers = how && !strcmp( how, "engine" ) ? 0 : mcw_open( env_int( "JK2_WORKERS", 16 ) );
+		if ( workers > 0 )
+			mcw_touch_code( _start, (unsigned)( etext - _start ) );   // (a worker stops at a page of code no core has run)
+	}
+	if ( workers <= 0 || mcw_on_worker() || bytes <= 0 || channels < 1 )
+		return -1;
+	const char *why;
+	struct media_audio *a = media_audio_open( data, (uint32_t)size, &why );
+	if ( !a )
+		return -1;
+	struct media_audio_info info;
+	media_audio_get_info( a, &info );
+	// the engine counts a frame libmedia's table leaves out (one that decodes to nothing) or the other way round: the
+	// length stays the engine's (ICARUS waits for a sound's end), a missing frame silence, a frame more cut off
+	uint32_t frames = (uint32_t)bytes / ( 2u * (uint32_t)channels ), some = info.frames < frames ? info.frames : frames;
+	int16_t *pcm = NULL;
+	int done = -1;
+	if ( info.rate == rate && info.channels == channels && info.frames + 1152u >= frames && frames + 1152u >= info.frames &&
+	     frames * 2u * (uint32_t)channels == (uint32_t)bytes && !posix_memalign( (void **)&pcm, 16, (size_t)bytes ) ) {
+		if ( media_audio_decode_all( a, pcm, some, workers ) == some ) {
+			memcpy( out, pcm, (size_t)some * 2u * (uint32_t)channels );
+			memset( (char *)out + (size_t)some * 2u * (uint32_t)channels, 0, (size_t)( frames - some ) * 2u * (uint32_t)channels );
+			done = bytes;
+		}
+		free( pcm );
+	}
+	media_audio_close( a );
+	return done;
+}
 #else
+int SE_SoundMP3( const void *data, int size, void *out, int bytes, int rate, int channels ) { return -1; }
 int SE_MixWorker( void ) { return 0; }
 void SE_MixGive( void ( *fn )( void ) ) { fn(); }
 void SE_MixSettle( void ) {}

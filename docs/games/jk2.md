@@ -362,6 +362,18 @@ buffer on core 0 whatever the GL under it.
   cache file the game wrote into its home (a file made from the level) is neither read nor written.
 - **Pictures** at `r_picmip`'s size and no levels under the first ("The picture"). Not done: decoding on the workers
   by libmedia; rd-vanilla loads a picture at a time as its shaders are parsed, so that needs the loads gathered first.
+- **No CRC-32 of a pak's file** read whole (`se_pak_crc` in minizip's `unzip.c`; `JK2_PAK_CRC=1` checks again): the
+  inflate already fails on a broken stream. Core 0 from the desktop to the level played (`client state 7`, the
+  installer's files unpacked first, `fixedtime 50`), `rvc_cpu`: 9.05 to 8.43 billion (3 November 2026).
+- **A sound's MP3 decoded by libmedia on the workers** (`SE_SoundMP3` in `sys_shaderemu.cpp`, called from
+  `S_LoadSound_Actual`; `JK2_SOUNDS=engine` is the engine's decoder, 16 workers or `JK2_WORKERS`): the level's 220 or
+  so sound effects were decoded one after another on core 0. libmedia's frame table leaves out a frame that decodes to
+  nothing and the engine counts it (two in three sounds differ by one frame of 1,152 samples, either way): the length
+  stays the engine's, as ICARUS waits for a sound's end, a frame missing is silence and one more cut off. The same run:
+  **1,067,800 to 872,552 passes** (-18%), core 0 8.43 to 6.78 billion, the workers 3.3 billion. The game's sums to
+  frame 450 (`JK2_SUM=50`) are the same both ways; `test_all.py jk2-sums` (1,200 s) was not run.
+- Left on core 0 (the profile of the first half of that load): pak inflate 17% (`inflate_fast`, `window`), JPEG 20%
+  (`decode_mcu`, the IDCTs, `ycc_rgb_convert`), `Q_stricmp` 6% (3.6 million calls), `mdfour` 2%.
 
 ## Memory
 
