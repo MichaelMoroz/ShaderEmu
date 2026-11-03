@@ -641,6 +641,7 @@ static struct {
 	/* the frame drawn last, to know one that is the same: its runs, their pages and colours, the sprites */
 	int was_runs, alike;
 	int set_w, set_h;		/* the window's size the library's matrices were set for */
+	int clear_left;			/* frames that still clear the window before the picture (after a change of size) */
 	ppu_lineinfo_t was_run[8];
 	uint8 was_end[8], was_colours[8][32], was_oam[256];
 	uint8 *was_pages[8][16];
@@ -1131,7 +1132,13 @@ gd_draw(uint32_t written, uint32_t record)
 	}
 
 	seglSize(&width, &height);
-	if (width != gd.set_w || height != gd.set_h) {
+	/* (the black round the picture cleared for a second after a change of size, not once: the window manager's frame and a
+	 * maximise give the window other memory after the first size is seen, and the bars kept the desktop's old pixels: a capture
+	 * of 3 November 2026 showed the bar's buttons down both sides) */
+	if (width != gd.set_w || height != gd.set_h)
+		gd.clear_left = 60;
+	if (width != gd.set_w || height != gd.set_h || gd.clear_left) {
+		gd.clear_left -= gd.clear_left > 0;
 		gd.set_w = width;
 		gd.set_h = height;
 		nes_viewport(width, height);

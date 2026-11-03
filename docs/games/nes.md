@@ -315,6 +315,9 @@ says it has made (`emu_said.frames`) and the machine's clock; its variables are 
 The console's picture is 256 x 240 whatever the window: a larger window shows it larger, at the console's shape (8:7
 pixels, a television's 4:3 less its overscan: 292 x 240), as large as fits and centred, the rest black (`nes_viewport` in
 `osd_shaderemu.c`, 3 November 2026). Before, it was stretched to the window's shape. `NES_STRETCH=1` is the way before.
+The black round it is cleared for 60 frames after a change of size, not once: a capture of the maximised window
+(`rvc_harness --cpu`, `--save-state`, `tools/snapshot_screen.py`) showed the desktop's bar repeated down both sides, the
+window's memory having changed after the first clear.
 The NES takes no pointer, so no place has to be mapped. Not seen in a picture (`rvc_cpu` draws no list, and this round ran no
 WARP capture); `test_all.py nes` passes with it.
 
