@@ -282,6 +282,8 @@ static void draw_all(void)
 {
 	draw_buttons();
 	draw_groups();
+	ui_fill(window, 0, PIC_Y - 4, LEFT - 4, HEIGHT - 24 - PIC_Y + 4, UI_FACE);
+	ui_text(window, PIC_X, PIC_Y + PIC_H + 4, "the GPU's tests", -1, UI_SHADOW, 0);
 	draw_rows();
 	draw_status();
 }
@@ -355,7 +357,8 @@ static void run_list(const int *list, int n, int all)
 		int ok = 0, failed = 0;
 
 		for (k = 0; k < n; k++) ok += results[list[k]].ok > 0, failed += results[list[k]].ok == 0;
-		snprintf(status, sizeof status, "%d tests: %d OK, %d FAIL, %d not run (%d workers)", n, ok, failed, n - ok - failed, had);
+		snprintf(status, sizeof status, "%d tests: %d OK, %d FAIL, %d not run", n, ok, failed, n - ok - failed);
+		if (had) snprintf(status + strlen(status), sizeof status - strlen(status), " (%d workers)", had);
 	}
 	draw_all();
 }
