@@ -20,10 +20,45 @@ int perf_workers;
 
 /* ---------------------------------------------------------------- the frame */
 
+/* The host's clock where rvc_cpu gives it (CSRs 0x8c0-0x8c1, docs/apps/bench.md "The host's clock"): there a
+ * result is the host's real speed, not its model of the machine's time. The tick reads them as 0, and rvc_cpu under
+ * --pass-model too: then the guest's clock. NXPERF_CLOCK=guest takes the guest's anyway. */
+int perf_host_clock = -1;
+char perf_host_name[52];
+
+static uint64_t host_ns(void)
+{
+	uint32_t lo, hi;
+
+	__asm__ volatile("csrr %0, 0x8c0" : "=r"(lo));
+	__asm__ volatile("csrr %0, 0x8c1" : "=r"(hi));
+	return (uint64_t)hi << 32 | lo;
+}
+
+void perf_clock_init(void)
+{
+	const char *c = getenv("NXPERF_CLOCK");
+	uint32_t w;
+	int k;
+
+	perf_host_clock = !(c && !strcmp(c, "guest")) && host_ns() != 0;
+	if (!perf_host_clock) return;
+	/* the host's processor, CPUID's brand string: 0x8c4 to 0x8cf, four bytes each */
+#define BRAND(k) __asm__ volatile("csrr %0, %1" : "=r"(w) : "i"(0x8c4 + k)); memcpy(perf_host_name + 4 * k, &w, 4);
+	BRAND(0) BRAND(1) BRAND(2) BRAND(3) BRAND(4) BRAND(5) BRAND(6) BRAND(7) BRAND(8) BRAND(9) BRAND(10) BRAND(11)
+#undef BRAND
+	perf_host_name[48] = 0;
+	for (k = 0; perf_host_name[k] == ' '; k++) continue;
+	memmove(perf_host_name, perf_host_name + k, strlen(perf_host_name + k) + 1);
+	for (k = (int)strlen(perf_host_name); k > 0 && perf_host_name[k - 1] == ' '; k--) perf_host_name[k - 1] = 0;
+}
+
 uint64_t perf_now_ns(void)
 {
 	struct timespec ts;
 
+	if (perf_host_clock < 0) perf_clock_init();
+	if (perf_host_clock) return host_ns();
 	clock_gettime(CLOCK_MONOTONIC, &ts);
 	return (uint64_t)ts.tv_sec * 1000000000u + (uint64_t)ts.tv_nsec;
 }
