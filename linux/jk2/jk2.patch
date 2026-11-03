@@ -248,6 +248,26 @@ index bb539e4c..76f33461 100644
  					S_UpdateBackgroundTrack_Actual( pMusicInfoFadeOut, qfalse, s_musicVolume->value );	// inactive-checked internally
  	/*
  					static int iPrevFadeVol = 0;
+diff --git a/code/qcommon/cm_patch.cpp b/code/qcommon/cm_patch.cpp
+index dbaa19dd..d61bcc5c 100644
+--- a/code/qcommon/cm_patch.cpp
++++ b/code/qcommon/cm_patch.cpp
+@@ -1556,6 +1556,15 @@ void CM_TraceThroughPatchCollide( traceWork_t *tw, const struct patchCollide_s *
+ 	static cvar_t *cv;
+ #endif //BSPC
+ 
++#ifdef SHADEREMU
++	// (Quake III 1.32's test, which Raven's code had not: a patch whose bounds, a unit past its points, are apart from the
++	// trace's swept box cannot touch it, its facets lying within SURFACE_CLIP_EPSILON of its points. docs/games/jk2.md,
++	// "Fewer instructions": the game's traces through patches were 0.5 million instructions a frame of play)
++	if ( tw->bounds[0][0] > pc->bounds[1][0] || tw->bounds[0][1] > pc->bounds[1][1] || tw->bounds[0][2] > pc->bounds[1][2] ||
++		 tw->bounds[1][0] < pc->bounds[0][0] || tw->bounds[1][1] < pc->bounds[0][1] || tw->bounds[1][2] < pc->bounds[0][2] ) {
++		return;
++	}
++#endif
+ 	if (tw->isPoint) {
+ 		CM_TracePointThroughPatchCollide( tw, pc );
+ 		return;
 diff --git a/code/qcommon/cm_public.h b/code/qcommon/cm_public.h
 index efb97b53..83ee931a 100644
 --- a/code/qcommon/cm_public.h
@@ -1001,29 +1021,69 @@ index ef21d32f..ccd51a90 100644
  		{
  			switch ( cent->gent->client->NPC_class )
 diff --git a/codeJK2/cgame/cg_predict.cpp b/codeJK2/cgame/cg_predict.cpp
-index 8c73e521..10b2627e 100644
+index 8c73e521..3f6d6457 100644
 --- a/codeJK2/cgame/cg_predict.cpp
 +++ b/codeJK2/cgame/cg_predict.cpp
-@@ -122,6 +122,24 @@ void CG_ClipMoveToEntities ( const vec3_t start, const vec3_t mins, const vec3_t
+@@ -70,6 +70,17 @@ void CG_BuildSolidList( void )
+ 	}
+ }
+ 
++#ifdef SHADEREMU
++static qboolean se_apart( const vec3_t origin, const vec3_t bmins, const vec3_t bmaxs, const vec3_t lo, const vec3_t hi ) {
++	for ( int k = 0 ; k < 3 ; k++ ) {
++		if ( origin[k] + bmins[k] > hi[k] || origin[k] + bmaxs[k] < lo[k] ) {
++			return qtrue;
++		}
++	}
++	return qfalse;
++}
++#endif
++
+ /*
+ ====================
+ CG_ClipMoveToEntities
+@@ -85,6 +96,16 @@ void CG_ClipMoveToEntities ( const vec3_t start, const vec3_t mins, const vec3_t
+ 	vec3_t		bmins, bmaxs;
+ 	vec3_t		origin, angles;
+ 	centity_t	*cent;
++#ifdef SHADEREMU
++	// (docs/games/jk2.md, "Fewer instructions": an entity whose box is apart from the move's whole extent, with a unit to
++	// spare, is not traced: the trace would find nothing, and leave tr as it is. The effects' traces were 2 million
++	// instructions a frame of play, nearly all of them here.)
++	vec3_t		move_lo, move_hi;
++	for ( i = 0 ; i < 3 ; i++ ) {
++		move_lo[i] = ( start[i] < end[i] ? start[i] : end[i] ) + ( mins ? mins[i] : 0 ) - 1;
++		move_hi[i] = ( start[i] > end[i] ? start[i] : end[i] ) + ( maxs ? maxs[i] : 0 ) + 1;
++	}
++#endif
+ 
+ 	for ( i = 0 ; i < cg_numSolidEntities ; i++ ) {
+ 		cent = cg_solidEntities[ i ];
+@@ -110,6 +131,17 @@ void CG_ClipMoveToEntities ( const vec3_t start, const vec3_t mins, const vec3_t
+ 			//Let's use the lerpOrigin for now and see if it breaks anything...
+ 			//EvaluateTrajectory( &cent->currentState.pos, cg.snap->serverTime, origin );
+ 			VectorCopy( cent->lerpOrigin, origin );
++#ifdef SHADEREMU
++			// (a brush model not turned, its box where the game linked it moved to where it is drawn)
++			if ( cent->gent && cent->gent->linked && !angles[0] && !angles[1] && !angles[2] && !cent->gent->currentAngles[0] &&
++				 !cent->gent->currentAngles[1] && !cent->gent->currentAngles[2] ) {
++				VectorSubtract( cent->gent->absmin, cent->gent->currentOrigin, bmins );
++				VectorSubtract( cent->gent->absmax, cent->gent->currentOrigin, bmaxs );
++				if ( se_apart( origin, bmins, bmaxs, move_lo, move_hi ) ) {
++					continue;
++				}
++			}
++#endif
+ 
+ 		} else {
+ 			// encoded bbox
+@@ -122,6 +154,11 @@ void CG_ClipMoveToEntities ( const vec3_t start, const vec3_t mins, const vec3_t
  			bmins[2] = -zd;
  			bmaxs[2] = zu;
  
 +#ifdef SHADEREMU
-+			// (docs/games/jk2.md, "Fewer instructions": a box apart from the move's whole extent, with a unit to spare,
-+			// is not traced: the trace would find nothing, and leave tr as it is. The effects' traces were 2 million
-+			// instructions a frame of play, nearly all of them here.)
-+			{
-+				int k;
-+				for ( k = 0 ; k < 3 ; k++ ) {
-+					float lo = ( start[k] < end[k] ? start[k] : end[k] ) + ( mins ? mins[k] : 0 ) - 1;
-+					float hi = ( start[k] > end[k] ? start[k] : end[k] ) + ( maxs ? maxs[k] : 0 ) + 1;
-+					if ( cent->lerpOrigin[k] + bmins[k] > hi || cent->lerpOrigin[k] + bmaxs[k] < lo ) {
-+						break;
-+					}
-+				}
-+				if ( k < 3 ) {
-+					continue;
-+				}
++			if ( se_apart( cent->lerpOrigin, bmins, bmaxs, move_lo, move_hi ) ) {
++				continue;
 +			}
 +#endif
  			cmodel = cgi_CM_TempBoxModel( bmins, bmaxs );//, cent->gent->contents );
