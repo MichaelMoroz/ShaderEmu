@@ -32,7 +32,7 @@ index 7cf2db8c..e8dc8ba1 100644
  			{
  				// failed, so go back to english
 diff --git a/code/client/cl_input.cpp b/code/client/cl_input.cpp
-index 94051760..12c752d9 100644
+index 94051760..57e8ac87 100644
 --- a/code/client/cl_input.cpp
 +++ b/code/client/cl_input.cpp
 @@ -239,6 +239,18 @@ float CL_KeyState( kbutton_t *key ) {
@@ -54,6 +54,19 @@ index 94051760..12c752d9 100644
  	msec = key->msec;
  	key->msec = 0;
  
+@@ -696,6 +708,12 @@ usercmd_t CL_CreateCmd( void ) {
+ 	// get basic movement from joystick
+ 	CL_JoystickMove( &cmd );
+ 
++#ifdef SHADEREMU
++	// ShaderEmu: from a holodeck's seat, the host's sticks, triggers and turns (linux/jk2/sys_shaderemu.cpp)
++	extern void SE_SeatMove( usercmd_t *cmd );
++	SE_SeatMove( &cmd );
++#endif
++
+ 	// check to make sure the angles haven't wrapped
+ 	if ( cl.viewangles[PITCH] - oldAngles[PITCH] > 90 ) {
+ 		cl.viewangles[PITCH] = oldAngles[PITCH] + 90;
 diff --git a/code/client/cl_main.cpp b/code/client/cl_main.cpp
 index 1a5c2446..32f835dc 100644
 --- a/code/client/cl_main.cpp

@@ -336,8 +336,8 @@ public class EmuHolodeck : UdonSharpBehaviour
 
     // ---- a stand's keys: they are the sitter's ----
 
-    // The games made for a world round the seat (linux/apps/gameid.h): Doom, Quake, ClassiCube, Quake III, nxphys, Half-Life.
-    private bool Registered(int id) { return id == 1 || id == 2 || id == 3 || id == 7 || id == 8 || id == 9; }
+    // The games made for a world round the seat (linux/apps/gameid.h): Doom, Quake, ClassiCube, Quake III, nxphys, Half-Life, Jedi Outcast.
+    private bool Registered(int id) { return id == 1 || id == 2 || id == 3 || id == 7 || id == 8 || id == 9 || id == 10; }
 
     // The console's 3D key: every program's world round the seat, or the registered games' alone.
     public void ToggleWorld()
@@ -559,7 +559,7 @@ public class EmuHolodeck : UdonSharpBehaviour
         VRCPlayerApi player = Networking.LocalPlayer;
         if (own < 0 || flat || !Utilities.IsValid(player) || player.IsUserInVR()) return false;
         if (gamepad == null || gamepad.keys == null || !gamepad.keys.Capturing()) return false;
-        return played == 1 || played == 2 || played == 3 || played == 7 || played == 9;
+        return played == 1 || played == 2 || played == 3 || played == 7 || played == 9 || played == 10;
     }
 
     private int Key(KeyCode key) { return Input.GetKey(key) ? 127 : 0; }
