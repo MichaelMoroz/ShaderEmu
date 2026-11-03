@@ -111,6 +111,7 @@ struct Options {
     std::string save, load;              // --save FILE, --load FILE: the whole machine at the run's end, and from one
     u64 maxPasses = 0;                   // --max-passes N: the run stops after N passes (from a --load's too)
     double saveAfter = 0;                // --save-after S: and after S seconds of this computer's (then --save)
+    std::string saveAt;                  // --save-at TEXT: or once the console has shown TEXT (a checkpoint for a long case)
 };
 static Options opt;
 
@@ -3000,6 +3001,7 @@ int main(int argc, char** argv) {
         else if (a == "--load") opt.load = next("--load");
         else if (a == "--max-passes") opt.maxPasses = strtoull(next("--max-passes").c_str(), nullptr, 10);
         else if (a == "--save-after") opt.saveAfter = atof(next("--save-after").c_str());
+        else if (a == "--save-at") opt.saveAt = next("--save-at");
         else if (a == "--pass-ms") opt.passMs = atof(next("--pass-ms").c_str());
         else if (a == "--pass-model") {
             std::string v = next("--pass-model");
@@ -3060,6 +3062,7 @@ int main(int argc, char** argv) {
                    "  --load FILE            go on from a --save instead of booting (the same image, cores and arguments)\n"
                    "  --max-passes N         stop after N passes (exit 5 with --save: to be gone on with)\n"
                    "  --save-after S         stop after S s of this computer's (the same)\n"
+                   "  --save-at TEXT         stop once the console has shown TEXT (the same): a checkpoint a case goes on from\n"
                    "                         (3700000 and 0.25: the harness; the world is about 3100000 and 0.2)\n"
                    "  --pointer-sweep N      the pointer goes round from pass N on\n"
                    "  --pointer-circle X,Y,R round that place of the display, so far from it\n"
@@ -3204,6 +3207,7 @@ int main(int argc, char** argv) {
         if (opt.wall > 0 && (frame_no & 255) == 0 &&
             std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() >= opt.wall) { exit_code = opt.until.empty() ? 0 : 3; break; }
         if ((opt.maxPasses && passes_run >= opt.maxPasses) ||
+            (!opt.saveAt.empty() && (frame_no & 15) == 0 && console_text.find(opt.saveAt) != std::string::npos) ||
             (opt.saveAfter > 0 && (frame_no & 15) == 0 && std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() >= opt.saveAfter)) {
             stopped = true, exit_code = opt.save.empty() ? (opt.until.empty() ? 0 : 3) : 5;
             break;

@@ -853,8 +853,8 @@ CASES = [
               r'volume_frames: frames: .*empty worlds over a second: 0', r'volume_frames: exit 0']),
     # Jedi Outcast from the seat (an image with the demo; docs/world/holodeck.md): the level loaded flat, then the sitter's stick walks
     # it ("seat: 2 ... move 127 0 0", JK2_SEAT=1), the world with its HUD, no empty world over a second
-    case('jk2-seat', 'games jk2 long holodeck', 'if [ -f /usr/share/jk2/jk2demo.exe ]; then JK2_SEAT=1 jk2 +map demo; else echo JK2-NO-DATA; fi',
-         until='move 127 0 0', wall=7200, volume=True,
+    case('jk2-seat', 'games jk2 long holodeck', X + 'if [ -f /usr/share/jk2/jk2demo.exe ]; then JK2_SEAT=1 jk2 +map demo; else echo JK2-NO-DATA; fi',
+         until='move 127 0 0', wall=18000, volume=True, checkpoint='No Weather Zones Encountered',
          more=['--expect', 'Type yes', '--send', 'yes\\n', '--host', '00000112,0,0,0,0,00007f00,0,0'],
          has=[r'(seat: 2 aim .* move 127 0 0|JK2-NO-DATA)', r'(volume_frames: exit 0|JK2-NO-DATA)']),
     # Half-Life from the seat (an image with Uplink's data): the menu at the level's second 10 (flat) closed by Escape at the guest's
@@ -1072,6 +1072,21 @@ def run(c, a, image, logs):
         env.setdefault('RVC_RACES_NEAR', '4')
     env.update(c['env'])
     t = time.time()
+    if c.get('checkpoint') and not a.sections:
+        # a long case goes on from a checkpoint (rvc_cpu --save-at TEXT, then --load: docs/machine/cpu-harness.md), made once an
+        # image (build/checkpoints, by the image's files' sizes and times) and its arguments: the first run is long, the rest minutes
+        st = [os.stat(os.path.join(image, f)) for f in ('rootfs.bin', 'linux_payload.bin') if os.path.exists(os.path.join(image, f))]
+        key = hashlib.sha1(repr([(s.st_size, int(s.st_mtime)) for s in st] + [c['cmd'], c['more'], c['checkpoint']]).encode()).hexdigest()[:10]
+        ck = os.path.join(ROOT, 'build', 'checkpoints', '%s-%s.snap' % (c['name'], key))
+        if not os.path.exists(ck):
+            os.makedirs(os.path.dirname(ck), exist_ok=True)
+            p = subprocess.run(args + ['--save', ck + '.part', '--save-at', c['checkpoint']], cwd=ROOT, env=env, capture_output=True,
+                               text=True, errors='replace')
+            if p.returncode == 5 and os.path.exists(ck + '.part'):
+                os.replace(ck + '.part', ck)
+            else:
+                return (open(log, encoding='latin-1').read() if os.path.exists(log) else ''), p.stderr, races, time.time() - t
+        args += ['--load', ck]
     for _ in range(60):   # the harness lock refuses a CPU harness beside a GPU one: wait for it
         p = subprocess.run(args, cwd=ROOT, env=env, capture_output=True, text=True, errors='replace')
         if '[lock]' not in p.stderr or 'refused' not in p.stderr:
