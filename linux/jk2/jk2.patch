@@ -35,7 +35,7 @@ diff --git a/code/client/cl_input.cpp b/code/client/cl_input.cpp
 index 94051760..12c752d9 100644
 --- a/code/client/cl_input.cpp
 +++ b/code/client/cl_input.cpp
-@@ -239,6 +239,18 @@
+@@ -239,6 +239,18 @@ float CL_KeyState( kbutton_t *key ) {
  	float		val;
  	int			msec;
  
@@ -58,7 +58,7 @@ diff --git a/code/client/cl_main.cpp b/code/client/cl_main.cpp
 index 1a5c2446..aa845ee0 100644
 --- a/code/client/cl_main.cpp
 +++ b/code/client/cl_main.cpp
-@@ -1127,6 +1127,9 @@
+@@ -1127,6 +1127,9 @@ void CL_InitRef( void ) {
  	RIT(CM_DeleteCachedMap);
  	RIT(CM_DrawDebugSurface);
  	RIT(CM_PointContents);
@@ -68,11 +68,238 @@ index 1a5c2446..aa845ee0 100644
  	RIT(Cvar_Get);
  	RIT(Cvar_Set);
  	RIT(Cvar_SetValue);
+diff --git a/code/client/snd_dma.cpp b/code/client/snd_dma.cpp
+index bb539e4c..76f33461 100644
+--- a/code/client/snd_dma.cpp
++++ b/code/client/snd_dma.cpp
+@@ -54,6 +54,15 @@ static int SND_FreeSFXMem(sfx_t *sfx);
+ 
+ extern qboolean Sys_LowPhysicalMemory();
+ 
++#ifdef SHADEREMU
++// the music on the card, decoded by the worker cores (linux/jk2/sys_shaderemu.cpp; docs/games/jk2.md, "Music on the card")
++int SE_MusicOn( void );
++int SE_MusicGive( const void *track, int bytes, int pos, int want, float volume, int raw_time );
++void SE_MusicForget( const void *track );
++void SE_MusicRound( int sound_time, int muted );
++static int se_music_end;	// the card's music as far as the engine has given it (as s_rawend is the mixer's)
++#endif
++
+ //////////////////////////
+ //
+ // vars for bgrnd music track...
+@@ -106,15 +115,31 @@ typedef struct
+ 	fileHandle_t s_backgroundFile;	// valid handle, else -1 if an MP3 (so that NZ compares still work)
+ 	wavinfo_t	s_backgroundInfo;
+ 	int			s_backgroundSamples;
++#ifdef SHADEREMU
++	int			se_pos;		// the frame of the track the engine gives next, when the card plays it (SE_MusicGive)
++#endif
+ 
+ 	void Rewind()
+ 	{
+ 		MP3Stream_Rewind( &chMP3_Bgrnd );
+ 		s_backgroundSamples = sfxMP3_Bgrnd.iSoundLengthInSamples;
++#ifdef SHADEREMU
++		se_pos = 0;
++#endif
+ 	}
+ 
+ 	void SeekTo(float fTime)
+ 	{
++#ifdef SHADEREMU
++		if ( SE_MusicOn() )
++		{	// (the card's music: no decoding up to there, only the place)
++			MP3Stream_Rewind( &chMP3_Bgrnd );
++			se_pos = (int)( fTime * dma.speed );
++			chMP3_Bgrnd.MP3StreamHeader.iBytesDecodedTotal = se_pos * 4;
++			s_backgroundSamples = sfxMP3_Bgrnd.iSoundLengthInSamples;
++			return;
++		}
++#endif
+ 		chMP3_Bgrnd.iMP3SlidingDecodeWindowPos = 0;
+ 		chMP3_Bgrnd.iMP3SlidingDecodeWritePos = 0;
+ 		MP3Stream_SeekTo( &chMP3_Bgrnd, fTime );
+@@ -2696,6 +2721,9 @@ void S_Update( void ) {
+ 	int			i;
+ 	channel_t	*ch;
+ 
++#ifdef SHADEREMU
++	SE_MusicRound( s_soundtime, !s_soundStarted || s_soundMuted );
++#endif
+ 	if ( !s_soundStarted || s_soundMuted ) {
+ 		return;
+ 	}
+@@ -4062,6 +4090,9 @@ static void FreeMusic( MusicInfo_t *pMusicInfo )
+ {
+ 	if (pMusicInfo->pLoadedData)
+ 	{
++#ifdef SHADEREMU
++		SE_MusicForget( pMusicInfo->pLoadedData );
++#endif
+ 		Z_Free(pMusicInfo->pLoadedData);
+ 		pMusicInfo->pLoadedData		= NULL;		// these two MUST be kept as valid/invalid together
+ 		pMusicInfo->sLoadedDataName[0]= '\0';	//
+@@ -4134,7 +4165,13 @@ static qboolean S_StartBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolean
+ 											// scan up to halfway of it to find floating headers, so don't make it
+ 											// too small. 8k works fine.
+ 		qboolean bMusicSucceeded = qfalse;
+-		if (qbDynamic)
++#ifdef SHADEREMU
++		pMusicInfo->se_pos = 0;
++		const qboolean qbInMemory = (qboolean)( qbDynamic || SE_MusicOn() );	// (the card's music decodes the file where it lies)
++#else
++		const qboolean qbInMemory = qbDynamic;
++#endif
++		if (qbInMemory)
+ 		{
+ 			if (!pMusicInfo->pLoadedData)
+ 			{
+@@ -4177,7 +4214,7 @@ static qboolean S_StartBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolean
+ 							pMusicInfo->sfxMP3_Bgrnd.pMP3StreamHeader		= &pMusicInfo->streamMP3_Bgrnd;
+ 				Q_strncpyz( pMusicInfo->sfxMP3_Bgrnd.sSoundName, name, sizeof(pMusicInfo->sfxMP3_Bgrnd.sSoundName) );
+ 
+-				if (qbDynamic)
++				if (qbInMemory)
+ 				{
+ 					MP3Stream_InitPlayingTimeFields ( &pMusicInfo->streamMP3_Bgrnd, name, pbMP3DataSegment, pMusicInfo->iLoadedDataLen, qtrue);
+ 				}
+@@ -4193,7 +4230,7 @@ static qboolean S_StartBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolean
+ 						pMusicInfo->chMP3_Bgrnd.thesfx = &pMusicInfo->sfxMP3_Bgrnd;
+ 				memcpy(&pMusicInfo->chMP3_Bgrnd.MP3StreamHeader, pMusicInfo->sfxMP3_Bgrnd.pMP3StreamHeader, sizeof(*pMusicInfo->sfxMP3_Bgrnd.pMP3StreamHeader));
+ 
+-				if (qbDynamic)
++				if (qbInMemory)
+ 				{
+ 					if (pMusicInfo->s_backgroundFile != -1)
+ 					{
+@@ -4711,6 +4748,54 @@ static qboolean S_UpdateBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolea
+ 		return qfalse;
+ 	}
+ 
++#ifdef SHADEREMU
++	// The card's music: the track's frames given to SE_MusicGive as they were to the mixer, as far ahead, with the same
++	// ends; decoded on the workers into a stream voice of their own, nothing decoded or mixed here
++	if ( pMusicInfo->bIsMP3 && pMusicInfo->s_backgroundFile == -1 && pMusicInfo->pLoadedData && SE_MusicOn() )
++	{
++		if ( se_music_end < s_soundtime ) {
++			se_music_end = s_soundtime;
++		}
++		do	// (once at least: a give of nothing says the track is still wanted)
++		{
++			int want = s_soundtime + MAX_RAW_SAMPLES - se_music_end;
++			if ( want < 0 ) {
++				want = 0;
++			}
++			int got = SE_MusicGive( pMusicInfo->pLoadedData, pMusicInfo->iLoadedDataLen, pMusicInfo->se_pos, want,
++									pMusicInfo->fSmoothedOutVolume, se_music_end );
++			if ( got < 0 || ( got == 0 && pMusicInfo->se_pos == 0 ) ) {
++				return qfalse;		// (a track the card cannot play: said, not heard; or an empty one)
++			}
++			pMusicInfo->se_pos += got;
++			se_music_end += got;
++			pMusicInfo->chMP3_Bgrnd.MP3StreamHeader.iBytesDecodedTotal = pMusicInfo->se_pos * 4;
++			if ( got < want )
++			{	// the track's end: as below
++				if (bMusic_IsDynamic)
++				{
++					pMusicInfo->Rewind();
++				}
++				else
++				{
++					char sTestName[MAX_QPATH*2];
++					Q_strncpyz( sTestName, sMusic_BackgroundLoop, sizeof(sTestName));
++					COM_DefaultExtension(sTestName, sizeof(sTestName), ".mp3");
++					if (!S_FileExists( sTestName ))
++					{
++						return qtrue;
++					}
++					S_StartBackgroundTrack_Actual( pMusicInfo, qfalse, sMusic_BackgroundLoop, sMusic_BackgroundLoop );
++				}
++				if ( !pMusicInfo->s_backgroundFile || !pMusicInfo->bIsMP3 || !pMusicInfo->pLoadedData )
++				{
++					return qfalse;
++				}
++			}
++		} while ( se_music_end < s_soundtime + MAX_RAW_SAMPLES );
++		return qfalse;
++	}
++#endif
+ 	// see how many samples should be copied into the raw buffer
+ 	if ( s_rawend < s_soundtime ) {
+ 		s_rawend = s_soundtime;
+@@ -4935,6 +5020,9 @@ static void S_UpdateBackgroundTrack( void )
+ 			if ( pMusicInfoCurrent->s_backgroundFile == -1)
+ 			{
+ 				int iRawEnd = s_rawend;
++#ifdef SHADEREMU
++				int iMusicEnd = se_music_end;
++#endif
+ 				S_UpdateBackgroundTrack_Actual( pMusicInfoCurrent, qtrue, s_musicVolume->value );
+ 
+ 	/*			static int iPrevFrontVol = 0;
+@@ -4947,6 +5035,9 @@ static void S_UpdateBackgroundTrack( void )
+ 				if (pMusicInfoFadeOut->bActive)
+ 				{
+ 					s_rawend = iRawEnd;
++#ifdef SHADEREMU
++					se_music_end = iMusicEnd;
++#endif
+ 					S_UpdateBackgroundTrack_Actual( pMusicInfoFadeOut, qfalse, s_musicVolume->value );	// inactive-checked internally
+ 	/*
+ 					static int iPrevFadeVol = 0;
+diff --git a/code/client/snd_mix.cpp b/code/client/snd_mix.cpp
+index d245590d..aa9de400 100644
+--- a/code/client/snd_mix.cpp
++++ b/code/client/snd_mix.cpp
+@@ -36,6 +36,22 @@ void S_WriteLinearBlastStereo16 (void)
+ 	int		i;
+ 	int		val;
+ 
++#ifdef SHADEREMU
++	// (docs/games/jk2.md, "Fewer instructions": the same samples, from locals, a frame's two a word: the globals were
++	// loaded again after every store, -fno-strict-aliasing, and this was 109 thousand instructions a frame of the menu)
++	{
++		const int *p = snd_p;
++		unsigned int *out = (unsigned int *)snd_out;
++		const int n = snd_linear_count;
++		for ( i = 0 ; i < n ; i += 2 ) {
++			int l = p[i] >> 8, r = p[i+1] >> 8;
++			l = l > 0x7fff ? 0x7fff : l < -0x8000 ? -0x8000 : l;
++			r = r > 0x7fff ? 0x7fff : r < -0x8000 ? -0x8000 : r;
++			out[i >> 1] = ( (unsigned int)l & 0xffff ) | (unsigned int)r << 16;
++		}
++		return;
++	}
++#endif
+ 	for (i=0 ; i<snd_linear_count ; i+=2)
+ 	{
+ 		val = snd_p[i]>>8;
+diff --git a/code/qcommon/cm_patch.cpp b/code/qcommon/cm_patch.cpp
+index dbaa19dd..d61bcc5c 100644
+--- a/code/qcommon/cm_patch.cpp
++++ b/code/qcommon/cm_patch.cpp
+@@ -1556,6 +1556,15 @@ void CM_TraceThroughPatchCollide( traceWork_t *tw, const struct patchCollide_s *
+ 	static cvar_t *cv;
+ #endif //BSPC
+ 
++#ifdef SHADEREMU
++	// (Quake III 1.32's test, which Raven's code had not: a patch whose bounds, a unit past its points, are apart from the
++	// trace's swept box cannot touch it, its facets lying within SURFACE_CLIP_EPSILON of its points. docs/games/jk2.md,
++	// "Fewer instructions": the game's traces through patches were 0.5 million instructions a frame of play)
++	if ( tw->bounds[0][0] > pc->bounds[1][0] || tw->bounds[0][1] > pc->bounds[1][1] || tw->bounds[0][2] > pc->bounds[1][2] ||
++		 tw->bounds[1][0] < pc->bounds[0][0] || tw->bounds[1][1] < pc->bounds[0][1] || tw->bounds[1][2] < pc->bounds[0][2] ) {
++		return;
++	}
++#endif
+ 	if (tw->isPoint) {
+ 		CM_TracePointThroughPatchCollide( tw, pc );
+ 		return;
 diff --git a/code/qcommon/cm_public.h b/code/qcommon/cm_public.h
 index efb97b53..83ee931a 100644
 --- a/code/qcommon/cm_public.h
 +++ b/code/qcommon/cm_public.h
-@@ -45,6 +45,10 @@
+@@ -45,6 +45,10 @@ int			CM_FindSubBSP(int modelIndex);
  
  // returns an ORed contents mask
  int			CM_PointContents( const vec3_t p, clipHandle_t model );
@@ -87,11 +314,10 @@ diff --git a/code/qcommon/cm_test.cpp b/code/qcommon/cm_test.cpp
 index 77a2265f..6735e0ae 100644
 --- a/code/qcommon/cm_test.cpp
 +++ b/code/qcommon/cm_test.cpp
-@@ -680,4 +680,145 @@
+@@ -680,4 +680,145 @@ void CM_SnapPVS(vec3_t origin,byte *buffer)
  
  }
  
--
 +#ifdef SHADEREMU
 +/*
 +==================
@@ -221,7 +447,7 @@ index 77a2265f..6735e0ae 100644
 +	CM_SE_Grid_r( g, num, lo, hi1 );
 +	CM_SE_Grid_r( g, num, lo2, hi );
 +}
-+
+ 
 +void CM_PointContentsGrid( const vec3_t origin, float step, int nx, int ny, int nz, int mask,
 +	void ( *mark )( void *ctx, int x, int y, int z, int contents ), void *ctx )
 +{
@@ -278,7 +504,7 @@ diff --git a/code/rd-common/tr_image_jpg.cpp b/code/rd-common/tr_image_jpg.cpp
 index a3ddb84a..fe42c2cf 100644
 --- a/code/rd-common/tr_image_jpg.cpp
 +++ b/code/rd-common/tr_image_jpg.cpp
-@@ -59,6 +59,9 @@
+@@ -59,6 +59,9 @@ static void R_JPGOutputMessage(j_common_ptr cinfo)
  	Com_Printf("%s\n", buffer);
  }
  
@@ -288,7 +514,7 @@ index a3ddb84a..fe42c2cf 100644
  void LoadJPG( const char *filename, unsigned char **pic, int *width, int *height ) {
  	/* This struct contains the JPEG decompression parameters and pointers to
  	* working space (which is allocated as needed by the JPEG library).
-@@ -132,6 +135,15 @@
+@@ -132,6 +135,15 @@ void LoadJPG( const char *filename, unsigned char **pic, int *width, int *height
  	/* Make sure it always converts images to RGB color space. This will
  	* automatically convert 8-bit greyscale images to RGB as well.	*/
  	cinfo.out_color_space = JCS_RGB;
@@ -308,7 +534,7 @@ diff --git a/code/rd-common/tr_public.h b/code/rd-common/tr_public.h
 index a0f0ace4..e1a2ddd9 100644
 --- a/code/rd-common/tr_public.h
 +++ b/code/rd-common/tr_public.h
-@@ -84,6 +84,10 @@
+@@ -84,6 +84,10 @@ typedef struct {
  	bool				(*CM_CullWorldBox)					( const cplane_t *frustrum, const vec3pair_t bounds );
  	byte*				(*CM_ClusterPVS)					( int cluster );
  	int					(*CM_PointContents)					( const vec3_t p, clipHandle_t model );
@@ -319,11 +545,29 @@ index a0f0ace4..e1a2ddd9 100644
  	void				(*S_RestartMusic)					( void );
  	qboolean			(*SND_RegisterAudio_LevelLoadEnd)	( qboolean bDeleteEverythingNotUsedThisLevel );
  
+diff --git a/code/rd-vanilla/G2_API.cpp b/code/rd-vanilla/G2_API.cpp
+index 09bc27ed..e46a01eb 100644
+--- a/code/rd-vanilla/G2_API.cpp
++++ b/code/rd-vanilla/G2_API.cpp
+@@ -2277,6 +2277,13 @@ bool G2_SetupModelPointers(CGhoul2Info *ghlInfo) // returns true if the model is
+ 	if (ghlInfo->mModelindex != -1)
+ 	{
+ 		G2ERROR(ghlInfo->mFileName[0],"empty ghlInfo->mFileName");
++#ifdef SHADEREMU
++		// (docs/games/jk2.md, "Fewer instructions": the model looked for by its name only when the handle held does not
++		// name it already, as a loaded model is found by RE_RegisterModel with nothing else done: 317 lookups a frame of
++		// play, 0.38 million instructions)
++		if (ghlInfo->mModel <= 0 || ghlInfo->mModel >= tr.numModels || !tr.models[ghlInfo->mModel] ||
++			tr.models[ghlInfo->mModel]->type == MOD_BAD || strcmp(tr.models[ghlInfo->mModel]->name, ghlInfo->mFileName))
++#endif
+ 		ghlInfo->mModel = RE_RegisterModel(ghlInfo->mFileName);
+ 		ghlInfo->currentModel = R_GetModelByHandle(ghlInfo->mModel);
+ 		G2ERROR(ghlInfo->currentModel,va("NULL Model (glm) %s",ghlInfo->mFileName));
 diff --git a/code/rd-vanilla/tr_WorldEffects.cpp b/code/rd-vanilla/tr_WorldEffects.cpp
 index 5464b70b..6e6d897a 100644
 --- a/code/rd-vanilla/tr_WorldEffects.cpp
 +++ b/code/rd-vanilla/tr_WorldEffects.cpp
-@@ -428,8 +428,21 @@
+@@ -428,8 +428,21 @@ bool R_GetWindGusting(vec3_t atpoint)
  ////////////////////////////////////////////////////////////////////////////////////////
  // Outside Point Cache
  ////////////////////////////////////////////////////////////////////////////////////////
@@ -345,7 +589,7 @@ index 5464b70b..6e6d897a 100644
  #define COUTSIDE_STRUCT_VERSION 1	// you MUST increase this any time you change any binary (fields) inside this class, or cahced files will fuck up
  public:
  	////////////////////////////////////////////////////////////////////////////////////
-@@ -707,8 +720,15 @@
+@@ -707,8 +720,15 @@ public:
  
  		// all this piece of code does really is fill in the bool "SWeatherZone::mMarkedOutside", plus the mPointCache[] for each zone,
  		//	so we can diskload those. Maybe.
@@ -361,7 +605,7 @@ index 5464b70b..6e6d897a 100644
  		{
  			for (int iZone=0; iZone<mWeatherZones.size(); iZone++)
  			{
-@@ -728,7 +748,9 @@
+@@ -728,7 +748,9 @@ public:
  			uint32_t		contents;
  			uint32_t		bit;
  
@@ -371,7 +615,7 @@ index 5464b70b..6e6d897a 100644
  
  			// Iterate Over All Weather Zones
  			//--------------------------------
-@@ -744,6 +766,56 @@
+@@ -744,6 +766,56 @@ public:
  					Mins[x] += (POINTCACHE_CELL_SIZE/2);
  				}
  
@@ -428,7 +672,7 @@ index 5464b70b..6e6d897a 100644
  
  				// Start Scanning
  				//----------------
-@@ -879,6 +951,19 @@
+@@ -879,6 +951,19 @@ public:
  	}
  };
  COutside			mOutside;
@@ -448,7 +692,7 @@ index 5464b70b..6e6d897a 100644
  bool				COutside::SWeatherZone::mMarkedOutside = false;
  
  
-@@ -1035,7 +1120,13 @@
+@@ -1035,7 +1120,13 @@ public:
  		mImage = R_FindImageFile(texturePath, qfalse, qfalse, qfalse, GL_CLAMP);
  		if (!mImage)
  		{
@@ -462,6 +706,59 @@ index 5464b70b..6e6d897a 100644
  		}
  
  		GL_Bind(mImage);
+diff --git a/code/rd-vanilla/tr_backend.cpp b/code/rd-vanilla/tr_backend.cpp
+index 741bb95b..420f0e23 100644
+--- a/code/rd-vanilla/tr_backend.cpp
++++ b/code/rd-vanilla/tr_backend.cpp
+@@ -27,6 +27,10 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
+ #include "tr_common.h"
+ 
+ backEndData_t	*backEndData;
++#ifdef SHADEREMU
++extern "C" int jk2RenderSwapMark( void );	// (gl_jk2.c: the drawing on a worker)
++extern "C" int jk2RenderWorkerHere( void );
++#endif
+ backEndState_t	backEnd;
+ 
+ bool tr_stencilled = false;
+@@ -1568,6 +1572,9 @@ const void	*RB_SwapBuffers( const void *data ) {
+ 
+     GLimp_LogComment( "***************** RB_SwapBuffers *****************\n\n\n" );
+ 
++#ifdef SHADEREMU
++	if ( !jk2RenderSwapMark() )	// (on the drawing's worker: the GPU's list swapped by this core when it is done)
++#endif
+ 	ri.WIN_Present(&window);
+ 
+ 	backEnd.projection2D = qfalse;
+@@ -1604,7 +1611,15 @@ RB_ExecuteRenderCommands
+ void RB_ExecuteRenderCommands( const void *data ) {
+ 	int		t1, t2;
+ 
++#ifdef SHADEREMU
++	const int here = jk2RenderWorkerHere();	// (on the worker: no system call for the time)
++	t1 = here ? 0 : ri.Milliseconds ();
++	if ( here ) {
++		glState.finishCalled = qfalse;	// (RE_BeginFrame's, for the frame it draws)
++	}
++#else
+ 	t1 = ri.Milliseconds ();
++#endif
+ 
+ 	while ( 1 ) {
+ 		data = PADP(data, sizeof(void *));
+@@ -1640,7 +1655,11 @@ void RB_ExecuteRenderCommands( const void *data ) {
+ 		case RC_END_OF_LIST:
+ 		default:
+ 			// stop rendering
++#ifdef SHADEREMU
++			t2 = here ? 0 : ri.Milliseconds ();
++#else
+ 			t2 = ri.Milliseconds ();
++#endif
+ 			backEnd.pc.msec = t2 - t1;
+ 			return;
+ 		}
 diff --git a/code/rd-vanilla/tr_bsp.cpp b/code/rd-vanilla/tr_bsp.cpp
 index afbbb175..a5dbf9fd 100644
 --- a/code/rd-vanilla/tr_bsp.cpp
@@ -478,11 +775,390 @@ index afbbb175..a5dbf9fd 100644
  	}
  	else
  	{
+diff --git a/code/rd-vanilla/tr_cmds.cpp b/code/rd-vanilla/tr_cmds.cpp
+index 04ad9bdb..7973fa69 100644
+--- a/code/rd-vanilla/tr_cmds.cpp
++++ b/code/rd-vanilla/tr_cmds.cpp
+@@ -89,6 +89,20 @@ void R_PerformanceCounters( void ) {
+ R_IssueRenderCommands
+ ====================
+ */
++#ifdef SHADEREMU
++// The drawing a frame behind on a worker (docs/games/jk2.md, "The drawing on a worker"; gl_jk2.c): a frame's commands
++// are given at its end, the worker draws them while this core makes the next frame into the other backEndData
++extern "C" int jk2RenderOn( void );
++extern "C" void jk2RenderSettle( void );
++extern "C" void jk2RenderGive( void ( *fn )( const void * ), const void *arg );
++extern "C" void jk2RenderPresent( void );
++extern "C" void jk2RenderGo( void );
++int SE_RSBones( void );
++void SE_RSInline( void );
++unsigned SE_RSFrom( void );
++void SE_SkinGive( unsigned from, unsigned to );
++backEndData_t *se_backEndData[2];
++#endif
+ void R_IssueRenderCommands( qboolean runPerformanceCounters ) {
+ 	renderCommandList_t	*cmdList;
+ 
+@@ -101,6 +115,21 @@ void R_IssueRenderCommands( qboolean runPerformanceCounters ) {
+ 	// clear it out, in case this is a sync and not a buffer flip
+ 	cmdList->used = 0;
+ 
++#ifdef SHADEREMU
++	jk2RenderSettle();	// (the frame before done, and shown)
++	unsigned se_from = SE_RSFrom();
++	if ( runPerformanceCounters && !r_skipBackEnd->integer && jk2RenderOn() && se_backEndData[1] && SE_RSBones() >= 0 ) {
++		R_PerformanceCounters();
++		jk2RenderGive( RB_ExecuteRenderCommands, cmdList->cmds );	// (it waits for jk2RenderGo: the skins given out first)
++		SE_SkinGive( se_from, SE_RSFrom() );
++		jk2RenderGo();
++		backEndData = se_backEndData[backEndData == se_backEndData[0]];
++		jk2RenderPresent();	// (the window's frame: its input and its counts, as at the swap)
++		return;
++	}
++	SE_RSInline();
++#endif
++
+ 	// at this point, the back end thread is idle, so it is ok
+ 	// to look at it's performance counters
+ 	if ( runPerformanceCounters ) {
+@@ -375,6 +404,9 @@ void RE_BeginFrame( stereoFrame_t stereoFrame ) {
+ 	if ( !tr.registered ) {
+ 		return;
+ 	}
++#ifdef SHADEREMU
++	if ( !jk2RenderOn() )	// (the drawing's state: its worker clears it when it begins the frame, tr_backend.cpp)
++#endif
+ 	glState.finishCalled = qfalse;
+ 
+ 	tr.frameCount++;
+diff --git a/code/rd-vanilla/tr_ghoul2.cpp b/code/rd-vanilla/tr_ghoul2.cpp
+index 5062daf5..9216301e 100644
+--- a/code/rd-vanilla/tr_ghoul2.cpp
++++ b/code/rd-vanilla/tr_ghoul2.cpp
+@@ -723,6 +723,56 @@ CRenderableSurface *AllocRS()
+ 	return ret;
+ }
+ 
++#ifdef SHADEREMU
++// The drawing a frame behind on a worker (docs/games/jk2.md, "The drawing on a worker"): a Ghoul2 surface's bones are
++// evaluated lazily into the model's bone cache, which the game's and the client's bolts set up anew (their own times
++// and flags) while the worker draws. So when a frame is given, this core evaluates the bones each surface of it names,
++// as the drawing would have at once, and the drawing reads those (two sets: the frame out and the one being made).
++#define SE_RS_BONES ( 96 * 1024 )		// floats a set: 8,000 matrices
++static float se_rs_bones[2][SE_RS_BONES];
++static int se_rs_set, se_rs_from;
++int SE_RSBones( void )
++{
++	float *pool = se_rs_bones[se_rs_set];
++	int used = 0, made = 0;
++	for ( unsigned i = (unsigned)se_rs_from ; i != NextRS ; i = ( i + 1 ) % MAX_RENDER_SURFACES )
++	{
++		CRenderableSurface *rs = &RSStorage[i];
++		rs->seBones = 0;
++		if ( !rs->boneCache || !rs->surfaceData
++#ifdef _G2_GORE
++			|| rs->alternateTex
++#endif
++			)
++			continue;
++		const mdxmSurface_t *surface = rs->surfaceData;
++		const int *refs = (const int *)( (const byte *)surface + surface->ofsBoneReferences );
++		if ( used + surface->numBoneReferences * 12 > SE_RS_BONES )
++			return -1;	// (no room: the caller draws this frame on this core)
++		float *out = pool + used;
++		for ( int r = 0 ; r < surface->numBoneReferences ; r++ )
++			memcpy( out + r * 12, &rs->boneCache->Eval( refs[r] ), 12 * sizeof( float ) );
++		rs->seBones = out;
++		used += surface->numBoneReferences * 12;
++		made++;
++	}
++	se_rs_from = NextRS;
++	se_rs_set ^= 1;
++	return made;
++}
++unsigned SE_RSFrom( void ) { return (unsigned)se_rs_from; }
++// (the frame's surfaces, drawn on this core: their bones are the cache's, as always)
++void SE_RSInline( void )
++{
++	for ( unsigned i = (unsigned)se_rs_from ; i != NextRS ; i = ( i + 1 ) % MAX_RENDER_SURFACES )
++		RSStorage[i].seBones = 0;
++	se_rs_from = NextRS;
++}
++#define SE_EVAL( k ) ( surf->seBones ? (const mdxaBone_t *)( surf->seBones + ( k ) * 12 ) : &bones->Eval( piBoneReferences[k] ) )
++#else
++#define SE_EVAL( k ) ( &bones->Eval( piBoneReferences[k] ) )
++#endif
++
+ /*
+ 
+ All bones should be an identity orientation to display the mesh exactly
+@@ -2768,6 +2818,191 @@ void G2_ConstructGhoulSkeleton( CGhoul2Info_v &ghoul2,const int frameNum,bool ch
+ RB_SurfaceGhoul
+ ==============
+ */
++#ifdef SHADEREMU
++// A Ghoul2 surface's vertices skinned into X and N (STRIDE floats a vertex): RB_SurfaceGhoul's own loop, the same
++// operations in the same order, for the drawing's worker or a helper worker (docs/games/jk2.md, "The drawing on a worker")
++static void se_skin( const CRenderableSurface *surf, float *X, float *N, int stride )
++{
++	const mdxmSurface_t *surface = surf->surfaceData;
++	CBoneCache *bones = surf->boneCache;
++	const int *piBoneReferences = (const int *) ((const byte *)surface + surface->ofsBoneReferences);
++	mdxmVertex_t *v = (mdxmVertex_t *) ((const byte *)surface + surface->ofsVerts);
++	const int numVerts = surface->numVerts;
++	int j, k;
++	float fTotalWeight, fBoneWeight, t1, t2;
++	const mdxaBone_t *bone, *bone2;
++	for ( j = 0; j < numVerts; j++, v++, X += stride, N += stride )
++		{
++#ifdef JK2_MODE
++			bone = SE_EVAL( G2_GetVertBoneIndex( v, 0 ) );
++#else
++			bone = &bones->EvalRender(piBoneReferences[G2_GetVertBoneIndex( v, 0 )]);
++#endif // JK2_MODE
++			int iNumWeights = G2_GetVertWeights( v );
++			N[0] = DotProduct( bone->matrix[0], v->normal );
++			N[1] = DotProduct( bone->matrix[1], v->normal );
++			N[2] = DotProduct( bone->matrix[2], v->normal );
++
++			if (iNumWeights==1)
++			{
++				X[0] = ( DotProduct( bone->matrix[0], v->vertCoords ) + bone->matrix[0][3] );
++				X[1] = ( DotProduct( bone->matrix[1], v->vertCoords ) + bone->matrix[1][3] );
++				X[2] = ( DotProduct( bone->matrix[2], v->vertCoords ) + bone->matrix[2][3] );
++			}
++			else
++			{
++				fBoneWeight = G2_GetVertBoneWeightNotSlow( v, 0);
++				if (iNumWeights==2)
++				{
++#ifdef JK2_MODE
++					bone2 = SE_EVAL( G2_GetVertBoneIndex( v, 1 ) );
++#else
++					bone2 = &bones->EvalRender(piBoneReferences[G2_GetVertBoneIndex( v, 1 )]);
++#endif // JK2_MODE
++					/*
++					useless transposition
++					X[0] =
++					v[0]*(w*(bone->matrix[0][0]-bone2->matrix[0][0])+bone2->matrix[0][0])+
++					v[1]*(w*(bone->matrix[0][1]-bone2->matrix[0][1])+bone2->matrix[0][1])+
++					v[2]*(w*(bone->matrix[0][2]-bone2->matrix[0][2])+bone2->matrix[0][2])+
++					w*(bone->matrix[0][3]-bone2->matrix[0][3]) + bone2->matrix[0][3];
++					*/
++					t1 = ( DotProduct( bone->matrix[0], v->vertCoords ) + bone->matrix[0][3] );
++					t2 = ( DotProduct( bone2->matrix[0], v->vertCoords ) + bone2->matrix[0][3] );
++					X[0] = fBoneWeight * (t1-t2) + t2;
++					t1 = ( DotProduct( bone->matrix[1], v->vertCoords ) + bone->matrix[1][3] );
++					t2 = ( DotProduct( bone2->matrix[1], v->vertCoords ) + bone2->matrix[1][3] );
++					X[1] = fBoneWeight * (t1-t2) + t2;
++					t1 = ( DotProduct( bone->matrix[2], v->vertCoords ) + bone->matrix[2][3] );
++					t2 = ( DotProduct( bone2->matrix[2], v->vertCoords ) + bone2->matrix[2][3] );
++					X[2] = fBoneWeight * (t1-t2) + t2;
++				}
++				else
++				{
++
++					X[0] = fBoneWeight * ( DotProduct( bone->matrix[0], v->vertCoords ) + bone->matrix[0][3] );
++					X[1] = fBoneWeight * ( DotProduct( bone->matrix[1], v->vertCoords ) + bone->matrix[1][3] );
++					X[2] = fBoneWeight * ( DotProduct( bone->matrix[2], v->vertCoords ) + bone->matrix[2][3] );
++
++					fTotalWeight=fBoneWeight;
++					for (k=1; k < iNumWeights-1 ; k++)
++					{
++#ifdef JK2_MODE
++						bone = SE_EVAL( G2_GetVertBoneIndex( v, k ) );
++#else
++						bone = &bones->EvalRender(piBoneReferences[G2_GetVertBoneIndex( v, k )]);
++#endif // JK2_MODE
++
++						fBoneWeight = G2_GetVertBoneWeightNotSlow( v, k);
++						fTotalWeight += fBoneWeight;
++
++						X[0] += fBoneWeight * ( DotProduct( bone->matrix[0], v->vertCoords ) + bone->matrix[0][3] );
++						X[1] += fBoneWeight * ( DotProduct( bone->matrix[1], v->vertCoords ) + bone->matrix[1][3] );
++						X[2] += fBoneWeight * ( DotProduct( bone->matrix[2], v->vertCoords ) + bone->matrix[2][3] );
++					}
++
++#ifdef JK2_MODE
++					bone = SE_EVAL( G2_GetVertBoneIndex( v, k ) );
++#else
++					bone = &bones->EvalRender(piBoneReferences[G2_GetVertBoneIndex( v, k )]);
++#endif // JK2_MODE
++					fBoneWeight	= 1.0f-fTotalWeight;
++
++					X[0] += fBoneWeight * ( DotProduct( bone->matrix[0], v->vertCoords ) + bone->matrix[0][3] );
++					X[1] += fBoneWeight * ( DotProduct( bone->matrix[1], v->vertCoords ) + bone->matrix[1][3] );
++					X[2] += fBoneWeight * ( DotProduct( bone->matrix[2], v->vertCoords ) + bone->matrix[2][3] );
++				}
++			}
++
++	}
++}
++
++// The frame's Ghoul2 surfaces skinned by helper workers while the drawing's worker draws the rest (SE_RSBones gives
++// them out; JK2_SKIN=drawing: by the drawing's worker itself)
++extern "C" int jk2SkinPost( unsigned ( *fn )( unsigned, unsigned ), unsigned a0, unsigned a1 );
++extern "C" void jk2SkinJoin( void );
++extern "C" void jk2Touch( void *memory, unsigned bytes );
++extern "C" void jk2WaitPass( void );
++#define SE_SKIN_JOBS 8
++#define SE_SKIN_FLOATS ( 8 * 48 * 1024 )		// a set: 48 thousand vertices of 8 floats
++static float se_skin_pool[2][SE_SKIN_FLOATS] __attribute__(( aligned( 16 ) ));
++static struct __attribute__(( aligned( 16 ) )) { CRenderableSurface *rs[256]; int count; } se_skin_jobs[2][SE_SKIN_JOBS];
++static struct __attribute__(( aligned( 16 ) )) { volatile unsigned done, unused[3]; } se_skin_done[2][SE_SKIN_JOBS];	// a helper's
++static unsigned se_skin_stamp[2];
++static int se_skin_on = -1;
++static unsigned se_skin_job( unsigned set_job, unsigned stamp )
++{
++	const int set = set_job >> 8, job = set_job & 255;
++	for ( int i = 0 ; i < se_skin_jobs[set][job].count ; i++ )
++	{
++		CRenderableSurface *rs = se_skin_jobs[set][job].rs[i];
++		se_skin( rs, (float *)rs->seSkin, (float *)rs->seSkin + 4, 8 );
++	}
++	se_skin_done[set][job].done = stamp;
++	return 0;
++}
++// (the drawing's worker: the surface's helper done, ending its passes until then)
++static int SE_SkinReady( const CRenderableSurface *surf )
++{
++	while ( se_skin_done[surf->seSkinSet][surf->seSkinJob].done != surf->seSkinStamp )
++		jk2WaitPass();
++	return 1;
++}
++#endif
++#ifdef SHADEREMU
++// (after SE_RSBones, at the give: the given frame's Ghoul2 surfaces shared out to helpers by their vertices)
++void SE_SkinGive( unsigned from, unsigned to )
++{
++	if ( se_skin_on < 0 )
++	{
++		const char *k = getenv( "JK2_SKIN" );
++		se_skin_on = !( k && !strcmp( k, "drawing" ) );
++		jk2Touch( se_skin_pool, sizeof( se_skin_pool ) );
++		jk2Touch( se_skin_done, sizeof( se_skin_done ) );
++	}
++	static int set;
++	jk2SkinJoin();		// (the helpers of the frame before: done, as the drawing that waited for them is)
++	set ^= 1;
++	const unsigned stamp = ++se_skin_stamp[set];
++	int total = 0, used = 0;
++	for ( int j = 0 ; j < SE_SKIN_JOBS ; j++ )
++		se_skin_jobs[set][j].count = 0;
++	for ( unsigned i = from ; i != to ; i = ( i + 1 ) % MAX_RENDER_SURFACES )
++	{
++		RSStorage[i].seSkin = 0;
++		if ( RSStorage[i].seBones )
++			total += RSStorage[i].surfaceData->numVerts;
++	}
++	if ( !se_skin_on || total < 2000 )
++		return;
++	const int share = total / SE_SKIN_JOBS + 1;
++	int job = 0, in_job = 0;
++	for ( unsigned i = from ; i != to ; i = ( i + 1 ) % MAX_RENDER_SURFACES )
++	{
++		CRenderableSurface *rs = &RSStorage[i];
++		if ( !rs->seBones )
++			continue;
++		const int n = rs->surfaceData->numVerts;
++		if ( used + n * 8 > SE_SKIN_FLOATS || se_skin_jobs[set][job].count == 256 )
++			break;
++		rs->seSkin = se_skin_pool[set] + used, rs->seSkinSet = set, rs->seSkinJob = job, rs->seSkinStamp = stamp;
++		used += n * 8;
++		se_skin_jobs[set][job].rs[se_skin_jobs[set][job].count++] = rs;
++		if ( ( in_job += n ) >= share && job < SE_SKIN_JOBS - 1 )
++			job++, in_job = 0;
++	}
++	for ( int j = 0 ; j <= job && j < SE_SKIN_JOBS ; j++ )
++	{
++		if ( se_skin_jobs[set][j].count && !jk2SkinPost( se_skin_job, (unsigned)( set << 8 | j ), stamp ) )
++		{	// (no worker free: the drawing's worker skins these itself)
++			for ( int i = 0 ; i < se_skin_jobs[set][j].count ; i++ )
++				se_skin_jobs[set][j].rs[i]->seSkin = 0;
++			se_skin_jobs[set][j].count = 0;
++		}
++	}
++}
++#endif
++
+ void RB_SurfaceGhoul( CRenderableSurface *surf )
+ {
+ #ifdef G2_PERFORMANCE_ANALYSIS
+@@ -2989,10 +3224,32 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
+ 		float t2;
+ 		const mdxaBone_t *bone;
+ 		const mdxaBone_t *bone2;
++#ifdef SHADEREMU
++		if ( surf->seSkin && SE_SkinReady( surf ) )
++		{
++			const float *in = surf->seSkin;
++			for ( j = 0; j < numVerts; j++, baseVertex++, in += 8 )
++			{
++				tess.xyz[baseVertex][0] = in[0], tess.xyz[baseVertex][1] = in[1], tess.xyz[baseVertex][2] = in[2];
++				tess.normal[baseVertex][0] = in[4], tess.normal[baseVertex][1] = in[5], tess.normal[baseVertex][2] = in[6];
++				tess.texCoords[baseVertex][0][0] = pTexCoords[j].texCoords[0];
++				tess.texCoords[baseVertex][0][1] = pTexCoords[j].texCoords[1];
++			}
++		}
++		else
++		{
++			se_skin( surf, tess.xyz[baseVertex], tess.normal[baseVertex], 4 );
++			for ( j = 0; j < numVerts; j++, baseVertex++ )
++			{
++				tess.texCoords[baseVertex][0][0] = pTexCoords[j].texCoords[0];
++				tess.texCoords[baseVertex][0][1] = pTexCoords[j].texCoords[1];
++			}
++		}
++#else
+ 		for ( j = 0; j < numVerts; j++, baseVertex++,v++ )
+ 		{
+ #ifdef JK2_MODE
+-			bone = &bones->Eval(piBoneReferences[G2_GetVertBoneIndex( v, 0 )]);
++			bone = SE_EVAL( G2_GetVertBoneIndex( v, 0 ) );
+ #else
+ 			bone = &bones->EvalRender(piBoneReferences[G2_GetVertBoneIndex( v, 0 )]);
+ #endif // JK2_MODE
+@@ -3013,7 +3270,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
+ 				if (iNumWeights==2)
+ 				{
+ #ifdef JK2_MODE
+-					bone2 = &bones->Eval(piBoneReferences[G2_GetVertBoneIndex( v, 1 )]);
++					bone2 = SE_EVAL( G2_GetVertBoneIndex( v, 1 ) );
+ #else
+ 					bone2 = &bones->EvalRender(piBoneReferences[G2_GetVertBoneIndex( v, 1 )]);
+ #endif // JK2_MODE
+@@ -3046,7 +3303,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
+ 					for (k=1; k < iNumWeights-1 ; k++)
+ 					{
+ #ifdef JK2_MODE
+-						bone = &bones->Eval(piBoneReferences[G2_GetVertBoneIndex( v, k )]);
++						bone = SE_EVAL( G2_GetVertBoneIndex( v, k ) );
+ #else
+ 						bone = &bones->EvalRender(piBoneReferences[G2_GetVertBoneIndex( v, k )]);
+ #endif // JK2_MODE
+@@ -3060,7 +3317,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
+ 					}
+ 
+ #ifdef JK2_MODE
+-					bone = &bones->Eval(piBoneReferences[G2_GetVertBoneIndex( v, k )]);
++					bone = SE_EVAL( G2_GetVertBoneIndex( v, k ) );
+ #else
+ 					bone = &bones->EvalRender(piBoneReferences[G2_GetVertBoneIndex( v, k )]);
+ #endif // JK2_MODE
+@@ -3075,6 +3332,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
+ 			tess.texCoords[baseVertex][0][0] = pTexCoords[j].texCoords[0];
+ 			tess.texCoords[baseVertex][0][1] = pTexCoords[j].texCoords[1];
+ 		}
++#endif
+ #if 0
+ 	}
+ #endif
 diff --git a/code/rd-vanilla/tr_image.cpp b/code/rd-vanilla/tr_image.cpp
 index a13badd4..73f86498 100644
 --- a/code/rd-vanilla/tr_image.cpp
 +++ b/code/rd-vanilla/tr_image.cpp
-@@ -554,6 +554,9 @@
+@@ -554,6 +554,9 @@ Upload32
  
  ===============
  */
@@ -492,7 +1168,7 @@ index a13badd4..73f86498 100644
  static void Upload32( unsigned *data,
  						  GLenum format,
  						  qboolean mipmap,
-@@ -576,7 +579,11 @@
+@@ -576,7 +579,11 @@ static void Upload32( unsigned *data,
  	    // perform optional picmip operation
  	    //
  	    if ( picmip ) {
@@ -504,7 +1180,7 @@ index a13badd4..73f86498 100644
  			    R_MipMap( (byte *)data, width, height );
  			    width >>= 1;
  			    height >>= 1;
-@@ -703,7 +710,11 @@
+@@ -703,7 +710,11 @@ static void Upload32( unsigned *data,
  
  	    qglTexImage2D (GL_TEXTURE_2D, 0, *pformat, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, data );
  
@@ -516,7 +1192,7 @@ index a13badd4..73f86498 100644
  	    {
  		    int		miplevel;
  
-@@ -1087,12 +1098,25 @@
+@@ -1087,12 +1098,25 @@ image_t	*R_FindImageFile( const char *name, qboolean mipmap, qboolean allowPicmi
  	//
  	// load the pic from disk
  	//
@@ -542,6 +1218,198 @@ index a13badd4..73f86498 100644
  	R_Free( pic );
  	return image;
  }
+diff --git a/code/rd-vanilla/tr_init.cpp b/code/rd-vanilla/tr_init.cpp
+index 13c72e66..c474a255 100644
+--- a/code/rd-vanilla/tr_init.cpp
++++ b/code/rd-vanilla/tr_init.cpp
+@@ -1752,6 +1752,13 @@ void R_Init( void ) {
+ 	R_Register();
+ 
+ 	backEndData = (backEndData_t *) R_Hunk_Alloc( sizeof( backEndData_t ), qtrue );
++#ifdef SHADEREMU
++	{	// (a second for the drawing on a worker: tr_cmds.cpp)
++		extern backEndData_t *se_backEndData[2];
++		se_backEndData[0] = backEndData;
++		se_backEndData[1] = (backEndData_t *) R_Hunk_Alloc( sizeof( backEndData_t ), qtrue );
++	}
++#endif
+ 	R_InitNextFrame();
+ 
+ 	const color4ub_t color = {0xff, 0xff, 0xff, 0xff};
+diff --git a/code/rd-vanilla/tr_local.h b/code/rd-vanilla/tr_local.h
+index c9e745aa..f77e65fa 100644
+--- a/code/rd-vanilla/tr_local.h
++++ b/code/rd-vanilla/tr_local.h
+@@ -1587,6 +1587,12 @@ public:
+ #endif
+  	CBoneCache 		*boneCache;		// pointer to transformed bone list for this surf
+ 	mdxmSurface_t	*surfaceData;	// pointer to surface data loaded into file - only used by client renderer DO NOT USE IN GAME SIDE - if there is a vid restart this will be out of wack on the game
++#ifdef SHADEREMU
++	const float		*seBones = 0;	// its bone references' matrices as the frame was given to the drawing's worker (SE_RSBones)
++	const float		*seSkin = 0;	// its vertices skinned by a helper worker: xyz and normal, 8 floats a vertex (SE_SkinGive)
++	int				seSkinSet = 0, seSkinJob = 0;
++	unsigned		seSkinStamp = 0;
++#endif
+ #ifdef _G2_GORE
+ 	float			*alternateTex;		// alternate texture coordinates.
+ 	void			*goreChain;
+@@ -1604,6 +1610,10 @@ public:
+ 		surfaceData = src.surfaceData;
+ 		alternateTex = src.alternateTex;
+ 		goreChain = src.goreChain;
++#ifdef SHADEREMU
++		seBones = src.seBones;
++		seSkin = src.seSkin, seSkinSet = src.seSkinSet, seSkinJob = src.seSkinJob, seSkinStamp = src.seSkinStamp;
++#endif
+ 
+ 		return *this;
+ 	}
+@@ -1625,6 +1635,10 @@ CRenderableSurface():
+ 	{
+ 		boneCache=0;
+ 		surfaceData=0;
++#ifdef SHADEREMU
++		seBones=0;
++		seSkin=0;
++#endif
+ #ifdef _G2_GORE
+ 		ident = SF_MDX;
+ 		alternateTex=0;
+diff --git a/code/rd-vanilla/tr_main.cpp b/code/rd-vanilla/tr_main.cpp
+index da619736..4bc452c6 100644
+--- a/code/rd-vanilla/tr_main.cpp
++++ b/code/rd-vanilla/tr_main.cpp
+@@ -205,7 +205,15 @@ void R_LocalPointToWorld (const vec3_t local, vec3_t world) {
+ 	world[2] = local[0] * tr.ori.axis[0][2] + local[1] * tr.ori.axis[1][2] + local[2] * tr.ori.axis[2][2] + tr.ori.origin[2];
+ }
+ 
++#ifdef SHADEREMU
++// (R_RotateForEntity's scratch, one for this core's front end and one for the drawing's worker: docs/games/jk2.md,
++// "The drawing on a worker"; RVC_RACES found the two storing to it at once)
++extern "C" int jk2RenderWorkerHere( void );
++static float se_preTransEntMatrix[2][16] __attribute__(( aligned( 16 ) ));
++#define preTransEntMatrix ( se_preTransEntMatrix[jk2RenderWorkerHere()] )
++#else
+ float preTransEntMatrix[16];
++#endif
+ 
+ void R_InvertMatrix(float *sourcemat, float *destmat)
+ {
+diff --git a/code/rd-vanilla/tr_marks.cpp b/code/rd-vanilla/tr_marks.cpp
+index 2da2512a..97658329 100644
+--- a/code/rd-vanilla/tr_marks.cpp
++++ b/code/rd-vanilla/tr_marks.cpp
+@@ -45,8 +45,14 @@ Out must have space for two more vertexes than in
+ static void R_ChopPolyBehindPlane( int numInPoints, vec3_t inPoints[MAX_VERTS_ON_POLY],
+ 								   int *numOutPoints, vec3_t outPoints[MAX_VERTS_ON_POLY],
+ 							vec3_t normal, vec_t dist, vec_t epsilon) {
++#ifdef SHADEREMU
++	// (not cleared: only the first numInPoints + 1 are read, all written below; clearing both was 4% of a frame of play)
++	float		dists[MAX_VERTS_ON_POLY+4];
++	int			sides[MAX_VERTS_ON_POLY+4];
++#else
+ 	float		dists[MAX_VERTS_ON_POLY+4] = { 0 };
+ 	int			sides[MAX_VERTS_ON_POLY+4] = { 0 };
++#endif
+ 	int			counts[3];
+ 	float		dot;
+ 	int			i, j;
+diff --git a/code/rd-vanilla/tr_model.cpp b/code/rd-vanilla/tr_model.cpp
+index a6d5bc7b..bcfc3f67 100644
+--- a/code/rd-vanilla/tr_model.cpp
++++ b/code/rd-vanilla/tr_model.cpp
+@@ -254,9 +254,15 @@ extern cvar_t *r_modelpoolmegs;
+ // return qtrue if at least one cached model was freed (which tells z_malloc()-fail recovery code to try again)
+ //
+ extern qboolean gbInsideRegisterModel;
++#ifdef SHADEREMU
++int se_models_gen;	// raised where models may be freed: what is kept of a model's vertices goes by it (tr_surface.cpp)
++#endif
+ qboolean RE_RegisterModels_LevelLoadEnd(qboolean bDeleteEverythingNotUsedThisLevel /* = qfalse */)
+ {
+ 	qboolean bAtLeastoneModelFreed = qfalse;
++#ifdef SHADEREMU
++	se_models_gen++;
++#endif
+ 
+ 	if (gbInsideRegisterModel)
+ 	{
+@@ -342,6 +348,9 @@ void RE_RegisterModels_Info_f( void )
+ 
+ static void RE_RegisterModels_DeleteAll(void)
+ {
++#ifdef SHADEREMU
++	se_models_gen++;
++#endif
+ 	if(!CachedModels) {
+ 		return;	//argh!
+ 	}
+@@ -1004,6 +1013,9 @@ R_ModelInit
+ */
+ void R_ModelInit( void )
+ {
++#ifdef SHADEREMU
++	se_models_gen++;
++#endif
+ 	static CachedModels_t singleton;	// sorry vv, your dynamic allocation was a (false) memory leak
+ 	CachedModels = &singleton;
+ 
+diff --git a/code/rd-vanilla/tr_surface.cpp b/code/rd-vanilla/tr_surface.cpp
+index 1e51e71c..19f1439d 100644
+--- a/code/rd-vanilla/tr_surface.cpp
++++ b/code/rd-vanilla/tr_surface.cpp
+@@ -1196,6 +1196,51 @@ static void LerpMeshVertexes (md3Surface_t *surf, float backlerp)
+ 
+ 	numVerts = surf->numVerts;
+ 
++#ifdef SHADEREMU
++	// (docs/games/jk2.md, "Fewer instructions": a frame of a model not between two frames is the same vertices and
++	// normals every time: made once and kept, the last 8 of them; the menu's turning logo, 1,399 vertices, was 100
++	// thousand instructions of its frame)
++	if ( backlerp == 0 && numVerts <= SHADER_MAX_VERTEXES ) {
++		extern int se_models_gen;	// (tr_model.cpp: raised where models may be freed)
++		static struct { const short *from; int numVerts, gen; float *made; } kept[8];
++		static int kept_next;
++		int k;
++		for ( k = 0 ; k < 8 && !( kept[k].from == newXyz && kept[k].numVerts == numVerts && kept[k].gen == se_models_gen ) ; k++ ) {
++		}
++		if ( k == 8 ) {
++			static float kept_pool[8][SHADER_MAX_VERTEXES * 6];	// (no malloc: the drawing may be on a worker)
++			k = kept_next++ & 7;
++			float *made = kept_pool[k];
++			if ( made ) {
++				const short *x = newXyz, *n = newNormals;
++				for ( vertNum = 0 ; vertNum < numVerts ; vertNum++, x += 4, n += 4 ) {
++					float *m = made + vertNum * 6;
++					m[0] = x[0] * newXyzScale;
++					m[1] = x[1] * newXyzScale;
++					m[2] = x[2] * newXyzScale;
++					lat = ( n[0] >> 8 ) & 0xff;
++					lng = ( n[0] & 0xff );
++					lat *= (FUNCTABLE_SIZE/256);
++					lng *= (FUNCTABLE_SIZE/256);
++					m[3] = tr.sinTable[(lat+(FUNCTABLE_SIZE/4))&FUNCTABLE_MASK] * tr.sinTable[lng];
++					m[4] = tr.sinTable[lat] * tr.sinTable[lng];
++					m[5] = tr.sinTable[(lng+(FUNCTABLE_SIZE/4))&FUNCTABLE_MASK];
++				}
++				kept[k].from = newXyz, kept[k].numVerts = numVerts, kept[k].gen = se_models_gen, kept[k].made = made;
++			} else {
++				kept[k].from = NULL;
++			}
++		}
++		if ( k < 8 && kept[k].from ) {
++			const float *m = kept[k].made;
++			for ( vertNum = 0 ; vertNum < numVerts ; vertNum++, m += 6, outXyz += 4, outNormal += 4 ) {
++				outXyz[0] = m[0], outXyz[1] = m[1], outXyz[2] = m[2];
++				outNormal[0] = m[3], outNormal[1] = m[4], outNormal[2] = m[5];
++			}
++			return;
++		}
++	}
++#endif
+ 	if ( backlerp == 0 ) {
+ 		//
+ 		// just copy the vertexes
 diff --git a/code/server/sv_game.cpp b/code/server/sv_game.cpp
 index 8cd596fb..b8e4be48 100644
 --- a/code/server/sv_game.cpp
@@ -646,11 +1514,119 @@ index bdb72696..0919f611 100644
  	{
  		char	text[1024]={0};
  		cgi_SP_GetStringTextString( "INGAME_ALONGTIME", text, sizeof(text) );
+diff --git a/codeJK2/cgame/cg_marks.cpp b/codeJK2/cgame/cg_marks.cpp
+index f4bcfa8d..ba92f91b 100644
+--- a/codeJK2/cgame/cg_marks.cpp
++++ b/codeJK2/cgame/cg_marks.cpp
+@@ -128,6 +128,10 @@ passed to the renderer.
+ #define	MAX_MARK_FRAGMENTS	128
+ #define	MAX_MARK_POINTS		384
+ 
++#ifdef SHADEREMU
++void ( *se_mark_kept )( int numPoints, const polyVert_t *verts );	// a temporary mark's polygons, told as they are added
++#endif
++
+ void CG_ImpactMark( qhandle_t markShader, const vec3_t origin, const vec3_t dir,
+ 				   float orientation, float red, float green, float blue, float alpha,
+ 				   qboolean alphaFade, float radius, qboolean temporary ) {
+@@ -202,6 +206,11 @@ void CG_ImpactMark( qhandle_t markShader, const vec3_t origin, const vec3_t dir,
+ 		// if it is a temporary (shadow) mark, add it immediately and forget about it
+ 		if ( temporary ) {
+ 			cgi_R_AddPolyToScene( markShader, mf->numPoints, verts );
++#ifdef SHADEREMU
++			if ( se_mark_kept ) {	// (cg_players.cpp's shadows keep what they add: docs/games/jk2.md, "Fewer instructions")
++				se_mark_kept( mf->numPoints, verts );
++			}
++#endif
+ 			continue;
+ 		}
+ 
 diff --git a/codeJK2/cgame/cg_players.cpp b/codeJK2/cgame/cg_players.cpp
-index ef21d32f..c274c77d 100644
+index ef21d32f..ccd51a90 100644
 --- a/codeJK2/cgame/cg_players.cpp
 +++ b/codeJK2/cgame/cg_players.cpp
-@@ -3007,11 +3007,13 @@ void _PlayerSplash( const vec3_t origin, const vec3_t velocity, const float radi
+@@ -2861,7 +2861,80 @@ void CG_PlayerPowerups( centity_t *cent )
+ }
+ 
+ #define	SHADOW_DISTANCE		128
++#ifdef SHADEREMU
++// A blob shadow kept (docs/games/jk2.md, "Fewer instructions"): its trace down and its mark's polygons are of the world
++// alone, so a shadow from the same place, turned the same way, of the same size is the one made before: kept and given
++// to the renderer again (9 shadows a frame of play were 1.6 million instructions; standing people's are the same each
++// frame). JK2_SHADOWS=made: always made.
++#define SE_SHADOWS			32
++#define SE_SHADOW_POLYS		12
++#define SE_SHADOW_POINTS	10
++typedef struct {
++	vec3_t		origin;
++	float		orientation, radius, plane;
++	int			used, polys, points[SE_SHADOW_POLYS];
++	qboolean	result, whole;
++	polyVert_t	verts[SE_SHADOW_POLYS][SE_SHADOW_POINTS];
++} seShadow_t;
++static seShadow_t se_shadows[SE_SHADOWS], *se_shadow_now;
++static int se_shadow_clock, se_shadow_off = -1;
++extern void ( *se_mark_kept )( int numPoints, const polyVert_t *verts );
++static void se_shadow_keep( int numPoints, const polyVert_t *verts ) {
++	seShadow_t *e = se_shadow_now;
++	if ( !e || e->polys >= SE_SHADOW_POLYS || numPoints > SE_SHADOW_POINTS ) {
++		if ( e ) {
++			e->whole = qfalse;
++		}
++		return;
++	}
++	e->points[e->polys] = numPoints;
++	memcpy( e->verts[e->polys], verts, numPoints * sizeof( polyVert_t ) );
++	e->polys++;
++}
++static qboolean _PlayerShadowMade( const vec3_t origin, const float orientation, float *const shadowPlane, const float radius );
+ static qboolean _PlayerShadow( const vec3_t origin, const float orientation, float *const shadowPlane, const float radius ) {
++	if ( se_shadow_off < 0 ) {
++		const char *s = getenv( "JK2_SHADOWS" );
++		se_shadow_off = s && !strcmp( s, "made" );
++	}
++	if ( se_shadow_off || cg_shadows.integer != 1 || !cg_addMarks.integer ) {
++		return _PlayerShadowMade( origin, orientation, shadowPlane, radius );
++	}
++	seShadow_t *e, *oldest = &se_shadows[0];
++	for ( e = se_shadows ; e < se_shadows + SE_SHADOWS ; e++ ) {
++		if ( e->used && e->origin[0] == origin[0] && e->origin[1] == origin[1] && e->origin[2] == origin[2] &&
++			 e->orientation == orientation && e->radius == radius ) {
++			e->used = ++se_shadow_clock;
++			for ( int i = 0 ; i < e->polys ; i++ ) {
++				cgi_R_AddPolyToScene( cgs.media.shadowMarkShader, e->points[i], e->verts[i] );
++			}
++			if ( e->result ) {
++				*shadowPlane = e->plane;
++			}
++			return e->result;
++		}
++		if ( e->used < oldest->used ) {
++			oldest = e;
++		}
++	}
++	e = oldest;
++	VectorCopy( origin, e->origin );
++	e->orientation = orientation, e->radius = radius, e->polys = 0, e->whole = qtrue, e->plane = *shadowPlane;
++	se_shadow_now = e;
++	se_mark_kept = se_shadow_keep;
++	e->result = _PlayerShadowMade( origin, orientation, &e->plane, radius );
++	se_mark_kept = NULL;
++	se_shadow_now = NULL;
++	e->used = e->whole ? ++se_shadow_clock : 0;
++	if ( e->result ) {
++		*shadowPlane = e->plane;
++	}
++	return e->result;
++}
++static qboolean _PlayerShadowMade( const vec3_t origin, const float orientation, float *const shadowPlane, const float radius ) {
++#else
++static qboolean _PlayerShadow( const vec3_t origin, const float orientation, float *const shadowPlane, const float radius ) {
++#endif
+ 	vec3_t		end, mins = {-7, -7, 0}, maxs = {7, 7, 2};
+ 	trace_t		trace;
+ 	float		alpha;
+@@ -3007,11 +3080,13 @@ void _PlayerSplash( const vec3_t origin, const vec3_t velocity, const float radi
  
  	float alpha = ( t / 8192.0f ) * 0.6f + 0.2f;
  
@@ -665,7 +1641,7 @@ index ef21d32f..c274c77d 100644
  								cgs.media.wakeMarkShader, FX_ALPHA_LINEAR | FX_SIZE_LINEAR );
  }
  
-@@ -3349,7 +3351,9 @@ static void CG_ForceElectrocution( centity_t *cent, const vec3_t origin, vec3_t
+@@ -3349,7 +3424,9 @@ static void CG_ForceElectrocution( centity_t *cent, const vec3_t origin, vec3_t
  	{
  		// Just use the lerp Origin and a random direction
  		VectorCopy( cent->lerpOrigin, fxOrg );
@@ -676,6 +1652,75 @@ index ef21d32f..c274c77d 100644
  		if ( cent->gent && cent->gent->client )
  		{
  			switch ( cent->gent->client->NPC_class )
+diff --git a/codeJK2/cgame/cg_predict.cpp b/codeJK2/cgame/cg_predict.cpp
+index 8c73e521..3f6d6457 100644
+--- a/codeJK2/cgame/cg_predict.cpp
++++ b/codeJK2/cgame/cg_predict.cpp
+@@ -70,6 +70,17 @@ void CG_BuildSolidList( void )
+ 	}
+ }
+ 
++#ifdef SHADEREMU
++static qboolean se_apart( const vec3_t origin, const vec3_t bmins, const vec3_t bmaxs, const vec3_t lo, const vec3_t hi ) {
++	for ( int k = 0 ; k < 3 ; k++ ) {
++		if ( origin[k] + bmins[k] > hi[k] || origin[k] + bmaxs[k] < lo[k] ) {
++			return qtrue;
++		}
++	}
++	return qfalse;
++}
++#endif
++
+ /*
+ ====================
+ CG_ClipMoveToEntities
+@@ -85,6 +96,16 @@ void CG_ClipMoveToEntities ( const vec3_t start, const vec3_t mins, const vec3_t
+ 	vec3_t		bmins, bmaxs;
+ 	vec3_t		origin, angles;
+ 	centity_t	*cent;
++#ifdef SHADEREMU
++	// (docs/games/jk2.md, "Fewer instructions": an entity whose box is apart from the move's whole extent, with a unit to
++	// spare, is not traced: the trace would find nothing, and leave tr as it is. The effects' traces were 2 million
++	// instructions a frame of play, nearly all of them here.)
++	vec3_t		move_lo, move_hi;
++	for ( i = 0 ; i < 3 ; i++ ) {
++		move_lo[i] = ( start[i] < end[i] ? start[i] : end[i] ) + ( mins ? mins[i] : 0 ) - 1;
++		move_hi[i] = ( start[i] > end[i] ? start[i] : end[i] ) + ( maxs ? maxs[i] : 0 ) + 1;
++	}
++#endif
+ 
+ 	for ( i = 0 ; i < cg_numSolidEntities ; i++ ) {
+ 		cent = cg_solidEntities[ i ];
+@@ -110,6 +131,17 @@ void CG_ClipMoveToEntities ( const vec3_t start, const vec3_t mins, const vec3_t
+ 			//Let's use the lerpOrigin for now and see if it breaks anything...
+ 			//EvaluateTrajectory( &cent->currentState.pos, cg.snap->serverTime, origin );
+ 			VectorCopy( cent->lerpOrigin, origin );
++#ifdef SHADEREMU
++			// (a brush model not turned, its box where the game linked it moved to where it is drawn)
++			if ( cent->gent && cent->gent->linked && !angles[0] && !angles[1] && !angles[2] && !cent->gent->currentAngles[0] &&
++				 !cent->gent->currentAngles[1] && !cent->gent->currentAngles[2] ) {
++				VectorSubtract( cent->gent->absmin, cent->gent->currentOrigin, bmins );
++				VectorSubtract( cent->gent->absmax, cent->gent->currentOrigin, bmaxs );
++				if ( se_apart( origin, bmins, bmaxs, move_lo, move_hi ) ) {
++					continue;
++				}
++			}
++#endif
+ 
+ 		} else {
+ 			// encoded bbox
+@@ -122,6 +154,11 @@ void CG_ClipMoveToEntities ( const vec3_t start, const vec3_t mins, const vec3_t
+ 			bmins[2] = -zd;
+ 			bmaxs[2] = zu;
+ 
++#ifdef SHADEREMU
++			if ( se_apart( cent->lerpOrigin, bmins, bmaxs, move_lo, move_hi ) ) {
++				continue;
++			}
++#endif
+ 			cmodel = cgi_CM_TempBoxModel( bmins, bmaxs );//, cent->gent->contents );
+ 			VectorCopy( vec3_origin, angles );
+ 			VectorCopy( cent->lerpOrigin, origin );
 diff --git a/codeJK2/game/NPC.cpp b/codeJK2/game/NPC.cpp
 index b57d6347..52e98d9e 100644
 --- a/codeJK2/game/NPC.cpp
@@ -920,10 +1965,18 @@ index 04c5aa25..c80c7579 100644
  			break;
  		case CLASS_ATST://much too big to grip!
 diff --git a/shared/qcommon/q_math.c b/shared/qcommon/q_math.c
-index b15b3dba..c04d7a55 100644
+index b15b3dba..c1d43b55 100644
 --- a/shared/qcommon/q_math.c
 +++ b/shared/qcommon/q_math.c
-@@ -221,6 +221,9 @@ float Q_crandom( int *seed )
+@@ -21,6 +21,7 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
+ ===========================================================================
+ */
+ 
++#define SE_Q_MATH_C	// (the functions q_math.h makes inline on the machine are defined here as well)
+ #include "q_math.h"
+ #include <assert.h>
+ #include <float.h>
+@@ -221,6 +222,9 @@ float Q_crandom( int *seed )
  // eg the typical tint = (rand() * 255) / 32768
  // becomes tint = irand(0, 255)
  static uint32_t	holdrand = 0x89abcdef;
@@ -933,6 +1986,78 @@ index b15b3dba..c04d7a55 100644
  
  void Rand_Init( int seed )
  {
+diff --git a/shared/qcommon/q_math.h b/shared/qcommon/q_math.h
+index f52e45dd..ad496db1 100644
+--- a/shared/qcommon/q_math.h
++++ b/shared/qcommon/q_math.h
+@@ -243,13 +243,55 @@ extern vec3_t vec3_origin;
+ #define VectorClearM(dst) \
+ 	memset((dst), 0, sizeof((dst)[0]) * 3)
+ 
++#if defined(SHADEREMU) && !defined(SE_Q_MATH_C)
++// The machine (docs/games/jk2.md, "Fewer instructions"): the small vector functions inline, as q_math.c has them (an
++// out-of-line DotProduct was 7% of a frame of play, VectorCopy and the rest 3%)
++static inline void VectorAdd( const vec3_t vec1, const vec3_t vec2, vec3_t vecOut ) {
++	vecOut[0] = vec1[0]+vec2[0];
++	vecOut[1] = vec1[1]+vec2[1];
++	vecOut[2] = vec1[2]+vec2[2];
++}
++static inline void VectorSubtract( const vec3_t vec1, const vec3_t vec2, vec3_t vecOut ) {
++	vecOut[0] = vec1[0]-vec2[0];
++	vecOut[1] = vec1[1]-vec2[1];
++	vecOut[2] = vec1[2]-vec2[2];
++}
++static inline void VectorScale( const vec3_t vecIn, float scale, vec3_t vecOut ) {
++	vecOut[0] = vecIn[0]*scale;
++	vecOut[1] = vecIn[1]*scale;
++	vecOut[2] = vecIn[2]*scale;
++}
++static inline void VectorMA( const vec3_t vec1, float scale, const vec3_t vec2, vec3_t vecOut ) {
++	vecOut[0] = vec1[0] + scale*vec2[0];
++	vecOut[1] = vec1[1] + scale*vec2[1];
++	vecOut[2] = vec1[2] + scale*vec2[2];
++}
++static inline void VectorClear( vec3_t vec ) {
++	vec[0] = vec[1] = vec[2] = 0.0f;
++}
++static inline void VectorCopy( const vec3_t vecIn, vec3_t vecOut ) {
++	vecOut[0] = vecIn[0];
++	vecOut[1] = vecIn[1];
++	vecOut[2] = vecIn[2];
++}
++static inline void CrossProduct( const vec3_t vec1, const vec3_t vec2, vec3_t vecOut ) {
++	vecOut[0] = vec1[1]*vec2[2] - vec1[2]*vec2[1];
++	vecOut[1] = vec1[2]*vec2[0] - vec1[0]*vec2[2];
++	vecOut[2] = vec1[0]*vec2[1] - vec1[1]*vec2[0];
++}
++static inline float DotProduct( const vec3_t vec1, const vec3_t vec2 ) {
++	return vec1[0]*vec2[0] + vec1[1]*vec2[1] + vec1[2]*vec2[2];
++}
++#define SE_VECTOR_INLINE
++#else
+ void VectorAdd( const vec3_t vec1, const vec3_t vec2, vec3_t vecOut );
+ void VectorSubtract( const vec3_t vec1, const vec3_t vec2, vec3_t vecOut );
+ void VectorScale( const vec3_t vecIn, float scale, vec3_t vecOut );
+ void VectorMA( const vec3_t vec1, float scale, const vec3_t vec2, vec3_t vecOut );
+-void VectorSet( vec3_t vec, float x, float y, float z );
+ void VectorClear( vec3_t vec );
+ void VectorCopy( const vec3_t vecIn, vec3_t vecOut );
++#endif
++void VectorSet( vec3_t vec, float x, float y, float z );
+ float VectorLength( const vec3_t vec );
+ float VectorLengthSquared( const vec3_t vec );
+ void VectorNormalizeFast( vec3_t vec );
+@@ -259,8 +301,10 @@ void VectorAdvance( const vec3_t veca, const float scale, const vec3_t vecb, vec
+ void VectorInc( vec3_t vec );
+ void VectorDec( vec3_t vec );
+ void VectorInverse( vec3_t vec );
++#ifndef SE_VECTOR_INLINE
+ void CrossProduct( const vec3_t vec1, const vec3_t vec2, vec3_t vecOut );
+ float DotProduct( const vec3_t vec1, const vec3_t vec2 );
++#endif
+ qboolean VectorCompare( const vec3_t vec1, const vec3_t vec2 );
+ qboolean VectorCompare2( const vec3_t v1, const vec3_t v2 );
+ 
 diff --git a/shared/sys/sys_loadlib.h b/shared/sys/sys_loadlib.h
 index 97d2ef4f..1588a702 100644
 --- a/shared/sys/sys_loadlib.h

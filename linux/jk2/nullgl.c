@@ -81,3 +81,16 @@ void glReadPixels(GLint x, GLint y, int width, int height, GLenum format, GLenum
     (void)x; (void)y; (void)type;
     memset(pixels, 0, (size_t)((width * bytes + 3) & ~3) * height);
 }
+
+/* the drawing on a worker (gl_jk2.c, the machine's): never on the build computer */
+int jk2RenderOn(void) { return 0; }
+void jk2RenderSettle(void) {}
+void jk2RenderGive(void (*fn)(const void *), const void *arg) { fn(arg); }
+void jk2RenderPresent(void) {}
+int jk2RenderSwapMark(void) { return 0; }
+int jk2RenderWorkerHere(void) { return 0; }
+void jk2RenderGo(void) {}
+int jk2SkinPost(unsigned (*fn)(unsigned, unsigned), unsigned a0, unsigned a1) { (void)fn; (void)a0; (void)a1; return 0; }
+void jk2SkinJoin(void) {}
+void jk2Touch(void *memory, unsigned bytes) { (void)memory; (void)bytes; }
+void jk2WaitPass(void) {}

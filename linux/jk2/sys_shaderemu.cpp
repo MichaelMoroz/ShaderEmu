@@ -154,6 +154,9 @@ extern "C" {
 int jk2glOpen( unsigned window );
 int jk2glOn( void );
 void jk2glSwap( void );
+void jk2RenderSettle( void );
+void jk2RenderServe( void );
+void jk2RenderStats( unsigned *gives, unsigned *settles, unsigned *gl_settles, unsigned *waits );
 void jk2glStats( unsigned *in_gpu, unsigned *gpu_size, unsigned *left_out, unsigned *vertices );
 const volatile unsigned *gpuControl( int offset );
 void gpuWindowOrigin( int *x, int *y );
@@ -256,6 +259,23 @@ void WIN_Present( window_t *window )
 	}
 	se_frames++;
 	se_window_frames++;
+	// JK2_MARK=F0,F1: a measured window (tools/game_par.py's jk2 entries): a line at frame F0 and one at F1 with its
+	// frames and milliseconds of the machine's time, then the end
+	static int mark_from = -2, mark_to, mark_ms;
+	if ( mark_from == -2 ) {
+		const char *m = getenv( "JK2_MARK" );
+		mark_from = -1;
+		if ( m && sscanf( m, "%d,%d", &mark_from, &mark_to ) != 2 )
+			mark_from = -1;
+	}
+	if ( mark_from > 0 && se_frames == mark_from ) {
+		mark_ms = Sys_Milliseconds();
+		Com_Printf( "jk2mark: begins at frame %d\n", se_frames );
+	}
+	if ( mark_from > 0 && se_frames == mark_to ) {
+		Com_Printf( "jk2mark: ends, %d frames in %d ms\n", mark_to - mark_from, Sys_Milliseconds() - mark_ms );
+		se_stop_at = se_frames;
+	}
 	bool stop = se_stop_at > 0 && se_frames >= se_stop_at;
 	if ( stop || ( se_stats_every > 0 && se_window_frames >= se_stats_every ) ) {
 		int now = Sys_Milliseconds();
@@ -279,10 +299,13 @@ void WIN_Present( window_t *window )
 		se_window_instructions = ins;
 #ifdef SE_WINDOW
 		if ( jk2glOn() ) {     // the GPU's memory: textures in it, and how many found no room; vertices drawn since
-			unsigned in_gpu, size, left_out, vertices;
+			unsigned in_gpu, size, left_out, vertices, gives, settles, gl_settles, waits;
 			jk2glStats( &in_gpu, &size, &left_out, &vertices );
 			Com_Printf( "jk2gpu: textures %u of %u KB, %u left out, %u vertices a frame\n", in_gpu >> 10, size >> 10, left_out,
 				vertices / ( se_stats_every > 0 ? se_stats_every : 1 ) );
+			jk2RenderStats( &gives, &settles, &gl_settles, &waits );
+			Com_Printf( "jk2render: %u frames given to the drawing's worker, %u settled (%u by a GL call of this core's), "
+				"%u passes waited for it\n", gives, settles, gl_settles, waits );
 		}
 #endif
 		se_window_frames = 0;
@@ -354,6 +377,20 @@ void WIN_Present( window_t *window )
 		Cbuf_ExecuteText( EXEC_NOW, "quit\n" );
 	}
 }
+
+#ifdef SE_WINDOW
+// Whether the game is being played, no menu over it (the drawing on a worker then: gl_jk2.c)
+extern "C" int SE_InPlay( void )
+{
+	return cls.state == CA_ACTIVE && !( Key_GetCatcher() & ( KEYCATCH_UI | KEYCATCH_CONSOLE ) );
+}
+
+// A frame given to the drawing's worker (gl_jk2.c): the window's part of the swap, its list shown when the job is done
+extern "C" void SE_WindowFrame( void )
+{
+	WIN_Present( NULL );
+}
+#endif
 
 void WIN_SetGamma( glconfig_t *glConfig, byte red[256], byte green[256], byte blue[256] )
 {
@@ -451,6 +488,7 @@ static void se_input( void )
 			break;
 		case GR_EVENT_TYPE_UPDATE:
 			if ( e.update.utype == GR_UPDATE_SIZE ) {
+				jk2RenderSettle();     // (the drawing's worker done first: the window's GL state changes)
 				seglWindowChanged();
 				seglSize( &se_win_w, &se_win_h );
 				if ( se_win_w < 1 || se_win_h < 1 )
@@ -587,3 +625,248 @@ void SNDDMA_Submit( void )
 }
 void SNDDMA_BeginPainting( void ) {}
 void SNDDMA_Activate( qboolean activate ) {}
+
+// ---- the music on the card (docs/games/jk2.md, "Music on the card") ----
+// The engine's music (snd_dma.cpp's background tracks: an intro and its loop, or the level's dynamic explore, action and
+// boss tracks with their cross-fades) decides what plays, when and how loud, as it did; what it gave its mixer, the
+// samples it decoded on this core (2.8 to 3.0 million instructions a frame: two thirds of the menu's), it now gives
+// here: each track's file, as the engine holds it in memory, is decoded by libmedia on the worker cores, at half its
+// rate (22,050 a second, the mix's), into a stream voice's ring of the card. A stream is a track played from a place
+// on: the engine's next give at the frame where the last ended is the same stream, any other a new one (a rewind, a
+// seek, the fader's copy going on with the old). A stream's voice starts when the card's clock reaches the time the
+// engine meant its first frames for (its raw buffer's end), so an intro's tail and its loop do not overlap; and it is
+// let go once what was given is heard. JK2_MUSIC=engine is the way before; with no card (the sums' runs) or no workers
+// the engine decodes and mixes as before.
+#ifdef SE_WINDOW
+#include "media.h"
+#include "mcw.h"
+#include "mcwx.h"
+
+#define SE_STREAMS 3            // the current track, the fader's and one going quiet
+#define SE_RING 32768           // a stream's ring, frames (1.49 s at 22,050)
+#define SE_JOBS 4               // pieces decoded at once, a stream
+#define SE_PIECE 5512           // frames a piece (a quarter of a second)
+
+struct se_stream_t {
+	const void *track;
+	uint32_t bytes;
+	struct media_audio *a;
+	struct media_audio_info info;
+	int voice, open, playing, start_at, given_round;
+	unsigned volume;
+	int16_t *ring;
+	uint32_t ring_at;
+	int16_t *stage[SE_JOBS];
+	mcw_handle job[SE_JOBS];
+	uint32_t job_piece[SE_JOBS];
+	uint8_t *done;
+	uint32_t base, pos, next, ordered, written;
+};
+static se_stream_t se_streams[SE_STREAMS];
+static int se_music_state = -1, se_round, se_music_workers;
+extern "C" char _start[], etext[];
+
+static uint32_t se_music_job( uint32_t sj, uint32_t piece )
+{
+	se_stream_t *s = &se_streams[sj >> 8];
+	int j = sj & 255;
+	uint32_t n = media_audio_piece_frames( s->a, piece ), ch = (uint32_t)s->info.channels;
+	uint32_t at = ( media_audio_piece_first( s->a, piece ) - s->base ) & ( SE_RING - 1 ), first = SE_RING - at < n ? SE_RING - at : n;
+	media_audio_piece( s->a, j, piece, s->stage[j] );
+	memcpy( s->ring + at * ch, s->stage[j], first * ch * 2 );
+	if ( n > first )
+		memcpy( s->ring, s->stage[j] + first * ch, ( n - first ) * ch * 2 );
+	return n;
+}
+
+int SE_MusicOn( void )
+{
+	if ( se_music_state >= 0 )
+		return se_music_state;
+	const char *m = getenv( "JK2_MUSIC" );
+	if ( se_voice < 0 )
+		return 0;     // (no card yet, or none: asked again)
+	se_music_state = 0;
+	if ( m && !strcmp( m, "engine" ) )
+		return 0;
+	se_music_workers = mcw_open( env_int( "JK2_WORKERS", 16 ) );
+	if ( se_music_workers <= 0 ) {
+		Com_Printf( "jk2: no workers: the music decoded by this core\n" );
+		return 0;
+	}
+	mcw_touch_code( _start, (unsigned)( etext - _start ) );   // (a worker stops at a page of code no core has run)
+	for ( int i = 0; i < SE_STREAMS; i++ ) {
+		se_stream_t *s = &se_streams[i];
+		if ( ( s->voice = snd_claim() ) < 0 || !( s->ring = (int16_t *)snd_memory( SE_RING * 4, &s->ring_at ) ) ) {
+			Com_Printf( "jk2: no voice or sound memory for the music: decoded by this core\n" );
+			return 0;
+		}
+		mcw_touch( s->ring, SE_RING * 4 );
+		for ( int j = 0; j < SE_JOBS; j++ ) {
+			s->stage[j] = (int16_t *)mcw_alloc( ( SE_PIECE + 4096 ) * 4 );
+			mcw_touch( s->stage[j], ( SE_PIECE + 4096 ) * 4 );
+		}
+	}
+	Com_Printf( "jk2: music on the card, decoded by %d workers\n", se_music_workers );
+	return se_music_state = 1;
+}
+
+static void se_stream_close( se_stream_t *s )
+{
+	for ( int j = 0; j < SE_JOBS; j++ )
+		if ( s->job[j] )
+			mcw_join( s->job[j] ), s->job[j] = 0;
+	snd_stop( s->voice );
+	if ( s->a )
+		media_audio_close( s->a ), s->a = NULL;
+	free( s->done ), s->done = NULL;
+	s->open = s->playing = 0;
+}
+
+static uint32_t se_stream_played( se_stream_t *s )
+{
+	int v = s->voice;
+	return !s->playing || SND_STATE[v].seen != SND_VOICE[v].key ? 0 : SND_STATE[v].position;
+}
+
+static se_stream_t *se_stream_open( const void *track, uint32_t bytes, uint32_t pos, int start_at )
+{
+	se_stream_t *s = NULL;
+	const char *why = "";
+	for ( int i = 0; i < SE_STREAMS && !s; i++ )
+		if ( !se_streams[i].open )
+			s = &se_streams[i];
+	for ( int i = 0; i < SE_STREAMS && !s; i++ )     // (none free: the one given to longest ago)
+		if ( !s || se_streams[i].given_round < s->given_round )
+			s = &se_streams[i];
+	if ( !s )
+		s = &se_streams[0];
+	if ( s->open )
+		se_stream_close( s );
+	if ( !( s->a = media_audio_open( track, bytes, &why ) ) ) {
+		Com_Printf( "jk2: music: %s\n", why );
+		return NULL;
+	}
+	media_audio_half( s->a, 1 );
+	media_audio_get_info( s->a, &s->info );
+	if ( s->info.rate != dma.speed ) {
+		media_audio_half( s->a, 0 );
+		media_audio_get_info( s->a, &s->info );
+	}
+	if ( s->info.rate != dma.speed || s->info.channels < 1 || s->info.channels > 2 || !media_audio_set_piece( s->a, SE_PIECE ) ||
+	     media_audio_decoders( s->a, SE_JOBS ) < SE_JOBS ) {
+		Com_Printf( "jk2: music: a track of %d Hz, %d channels, %u frames: not played\n", s->info.rate, s->info.channels,
+			(unsigned)s->info.frames );
+		media_audio_close( s->a ), s->a = NULL;
+		return NULL;
+	}
+	media_audio_get_info( s->a, &s->info );
+	uint32_t p0 = media_audio_piece_of( s->a, pos < s->info.frames ? pos : s->info.frames - 1 );
+	s->track = track, s->bytes = bytes, s->pos = pos, s->start_at = start_at;
+	s->base = media_audio_piece_first( s->a, p0 );
+	s->next = s->ordered = p0, s->written = 0;
+	s->done = (uint8_t *)calloc( s->info.pieces + 1, 1 );
+	s->open = 1, s->playing = 0, s->given_round = se_round;
+	if ( getenv( "JK2_MUSIC_LOG" ) )
+		Com_Printf( "jk2music: stream %d: a track of %u frames at %d Hz, %d channels, from frame %u (piece %u of %u), at %d\n",
+			(int)( s - se_streams ), (unsigned)s->info.frames, s->info.rate, s->info.channels, (unsigned)pos, (unsigned)p0,
+			(unsigned)s->info.pieces, start_at );
+	return s;
+}
+
+// What the engine gives of a track: `want` frames from `pos`, meant to sound at `raw_time` of the card's clock (its raw
+// buffer's end); how many the track has from there (fewer at its end), or -1 when it cannot be played here
+int SE_MusicGive( const void *track, int bytes, int pos, int want, float volume, int raw_time )
+{
+	se_stream_t *s = NULL;
+	for ( int i = 0; i < SE_STREAMS && !s; i++ )
+		if ( se_streams[i].open && se_streams[i].track == track && se_streams[i].pos == (uint32_t)pos )
+			s = &se_streams[i];
+	if ( !s && !( s = se_stream_open( track, (uint32_t)bytes, (uint32_t)pos, raw_time ) ) )
+		return -1;
+	int left = (int)s->info.frames - pos, got = want < left ? want : left > 0 ? left : 0;
+	s->pos += got;
+	s->given_round = se_round;
+	int v = (int)( volume * 256.0f );
+	s->volume = v < 0 ? 0 : v > 256 ? 256 : v;
+	return got;
+}
+
+// A track's file freed by the engine (an intro's when its loop begins): its streams decode no more, and play out what
+// is decoded of what was given
+void SE_MusicForget( const void *track )
+{
+	for ( int i = 0; i < SE_STREAMS; i++ ) {
+		se_stream_t *s = &se_streams[i];
+		if ( !s->open || s->track != track || !s->a )
+			continue;
+		for ( int j = 0; j < SE_JOBS; j++ )
+			if ( s->job[j] ) {
+				mcw_join( s->job[j] );
+				s->job[j] = 0;
+				s->done[s->job_piece[j]] = 1;
+			}
+		while ( s->ordered < s->info.pieces && s->done[s->ordered] )
+			s->written += media_audio_piece_frames( s->a, s->ordered++ );
+		media_audio_close( s->a ), s->a = NULL;
+		s->track = NULL;
+		if ( s->pos - s->base > s->written )
+			s->pos = s->base + s->written;
+	}
+}
+
+// Once a frame, before the engine's gives: the pieces decoded are taken into the streams in order, more given out to the
+// workers up to a ring ahead of what is heard, a voice started when its time comes, a stream let go once heard
+void SE_MusicRound( int sound_time, int muted )
+{
+	jk2RenderServe();     // (the drawing's worker, a page or a system call it stopped at)
+	if ( se_music_state != 1 )
+		return;
+	for ( int i = 0; i < SE_STREAMS; i++ ) {
+		se_stream_t *s = &se_streams[i];
+		if ( !s->open )
+			continue;
+		for ( int j = 0; j < SE_JOBS && s->a; j++ )
+			if ( s->job[j] && mcw_ready( s->job[j] ) ) {
+				mcw_join( s->job[j] );
+				s->job[j] = 0;
+				s->done[s->job_piece[j]] = 1;
+			}
+		while ( s->a && s->ordered < s->info.pieces && s->done[s->ordered] )
+			s->written += media_audio_piece_frames( s->a, s->ordered++ );
+		uint32_t played = se_stream_played( s ), given_end = s->pos > s->base ? s->pos - s->base : 0;
+		if ( s->given_round != se_round && ( !s->playing || played >= given_end ) ) {
+			if ( getenv( "JK2_MUSIC_LOG" ) )
+				Com_Printf( "jk2music: stream %d ends: %u frames heard, %u written, %u given\n", i, (unsigned)played,
+					(unsigned)s->written, (unsigned)given_end );
+			se_stream_close( s );     // (not given in the last frame, and all of it heard)
+			continue;
+		}
+		if ( s->playing && played >= s->written && s->written < given_end && getenv( "JK2_MUSIC_LOG" ) )
+			Com_Printf( "jk2music: stream %d dry at %u frames\n", i, (unsigned)played );
+		if ( !s->playing && s->written && sound_time - s->start_at >= 0 ) {
+			snd_play( s->voice, SND_STREAM | ( s->info.channels == 2 ? SND_STEREO : 0 ) | SND_SMOOTH, s->ring_at, SE_RING, s->written,
+				snd_step( (uint32_t)s->info.rate ), 0 );
+			s->playing = 1;
+		}
+		if ( s->playing ) {
+			SND_VOICE[s->voice].loop = s->written;
+			SND_VOICE[s->voice].volume = muted ? 0 : SND_VOLUME( s->volume, s->volume );
+		}
+		for ( int j = 0; j < SE_JOBS && s->a && s->next < s->info.pieces; j++ ) {
+			if ( s->job[j] )
+				continue;
+			uint32_t end = media_audio_piece_first( s->a, s->next ) + media_audio_piece_frames( s->a, s->next ) - s->base;
+			if ( end - played > SE_RING || !( s->job[j] = mcw_try_call( se_music_job, (uint32_t)( i << 8 | j ), s->next ) ) )
+				break;
+			s->job_piece[j] = s->next++;
+		}
+	}
+	se_round++;
+}
+#else
+int SE_MusicOn( void ) { return 0; }
+int SE_MusicGive( const void *track, int bytes, int pos, int want, float volume, int raw_time ) { return -1; }
+void SE_MusicForget( const void *track ) {}
+void SE_MusicRound( int sound_time, int muted ) {}
+#endif
