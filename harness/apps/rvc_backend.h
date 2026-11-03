@@ -82,6 +82,13 @@ const int kCoresMost = 256;   // what the shader, the kernel and the library hav
 const int kCores = 256;       // core 0 and 255 workers: the only machine there is (docs/machine/multicore.md)
 // The display's RAM framebuffer (rvlayout::kCtrl, 128 texture rows), for writing the picture back.
 
+// The GPU device's passes in the order they are drawn (shader_vm/src/gpu.h, FRAGMENT_PASS): the four blendings depth
+// tested, the two of destination alpha depth tested, then the same six with no depth. A pass's blending is PASS_BLENDING.
+const int kGpuPassOrder[12] = {0, 1, 2, 3, 8, 9, 4, 5, 6, 7, 12, 13};
+const int kGpuBlendings = 6;
+inline int gpuPassBlending(int pass) { return (pass & 3) | ((pass >> 1) & 4); }
+inline int gpuPassDepth(int pass) { return pass == 0 ? 0 : (pass & 4) == 0 ? 1 : 2; }   // tested and written, tested, none
+
 class RvcBackend {
 public:
     // The GPU device's passes to draw in the next frame, one bit each (docs/machine/gpu.md); pass 0 always.

@@ -30,7 +30,7 @@ enum { SE_SKY = 1, SE_OFFSET = 2, SE_AUTOSPRITE = 4, SE_NODRAW = 8, SE_2D = 16 }
 typedef struct { char name[64]; uint32_t flags; uint16_t first_stage; uint8_t stages, unused; int32_t number; } se_shader_t;
 
 /* STAG */
-enum { SE_OPAQUE, SE_BLEND, SE_ADD, SE_FILTER };	/* the GPU's four ways of drawing over what is there */
+enum { SE_OPAQUE, SE_BLEND, SE_ADD, SE_FILTER, SE_MASKED = 9 };	/* the GPU's ways of drawing over what is there (its passes) */
 enum { SE_KEYED = 1, SE_LIGHTMAP = 2, SE_ENV = 4, SE_CLAMP = 8, SE_IMPLICIT = 16 };
 enum { SE_RGB_IDENTITY, SE_RGB_VERTEX, SE_RGB_ENTITY, SE_RGB_ONE_MINUS_ENTITY, SE_RGB_DIFFUSE, SE_RGB_WAVE, SE_RGB_CONST };
 enum { SE_A_IDENTITY, SE_A_VERTEX, SE_A_ENTITY, SE_A_ONE_MINUS_ENTITY, SE_A_WAVE, SE_A_CONST };

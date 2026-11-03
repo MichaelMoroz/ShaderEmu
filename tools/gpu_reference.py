@@ -318,8 +318,16 @@ def shade(m, colour, uv, tex, key, light=None):
 
 
 def pass_of(cmd):
-    """The pass a command is drawn in: bits 16-18 of its fragment mode word (docs/machine/gpu.md)."""
-    return (cmd['tex'][0] >> 16) & 7 if cmd['op'] != 1 else 0
+    """The pass a command is drawn in: bits 16-19 of its fragment mode word (docs/machine/gpu.md)."""
+    return (cmd['tex'][0] >> 16) & 15 if cmd['op'] != 1 else 0
+
+
+# The order passes are drawn in, and a pass's blending (shader_vm/src/gpu.h, FRAGMENT_PASS and PASS_BLENDING)
+PASS_ORDER = [0, 1, 2, 3, 8, 9, 4, 5, 6, 7, 12, 13]
+def pass_rank(cmd):
+    p = pass_of(cmd)
+    return PASS_ORDER.index(p) if p in PASS_ORDER else len(PASS_ORDER)
+def blending_of(p): return (p & 3) | ((p >> 1) & 4)
 
 
 def clip_near(p, colour, uv):
@@ -343,11 +351,12 @@ def clip_near(p, colour, uv):
 def draw(m):
     width, height, commands = vertices(m)
     image = np.zeros((height, width, 3), np.uint8)
+    kept = np.ones((height, width), np.float64)   # the picture's alpha (the host clears to opaque black)
     depth = np.full((height, width), np.inf)
     edge = np.zeros((height, width), bool)   # pixels within half a pixel of some triangle edge
     stats = {'commands': len(commands), 'triangles': 0, 'behind_eye': 0, 'passes': sorted({pass_of(c) for c in commands})}
-    # passes in order, each with the list's commands in order; 0-3 test depth, only 0 writes it
-    for cmd in sorted(commands, key=pass_of):
+    # passes in order, each with the list's commands in order; 0-3, 8 and 9 test depth, only 0 writes it
+    for cmd in sorted(commands, key=pass_rank):
         which = pass_of(cmd)
         pos = cmd['pos'].astype(np.float64)
         triangles = []
@@ -403,7 +412,7 @@ def draw(m):
             l = [e[i] / area for i in range(3)]
             zf = l[0] * z[0] + l[1] * z[1] + l[2] * z[2]
             ok = inside & (zf >= -1e-9) & (zf <= 1 + 1e-9)   # the far plane itself is inside
-            if which < 4:
+            if (which & 4) == 0:
                 ok &= zf <= depth[sl]
             if not ok.any():
                 continue
@@ -421,10 +430,16 @@ def draw(m):
             idx = np.argwhere(ok)[keep]
             yy, xx = idx[:, 0] + y_lo, idx[:, 1] + x_lo
             src, alpha = rgba[keep][:, :3].astype(np.float64), rgba[keep][:, 3:4].astype(np.float64)
-            dst = image[yy, xx] / 255.0
-            blend = which & 3   # none, alpha, additive, multiply
-            out = src if blend == 0 else src * alpha + dst * (1 - alpha) if blend == 1 else src * alpha + dst if blend == 2 else src * dst
+            dst, da = image[yy, xx] / 255.0, kept[yy, xx][:, None]
+            blend = blending_of(which)   # none, alpha, additive, multiply, the shine (1 - da, 1), the masked multiply
+            if blend == 0: out, oa = src, alpha
+            elif blend == 1: out, oa = src * alpha + dst * (1 - alpha), alpha * alpha + da * (1 - alpha)
+            elif blend == 2: out, oa = src * alpha + dst, alpha * alpha + da
+            elif blend == 3: out, oa = src * dst, da
+            elif blend == 4: out, oa = src * (1 - da) + dst, alpha * (1 - da) + da
+            else: out, oa = src * dst + dst * (1 - da), alpha * da + da * (1 - da)
             image[yy, xx] = (np.clip(out, 0, 1) * 255.0 + 0.5).astype(np.uint8)
+            kept[yy, xx] = np.round(np.clip(oa[:, 0], 0, 1) * 255.0) / 255.0
             if which == 0:
                 depth[yy, xx] = zf[ok][keep]
     return image, edge, stats

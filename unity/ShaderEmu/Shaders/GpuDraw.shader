@@ -76,6 +76,36 @@ Shader "ShaderEmu/GpuDraw"
         }
         Pass
         {
+            Name "GPU8"
+            Blend OneMinusDstAlpha One
+            ZTest LEqual
+            ZWrite Off
+            CGPROGRAM
+            #pragma target 5.0
+            #pragma vertex vert
+            #pragma geometry geom
+            #pragma fragment frag
+            #define _GpuPass 8
+            #include "GpuDrawPass.cginc"
+            ENDCG
+        }
+        Pass
+        {
+            Name "GPU9"
+            Blend DstColor OneMinusDstAlpha, DstAlpha OneMinusDstAlpha
+            ZTest LEqual
+            ZWrite Off
+            CGPROGRAM
+            #pragma target 5.0
+            #pragma vertex vert
+            #pragma geometry geom
+            #pragma fragment frag
+            #define _GpuPass 9
+            #include "GpuDrawPass.cginc"
+            ENDCG
+        }
+        Pass
+        {
             Name "GPU4"
             Blend One Zero
             ZTest Always
@@ -131,6 +161,36 @@ Shader "ShaderEmu/GpuDraw"
             #pragma geometry geom
             #pragma fragment frag
             #define _GpuPass 7
+            #include "GpuDrawPass.cginc"
+            ENDCG
+        }
+        Pass
+        {
+            Name "GPU12"
+            Blend OneMinusDstAlpha One
+            ZTest Always
+            ZWrite Off
+            CGPROGRAM
+            #pragma target 5.0
+            #pragma vertex vert
+            #pragma geometry geom
+            #pragma fragment frag
+            #define _GpuPass 12
+            #include "GpuDrawPass.cginc"
+            ENDCG
+        }
+        Pass
+        {
+            Name "GPU13"
+            Blend DstColor OneMinusDstAlpha, DstAlpha OneMinusDstAlpha
+            ZTest Always
+            ZWrite Off
+            CGPROGRAM
+            #pragma target 5.0
+            #pragma vertex vert
+            #pragma geometry geom
+            #pragma fragment frag
+            #define _GpuPass 13
             #include "GpuDrawPass.cginc"
             ENDCG
         }

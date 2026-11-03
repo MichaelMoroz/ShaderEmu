@@ -53,6 +53,12 @@ enum {
     GPU_PASS_FLAT_BLEND,
     GPU_PASS_FLAT_ADD,
     GPU_PASS_FLAT_MULTIPLY,
+    // what is there's alpha, as GL keeps it (each pass's factors on alpha too): drawn after GPU_PASS_MULTIPLY
+    GPU_PASS_SHINE = 8,            // added where what is there is transparent (GL_ONE_MINUS_DST_ALPHA, GL_ONE)
+    GPU_PASS_MASKED_MULTIPLY,      // what is there times the colour, plus what is there times its transparency
+                                   // (GL_DST_COLOR, GL_ONE_MINUS_DST_ALPHA): Quake III's light map over a glow
+    GPU_PASS_FLAT_SHINE = 12,      // the two with no depth test: drawn last
+    GPU_PASS_FLAT_MASKED_MULTIPLY,
 };
 #define GPU_PASS(n) ((uint32_t)(n) << 16)
 
@@ -75,7 +81,7 @@ typedef struct {
 
 static volatile uint32_t* gpu_next;
 static uint32_t gpu_commands, gpu_vertices;
-static uint32_t gpu_passes;   // passes 1-7 this list uses, one bit each, for the submit word
+static uint32_t gpu_passes;   // passes 1-15 this list uses, one bit each, for the submit word
 
 static inline void gpu_begin(void) {
     gpu_next = (volatile uint32_t*)GPU_COMMANDS;
@@ -86,7 +92,7 @@ static inline void gpu_begin(void) {
 
 // Notes the pass of a fragment mode, so the submit word can tell the host which to draw.
 static inline uint32_t gpu_mode(uint32_t fragment_mode) {
-    gpu_passes |= (1u << ((fragment_mode >> 16) & 7)) & 0xfe;
+    gpu_passes |= (1u << ((fragment_mode >> 16) & 15)) & 0xfffe;
     return fragment_mode;
 }
 

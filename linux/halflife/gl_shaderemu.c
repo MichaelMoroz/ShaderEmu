@@ -484,7 +484,9 @@ static void s_glColor4ubv(const unsigned char* v) { s_glColor4ub(v[0], v[1], v[2
 static unsigned pass_of(void) {
     unsigned kind = 0;
     if (blending) {
-        if (blend_dst == GL_ONE) kind = 2;
+        if (blend_src == GL_ONE_MINUS_DST_ALPHA && blend_dst == GL_ONE) kind = 8;   // (by what is there's alpha: gpu.h)
+        else if (blend_src == GL_DST_COLOR && blend_dst == GL_ONE_MINUS_DST_ALPHA) kind = 9;
+        else if (blend_dst == GL_ONE) kind = 2;
         else if ((blend_src == GL_ZERO && blend_dst == GL_SRC_COLOR) || (blend_src == GL_DST_COLOR && blend_dst == GL_ZERO) ||
                  (blend_src == GL_DST_COLOR && blend_dst == GL_SRC_COLOR))
             kind = 3;

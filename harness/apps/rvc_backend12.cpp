@@ -273,12 +273,13 @@ public:
             auto toAny = transition(state_[cur].Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, anyStage);
             cl_->ResourceBarrier(1, &toAny);
             // one draw per pass in use, in order: each has its own blending and depth use
-            for (int p = 0; p < 8; ++p) {
+            for (int i = 0; i < 12; ++i) {
+                int p = kGpuPassOrder[i];
                 if (!((gpuPasses >> p) & 1)) continue;
                 if (gpuVl_.hasGlobals) {
                     mat.setInt("_GpuPass", p);
                     mat.fillGlobals(gpuVl_);
-                    UINT64 at = ((UINT64)slot * kCbPerFrame + 8 + (UINT64)p) * kCbBytes;
+                    UINT64 at = ((UINT64)slot * kCbPerFrame + 8 + (UINT64)i) * kCbBytes;
                     memcpy(cbMapped_ + at, gpuVl_.scratch.data(), gpuVl_.scratch.size());
                     cl_->SetGraphicsRootConstantBufferView(1, cbuf_->GetGPUVirtualAddress() + at);
                 }
@@ -301,7 +302,7 @@ public:
                 cl_->SetGraphicsRootDescriptorTable(0, gtable);
                 if (soundPl_.hasGlobals) {
                     mat.fillGlobals(soundPl_);
-                    UINT64 at = ((UINT64)slot * kCbPerFrame + 16) * kCbBytes;
+                    UINT64 at = ((UINT64)slot * kCbPerFrame + 20) * kCbBytes;
                     memcpy(cbMapped_ + at, soundPl_.scratch.data(), soundPl_.scratch.size());
                     cl_->SetGraphicsRootConstantBufferView(1, cbuf_->GetGPUVirtualAddress() + at);
                 }
@@ -649,17 +650,21 @@ private:
         pd.NumRenderTargets = 1;
         pd.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
         pd.SampleDesc.Count = 1;
-        // The eight passes (FRAGMENT_PASS in gpu.h): opaque, alpha, additive, multiply with the
-        // depth test, then the same four without. Only the first writes depth.
-        for (int p = 0; p < 8; ++p) {
+        // The passes (FRAGMENT_PASS in gpu.h): opaque, alpha, additive, multiply and the two of destination alpha with
+        // the depth test (0-3, 8, 9), then the same six without (4-7, 12, 13). Only the first writes depth.
+        for (int p : kGpuPassOrder) {
             auto& rt = pd.BlendState.RenderTarget[0];
-            int blend = p & 3;
+            int blend = gpuPassBlending(p);
             rt.BlendEnable = blend != 0;
             rt.SrcBlend = rt.SrcBlendAlpha = blend == 3 ? D3D12_BLEND_DEST_COLOR : D3D12_BLEND_SRC_ALPHA;
             rt.DestBlend = rt.DestBlendAlpha = blend == 1 ? D3D12_BLEND_INV_SRC_ALPHA : blend == 2 ? D3D12_BLEND_ONE : D3D12_BLEND_ZERO;
             rt.BlendOp = rt.BlendOpAlpha = D3D12_BLEND_OP_ADD;
             if (blend == 3) rt.SrcBlendAlpha = D3D12_BLEND_ZERO, rt.DestBlendAlpha = D3D12_BLEND_ONE;
-            pd.DepthStencilState.DepthEnable = p < 4;
+            if (blend == 4) rt.SrcBlend = rt.SrcBlendAlpha = D3D12_BLEND_INV_DEST_ALPHA, rt.DestBlend = rt.DestBlendAlpha = D3D12_BLEND_ONE;
+            if (blend == 5)
+                rt.SrcBlend = D3D12_BLEND_DEST_COLOR, rt.SrcBlendAlpha = D3D12_BLEND_DEST_ALPHA,
+                rt.DestBlend = rt.DestBlendAlpha = D3D12_BLEND_INV_DEST_ALPHA;
+            pd.DepthStencilState.DepthEnable = (p & 4) == 0;
             pd.DepthStencilState.DepthWriteMask = p == 0 ? D3D12_DEPTH_WRITE_MASK_ALL : D3D12_DEPTH_WRITE_MASK_ZERO;
             check(dx_.dev->CreateGraphicsPipelineState(&pd, IID_PPV_ARGS(&gpuPso_[p])), "GPU pipeline state");
         }
@@ -758,7 +763,7 @@ private:
     }
 
     static constexpr DXGI_FORMAT kSoundFormat = DXGI_FORMAT_R32G32_FLOAT;
-    static constexpr UINT kCbPerFrame = 20;   // constant-buffer slots a frame
+    static constexpr UINT kCbPerFrame = 24;   // constant-buffer slots a frame
     ComPtr<ID3D12RootSignature> soundRoot_;
     ComPtr<ID3D12PipelineState> soundPso_;
     StageLayout soundPl_;
@@ -771,7 +776,7 @@ private:
     std::vector<uint8_t> lastZone_;
 
     ComPtr<ID3D12RootSignature> gpuRoot_;
-    ComPtr<ID3D12PipelineState> gpuPso_[8];
+    ComPtr<ID3D12PipelineState> gpuPso_[16];
     StageLayout gpuVl_, gpuPl_;
     static constexpr UINT kGpuTable = 5;   // the GPU draw's textures: the state, then the ROM's four
     ComPtr<ID3D12Resource> gpuColor_, gpuDepth_;

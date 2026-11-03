@@ -19,9 +19,9 @@
 #define SUBMIT_WRITEBACK 2   // afterwards copy the picture into the RAM framebuffer
 #define SUBMIT_INTO 4        // afterwards copy it into the rectangle of RAM at GPU_INTO, whose size the picture has
 #define SUBMIT_COPIES (SUBMIT_WRITEBACK | SUBMIT_INTO)
-// Bits 9-15: the list has commands for passes 1-7. It is drawn, and the submit word taken back,
+// Bits 9-23: the list has commands for passes 1-15. It is drawn, and the submit word taken back,
 // once the host draws all of those (it learns of them by reading these words back).
-#define SUBMIT_PASSES(submit) (((submit) >> 8) & 0xfe)
+#define SUBMIT_PASSES(submit) (((submit) >> 8) & 0xfffe)
 
 #define GPU_TARGET 2048.0       // the GPU's render target is GPU_TARGET pixels square,
 // unless the host draws into a smaller one and says so (the picture cannot be larger than it)
@@ -70,11 +70,22 @@
 #define FRAGMENT_SMOOTH 0x400 // flag (word, indexed and three-byte textures): the four texels round the point, weighed (bilinear)
 #define FRAGMENT_CLAMPED 0x1000 // flag: the texture does not repeat: beyond its edge the edge goes on
 #define FRAGMENT_LIT 0x800    // flag (compact draws): times a light map, a three-byte texture, at a second pair of coordinates a vertex (words 12-14)
-// Bits 16-18 of the same word: the pass the command is drawn in. Passes are drawn in order, each
+// Bits 16-19 of the same word: the pass the command is drawn in. Passes are drawn in order, each
 // with fixed blending and depth use; within a pass commands keep the list's order.
 //   0 opaque   1 alpha blend   2 additive   3 multiply     depth tested; only pass 0 writes it
+//   8 the colour times (1 - what is there's alpha), added   9 the colour times what is there, plus what is
+//     there times (1 - its alpha)                            depth tested (drawn after 3, before 4)
 //   4 opaque   5 alpha blend   6 additive   7 multiply     no depth
-#define FRAGMENT_PASS(mode) (((mode) >> 16) & 7)
+//   12, 13 as 8 and 9                                       no depth (drawn after 7)
+// The picture's alpha is kept as GL keeps it (each blending's own factors on alpha), for 8, 9, 12 and 13:
+// GL_ONE_MINUS_DST_ALPHA GL_ONE (Jedi Outcast's shine over its logo), GL_DST_COLOR GL_ONE_MINUS_DST_ALPHA
+// (Quake III's glints masked by an earlier stage's alpha). 10, 11, 14 and 15 are not passes yet.
+#define FRAGMENT_PASS(mode) (((mode) >> 16) & 15)
+#define PASS_BLENDING(pass) (((pass) & 3) | (((pass) >> 1) & 4))   // 0-3 as above, 4 and 5 those of 8 and 9
+#define PASS_DEPTH(pass) (((pass) & 4) == 0)
+// The blending a pass has in the world's volume and HUD layer (docs/world/holodeck.md), drawn over the world's picture,
+// whose alpha is no game's: 9 and 13 there multiply (Quake III's light maps), 8 and 12 (a shine) are not drawn.
+#define VOLUME_BLENDING(pass) (PASS_BLENDING(pass) == 5 ? 3u : PASS_BLENDING(pass))
 // A sprite record's kind (CMD_SPRITES, bits 22-25 of its fourth word). A sprite's byte 0 is a hole but in RAW.
 #define SPRITE_COPY 0         // the byte
 #define SPRITE_REMAP 1        // the byte through a table of 256 bytes (word 1); a 0 there is a hole
@@ -725,7 +736,7 @@ bool volume_command(uint id, out uint base, out uint4 head) {
     if ((how.r & VERTEX_MODELVIEW) == 0 || (how.r & 0xff) == VERTEX_SCREEN) return false;
 #ifdef GPU_VOLUME_PASS
     // the pass being drawn: the command's own, or for passes 4-7 (no depth test) the one that blends alike
-    if ((FRAGMENT_PASS(how.g) & 3) != GPU_VOLUME_PASS) return false;
+    if (VOLUME_BLENDING(FRAGMENT_PASS(how.g)) != GPU_VOLUME_PASS) return false;
 #endif
     // a projection whose w does not come from z draws flat on the picture (a status bar)
     return ram(texel_of(how.b) + 3).b != 0;
@@ -756,7 +767,7 @@ bool volume_flat_command(uint id, out uint base, out uint4 head) {
     if (slots == 0 || id < head.a || id + 3 > head.a + slots) return false;
     uint drawn_in = op == CMD_DRAW ? FRAGMENT_PASS(ram(base + 1).g) : FRAGMENT_PASS(ram(base + 2).r);
 #ifdef GPU_VOLUME_PASS
-    if ((drawn_in & 3) != GPU_VOLUME_PASS) return false;
+    if (VOLUME_BLENDING(drawn_in) != GPU_VOLUME_PASS) return false;
 #endif
     if (op != CMD_DRAW) return true;
     uint4 how = ram(base + 1);

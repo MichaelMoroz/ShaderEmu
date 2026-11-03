@@ -619,8 +619,14 @@ void glDisable(GLenum what) {
     int* f = flag(what);
     if (f) *f = 0;
 }
+#ifndef GL_ONE_MINUS_DST_ALPHA
+#define GL_ONE_MINUS_DST_ALPHA 0x0305
+#endif
+// blend_kind is the depth-tested pass (FRAGMENT_PASS in shader_vm/src/gpu.h): 4 more without the depth test
 void glBlendFunc(GLenum source, GLenum destination) {
-    if (destination == GL_ONE_MINUS_SRC_ALPHA) blend_kind = 1;
+    if (source == GL_ONE_MINUS_DST_ALPHA && destination == GL_ONE) blend_kind = 8;   // (by what is there's alpha: shader_vm/src/gpu.h)
+    else if (source == GL_DST_COLOR && destination == GL_ONE_MINUS_DST_ALPHA) blend_kind = 9;
+    else if (destination == GL_ONE_MINUS_SRC_ALPHA) blend_kind = 1;
     else if (destination == GL_ONE) blend_kind = 2;
     else if (source == GL_DST_COLOR || destination == GL_SRC_COLOR) blend_kind = 3;
 }
@@ -864,7 +870,7 @@ void glDrawArrays(GLenum mode, GLint first, GLsizei count) {
         c[11] = colour;
         last_draw = c;
         for (int i = 0; i < 6; i++) last_state[i] = state[i];
-        passes_used |= (1u << pass) & 0xfe;
+        passes_used |= (1u << pass) & 0xfffe;
     }
     const arrays a = {vertex_array.pointer, coord_array.enabled ? coord_array.pointer : 0, (size_t)vertex_array.stride,
                       (size_t)coord_array.stride, vertex_array.size > 2, vertex_array.floats != (NUM_FORMAT != 0),
@@ -931,7 +937,7 @@ static uint32_t* compact_begin(GLenum mode, GLsizei count, uint32_t* stored_out,
         c[11] = tint;
         last_draw = at ? 0 : c;   // (nothing joins a command whose vertices are elsewhere)
         for (int i = 0; i < 6; i++) last_state[i] = state[i];
-        passes_used |= (1u << pass) & 0xfe;
+        passes_used |= (1u << pass) & 0xfffe;
     }
     if (!at) vertex_top += stored * 16;
     last_ratio = points ? 3 : 1;
@@ -1045,7 +1051,7 @@ void seglQuad(const GLfixed* xyz, const GLfixed* uv, GLuint name, unsigned grey,
         c[10] = last_state[5] = key_index;
         c[11] = last_state[4] = tint;
         last_draw = c;
-        passes_used |= (1u << pass) & 0xfe;
+        passes_used |= (1u << pass) & 0xfffe;
     }
     for (int i = 0; i < 4; i++, to += 4, xyz += 3, uv += 2) {
         to[0] = bits_of(FROM_FIXED(xyz[0]));

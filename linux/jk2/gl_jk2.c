@@ -345,13 +345,13 @@ static int fast_triangles(int count, const uint32_t* idx) {
     if (!fast_passes) {
         float m[16];
         seglGetMatrix(GL_PROJECTION, m);	// (columns: rd-vanilla's 2D is an ortho of depth 0 to 1)
-        unsigned pass = s.fragment >> 16 & 7;
+        unsigned pass = s.fragment >> 16 & 15;
         if (!(m[10] == -2.0f && m[14] == -1.0f && m[11] == 0.0f && m[15] == 1.0f)) {
             depth_seen = 1;
         } else if (!depth_seen) {
             far = 1;   // 2D before the frame's 3D: behind it
-            if (pass >= 4) s.fragment -= GPU_PASS(4);
-        } else if (pass < 4) {
+            if (pass & 4) s.fragment -= GPU_PASS(4);
+        } else if (!(pass & 4)) {
             s.fragment += GPU_PASS(pass ? 4 : 5);   // 2D after it: on top (OpenGL's 3D had its own depth cleared)
         }
     }
@@ -362,7 +362,7 @@ static int fast_triangles(int count, const uint32_t* idx) {
         seglGetMatrix(GL_PROJECTION, m);
         printf("jk2gl: draw %d indices %d vertices, texture %d, pass %u, depth %d, blend %x %x, far %d, colour %08x, "
                "first %.1f %.1f %.1f, projection %.3f %.3f %.3f %.3f\n", count, n, texturing ? (int)bound : -1,
-               s.fragment >> 16 & 7, depth_test, blending ? blend_src : 0, blending ? blend_dst : 0, far,
+               s.fragment >> 16 & 15, depth_test, blending ? blend_src : 0, blending ? blend_dst : 0, far,
                *(const uint32_t*)(va_colour.p + (size_t)idx[0] * va_colour.stride), p0[0], p0[1], p0[2], m[0], m[5], m[10], m[14]);
     }
     const uint8_t *pos = va_pos.p + (size_t)lo * va_pos.stride, *tc = va_coord.p + (size_t)lo * va_coord.stride,

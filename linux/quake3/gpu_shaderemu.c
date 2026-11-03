@@ -96,7 +96,7 @@ unsigned* gpuDrawAt(const gpu_state* s, unsigned vertices, int mesh) {
     c[2] = (uint32_t)mesh;
     c[6] = block;
     command_state(c, s);
-    passes_used |= (1u << (s->fragment >> 16 & 7)) & 0xfe;
+    passes_used |= (1u << (s->fragment >> 16 & 15)) & 0xfffe;
     last_draw = 0;
     joined_command = 0;
     return c;
@@ -117,7 +117,7 @@ unsigned* gpuDrawRoom(const gpu_state* s, int stored, int mesh) {
         c[2] = (uint32_t)mesh;
         c[6] = block;
         command_state(c, s);
-        passes_used |= (1u << (s->fragment >> 16 & 7)) & 0xfe;
+        passes_used |= (1u << (s->fragment >> 16 & 15)) & 0xfffe;
         joined = *s, joined_command = c, joined_block = block;
         last_draw = 0;
     }
@@ -135,7 +135,7 @@ unsigned* gpuDrawsRoom(int count, unsigned mesh, unsigned passes, unsigned* bloc
     for (int i = 0; i < count; i++) c[16 * i] = CMD_DRAW;   // (this core's store first: the pages are a worker's to write)
     *first_mesh = mesh_vertices;
     commands += (unsigned)count, mesh_vertices += mesh;
-    passes_used |= passes & 0xfe;
+    passes_used |= passes & 0xfffe;
     last_draw = 0;
     joined_command = 0;
     return c;
@@ -183,7 +183,7 @@ unsigned* gpuKept(int set, int index, const gpu_state* s, unsigned vertices, int
     c[3] = (uint32_t)first_mesh;
     c[6] = GPU_PHYS + SETS_AT + (uint32_t)set * SET_SIZE + UNIFORMS_IN;
     command_state(c, s);
-    kept_passes |= (1u << (s->fragment >> 16 & 7)) & 0xfe;
+    kept_passes |= (1u << (s->fragment >> 16 & 15)) & 0xfffe;
     passes_used |= kept_passes;
     return c;
 }
