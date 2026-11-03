@@ -5,9 +5,10 @@ one program by `linux/jk2/build.sh`, with the game and the renderer linked in an
 demo's level loads and plays on the build computer and **on the machine**, and the same runs give the same sums on
 both. Since the plan's step 2 (2 November 2026) it is **drawn on the machine's GPU** in a Nano-X window, through
 rd-vanilla over Half-Life's OpenGL ("The picture"); keys and the pointer drive it, its sound goes to the card, and a
-script of keys plays its start from the menu as a test. **It is far too slow**: a frame of play is 11.4 million
-instructions of core 0 with the picture (7.8 without), against about 400 thousand for 5 frames a second at 2 MIPS,
-and the load to the level 11.5 billion. It goes into private images only.
+script of keys plays its start from the menu as a test. **It is far too slow to play** ("Speed", 3 November 2026): on
+the card's calibrated clock the menu runs at 6.2 frames a second (1.2 before) and a frame of play takes 1 to 2 s (3 to
+4 before), and the load to the level is 11.5 billion instructions. What bounds it is the game itself on the first
+core ("What bounds it"). It goes into private images only.
 
     wsl -- python3 linux/jk2/data.py host ~/jk2-host/data --accept-eula   (the demo, fetched once into a cache; its licence)
     wsl -- bash linux/jk2/host_sum.sh                                     (builds the build computer's program, plays, sums)
@@ -137,6 +138,11 @@ freed once the renderer has the world (`tr_bsp.cpp`: 9.5 MB); the `.nav` file's 
     JK2_PICTURE=none    no window even with a window system (nullgl.c's answers)
     JK2_SOUND=mix       the mix into a buffer nobody hears even with a sound card (for sums: the card's pace moves them)
     JK2_WEATHER_CHECK=1 the snow's outside cache also asked point by point, and the words that differ counted
+    JK2_MARK=F0,F1      a measured window: jk2mark: lines at frames F0 and F1 (its frames and milliseconds), then the end
+    JK2_MUSIC=engine    the music decoded and mixed by this core, as before ("Music on the card"); JK2_MUSIC_LOG=1 says
+                        each stream of the card's; JK2_WORKERS=N the workers asked for (16)
+    JK2_GL=plain        rd-vanilla's triangles through Half-Life's shim as before ("Fewer instructions")
+    JK2_SHADOWS=made    every blob shadow made anew each frame ("Fewer instructions")
     HL_POOL_MB=N        the GPU's texture memory, MB of RAM (36); HLGL_LOG=1 every texture uploaded
     jk2gpu:             with JK2_STATS, the textures in GPU memory, how many found no room, vertices drawn a frame
     +set com_demo 1     the demo (the starter's)
@@ -413,18 +419,124 @@ so of this only the game's, the traces' and Ghoul2's bones carry over.
   `cg_players.cpp` 5); to be looked at by the profile on the machine, not before.
 - **64-bit**: none of note.
 
+## Speed
+
+Asked for on 3 November 2026: at least 15 frames a second in the menu and in play. **Not reached, and not reachable
+in play with this game's structure** ("What bounds it"). What was done, each measured on `rvc_cpu` with the card's
+calibrated clock (`--pass-model`, `tools/card_model.json`: 5.49 million instructions a second of core 0, a pass 1.49
+ms), the same image pair, the same keys (test_all's `jk2` script, `fixedtime 50`: a frame is one 50 ms frame of the
+game, so these are the speeds of a game slowed to them, not of the real-time game, which runs up to four game frames
+a slow frame):
+
+| | before (650f94c3) | after | |
+|---|---|---|---|
+| The main menu (frames 100 to 300, `game_par.py jk2-menu`) | 1.16 frames a second, 4.62 million instructions of core 0 a frame | 6.7 frames a second, 0.68 million (with the logo, the title and the saber it was missing drawn) | |
+| The walk (frames 1,500 to 1,700) | 0.31 frames a second, 3.27 s a frame, about 17 million | 0.64 to 0.66 frames a second, 1.51 to 1.56 s a frame, 8.1 to 8.3 million | |
+| The opening scene's march, the busiest stretch of the start (1,250 to 1,450) | 0.28, 3.61 s a frame | 0.53, 1.90 s a frame | |
+| The walk on after the turn (1,750 to 1,900) | 0.48, 2.09 s | 0.96, 1.04 s | |
+
+The test's shot at frame 1,900 kills the player and the autosave loads from 1,950: the start has no fight to measure
+past that; the march is its most crowded stretch (14 Stormtroopers in view).
+
+What each step gave (the walk's instructions of core 0 a frame, from `tools/prof.py` over frames 1,500 to 1,650):
+
+| Step | Saved a frame of the walk | The menu |
+|---|---|---|
+| The music on the card ("Music on the card") | 2.9 million (and the starved music's gaps) | 3.0 of its 4.6 million |
+| The small vector functions inline (`q_math.h` under `SHADEREMU`; an out-of-line `DotProduct` was 7% of the frame) | about 1.5 million | |
+| rd-vanilla's triangles made once a vertex in `gl_jk2.c` (an index a copy of its vertex's four words; it was two copies of the whole vertex an index, 165 instructions an index) | about 1.8 million | 0.13 million |
+| The client's game's traces against entities: a box (and a brush model not turned) apart from the move's extent is not traced (`cg_predict.cpp`; the effects' particles traced against every solid entity) | 1.8 million | |
+| `R_ChopPolyBehindPlane`'s two arrays not cleared (`tr_marks.cpp`, OpenJK's `= { 0 }`: 0.66 million in `memset`) | 0.66 million | |
+| A Ghoul2 model found again by its handle, not its name (`G2_SetupModelPointers`, 317 lookups a frame) | 0.3 million | |
+| A blob shadow from the same place, turning and size kept (`cg_players.cpp`: its trace and mark are of the world) | 0.5 to 1.1 million (standing people) | |
+| A patch tested against its bounds before its facets (`cm_patch.cpp`: Quake III 1.32's test, which Raven's code lacked) | about 0.4 million | |
+| A model's frame not between two frames kept (`tr_surface.cpp`), the mix's transfer from locals (`snd_mix.cpp`) | small | 0.76 to 0.68 million, the menu's whole picture now drawn |
+
+Every one of these leaves the game as it was: `host_sum.sh`'s nine lines and `test_all.py jk2`, `jk2-sums` and
+`jk2-install` the same; captures of the level at frame 900 (`+map demo`) and of the walk at frame 1,650 of the keys'
+start (`JK2_SOUND=mix`, so that the card's pace does not move the game) are the same pixels before and after (0 of
+307,680 differ). `RVC_RACES` with `RVC_RACES_NEAR=4` (`game_par.py`'s runs of the menu and the walk): 0 undone.
+
+Seen on the way and fixed:
+
+- **The music starved.** The engine filled its raw buffer 0.74 s ahead of the card's clock once a frame; a frame of 1
+  to 3 s left the music silent most of the time. On the card's stream voices it is decoded up to 1.5 s ahead by the
+  workers, whatever the frame takes.
+- **The main menu was missing its picture** (the turning Jedi Knight logo, the Star Wars title, the saber and its
+  halos: only the background and the buttons were drawn). Two causes in what the GPU does otherwise than OpenGL
+  ("What the menu was missing"); seen in captures before and after.
+
+### Music on the card
+
+`SE_MusicGive` (`sys_shaderemu.cpp`) takes what `S_UpdateBackgroundTrack_Actual` (`snd_dma.cpp`) gave the mixer: the
+engine keeps deciding which track plays, from where, how loud, and its intro, loop, dynamic states and cross-fades, as
+far ahead of the card's clock as before (`se_music_end`, its raw buffer's end); a track's file is in memory as the
+engine holds it (a non-dynamic track is read whole too, `qbInMemory`). A **stream** is a track played from a frame on:
+the engine's next give at the frame where the last ended is the same stream, any other a new one (a rewind, a seek, the
+fader's copy going on with the old track while the current one rewinds). A stream has its own card voice and a ring of
+32,768 frames in sound memory; libmedia (`media_audio_piece`, at half its rate: 22,050 a second, the mix's) decodes
+its pieces of a quarter of a second on the workers, four at a time, up to a ring ahead of what is heard. Its voice
+starts when the card's clock reaches the time the engine meant its first frames for, so an intro's tail and its loop do
+not overlap, and it is let go once all that was given is heard. A seek is only a place (`SeekTo`), and the engine's
+time left in a track (`iBytesDecodedTotal`) is the place given. The engine still decodes and mixes the music where
+there is no card (the sums' runs: `JK2_SOUND=mix` or `rvc_cpu` without `RVC_SOUND`), no workers, or with
+`JK2_MUSIC=engine`. The menu's track is 5,224,320 frames (237 s); the workers spend about 0.5 million instructions a
+frame of the menu on it.
+
+### What the menu was missing
+
+Captured with `rvc_harness --cpu --warp` (`JK2_AT=F:echo ...` as the mark): before, the main menu was the background,
+the buttons and nothing else. `JK2_GL_LOG=F` prints frame F's draws (`gl_jk2.c`); it showed:
+
+- rd-vanilla's 2D is drawn at depth 0 (the near plane), mostly depth-tested, and a menu's 3D model after it in a scene
+  of its own whose depth OpenGL clears first. The machine's GPU has one depth buffer a frame (a clear only clears
+  colour) and draws its passes in order whatever the list's order: the background, tested in pass 1, came after the
+  logo's opaque pass 0 and over it. Now 2D before the frame's first 3D draw goes to the depth-tested passes at the far
+  plane (its z made -1 under rd-vanilla's ortho of 0 to 1), so what is drawn after it in 3D is in front; 2D after it
+  goes to the passes without depth, on top, as in the list. `JK2_GL=passes` is the way before.
+- The GPU's added pass scales by alpha, which `GL_ONE, GL_ONE` does not: the saber halos' alpha is a wave from -1 to 1
+  (`alphaGen wave sin`), so they were dim or gone. Their alpha is made 1.
+
+### What bounds it
+
+After all of the above a frame of the walk is still about 8 million instructions of core 0 (prof.py, frames 1,500 to
+1,650): rd-vanilla's back end about 3.3 million (the GL shim's vertices 1.0, Ghoul2's skinning 0.9, its shaders'
+stages and surfaces the rest), the client's game about 2.5 million (its players and their bones, the effects, the
+shadows), the game's frame about 1.5 million (NPCs' behaviours: `ST_Commander` and `NPC_FindCombatPoint` 0.5,
+traces 0.6, Ghoul2 bolts), the mix 0.6 million (by the card's time: about 40 thousand a frame at 15 frames a
+second). 15 frames a second is 44 passes, about 366 thousand instructions of core 0 a frame.
+
+- **The game's frame alone is five times that**, and it cannot leave core 0 as Quake III's and Half-Life's servers did:
+  Jedi Outcast's single player has no client and server apart. The client's game reads the game's entities directly
+  (`cent->gent`, its client, its NPC state, `ghoul2`), and the renderer's Ghoul2 bone caches are the game's own
+  (`CBoneCache::EvalRender` evaluates lazily into the instance the game's bolts use). A game frame on a worker beside
+  the client's frame would race every one of those; a copy of the entities and the Ghoul2 instances each frame is the
+  size of the state itself. At 1.5 million a 50 ms game frame the game wants 30 million instructions a second for real
+  time, five or six calibrated cores.
+- **The back end a frame behind on a worker** (Half-Life's `rnd_shaderemu.c`) would take about 3.3 million off core 0
+  (play then about 1 frame a second, the menu about 9 to 10: its back end, 0.6 million, would bound it on the worker).
+  It needs `backEndData` twice (OpenJK took out Quake III's two), the frame's Ghoul2 bone matrices evaluated and copied
+  on core 0 before the job (the lazy evaluation above), every other renderer call settling the job first (texture
+  uploads, registrations), and the swap and the window's input back on core 0: not done.
+- **The level kept in GPU memory** (Half-Life's `gl_kept.c`) or a renderer of our own: the world's 200 draws a frame
+  through the shim are about 1 million.
+
+So the menu at about 6.7 frames a second and play at 1 to 2 s a frame is where this stands; 15 frames a second in
+play would need the game's frame itself several times cheaper and the client and renderer off core 0.
+
 ## What is left, in order
 
 The owner chose on 2 November 2026 to go on past step 1's gate. Steps 2 and 4 have a first form, step 3 its choice:
 
 1. **A renderer of our own** (step 2's real form): `tr_shaderemu`'s method behind `refexport_t`, the level kept in GPU
    memory as kept draws, keeping rd-vanilla's Ghoul2 (`G2_*.cpp`, `tr_ghoul2.cpp`'s bones: the game traces against
-   them), models, skins and fonts. rd-vanilla's back end is 7.25 of a frame's 11.4 million ("The picture").
+   them), models, skins and fonts; or rd-vanilla's back end a frame behind on a worker ("What bounds it").
 2. **Ghoul2 skinned by the GPU's vertex shader** ("Ghoul2"): a draw kind of four weights a vertex and a bone table, in
    `gpu.shader` and Unity's copy, measured on the card.
-3. **The game's own 21 million instructions a second** ("On the machine"): traces through patches, NPCs' behaviours and
-   Ghoul2 bolts made cheaper, or the game on a worker (step 5).
-4. **Sound** as voices of the card (the decoded sounds and the MP3s' 14.5 MB of decoder states out of RAM), music, films.
+3. **The game's own 30 million instructions a second** ("What bounds it"): NPCs' behaviours, traces and Ghoul2 bolts
+   made cheaper; it cannot simply go to a worker.
+4. **Sound effects** as voices of the card (the decoded sounds and the MP3s' 14.5 MB of decoder states out of RAM), films.
+   The music is the card's ("Music on the card").
 5. **The player's own view checked**: HUD, hands and saber, in a capture after the opening scene with the player alive.
 6. **In** (step 6): `image.py --jk2`/`JK2_IMAGE=1` calling `data.py`, `AGENTS.md`'s line.
 

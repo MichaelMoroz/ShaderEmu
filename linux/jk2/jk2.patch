@@ -248,6 +248,33 @@ index bb539e4c..76f33461 100644
  					S_UpdateBackgroundTrack_Actual( pMusicInfoFadeOut, qfalse, s_musicVolume->value );	// inactive-checked internally
  	/*
  					static int iPrevFadeVol = 0;
+diff --git a/code/client/snd_mix.cpp b/code/client/snd_mix.cpp
+index d245590d..aa9de400 100644
+--- a/code/client/snd_mix.cpp
++++ b/code/client/snd_mix.cpp
+@@ -36,6 +36,22 @@ void S_WriteLinearBlastStereo16 (void)
+ 	int		i;
+ 	int		val;
+ 
++#ifdef SHADEREMU
++	// (docs/games/jk2.md, "Fewer instructions": the same samples, from locals, a frame's two a word: the globals were
++	// loaded again after every store, -fno-strict-aliasing, and this was 109 thousand instructions a frame of the menu)
++	{
++		const int *p = snd_p;
++		unsigned int *out = (unsigned int *)snd_out;
++		const int n = snd_linear_count;
++		for ( i = 0 ; i < n ; i += 2 ) {
++			int l = p[i] >> 8, r = p[i+1] >> 8;
++			l = l > 0x7fff ? 0x7fff : l < -0x8000 ? -0x8000 : l;
++			r = r > 0x7fff ? 0x7fff : r < -0x8000 ? -0x8000 : r;
++			out[i >> 1] = ( (unsigned int)l & 0xffff ) | (unsigned int)r << 16;
++		}
++		return;
++	}
++#endif
+ 	for (i=0 ; i<snd_linear_count ; i+=2)
+ 	{
+ 		val = snd_p[i]>>8;
 diff --git a/code/qcommon/cm_patch.cpp b/code/qcommon/cm_patch.cpp
 index dbaa19dd..d61bcc5c 100644
 --- a/code/qcommon/cm_patch.cpp
@@ -778,6 +805,101 @@ index 2da2512a..97658329 100644
  	int			counts[3];
  	float		dot;
  	int			i, j;
+diff --git a/code/rd-vanilla/tr_model.cpp b/code/rd-vanilla/tr_model.cpp
+index a6d5bc7b..bcfc3f67 100644
+--- a/code/rd-vanilla/tr_model.cpp
++++ b/code/rd-vanilla/tr_model.cpp
+@@ -254,9 +254,15 @@ extern cvar_t *r_modelpoolmegs;
+ // return qtrue if at least one cached model was freed (which tells z_malloc()-fail recovery code to try again)
+ //
+ extern qboolean gbInsideRegisterModel;
++#ifdef SHADEREMU
++int se_models_gen;	// raised where models may be freed: what is kept of a model's vertices goes by it (tr_surface.cpp)
++#endif
+ qboolean RE_RegisterModels_LevelLoadEnd(qboolean bDeleteEverythingNotUsedThisLevel /* = qfalse */)
+ {
+ 	qboolean bAtLeastoneModelFreed = qfalse;
++#ifdef SHADEREMU
++	se_models_gen++;
++#endif
+ 
+ 	if (gbInsideRegisterModel)
+ 	{
+@@ -342,6 +348,9 @@ void RE_RegisterModels_Info_f( void )
+ 
+ static void RE_RegisterModels_DeleteAll(void)
+ {
++#ifdef SHADEREMU
++	se_models_gen++;
++#endif
+ 	if(!CachedModels) {
+ 		return;	//argh!
+ 	}
+@@ -1004,6 +1013,9 @@ R_ModelInit
+ */
+ void R_ModelInit( void )
+ {
++#ifdef SHADEREMU
++	se_models_gen++;
++#endif
+ 	static CachedModels_t singleton;	// sorry vv, your dynamic allocation was a (false) memory leak
+ 	CachedModels = &singleton;
+ 
+diff --git a/code/rd-vanilla/tr_surface.cpp b/code/rd-vanilla/tr_surface.cpp
+index 1e51e71c..8d67fd01 100644
+--- a/code/rd-vanilla/tr_surface.cpp
++++ b/code/rd-vanilla/tr_surface.cpp
+@@ -1196,6 +1196,50 @@ static void LerpMeshVertexes (md3Surface_t *surf, float backlerp)
+ 
+ 	numVerts = surf->numVerts;
+ 
++#ifdef SHADEREMU
++	// (docs/games/jk2.md, "Fewer instructions": a frame of a model not between two frames is the same vertices and
++	// normals every time: made once and kept, the last 8 of them; the menu's turning logo, 1,399 vertices, was 100
++	// thousand instructions of its frame)
++	if ( backlerp == 0 && numVerts <= SHADER_MAX_VERTEXES ) {
++		extern int se_models_gen;	// (tr_model.cpp: raised where models may be freed)
++		static struct { const short *from; int numVerts, gen; float *made; } kept[8];
++		static int kept_next;
++		int k;
++		for ( k = 0 ; k < 8 && !( kept[k].from == newXyz && kept[k].numVerts == numVerts && kept[k].gen == se_models_gen ) ; k++ ) {
++		}
++		if ( k == 8 ) {
++			k = kept_next++ & 7;
++			float *made = (float *)realloc( kept[k].made, numVerts * 6 * sizeof( float ) );
++			if ( made ) {
++				const short *x = newXyz, *n = newNormals;
++				for ( vertNum = 0 ; vertNum < numVerts ; vertNum++, x += 4, n += 4 ) {
++					float *m = made + vertNum * 6;
++					m[0] = x[0] * newXyzScale;
++					m[1] = x[1] * newXyzScale;
++					m[2] = x[2] * newXyzScale;
++					lat = ( n[0] >> 8 ) & 0xff;
++					lng = ( n[0] & 0xff );
++					lat *= (FUNCTABLE_SIZE/256);
++					lng *= (FUNCTABLE_SIZE/256);
++					m[3] = tr.sinTable[(lat+(FUNCTABLE_SIZE/4))&FUNCTABLE_MASK] * tr.sinTable[lng];
++					m[4] = tr.sinTable[lat] * tr.sinTable[lng];
++					m[5] = tr.sinTable[(lng+(FUNCTABLE_SIZE/4))&FUNCTABLE_MASK];
++				}
++				kept[k].from = newXyz, kept[k].numVerts = numVerts, kept[k].gen = se_models_gen, kept[k].made = made;
++			} else {
++				kept[k].from = NULL;
++			}
++		}
++		if ( k < 8 && kept[k].from ) {
++			const float *m = kept[k].made;
++			for ( vertNum = 0 ; vertNum < numVerts ; vertNum++, m += 6, outXyz += 4, outNormal += 4 ) {
++				outXyz[0] = m[0], outXyz[1] = m[1], outXyz[2] = m[2];
++				outNormal[0] = m[3], outNormal[1] = m[4], outNormal[2] = m[5];
++			}
++			return;
++		}
++	}
++#endif
+ 	if ( backlerp == 0 ) {
+ 		//
+ 		// just copy the vertexes
 diff --git a/code/server/sv_game.cpp b/code/server/sv_game.cpp
 index 8cd596fb..b8e4be48 100644
 --- a/code/server/sv_game.cpp
