@@ -14,21 +14,113 @@ uint32_t SE_RenderOnCore0(uint32_t (*fn)(void*), void* args) { return fn(args); 
 static int on;   // the window is open and the GPU draws
 int jk2glOn(void) { return on; }
 
+// ---- the drawing on a worker, a frame behind (docs/games/jk2.md, "The drawing on a worker") ----
+// At a frame's end (R_IssueRenderCommands) rd-vanilla's commands are given to a worker of their own, which runs its
+// back end (RB_ExecuteRenderCommands: the shaders' stages, Ghoul2's skinning, this file's GL) on a stack of its own
+// while this core makes the next frame into the other backEndData. The frame is shown (the GPU's list swapped) by this
+// core when the job is done, at the next give or any settle. Any GL call this core makes while the job is out (a
+// texture uploaded, a sync of the renderer's) settles it first. JK2_RENDER=core: the drawing this core's, as before.
+uint32_t jk2_call_on_stack(uint32_t (*fn)(uint32_t), uint32_t arg, void* stack_top);
+__asm__(".text\n.globl jk2_call_on_stack\n.type jk2_call_on_stack, @function\njk2_call_on_stack:\n"
+        "	addi a2, a2, -16\n	sw ra, 12(a2)\n	sw sp, 8(a2)\n	mv sp, a2\n	mv t0, a0\n	mv a0, a1\n	jalr t0\n"
+        "	lw ra, 12(sp)\n	lw sp, 8(sp)\n	ret\n");
+#define RENDER_STACK (256 * 1024)
+static uint8_t render_stack[RENDER_STACK] __attribute__((aligned(16)));
+static struct __attribute__((aligned(16))) { int mode, worker, out, presenting; unsigned gives, settles, gl_settles, waits; } rw0;  // this core's
+static struct __attribute__((aligned(16))) { void (*fn)(const void*); const void* arg; int swap, unused; } job;  // the given frame: the worker's while out
+static void gl_swap(void);
+static void memo_init(void);
+static int on_render(void) {
+    char here;
+    return (uint8_t*)&here >= render_stack && (uint8_t*)&here < render_stack + RENDER_STACK;
+}
+int jk2RenderWorkerHere(void) { return on_render(); }
+static uint32_t render_body(uint32_t unused) {
+    (void)unused;
+    job.fn(job.arg);
+    return 0;
+}
+static uint32_t render_job(uint32_t a0, uint32_t a1) {
+    (void)a0, (void)a1;
+    return jk2_call_on_stack(render_body, 0, render_stack + RENDER_STACK);
+}
+extern char _start[], etext[];
+static void render_open(void) {
+    const char* how = getenv("JK2_RENDER");
+    rw0.mode = 0;
+    if (how && !strcmp(how, "core")) return;
+    int n = mcw_open(getenv("JK2_WORKERS") ? atoi(getenv("JK2_WORKERS")) : 16);
+    if (n <= 0) return;
+    mcw_touch_code(_start, (unsigned)(etext - _start));   // (a worker stops at a page of code no core has run)
+    mcw_touch(render_stack, RENDER_STACK);
+    mcw_touch(&job, sizeof job);
+    // (a worker on one of the first 16 cores, with the larger write cache: the drawing stores every vertex's words)
+    rw0.worker = n;
+    for (int k = 1; k <= n; k++)
+        if (mcw_fast(k)) { rw0.worker = k; break; }
+    rw0.mode = 1;
+    printf("jk2: the drawing on worker %d (%s write cache), a frame behind\n", rw0.worker, mcw_fast(rw0.worker) ? "a large" : "a small");
+}
+int jk2RenderOn(void) { return on && rw0.mode == 1; }
+// The frame out done and shown
+void jk2RenderSettle(void) {
+    if (!rw0.out || on_render()) return;
+    while (!mcw_done(rw0.worker)) mcw_rest_for(&rw0.worker, 1), rw0.waits++;
+    rw0.out = 0, rw0.settles++;
+    if (job.swap) job.swap = 0, gl_swap();
+}
+// (a GL call of this core's while the frame is out: the drawing's state is the worker's until it is done)
+#define SETTLE() do { if (rw0.out && !on_render()) rw0.gl_settles++, jk2RenderSettle(); } while (0)
+void jk2RenderGive(void (*fn)(const void*), const void* arg) {
+    jk2RenderSettle();
+    job.fn = fn, job.arg = arg, job.swap = 0;
+    mcw_post(rw0.worker, render_job, 0, 0);
+    rw0.out = 1, rw0.gives++;
+}
+// The worker's RB_SwapBuffers: whether the swap is left to this core (the worker draws); else the window's own
+int jk2RenderSwapMark(void) {
+    if (!on_render()) return 0;
+    job.swap = 1;
+    return 1;
+}
+// The window's frame (its input, keys and counts) once a frame is given, its GPU list shown at the settle
+void SE_WindowFrame(void);
+void jk2RenderPresent(void) {
+    rw0.presenting = 1;
+    SE_WindowFrame();
+    rw0.presenting = 0;
+}
+// The worker's state served while this core waits elsewhere (a page or a system call it stopped at)
+void jk2RenderServe(void) {
+    if (rw0.out) mcw_done(rw0.worker);
+}
+void jk2RenderStats(unsigned* gives, unsigned* settles, unsigned* gl_settles, unsigned* waits) {
+    *gives = rw0.gives, *settles = rw0.settles, *gl_settles = rw0.gl_settles, *waits = rw0.waits;
+    rw0.gives = rw0.settles = rw0.gl_settles = rw0.waits = 0;
+}
+
 int jk2glOpen(unsigned window) {
     if (on) return 0;
     if (!getenv("HLGL_WORKERS")) setenv("HLGL_WORKERS", "0", 0);   // (none yet: textures are converted by this core)
     if (!getenv("HL_POOL_MB")) setenv("HL_POOL_MB", "36", 0);   // (the demo's level and menus at r_picmip 2: 31.6 MB)
     if (hlglOpen(window) < 0) return -1;
     on = 1;
+    render_open();
+    memo_init();
     return 0;
 }
 static int depth_seen;   // a draw of this frame was depth-tested (fast_triangles: what is drawn before it is behind it)
 static int gl_frames, gl_log_at = -1;
-void jk2glSwap(void) {
-    if (on) hlglSwap();
+static void gl_swap(void) {
+    hlglSwap();
     depth_seen = 0;
     if (gl_log_at < 0) gl_log_at = getenv("JK2_GL_LOG") ? atoi(getenv("JK2_GL_LOG")) : 0;
     gl_frames++;
+}
+void jk2glSwap(void) {
+    if (!on || rw0.presenting) return;   // (a frame given to the worker: shown when it is done)
+    SETTLE();
+    gl_swap();
 }
 void jk2glStats(unsigned* in_gpu, unsigned* gpu_size, unsigned* left_out, unsigned* vertices) {
     unsigned tiles;
@@ -48,7 +140,7 @@ typedef double GLdouble;
 typedef double GLclampd;
 typedef unsigned char GLubyte;
 
-#define ON_THEN(call) do { if (on) call; } while (0)
+#define ON_THEN(call) do { if (on) { SETTLE(); call; } } while (0)
 void jk2_glAlphaFunc(GLenum f, GLclampf r) { (void)f, (void)r; }
 void jk2_glArrayElement(GLint i) { ON_THEN(s_glArrayElement(i)); }
 void jk2_glBegin(GLenum m) { ON_THEN(s_glBegin(m)); }
@@ -138,17 +230,21 @@ static memo_t* memo_find(const gpu_state* s, int count, int n, int far, uint32_t
     return 0;
 }
 // The slot a new large draw is kept in: the one used longest ago
-static memo_t* memo_slot(void) {
-    if (memo_state < 0) {
-        const char* g = getenv("JK2_GL");
-        memo_state = 0;
-        if (!(g && !strcmp(g, "nomemo")) && (memo_gpu = hlglKeptMemory(MEMO_SLOTS * MAX_PRIMITIVE * 16))) {
-            memo_state = 1;
-            for (int e = 0; e < MEMO_SLOTS && memo_state; e++)
-                if (!(memo[e].in = malloc(MAX_PRIMITIVE * 6 * 4)) || !(memo[e].idx = malloc(MAX_PRIMITIVE * 4))) memo_state = 0;
-        }
+// (made on this core when the window opens: the drawing may be on a worker, which may not malloc)
+static void memo_init(void) {
+    const char* g = getenv("JK2_GL");
+    memo_state = 0;
+    if (!(g && !strcmp(g, "nomemo")) && (memo_gpu = hlglKeptMemory(MEMO_SLOTS * MAX_PRIMITIVE * 16))) {
+        memo_state = 1;
+        for (int e = 0; e < MEMO_SLOTS && memo_state; e++)
+            if (!(memo[e].in = malloc(MAX_PRIMITIVE * 6 * 4)) || !(memo[e].idx = malloc(MAX_PRIMITIVE * 4))) memo_state = 0;
+        for (int e = 0; e < MEMO_SLOTS && memo_state; e++)
+            mcw_touch(memo[e].in, MAX_PRIMITIVE * 6 * 4), mcw_touch(memo[e].idx, MAX_PRIMITIVE * 4);
+        mcw_touch(memo_gpu, MEMO_SLOTS * MAX_PRIMITIVE * 16);
     }
-    if (!memo_state) return 0;
+}
+static memo_t* memo_slot(void) {
+    if (memo_state <= 0) return 0;
     memo_t* best = &memo[0];
     for (int e = 1; e < MEMO_SLOTS; e++)
         if (memo[e].used < best->used) best = &memo[e];
@@ -328,6 +424,7 @@ static int fast_triangles(int count, const uint32_t* idx) {
 
 void jk2_glDrawElements(GLenum m, GLsizei count, GLenum type, const void* indices) {
     if (!on) return;
+    SETTLE();
     if (m == GL_TRIANGLES && type == GL_UNSIGNED_INT && fast_ok()) {
         int piece = MAX_PRIMITIVE / 3 * 3;
         int done = 0;
@@ -356,7 +453,7 @@ GLuint jk2_glGenLists(GLsizei range) {
 }
 GLenum jk2_glGetError(void) { return 0; }
 void jk2_glGetFloatv(GLenum name, GLfloat* v) {
-    if (on) s_glGetFloatv(name, v);
+    if (on) { SETTLE(); s_glGetFloatv(name, v); }
     else memset(v, 0, 16 * sizeof(GLfloat));
 }
 void jk2_glGetIntegerv(GLenum name, GLint* v) {
@@ -367,7 +464,7 @@ void jk2_glGetIntegerv(GLenum name, GLint* v) {
     // the window is 640 wide); without a window as nullgl.c
     case 0x0D33: *v = on ? 512 : 2048; return;
     }
-    if (on) s_glGetIntegerv(name, v);
+    if (on) { SETTLE(); s_glGetIntegerv(name, v); }
     else if (name == 0x0BA2) v[0] = v[1] = 0, v[2] = 640, v[3] = 480;
     else *v = 0;
 }
@@ -379,7 +476,7 @@ const GLubyte* jk2_glGetString(GLenum name) {
     default: return (const GLubyte*)"";   // no extension: the renderer takes its plain paths
     }
 }
-GLboolean jk2_glIsEnabled(GLenum c) { return on ? s_glIsEnabled(c) : 0; }
+GLboolean jk2_glIsEnabled(GLenum c) { if (!on) return 0; SETTLE(); return s_glIsEnabled(c); }
 void jk2_glLineWidth(GLfloat w) { (void)w; }
 void jk2_glLoadIdentity(void) { ON_THEN(s_glLoadIdentity()); }
 void jk2_glLoadMatrixf(const GLfloat* m) { ON_THEN(s_glLoadMatrixf(m)); }

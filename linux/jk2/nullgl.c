@@ -81,3 +81,11 @@ void glReadPixels(GLint x, GLint y, int width, int height, GLenum format, GLenum
     (void)x; (void)y; (void)type;
     memset(pixels, 0, (size_t)((width * bytes + 3) & ~3) * height);
 }
+
+/* the drawing on a worker (gl_jk2.c, the machine's): never on the build computer */
+int jk2RenderOn(void) { return 0; }
+void jk2RenderSettle(void) {}
+void jk2RenderGive(void (*fn)(const void *), const void *arg) { fn(arg); }
+void jk2RenderPresent(void) {}
+int jk2RenderSwapMark(void) { return 0; }
+int jk2RenderWorkerHere(void) { return 0; }

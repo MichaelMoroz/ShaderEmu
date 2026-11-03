@@ -186,6 +186,14 @@ compile renderer \
 # jk2game_init, out of the program's: sys_shaderemu.cpp makes them fresh at each load as a library's were (the data as
 # it began, the rest zero, the constructors run): a saved game's load found a table of the last load's freed names
 # (G_LoadRoff, AddressSanitizer, 2 November 2026).
+# On the machine every variable of its own section starts a 16-byte texel (OpenTTD's ottd-align16): the drawing's worker
+# (gl_jk2.c) and the music's write statics beside this core's, and two cores must not store to one texel in one pass
+if [ "${JK2_HOST:-}" != 1 ]; then
+    for o in "$BUILD"/engine/*.o "$BUILD"/game/*.o "$BUILD"/renderer/*.o; do
+        $OBJCOPY --set-section-alignment '.data*=16' --set-section-alignment '.sdata*=16' --set-section-alignment '.bss*=16' \
+            --set-section-alignment '.sbss*=16' "$o"
+    done
+fi
 step "the modules"
 cat > "$BUILD/game.ld.new" <<'EOF'
 SECTIONS {
@@ -224,6 +232,10 @@ if [ "${JK2_HOST:-}" != 1 ]; then
     # libmedia (docs/system/media.md): the music decoded on the worker cores (sys_shaderemu.cpp, "Music on the card")
     MEDIA=${MEDIA_LIB:-$WORK/src/libmedia/libmedia.a}
     [ -f "$MEDIA" ] || { echo "run linux/libmedia/build.sh first"; exit 1; }
+    for o in "$BUILD"/window/*.o; do   # (a texel each, as above)
+        $OBJCOPY --set-section-alignment '.data*=16' --set-section-alignment '.sdata*=16' --set-section-alignment '.bss*=16' \
+            --set-section-alignment '.sbss*=16' "$o"
+    done
     MACHINE="$BUILD/window/*.o $MW/src/lib/libnano-X.a $MEDIA"
 fi
 

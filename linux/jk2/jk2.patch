@@ -706,6 +706,59 @@ index 5464b70b..6e6d897a 100644
  		}
  
  		GL_Bind(mImage);
+diff --git a/code/rd-vanilla/tr_backend.cpp b/code/rd-vanilla/tr_backend.cpp
+index 741bb95b..420f0e23 100644
+--- a/code/rd-vanilla/tr_backend.cpp
++++ b/code/rd-vanilla/tr_backend.cpp
+@@ -27,6 +27,10 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
+ #include "tr_common.h"
+ 
+ backEndData_t	*backEndData;
++#ifdef SHADEREMU
++extern "C" int jk2RenderSwapMark( void );	// (gl_jk2.c: the drawing on a worker)
++extern "C" int jk2RenderWorkerHere( void );
++#endif
+ backEndState_t	backEnd;
+ 
+ bool tr_stencilled = false;
+@@ -1568,6 +1572,9 @@ const void	*RB_SwapBuffers( const void *data ) {
+ 
+     GLimp_LogComment( "***************** RB_SwapBuffers *****************\n\n\n" );
+ 
++#ifdef SHADEREMU
++	if ( !jk2RenderSwapMark() )	// (on the drawing's worker: the GPU's list swapped by this core when it is done)
++#endif
+ 	ri.WIN_Present(&window);
+ 
+ 	backEnd.projection2D = qfalse;
+@@ -1604,7 +1611,15 @@ RB_ExecuteRenderCommands
+ void RB_ExecuteRenderCommands( const void *data ) {
+ 	int		t1, t2;
+ 
++#ifdef SHADEREMU
++	const int here = jk2RenderWorkerHere();	// (on the worker: no system call for the time)
++	t1 = here ? 0 : ri.Milliseconds ();
++	if ( here ) {
++		glState.finishCalled = qfalse;	// (RE_BeginFrame's, for the frame it draws)
++	}
++#else
+ 	t1 = ri.Milliseconds ();
++#endif
+ 
+ 	while ( 1 ) {
+ 		data = PADP(data, sizeof(void *));
+@@ -1640,7 +1655,11 @@ void RB_ExecuteRenderCommands( const void *data ) {
+ 		case RC_END_OF_LIST:
+ 		default:
+ 			// stop rendering
++#ifdef SHADEREMU
++			t2 = here ? 0 : ri.Milliseconds ();
++#else
+ 			t2 = ri.Milliseconds ();
++#endif
+ 			backEnd.pc.msec = t2 - t1;
+ 			return;
+ 		}
 diff --git a/code/rd-vanilla/tr_bsp.cpp b/code/rd-vanilla/tr_bsp.cpp
 index afbbb175..a5dbf9fd 100644
 --- a/code/rd-vanilla/tr_bsp.cpp
@@ -722,6 +775,153 @@ index afbbb175..a5dbf9fd 100644
  	}
  	else
  	{
+diff --git a/code/rd-vanilla/tr_cmds.cpp b/code/rd-vanilla/tr_cmds.cpp
+index 04ad9bdb..90e30d06 100644
+--- a/code/rd-vanilla/tr_cmds.cpp
++++ b/code/rd-vanilla/tr_cmds.cpp
+@@ -89,6 +89,17 @@ void R_PerformanceCounters( void ) {
+ R_IssueRenderCommands
+ ====================
+ */
++#ifdef SHADEREMU
++// The drawing a frame behind on a worker (docs/games/jk2.md, "The drawing on a worker"; gl_jk2.c): a frame's commands
++// are given at its end, the worker draws them while this core makes the next frame into the other backEndData
++extern "C" int jk2RenderOn( void );
++extern "C" void jk2RenderSettle( void );
++extern "C" void jk2RenderGive( void ( *fn )( const void * ), const void *arg );
++extern "C" void jk2RenderPresent( void );
++int SE_RSBones( void );
++void SE_RSInline( void );
++backEndData_t *se_backEndData[2];
++#endif
+ void R_IssueRenderCommands( qboolean runPerformanceCounters ) {
+ 	renderCommandList_t	*cmdList;
+ 
+@@ -101,6 +112,18 @@ void R_IssueRenderCommands( qboolean runPerformanceCounters ) {
+ 	// clear it out, in case this is a sync and not a buffer flip
+ 	cmdList->used = 0;
+ 
++#ifdef SHADEREMU
++	jk2RenderSettle();	// (the frame before done, and shown)
++	if ( runPerformanceCounters && !r_skipBackEnd->integer && jk2RenderOn() && se_backEndData[1] && SE_RSBones() >= 0 ) {
++		R_PerformanceCounters();
++		jk2RenderGive( RB_ExecuteRenderCommands, cmdList->cmds );
++		backEndData = se_backEndData[backEndData == se_backEndData[0]];
++		jk2RenderPresent();	// (the window's frame: its input and its counts, as at the swap)
++		return;
++	}
++	SE_RSInline();
++#endif
++
+ 	// at this point, the back end thread is idle, so it is ok
+ 	// to look at it's performance counters
+ 	if ( runPerformanceCounters ) {
+@@ -375,6 +398,9 @@ void RE_BeginFrame( stereoFrame_t stereoFrame ) {
+ 	if ( !tr.registered ) {
+ 		return;
+ 	}
++#ifdef SHADEREMU
++	if ( !jk2RenderOn() )	// (the drawing's state: its worker clears it when it begins the frame, tr_backend.cpp)
++#endif
+ 	glState.finishCalled = qfalse;
+ 
+ 	tr.frameCount++;
+diff --git a/code/rd-vanilla/tr_ghoul2.cpp b/code/rd-vanilla/tr_ghoul2.cpp
+index 5062daf5..8f548ef4 100644
+--- a/code/rd-vanilla/tr_ghoul2.cpp
++++ b/code/rd-vanilla/tr_ghoul2.cpp
+@@ -723,6 +723,55 @@ CRenderableSurface *AllocRS()
+ 	return ret;
+ }
+ 
++#ifdef SHADEREMU
++// The drawing a frame behind on a worker (docs/games/jk2.md, "The drawing on a worker"): a Ghoul2 surface's bones are
++// evaluated lazily into the model's bone cache, which the game's and the client's bolts set up anew (their own times
++// and flags) while the worker draws. So when a frame is given, this core evaluates the bones each surface of it names,
++// as the drawing would have at once, and the drawing reads those (two sets: the frame out and the one being made).
++#define SE_RS_BONES ( 96 * 1024 )		// floats a set: 8,000 matrices
++static float se_rs_bones[2][SE_RS_BONES];
++static int se_rs_set, se_rs_from;
++int SE_RSBones( void )
++{
++	float *pool = se_rs_bones[se_rs_set];
++	int used = 0, made = 0;
++	for ( unsigned i = (unsigned)se_rs_from ; i != NextRS ; i = ( i + 1 ) % MAX_RENDER_SURFACES )
++	{
++		CRenderableSurface *rs = &RSStorage[i];
++		rs->seBones = 0;
++		if ( !rs->boneCache || !rs->surfaceData
++#ifdef _G2_GORE
++			|| rs->alternateTex
++#endif
++			)
++			continue;
++		const mdxmSurface_t *surface = rs->surfaceData;
++		const int *refs = (const int *)( (const byte *)surface + surface->ofsBoneReferences );
++		if ( used + surface->numBoneReferences * 12 > SE_RS_BONES )
++			return -1;	// (no room: the caller draws this frame on this core)
++		float *out = pool + used;
++		for ( int r = 0 ; r < surface->numBoneReferences ; r++ )
++			memcpy( out + r * 12, &rs->boneCache->Eval( refs[r] ), 12 * sizeof( float ) );
++		rs->seBones = out;
++		used += surface->numBoneReferences * 12;
++		made++;
++	}
++	se_rs_from = NextRS;
++	se_rs_set ^= 1;
++	return made;
++}
++// (the frame's surfaces, drawn on this core: their bones are the cache's, as always)
++void SE_RSInline( void )
++{
++	for ( unsigned i = (unsigned)se_rs_from ; i != NextRS ; i = ( i + 1 ) % MAX_RENDER_SURFACES )
++		RSStorage[i].seBones = 0;
++	se_rs_from = NextRS;
++}
++#define SE_EVAL( k ) ( surf->seBones ? (const mdxaBone_t *)( surf->seBones + ( k ) * 12 ) : &bones->Eval( piBoneReferences[k] ) )
++#else
++#define SE_EVAL( k ) ( &bones->Eval( piBoneReferences[k] ) )
++#endif
++
+ /*
+ 
+ All bones should be an identity orientation to display the mesh exactly
+@@ -2992,7 +3041,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
+ 		for ( j = 0; j < numVerts; j++, baseVertex++,v++ )
+ 		{
+ #ifdef JK2_MODE
+-			bone = &bones->Eval(piBoneReferences[G2_GetVertBoneIndex( v, 0 )]);
++			bone = SE_EVAL( G2_GetVertBoneIndex( v, 0 ) );
+ #else
+ 			bone = &bones->EvalRender(piBoneReferences[G2_GetVertBoneIndex( v, 0 )]);
+ #endif // JK2_MODE
+@@ -3013,7 +3062,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
+ 				if (iNumWeights==2)
+ 				{
+ #ifdef JK2_MODE
+-					bone2 = &bones->Eval(piBoneReferences[G2_GetVertBoneIndex( v, 1 )]);
++					bone2 = SE_EVAL( G2_GetVertBoneIndex( v, 1 ) );
+ #else
+ 					bone2 = &bones->EvalRender(piBoneReferences[G2_GetVertBoneIndex( v, 1 )]);
+ #endif // JK2_MODE
+@@ -3046,7 +3095,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
+ 					for (k=1; k < iNumWeights-1 ; k++)
+ 					{
+ #ifdef JK2_MODE
+-						bone = &bones->Eval(piBoneReferences[G2_GetVertBoneIndex( v, k )]);
++						bone = SE_EVAL( G2_GetVertBoneIndex( v, k ) );
+ #else
+ 						bone = &bones->EvalRender(piBoneReferences[G2_GetVertBoneIndex( v, k )]);
+ #endif // JK2_MODE
+@@ -3060,7 +3109,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
+ 					}
+ 
+ #ifdef JK2_MODE
+-					bone = &bones->Eval(piBoneReferences[G2_GetVertBoneIndex( v, k )]);
++					bone = SE_EVAL( G2_GetVertBoneIndex( v, k ) );
+ #else
+ 					bone = &bones->EvalRender(piBoneReferences[G2_GetVertBoneIndex( v, k )]);
+ #endif // JK2_MODE
 diff --git a/code/rd-vanilla/tr_image.cpp b/code/rd-vanilla/tr_image.cpp
 index a13badd4..73f86498 100644
 --- a/code/rd-vanilla/tr_image.cpp
@@ -786,6 +986,78 @@ index a13badd4..73f86498 100644
  	R_Free( pic );
  	return image;
  }
+diff --git a/code/rd-vanilla/tr_init.cpp b/code/rd-vanilla/tr_init.cpp
+index 13c72e66..c474a255 100644
+--- a/code/rd-vanilla/tr_init.cpp
++++ b/code/rd-vanilla/tr_init.cpp
+@@ -1752,6 +1752,13 @@ void R_Init( void ) {
+ 	R_Register();
+ 
+ 	backEndData = (backEndData_t *) R_Hunk_Alloc( sizeof( backEndData_t ), qtrue );
++#ifdef SHADEREMU
++	{	// (a second for the drawing on a worker: tr_cmds.cpp)
++		extern backEndData_t *se_backEndData[2];
++		se_backEndData[0] = backEndData;
++		se_backEndData[1] = (backEndData_t *) R_Hunk_Alloc( sizeof( backEndData_t ), qtrue );
++	}
++#endif
+ 	R_InitNextFrame();
+ 
+ 	const color4ub_t color = {0xff, 0xff, 0xff, 0xff};
+diff --git a/code/rd-vanilla/tr_local.h b/code/rd-vanilla/tr_local.h
+index c9e745aa..05545583 100644
+--- a/code/rd-vanilla/tr_local.h
++++ b/code/rd-vanilla/tr_local.h
+@@ -1587,6 +1587,9 @@ public:
+ #endif
+  	CBoneCache 		*boneCache;		// pointer to transformed bone list for this surf
+ 	mdxmSurface_t	*surfaceData;	// pointer to surface data loaded into file - only used by client renderer DO NOT USE IN GAME SIDE - if there is a vid restart this will be out of wack on the game
++#ifdef SHADEREMU
++	const float		*seBones = 0;	// its bone references' matrices as the frame was given to the drawing's worker (SE_RSBones)
++#endif
+ #ifdef _G2_GORE
+ 	float			*alternateTex;		// alternate texture coordinates.
+ 	void			*goreChain;
+@@ -1604,6 +1607,9 @@ public:
+ 		surfaceData = src.surfaceData;
+ 		alternateTex = src.alternateTex;
+ 		goreChain = src.goreChain;
++#ifdef SHADEREMU
++		seBones = src.seBones;
++#endif
+ 
+ 		return *this;
+ 	}
+@@ -1625,6 +1631,9 @@ CRenderableSurface():
+ 	{
+ 		boneCache=0;
+ 		surfaceData=0;
++#ifdef SHADEREMU
++		seBones=0;
++#endif
+ #ifdef _G2_GORE
+ 		ident = SF_MDX;
+ 		alternateTex=0;
+diff --git a/code/rd-vanilla/tr_main.cpp b/code/rd-vanilla/tr_main.cpp
+index da619736..4bc452c6 100644
+--- a/code/rd-vanilla/tr_main.cpp
++++ b/code/rd-vanilla/tr_main.cpp
+@@ -205,7 +205,15 @@ void R_LocalPointToWorld (const vec3_t local, vec3_t world) {
+ 	world[2] = local[0] * tr.ori.axis[0][2] + local[1] * tr.ori.axis[1][2] + local[2] * tr.ori.axis[2][2] + tr.ori.origin[2];
+ }
+ 
++#ifdef SHADEREMU
++// (R_RotateForEntity's scratch, one for this core's front end and one for the drawing's worker: docs/games/jk2.md,
++// "The drawing on a worker"; RVC_RACES found the two storing to it at once)
++extern "C" int jk2RenderWorkerHere( void );
++static float se_preTransEntMatrix[2][16] __attribute__(( aligned( 16 ) ));
++#define preTransEntMatrix ( se_preTransEntMatrix[jk2RenderWorkerHere()] )
++#else
+ float preTransEntMatrix[16];
++#endif
+ 
+ void R_InvertMatrix(float *sourcemat, float *destmat)
+ {
 diff --git a/code/rd-vanilla/tr_marks.cpp b/code/rd-vanilla/tr_marks.cpp
 index 2da2512a..97658329 100644
 --- a/code/rd-vanilla/tr_marks.cpp
@@ -846,10 +1118,10 @@ index a6d5bc7b..bcfc3f67 100644
  	CachedModels = &singleton;
  
 diff --git a/code/rd-vanilla/tr_surface.cpp b/code/rd-vanilla/tr_surface.cpp
-index 1e51e71c..8d67fd01 100644
+index 1e51e71c..19f1439d 100644
 --- a/code/rd-vanilla/tr_surface.cpp
 +++ b/code/rd-vanilla/tr_surface.cpp
-@@ -1196,6 +1196,50 @@ static void LerpMeshVertexes (md3Surface_t *surf, float backlerp)
+@@ -1196,6 +1196,51 @@ static void LerpMeshVertexes (md3Surface_t *surf, float backlerp)
  
  	numVerts = surf->numVerts;
  
@@ -865,8 +1137,9 @@ index 1e51e71c..8d67fd01 100644
 +		for ( k = 0 ; k < 8 && !( kept[k].from == newXyz && kept[k].numVerts == numVerts && kept[k].gen == se_models_gen ) ; k++ ) {
 +		}
 +		if ( k == 8 ) {
++			static float kept_pool[8][SHADER_MAX_VERTEXES * 6];	// (no malloc: the drawing may be on a worker)
 +			k = kept_next++ & 7;
-+			float *made = (float *)realloc( kept[k].made, numVerts * 6 * sizeof( float ) );
++			float *made = kept_pool[k];
 +			if ( made ) {
 +				const short *x = newXyz, *n = newNormals;
 +				for ( vertNum = 0 ; vertNum < numVerts ; vertNum++, x += 4, n += 4 ) {

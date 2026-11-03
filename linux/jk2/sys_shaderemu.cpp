@@ -154,6 +154,9 @@ extern "C" {
 int jk2glOpen( unsigned window );
 int jk2glOn( void );
 void jk2glSwap( void );
+void jk2RenderSettle( void );
+void jk2RenderServe( void );
+void jk2RenderStats( unsigned *gives, unsigned *settles, unsigned *gl_settles, unsigned *waits );
 void jk2glStats( unsigned *in_gpu, unsigned *gpu_size, unsigned *left_out, unsigned *vertices );
 const volatile unsigned *gpuControl( int offset );
 void gpuWindowOrigin( int *x, int *y );
@@ -296,10 +299,13 @@ void WIN_Present( window_t *window )
 		se_window_instructions = ins;
 #ifdef SE_WINDOW
 		if ( jk2glOn() ) {     // the GPU's memory: textures in it, and how many found no room; vertices drawn since
-			unsigned in_gpu, size, left_out, vertices;
+			unsigned in_gpu, size, left_out, vertices, gives, settles, gl_settles, waits;
 			jk2glStats( &in_gpu, &size, &left_out, &vertices );
 			Com_Printf( "jk2gpu: textures %u of %u KB, %u left out, %u vertices a frame\n", in_gpu >> 10, size >> 10, left_out,
 				vertices / ( se_stats_every > 0 ? se_stats_every : 1 ) );
+			jk2RenderStats( &gives, &settles, &gl_settles, &waits );
+			Com_Printf( "jk2render: %u frames given to the drawing's worker, %u settled (%u by a GL call of this core's), "
+				"%u passes waited for it\n", gives, settles, gl_settles, waits );
 		}
 #endif
 		se_window_frames = 0;
@@ -371,6 +377,14 @@ void WIN_Present( window_t *window )
 		Cbuf_ExecuteText( EXEC_NOW, "quit\n" );
 	}
 }
+
+#ifdef SE_WINDOW
+// A frame given to the drawing's worker (gl_jk2.c): the window's part of the swap, its list shown when the job is done
+extern "C" void SE_WindowFrame( void )
+{
+	WIN_Present( NULL );
+}
+#endif
 
 void WIN_SetGamma( glconfig_t *glConfig, byte red[256], byte green[256], byte blue[256] )
 {
@@ -468,6 +482,7 @@ static void se_input( void )
 			break;
 		case GR_EVENT_TYPE_UPDATE:
 			if ( e.update.utype == GR_UPDATE_SIZE ) {
+				jk2RenderSettle();     // (the drawing's worker done first: the window's GL state changes)
 				seglWindowChanged();
 				seglSize( &se_win_w, &se_win_h );
 				if ( se_win_w < 1 || se_win_h < 1 )
@@ -798,6 +813,7 @@ void SE_MusicForget( const void *track )
 // workers up to a ring ahead of what is heard, a voice started when its time comes, a stream let go once heard
 void SE_MusicRound( int sound_time, int muted )
 {
+	jk2RenderServe();     // (the drawing's worker, a page or a system call it stopped at)
 	if ( se_music_state != 1 )
 		return;
 	for ( int i = 0; i < SE_STREAMS; i++ ) {
