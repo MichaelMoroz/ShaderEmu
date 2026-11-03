@@ -89,3 +89,8 @@ void jk2RenderGive(void (*fn)(const void *), const void *arg) { fn(arg); }
 void jk2RenderPresent(void) {}
 int jk2RenderSwapMark(void) { return 0; }
 int jk2RenderWorkerHere(void) { return 0; }
+void jk2RenderGo(void) {}
+int jk2SkinPost(unsigned (*fn)(unsigned, unsigned), unsigned a0, unsigned a1) { (void)fn; (void)a0; (void)a1; return 0; }
+void jk2SkinJoin(void) {}
+void jk2Touch(void *memory, unsigned bytes) { (void)memory; (void)bytes; }
+void jk2WaitPass(void) {}

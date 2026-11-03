@@ -776,10 +776,10 @@ index afbbb175..a5dbf9fd 100644
  	else
  	{
 diff --git a/code/rd-vanilla/tr_cmds.cpp b/code/rd-vanilla/tr_cmds.cpp
-index 04ad9bdb..90e30d06 100644
+index 04ad9bdb..7973fa69 100644
 --- a/code/rd-vanilla/tr_cmds.cpp
 +++ b/code/rd-vanilla/tr_cmds.cpp
-@@ -89,6 +89,17 @@ void R_PerformanceCounters( void ) {
+@@ -89,6 +89,20 @@ void R_PerformanceCounters( void ) {
  R_IssueRenderCommands
  ====================
  */
@@ -790,22 +790,28 @@ index 04ad9bdb..90e30d06 100644
 +extern "C" void jk2RenderSettle( void );
 +extern "C" void jk2RenderGive( void ( *fn )( const void * ), const void *arg );
 +extern "C" void jk2RenderPresent( void );
++extern "C" void jk2RenderGo( void );
 +int SE_RSBones( void );
 +void SE_RSInline( void );
++unsigned SE_RSFrom( void );
++void SE_SkinGive( unsigned from, unsigned to );
 +backEndData_t *se_backEndData[2];
 +#endif
  void R_IssueRenderCommands( qboolean runPerformanceCounters ) {
  	renderCommandList_t	*cmdList;
  
-@@ -101,6 +112,18 @@ void R_IssueRenderCommands( qboolean runPerformanceCounters ) {
+@@ -101,6 +115,21 @@ void R_IssueRenderCommands( qboolean runPerformanceCounters ) {
  	// clear it out, in case this is a sync and not a buffer flip
  	cmdList->used = 0;
  
 +#ifdef SHADEREMU
 +	jk2RenderSettle();	// (the frame before done, and shown)
++	unsigned se_from = SE_RSFrom();
 +	if ( runPerformanceCounters && !r_skipBackEnd->integer && jk2RenderOn() && se_backEndData[1] && SE_RSBones() >= 0 ) {
 +		R_PerformanceCounters();
-+		jk2RenderGive( RB_ExecuteRenderCommands, cmdList->cmds );
++		jk2RenderGive( RB_ExecuteRenderCommands, cmdList->cmds );	// (it waits for jk2RenderGo: the skins given out first)
++		SE_SkinGive( se_from, SE_RSFrom() );
++		jk2RenderGo();
 +		backEndData = se_backEndData[backEndData == se_backEndData[0]];
 +		jk2RenderPresent();	// (the window's frame: its input and its counts, as at the swap)
 +		return;
@@ -816,7 +822,7 @@ index 04ad9bdb..90e30d06 100644
  	// at this point, the back end thread is idle, so it is ok
  	// to look at it's performance counters
  	if ( runPerformanceCounters ) {
-@@ -375,6 +398,9 @@ void RE_BeginFrame( stereoFrame_t stereoFrame ) {
+@@ -375,6 +404,9 @@ void RE_BeginFrame( stereoFrame_t stereoFrame ) {
  	if ( !tr.registered ) {
  		return;
  	}
@@ -827,10 +833,10 @@ index 04ad9bdb..90e30d06 100644
  
  	tr.frameCount++;
 diff --git a/code/rd-vanilla/tr_ghoul2.cpp b/code/rd-vanilla/tr_ghoul2.cpp
-index 5062daf5..8f548ef4 100644
+index 5062daf5..9216301e 100644
 --- a/code/rd-vanilla/tr_ghoul2.cpp
 +++ b/code/rd-vanilla/tr_ghoul2.cpp
-@@ -723,6 +723,55 @@ CRenderableSurface *AllocRS()
+@@ -723,6 +723,56 @@ CRenderableSurface *AllocRS()
  	return ret;
  }
  
@@ -871,6 +877,7 @@ index 5062daf5..8f548ef4 100644
 +	se_rs_set ^= 1;
 +	return made;
 +}
++unsigned SE_RSFrom( void ) { return (unsigned)se_rs_from; }
 +// (the frame's surfaces, drawn on this core: their bones are the cache's, as always)
 +void SE_RSInline( void )
 +{
@@ -886,7 +893,224 @@ index 5062daf5..8f548ef4 100644
  /*
  
  All bones should be an identity orientation to display the mesh exactly
-@@ -2992,7 +3041,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
+@@ -2768,6 +2818,191 @@ void G2_ConstructGhoulSkeleton( CGhoul2Info_v &ghoul2,const int frameNum,bool ch
+ RB_SurfaceGhoul
+ ==============
+ */
++#ifdef SHADEREMU
++// A Ghoul2 surface's vertices skinned into X and N (STRIDE floats a vertex): RB_SurfaceGhoul's own loop, the same
++// operations in the same order, for the drawing's worker or a helper worker (docs/games/jk2.md, "The drawing on a worker")
++static void se_skin( const CRenderableSurface *surf, float *X, float *N, int stride )
++{
++	const mdxmSurface_t *surface = surf->surfaceData;
++	CBoneCache *bones = surf->boneCache;
++	const int *piBoneReferences = (const int *) ((const byte *)surface + surface->ofsBoneReferences);
++	mdxmVertex_t *v = (mdxmVertex_t *) ((const byte *)surface + surface->ofsVerts);
++	const int numVerts = surface->numVerts;
++	int j, k;
++	float fTotalWeight, fBoneWeight, t1, t2;
++	const mdxaBone_t *bone, *bone2;
++	for ( j = 0; j < numVerts; j++, v++, X += stride, N += stride )
++		{
++#ifdef JK2_MODE
++			bone = SE_EVAL( G2_GetVertBoneIndex( v, 0 ) );
++#else
++			bone = &bones->EvalRender(piBoneReferences[G2_GetVertBoneIndex( v, 0 )]);
++#endif // JK2_MODE
++			int iNumWeights = G2_GetVertWeights( v );
++			N[0] = DotProduct( bone->matrix[0], v->normal );
++			N[1] = DotProduct( bone->matrix[1], v->normal );
++			N[2] = DotProduct( bone->matrix[2], v->normal );
++
++			if (iNumWeights==1)
++			{
++				X[0] = ( DotProduct( bone->matrix[0], v->vertCoords ) + bone->matrix[0][3] );
++				X[1] = ( DotProduct( bone->matrix[1], v->vertCoords ) + bone->matrix[1][3] );
++				X[2] = ( DotProduct( bone->matrix[2], v->vertCoords ) + bone->matrix[2][3] );
++			}
++			else
++			{
++				fBoneWeight = G2_GetVertBoneWeightNotSlow( v, 0);
++				if (iNumWeights==2)
++				{
++#ifdef JK2_MODE
++					bone2 = SE_EVAL( G2_GetVertBoneIndex( v, 1 ) );
++#else
++					bone2 = &bones->EvalRender(piBoneReferences[G2_GetVertBoneIndex( v, 1 )]);
++#endif // JK2_MODE
++					/*
++					useless transposition
++					X[0] =
++					v[0]*(w*(bone->matrix[0][0]-bone2->matrix[0][0])+bone2->matrix[0][0])+
++					v[1]*(w*(bone->matrix[0][1]-bone2->matrix[0][1])+bone2->matrix[0][1])+
++					v[2]*(w*(bone->matrix[0][2]-bone2->matrix[0][2])+bone2->matrix[0][2])+
++					w*(bone->matrix[0][3]-bone2->matrix[0][3]) + bone2->matrix[0][3];
++					*/
++					t1 = ( DotProduct( bone->matrix[0], v->vertCoords ) + bone->matrix[0][3] );
++					t2 = ( DotProduct( bone2->matrix[0], v->vertCoords ) + bone2->matrix[0][3] );
++					X[0] = fBoneWeight * (t1-t2) + t2;
++					t1 = ( DotProduct( bone->matrix[1], v->vertCoords ) + bone->matrix[1][3] );
++					t2 = ( DotProduct( bone2->matrix[1], v->vertCoords ) + bone2->matrix[1][3] );
++					X[1] = fBoneWeight * (t1-t2) + t2;
++					t1 = ( DotProduct( bone->matrix[2], v->vertCoords ) + bone->matrix[2][3] );
++					t2 = ( DotProduct( bone2->matrix[2], v->vertCoords ) + bone2->matrix[2][3] );
++					X[2] = fBoneWeight * (t1-t2) + t2;
++				}
++				else
++				{
++
++					X[0] = fBoneWeight * ( DotProduct( bone->matrix[0], v->vertCoords ) + bone->matrix[0][3] );
++					X[1] = fBoneWeight * ( DotProduct( bone->matrix[1], v->vertCoords ) + bone->matrix[1][3] );
++					X[2] = fBoneWeight * ( DotProduct( bone->matrix[2], v->vertCoords ) + bone->matrix[2][3] );
++
++					fTotalWeight=fBoneWeight;
++					for (k=1; k < iNumWeights-1 ; k++)
++					{
++#ifdef JK2_MODE
++						bone = SE_EVAL( G2_GetVertBoneIndex( v, k ) );
++#else
++						bone = &bones->EvalRender(piBoneReferences[G2_GetVertBoneIndex( v, k )]);
++#endif // JK2_MODE
++
++						fBoneWeight = G2_GetVertBoneWeightNotSlow( v, k);
++						fTotalWeight += fBoneWeight;
++
++						X[0] += fBoneWeight * ( DotProduct( bone->matrix[0], v->vertCoords ) + bone->matrix[0][3] );
++						X[1] += fBoneWeight * ( DotProduct( bone->matrix[1], v->vertCoords ) + bone->matrix[1][3] );
++						X[2] += fBoneWeight * ( DotProduct( bone->matrix[2], v->vertCoords ) + bone->matrix[2][3] );
++					}
++
++#ifdef JK2_MODE
++					bone = SE_EVAL( G2_GetVertBoneIndex( v, k ) );
++#else
++					bone = &bones->EvalRender(piBoneReferences[G2_GetVertBoneIndex( v, k )]);
++#endif // JK2_MODE
++					fBoneWeight	= 1.0f-fTotalWeight;
++
++					X[0] += fBoneWeight * ( DotProduct( bone->matrix[0], v->vertCoords ) + bone->matrix[0][3] );
++					X[1] += fBoneWeight * ( DotProduct( bone->matrix[1], v->vertCoords ) + bone->matrix[1][3] );
++					X[2] += fBoneWeight * ( DotProduct( bone->matrix[2], v->vertCoords ) + bone->matrix[2][3] );
++				}
++			}
++
++	}
++}
++
++// The frame's Ghoul2 surfaces skinned by helper workers while the drawing's worker draws the rest (SE_RSBones gives
++// them out; JK2_SKIN=drawing: by the drawing's worker itself)
++extern "C" int jk2SkinPost( unsigned ( *fn )( unsigned, unsigned ), unsigned a0, unsigned a1 );
++extern "C" void jk2SkinJoin( void );
++extern "C" void jk2Touch( void *memory, unsigned bytes );
++extern "C" void jk2WaitPass( void );
++#define SE_SKIN_JOBS 8
++#define SE_SKIN_FLOATS ( 8 * 48 * 1024 )		// a set: 48 thousand vertices of 8 floats
++static float se_skin_pool[2][SE_SKIN_FLOATS] __attribute__(( aligned( 16 ) ));
++static struct __attribute__(( aligned( 16 ) )) { CRenderableSurface *rs[256]; int count; } se_skin_jobs[2][SE_SKIN_JOBS];
++static struct __attribute__(( aligned( 16 ) )) { volatile unsigned done, unused[3]; } se_skin_done[2][SE_SKIN_JOBS];	// a helper's
++static unsigned se_skin_stamp[2];
++static int se_skin_on = -1;
++static unsigned se_skin_job( unsigned set_job, unsigned stamp )
++{
++	const int set = set_job >> 8, job = set_job & 255;
++	for ( int i = 0 ; i < se_skin_jobs[set][job].count ; i++ )
++	{
++		CRenderableSurface *rs = se_skin_jobs[set][job].rs[i];
++		se_skin( rs, (float *)rs->seSkin, (float *)rs->seSkin + 4, 8 );
++	}
++	se_skin_done[set][job].done = stamp;
++	return 0;
++}
++// (the drawing's worker: the surface's helper done, ending its passes until then)
++static int SE_SkinReady( const CRenderableSurface *surf )
++{
++	while ( se_skin_done[surf->seSkinSet][surf->seSkinJob].done != surf->seSkinStamp )
++		jk2WaitPass();
++	return 1;
++}
++#endif
++#ifdef SHADEREMU
++// (after SE_RSBones, at the give: the given frame's Ghoul2 surfaces shared out to helpers by their vertices)
++void SE_SkinGive( unsigned from, unsigned to )
++{
++	if ( se_skin_on < 0 )
++	{
++		const char *k = getenv( "JK2_SKIN" );
++		se_skin_on = !( k && !strcmp( k, "drawing" ) );
++		jk2Touch( se_skin_pool, sizeof( se_skin_pool ) );
++		jk2Touch( se_skin_done, sizeof( se_skin_done ) );
++	}
++	static int set;
++	jk2SkinJoin();		// (the helpers of the frame before: done, as the drawing that waited for them is)
++	set ^= 1;
++	const unsigned stamp = ++se_skin_stamp[set];
++	int total = 0, used = 0;
++	for ( int j = 0 ; j < SE_SKIN_JOBS ; j++ )
++		se_skin_jobs[set][j].count = 0;
++	for ( unsigned i = from ; i != to ; i = ( i + 1 ) % MAX_RENDER_SURFACES )
++	{
++		RSStorage[i].seSkin = 0;
++		if ( RSStorage[i].seBones )
++			total += RSStorage[i].surfaceData->numVerts;
++	}
++	if ( !se_skin_on || total < 2000 )
++		return;
++	const int share = total / SE_SKIN_JOBS + 1;
++	int job = 0, in_job = 0;
++	for ( unsigned i = from ; i != to ; i = ( i + 1 ) % MAX_RENDER_SURFACES )
++	{
++		CRenderableSurface *rs = &RSStorage[i];
++		if ( !rs->seBones )
++			continue;
++		const int n = rs->surfaceData->numVerts;
++		if ( used + n * 8 > SE_SKIN_FLOATS || se_skin_jobs[set][job].count == 256 )
++			break;
++		rs->seSkin = se_skin_pool[set] + used, rs->seSkinSet = set, rs->seSkinJob = job, rs->seSkinStamp = stamp;
++		used += n * 8;
++		se_skin_jobs[set][job].rs[se_skin_jobs[set][job].count++] = rs;
++		if ( ( in_job += n ) >= share && job < SE_SKIN_JOBS - 1 )
++			job++, in_job = 0;
++	}
++	for ( int j = 0 ; j <= job && j < SE_SKIN_JOBS ; j++ )
++	{
++		if ( se_skin_jobs[set][j].count && !jk2SkinPost( se_skin_job, (unsigned)( set << 8 | j ), stamp ) )
++		{	// (no worker free: the drawing's worker skins these itself)
++			for ( int i = 0 ; i < se_skin_jobs[set][j].count ; i++ )
++				se_skin_jobs[set][j].rs[i]->seSkin = 0;
++			se_skin_jobs[set][j].count = 0;
++		}
++	}
++}
++#endif
++
+ void RB_SurfaceGhoul( CRenderableSurface *surf )
+ {
+ #ifdef G2_PERFORMANCE_ANALYSIS
+@@ -2989,10 +3224,32 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
+ 		float t2;
+ 		const mdxaBone_t *bone;
+ 		const mdxaBone_t *bone2;
++#ifdef SHADEREMU
++		if ( surf->seSkin && SE_SkinReady( surf ) )
++		{
++			const float *in = surf->seSkin;
++			for ( j = 0; j < numVerts; j++, baseVertex++, in += 8 )
++			{
++				tess.xyz[baseVertex][0] = in[0], tess.xyz[baseVertex][1] = in[1], tess.xyz[baseVertex][2] = in[2];
++				tess.normal[baseVertex][0] = in[4], tess.normal[baseVertex][1] = in[5], tess.normal[baseVertex][2] = in[6];
++				tess.texCoords[baseVertex][0][0] = pTexCoords[j].texCoords[0];
++				tess.texCoords[baseVertex][0][1] = pTexCoords[j].texCoords[1];
++			}
++		}
++		else
++		{
++			se_skin( surf, tess.xyz[baseVertex], tess.normal[baseVertex], 4 );
++			for ( j = 0; j < numVerts; j++, baseVertex++ )
++			{
++				tess.texCoords[baseVertex][0][0] = pTexCoords[j].texCoords[0];
++				tess.texCoords[baseVertex][0][1] = pTexCoords[j].texCoords[1];
++			}
++		}
++#else
  		for ( j = 0; j < numVerts; j++, baseVertex++,v++ )
  		{
  #ifdef JK2_MODE
@@ -895,7 +1119,7 @@ index 5062daf5..8f548ef4 100644
  #else
  			bone = &bones->EvalRender(piBoneReferences[G2_GetVertBoneIndex( v, 0 )]);
  #endif // JK2_MODE
-@@ -3013,7 +3062,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
+@@ -3013,7 +3270,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
  				if (iNumWeights==2)
  				{
  #ifdef JK2_MODE
@@ -904,7 +1128,7 @@ index 5062daf5..8f548ef4 100644
  #else
  					bone2 = &bones->EvalRender(piBoneReferences[G2_GetVertBoneIndex( v, 1 )]);
  #endif // JK2_MODE
-@@ -3046,7 +3095,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
+@@ -3046,7 +3303,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
  					for (k=1; k < iNumWeights-1 ; k++)
  					{
  #ifdef JK2_MODE
@@ -913,7 +1137,7 @@ index 5062daf5..8f548ef4 100644
  #else
  						bone = &bones->EvalRender(piBoneReferences[G2_GetVertBoneIndex( v, k )]);
  #endif // JK2_MODE
-@@ -3060,7 +3109,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
+@@ -3060,7 +3317,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
  					}
  
  #ifdef JK2_MODE
@@ -922,6 +1146,14 @@ index 5062daf5..8f548ef4 100644
  #else
  					bone = &bones->EvalRender(piBoneReferences[G2_GetVertBoneIndex( v, k )]);
  #endif // JK2_MODE
+@@ -3075,6 +3332,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
+ 			tess.texCoords[baseVertex][0][0] = pTexCoords[j].texCoords[0];
+ 			tess.texCoords[baseVertex][0][1] = pTexCoords[j].texCoords[1];
+ 		}
++#endif
+ #if 0
+ 	}
+ #endif
 diff --git a/code/rd-vanilla/tr_image.cpp b/code/rd-vanilla/tr_image.cpp
 index a13badd4..73f86498 100644
 --- a/code/rd-vanilla/tr_image.cpp
@@ -1005,35 +1237,40 @@ index 13c72e66..c474a255 100644
  
  	const color4ub_t color = {0xff, 0xff, 0xff, 0xff};
 diff --git a/code/rd-vanilla/tr_local.h b/code/rd-vanilla/tr_local.h
-index c9e745aa..05545583 100644
+index c9e745aa..f77e65fa 100644
 --- a/code/rd-vanilla/tr_local.h
 +++ b/code/rd-vanilla/tr_local.h
-@@ -1587,6 +1587,9 @@ public:
+@@ -1587,6 +1587,12 @@ public:
  #endif
   	CBoneCache 		*boneCache;		// pointer to transformed bone list for this surf
  	mdxmSurface_t	*surfaceData;	// pointer to surface data loaded into file - only used by client renderer DO NOT USE IN GAME SIDE - if there is a vid restart this will be out of wack on the game
 +#ifdef SHADEREMU
 +	const float		*seBones = 0;	// its bone references' matrices as the frame was given to the drawing's worker (SE_RSBones)
++	const float		*seSkin = 0;	// its vertices skinned by a helper worker: xyz and normal, 8 floats a vertex (SE_SkinGive)
++	int				seSkinSet = 0, seSkinJob = 0;
++	unsigned		seSkinStamp = 0;
 +#endif
  #ifdef _G2_GORE
  	float			*alternateTex;		// alternate texture coordinates.
  	void			*goreChain;
-@@ -1604,6 +1607,9 @@ public:
+@@ -1604,6 +1610,10 @@ public:
  		surfaceData = src.surfaceData;
  		alternateTex = src.alternateTex;
  		goreChain = src.goreChain;
 +#ifdef SHADEREMU
 +		seBones = src.seBones;
++		seSkin = src.seSkin, seSkinSet = src.seSkinSet, seSkinJob = src.seSkinJob, seSkinStamp = src.seSkinStamp;
 +#endif
  
  		return *this;
  	}
-@@ -1625,6 +1631,9 @@ CRenderableSurface():
+@@ -1625,6 +1635,10 @@ CRenderableSurface():
  	{
  		boneCache=0;
  		surfaceData=0;
 +#ifdef SHADEREMU
 +		seBones=0;
++		seSkin=0;
 +#endif
  #ifdef _G2_GORE
  		ident = SF_MDX;

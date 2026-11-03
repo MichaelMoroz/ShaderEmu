@@ -4,6 +4,7 @@
 // (jk2glOpen), and before that, or with no window at all (a run with no Nano-X server: the sums), does what nullgl.c
 // does, so that the game is the same with a picture or without.
 #include "../halflife/gl_shaderemu.c"
+#include "mcwx.h"
 
 // what gl_shaderemu.c asks of Half-Life's drawing on a worker, which this game does not have
 int SE_RenderWho(void) { return 0; }
@@ -28,6 +29,7 @@ __asm__(".text\n.globl jk2_call_on_stack\n.type jk2_call_on_stack, @function\njk
 static uint8_t render_stack[RENDER_STACK] __attribute__((aligned(16)));
 static struct __attribute__((aligned(16))) { int mode, worker, out, presenting; unsigned gives, settles, gl_settles, waits; } rw0;  // this core's
 static struct __attribute__((aligned(16))) { void (*fn)(const void*); const void* arg; int swap, unused; } job;  // the given frame: the worker's while out
+static struct __attribute__((aligned(16))) { volatile unsigned go, unused[3]; } job_go;  // this core's: the frame may begin
 static void gl_swap(void);
 static void memo_init(void);
 static int on_render(void) {
@@ -35,14 +37,14 @@ static int on_render(void) {
     return (uint8_t*)&here >= render_stack && (uint8_t*)&here < render_stack + RENDER_STACK;
 }
 int jk2RenderWorkerHere(void) { return on_render(); }
-static uint32_t render_body(uint32_t unused) {
-    (void)unused;
+static uint32_t render_body(uint32_t given) {
+    while (job_go.go != given) mc_end_pass();   // (until this core has given the frame's skins out: SE_SkinGive)
     job.fn(job.arg);
     return 0;
 }
 static uint32_t render_job(uint32_t a0, uint32_t a1) {
-    (void)a0, (void)a1;
-    return jk2_call_on_stack(render_body, 0, render_stack + RENDER_STACK);
+    (void)a1;
+    return jk2_call_on_stack(render_body, a0, render_stack + RENDER_STACK);
 }
 extern char _start[], etext[];
 static void render_open(void) {
@@ -61,7 +63,9 @@ static void render_open(void) {
     rw0.mode = 1;
     printf("jk2: the drawing on worker %d (%s write cache), a frame behind\n", rw0.worker, mcw_fast(rw0.worker) ? "a large" : "a small");
 }
-int jk2RenderOn(void) { return on && rw0.mode == 1; }
+// (in play only: a menu's few draws of many vertices are faster on this core, whose write cache is the larger)
+int SE_InPlay(void);
+int jk2RenderOn(void) { return on && rw0.mode == 1 && SE_InPlay(); }
 // The frame out done and shown
 void jk2RenderSettle(void) {
     if (!rw0.out || on_render()) return;
@@ -74,9 +78,27 @@ void jk2RenderSettle(void) {
 void jk2RenderGive(void (*fn)(const void*), const void* arg) {
     jk2RenderSettle();
     job.fn = fn, job.arg = arg, job.swap = 0;
-    mcw_post(rw0.worker, render_job, 0, 0);
+    mcw_post(rw0.worker, render_job, rw0.gives + 1, 0);
     rw0.out = 1, rw0.gives++;
 }
+// The given frame may begin (posted first, so that no helper's job takes its worker)
+void jk2RenderGo(void) { job_go.go = rw0.gives; }
+
+// ---- Ghoul2's skinning on helper workers (tr_ghoul2.cpp, SE_SkinGive): the frame's surfaces in parts ----
+static mcw_handle skin_jobs[16];
+static int skin_count;
+int jk2SkinPost(uint32_t (*fn)(uint32_t, uint32_t), uint32_t a0, uint32_t a1) {
+    if (skin_count >= 16) return 0;
+    mcw_handle h = mcw_try_call(fn, a0, a1);
+    if (h) skin_jobs[skin_count++] = h;
+    return h != 0;
+}
+void jk2SkinJoin(void) {
+    for (int i = 0; i < skin_count; i++) mcw_join(skin_jobs[i]);
+    skin_count = 0;
+}
+void jk2Touch(void* memory, unsigned bytes) { mcw_touch(memory, bytes); }
+void jk2WaitPass(void) { mc_end_pass(); }
 // The worker's RB_SwapBuffers: whether the swap is left to this core (the worker draws); else the window's own
 int jk2RenderSwapMark(void) {
     if (!on_render()) return 0;
@@ -124,6 +146,7 @@ void jk2glSwap(void) {
 }
 void jk2glStats(unsigned* in_gpu, unsigned* gpu_size, unsigned* left_out, unsigned* vertices) {
     unsigned tiles;
+    jk2RenderSettle();   // (the counts are the drawing's: RVC_RACES found this core clearing one the worker added to)
     if (on) hlglStats(&tiles, in_gpu, gpu_size, left_out, vertices);
     else *in_gpu = *gpu_size = *left_out = *vertices = 0;
 }

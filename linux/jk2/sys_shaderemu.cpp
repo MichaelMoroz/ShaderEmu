@@ -379,6 +379,12 @@ void WIN_Present( window_t *window )
 }
 
 #ifdef SE_WINDOW
+// Whether the game is being played, no menu over it (the drawing on a worker then: gl_jk2.c)
+extern "C" int SE_InPlay( void )
+{
+	return cls.state == CA_ACTIVE && !( Key_GetCatcher() & ( KEYCATCH_UI | KEYCATCH_CONSOLE ) );
+}
+
 // A frame given to the drawing's worker (gl_jk2.c): the window's part of the swap, its list shown when the job is done
 extern "C" void SE_WindowFrame( void )
 {
