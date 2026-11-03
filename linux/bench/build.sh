@@ -19,12 +19,13 @@ INC="-idirafter $REPO/programs/linux/include -I$MW/src/include -I$REPO/linux/use
 OPT="-O2 -fsingle-precision-constant -fno-math-errno -fno-tree-loop-distribute-patterns"
 rv32-cc $OPT -fno-pie -Wall -Wno-unused-function $INC -c "$HERE/perf_tests.c" -o "$BUILD/perf_tests.o"
 rv32-cc $OPT -fno-pie -Wall -Wno-unused-function -DSEGL_FLOAT $INC -c "$HERE/perf_gpu.c" -o "$BUILD/perf_gpu.o"
+rv32-cc $OPT -fno-pie -Wall -Wno-unused-function $INC -c "$HERE/perf_score.c" -o "$BUILD/perf_score.o"
 rv32-cc -O2 -fno-pie -Wall -Wno-unused-function $INC -c "$HERE/nxperf.c" -o "$BUILD/nxperf.o"
 # the OpenGL library with floats, and the workers' library
 rv32-cc -O2 -fno-pie -w -DSEGL_FLOAT $INC -c "$REPO/programs/linux/gles.c" -o "$BUILD/gles.o"
 rv32-cc -O2 -fno-pie -w $INC -c "$REPO/programs/mc/mcw.c" -o "$BUILD/mcw.o"
 rv32-cc -O2 -fno-pie -w $INC -c "$REPO/programs/mc/mcwx.c" -o "$BUILD/mcwx.o"
-rv32-cc -O2 -no-pie "$BUILD/nxperf.o" "$BUILD/perf_tests.o" "$BUILD/perf_gpu.o" "$BUILD/gles.o" "$MEDIA" "$BUILD/mcwx.o" "$BUILD/mcw.o" \
+rv32-cc -O2 -no-pie "$BUILD/nxperf.o" "$BUILD/perf_tests.o" "$BUILD/perf_gpu.o" "$BUILD/perf_score.o" "$BUILD/gles.o" "$MEDIA" "$BUILD/mcwx.o" "$BUILD/mcw.o" \
     "$MW/src/lib/libnano-X.a" -lm -Wl,--gc-sections -o "$BUILD/nxperf"
 riscv32-linux-nm -n "$BUILD/nxperf" > "$WORK/src/nxperf.nm"
 riscv32-linux-strip -o "$OUT/usr/bin/nxperf" "$BUILD/nxperf"

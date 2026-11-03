@@ -8,6 +8,9 @@
  *   nxperf --cli [NAME|GROUP ...]   the tests named (all when none), a line each, then a count
  *   nxperf --list                   the tests and their groups
  *
+ * A run of every test ends with its score (perf_score.c): the window's Score page, and --cli's last lines; the
+ * last run's and the best are kept in the registry (nxperf.score, nxperf.best: "SCORE PARTS... TIME WORKERS LANES").
+ *
  * NXPERF_WORKERS=N asks for N workers (255 by default; 0: the tests that want them are not run).
  * --cli draws its GPU tests into a window of its own when there is a window system, and does not
  * touch the registry unless --save is given.
@@ -16,15 +19,17 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#include <unistd.h>
 #include "mcw.h"
 #include "mcwx.h"
 #include "perf.h"
 #include "ui.h"
 #include "ui_single.h"
 
-#define WIDTH 580
-#define HEIGHT 372
-#define TOP 34
+#define WIDTH 620
+#define HEIGHT 430
+#define TOP 46
 #define ROW 19
 #define LEFT 144
 #define GROUP_H 22
@@ -36,6 +41,97 @@
 struct result { float value, cpo; int ok, have; char note[72]; };
 static struct result *results;
 static int workers_wanted = 255;
+
+/* ---------------------------------------------------------------- the score */
+
+/* a score as kept: the whole, the parts, when, with how many workers and lanes in the field (-1: not known) */
+struct kept_score { float all, parts[PERF_PARTS]; long when; int workers, lanes, have; };
+static struct kept_score this_run, last_run, best_run;
+
+static void score_of_results(struct kept_score *k, int workers)
+{
+	float v[128];
+	int i;
+
+	for (i = 0; i < perf_count && i < 128; i++) v[i] = results[i].have && results[i].ok > 0 ? results[i].value : 0;
+	k->all = perf_score(v, k->parts, NULL);
+	k->when = (long)time(NULL), k->workers = workers, k->lanes = perf_field_lanes, k->have = k->all > 0;
+}
+
+static void score_read(const char *key, struct kept_score *k)
+{
+	const char *v = reg_get(key, NULL);
+	float *p = k->parts;
+
+	memset(k, 0, sizeof *k);
+	if (v && sscanf(v, "%f %f %f %f %f %f %f %f %f %ld %d %d", &k->all, &p[0], &p[1], &p[2], &p[3], &p[4], &p[5], &p[6],
+			&p[7], &k->when, &k->workers, &k->lanes) == 12)
+		k->have = 1;
+}
+
+static void score_write(const char *key, const struct kept_score *k)
+{
+	char text[160];
+	const float *p = k->parts;
+
+	snprintf(text, sizeof text, "%.0f %.0f %.0f %.0f %.0f %.0f %.0f %.0f %.0f %ld %d %d", (double)k->all, (double)p[0], (double)p[1],
+		 (double)p[2], (double)p[3], (double)p[4], (double)p[5], (double)p[6], (double)p[7], k->when, k->workers, k->lanes);
+	reg_set(key, text);
+}
+
+/* a whole run's score kept: the last, and the best if it is */
+static void score_keep(void)
+{
+	score_read("nxperf.score", &last_run);
+	score_read("nxperf.best", &best_run);
+	score_write("nxperf.score", &this_run);
+	if (!best_run.have || this_run.all > best_run.all) score_write("nxperf.best", &this_run);
+}
+
+/* what the machine was: the field has lanes on the card's lean tick only */
+static void machine_text(char *to, int room, const struct kept_score *k)
+{
+	if (k->lanes > 0) snprintf(to, (size_t)room, "the card (%d lanes in the field), %d workers", k->lanes, k->workers);
+	else if (k->lanes == 0) snprintf(to, (size_t)room, "no lanes: rvc_cpu or a tick without them, %d workers", k->workers);
+	else snprintf(to, (size_t)room, "%d workers (the field not run)", k->workers);
+}
+
+static void date_text(char *to, int room, long when)
+{
+	time_t t = (time_t)when;
+	struct tm *tm = localtime(&t);
+
+	if (!when || !tm || !strftime(to, (size_t)room, "%d %b %Y %H:%M", tm)) snprintf(to, (size_t)room, "-");
+}
+
+static void score_print(const struct kept_score *k, int n)
+{
+	char text[96];
+	float parts[PERF_PARTS];
+	int counted[PERF_PARTS], p, m;
+	float v[128];
+	int i;
+
+	for (i = 0; i < perf_count && i < 128; i++) v[i] = results[i].have && results[i].ok > 0 ? results[i].value : 0;
+	perf_score(v, parts, counted);
+	machine_text(text, sizeof text, k);
+	printf("nxperf: score %.0f of %d results (1,000: the card model), %s\n", (double)k->all, n, text);
+	for (p = 0; p < PERF_PARTS; p++)
+		if (counted[p]) printf("nxperf: part %-12s %6.0f (%d results)\n", perf_parts[p], (double)parts[p], counted[p]);
+		else printf("nxperf: part %-12s      - (none)\n", perf_parts[p]);
+	for (m = 0; m < PERF_MACHINES; m++) {
+		float all = perf_machine_score(m, parts, counted);
+
+		if (all <= 0) {
+			printf("nxperf: beside it: %-9s - (%s: not measured)\n", perf_machines[m].name, perf_machines[m].note);
+			continue;
+		}
+		printf("nxperf: beside it: %-9s %6.0f (%s;", perf_machines[m].name, (double)all, perf_machines[m].note);
+		for (p = 0; p < PERF_PARTS; p++)
+			if (counted[p]) printf(" %s %.0f", perf_parts[p], (double)parts[p]);
+		printf(")\n");
+	}
+}
 
 /* ---------------------------------------------------------------- running a test */
 
@@ -172,8 +268,11 @@ static int cli(int argc, char **argv, int save)
 		ok += s->ok > 0, failed += s->ok == 0, skipped += s->ok < 0;
 		if (save) save_result(i);
 	}
+	score_of_results(&this_run, perf_workers);
 	workers_close();
 	printf("nxperf: %d results: %d OK, %d FAIL, %d not run\n", n, ok, failed, skipped);
+	score_print(&this_run, ok);
+	if (save && n == perf_count) score_keep();
 	if (window) GrClose();
 	return failed ? 1 : 0;
 }
@@ -181,8 +280,19 @@ static int cli(int argc, char **argv, int save)
 /* ---------------------------------------------------------------- the window */
 
 static GR_WINDOW_ID window, picture;
+static GR_FONT_ID big_font;
 static int group, running, stop_asked, quit_asked, current = -1, selected = -1;
+/* what is shown under the buttons: a group's bars, the score, or every result */
+enum { VIEW_GROUP, VIEW_SCORE, VIEW_RESULTS };
+static int view = VIEW_GROUP;
 static char status[120] = "Run all, or a group, or click a test.";
+
+/* the buttons along the top, large enough for a hand in a world: x, width, label */
+static const struct { int x, w; const char *label; } buttons[] = {
+	{8, 96, "Run all"}, {110, 110, "Run group"}, {226, 70, "Stop"}, {310, 92, "Score"}, {408, 104, "Results"},
+};
+#define BUTTON_Y 6
+#define BUTTON_H 34
 
 static int row_count(int g)
 {
@@ -223,11 +333,12 @@ static void draw_status(void)
 
 static void draw_buttons(void)
 {
+	int b;
+
 	ui_fill(window, 0, 0, WIDTH, TOP, UI_FACE);
-	ui_button(window, 8, 6, 72, 22, "Run all", running == 2);
-	ui_button(window, 86, 6, 84, 22, "Run group", running == 1);
-	ui_button(window, 176, 6, 52, 22, "Stop", 0);
-	if (running) ui_text(window, 240, 11, "Running: Stop or Esc ends it after the test.", -1, BLACK, 0);
+	for (b = 0; b < (int)(sizeof buttons / sizeof buttons[0]); b++)
+		ui_button(window, buttons[b].x, BUTTON_Y, buttons[b].w, BUTTON_H, buttons[b].label,
+			  (b == 0 && running == 2) || (b == 1 && running == 1) || (b == 3 && view == VIEW_SCORE) || (b == 4 && view == VIEW_RESULTS));
 }
 
 static void draw_groups(void)
@@ -238,8 +349,8 @@ static void draw_groups(void)
 	for (g = 0; g < perf_group_count; g++) {
 		int y = TOP + 4 + g * GROUP_H;
 
-		if (g == group) ui_fill(window, 8, y, LEFT - 20, GROUP_H - 2, UI_SELECTED);
-		ui_text(window, 14, y + 4, perf_groups[g], -1, g == group ? WHITE : BLACK, 0);
+		if (g == group && view == VIEW_GROUP) ui_fill(window, 8, y, LEFT - 20, GROUP_H - 2, UI_SELECTED);
+		ui_text(window, 14, y + 4, perf_groups[g], -1, g == group && view == VIEW_GROUP ? WHITE : BLACK, 0);
 	}
 }
 
@@ -250,22 +361,22 @@ static void draw_row(int row)
 	char text[48];
 	float most;
 
-	if (i < 0) return;
+	if (i < 0 || view != VIEW_GROUP) return;
 	s = &results[i];
 	ui_fill(window, x, y, WIDTH - x - 8, ROW, i == current ? MWRGB(255, 255, 200) : i == selected ? MWRGB(220, 230, 250) : WHITE);
 	ui_text(window, x + 4, y + 3, perf_tests[i].name, -1, BLACK, 1);
-	ui_fill(window, x + 104, y + 4, 180, ROW - 8, MWRGB(230, 230, 230));
+	ui_fill(window, x + 104, y + 4, 200, ROW - 8, MWRGB(230, 230, 230));
 	if (s->have && s->ok >= 0) {
 		most = unit_most(group, perf_tests[i].unit);
-		w = most > 0 ? (int)(180.0f * s->value / most + 0.5f) : 0;
-		ui_fill(window, x + 104, y + 4, w < 1 ? 1 : w > 180 ? 180 : w, ROW - 8, s->ok ? MWRGB(60, 140, 220) : MWRGB(210, 60, 50));
+		w = most > 0 ? (int)(200.0f * s->value / most + 0.5f) : 0;
+		ui_fill(window, x + 104, y + 4, w < 1 ? 1 : w > 200 ? 200 : w, ROW - 8, s->ok ? MWRGB(60, 140, 220) : MWRGB(210, 60, 50));
 		value_text(text, 24, s->value);
 		strcat(text, " ");
 		strcat(text, perf_tests[i].unit);
-		ui_text(window, x + 292, y + 3, text, -1, BLACK, 0);
+		ui_text(window, x + 312, y + 3, text, -1, BLACK, 0);
 	}
 	if (s->have)
-		ui_text(window, x + 394, y + 3, s->ok > 0 ? "OK" : s->ok == 0 ? "FAIL" : "-", -1,
+		ui_text(window, x + 424, y + 3, s->ok > 0 ? "OK" : s->ok == 0 ? "FAIL" : "-", -1,
 			s->ok > 0 ? MWRGB(0, 120, 0) : s->ok == 0 ? MWRGB(200, 0, 0) : UI_SHADOW, 0);
 }
 
@@ -278,14 +389,174 @@ static void draw_rows(void)
 	for (row = 0; row < n; row++) draw_row(row);
 }
 
+/* ---- the score page: the whole large, a bar for each part (a click shows its group), the other machines beside it */
+
+#define PART_X 214
+#define PART_Y (TOP + 6)
+#define PART_H 30
+#define PART_BAR 220
+#define TABLE_Y (PART_Y + PERF_PARTS * PART_H + 10)
+
+/* the group a part's tests are in */
+static int part_group(int p)
+{
+	int i;
+
+	for (i = 0; i < perf_count; i++)
+		if (perf_part_of(i) == p) return group_of(perf_tests[i].group);
+	return 0;
+}
+
+static void number_text(char *to, int room, float v)
+{
+	if (v > 0) snprintf(to, (size_t)room, "%.0f", (double)v);
+	else snprintf(to, (size_t)room, "-");
+}
+
+static void draw_score(void)
+{
+	const struct kept_score *k = this_run.have ? &this_run : &last_run;
+	char text[96], when[40];
+	float most = 2000, parts[PERF_PARTS], all;
+	int p, m, y, failed = 0, i;
+
+	ui_fill(window, 0, TOP, WIDTH, HEIGHT - 24 - TOP, UI_FACE);
+	/* the whole */
+	ui_bevel(window, 8, TOP + 4, PART_X - 20, TABLE_Y - TOP - 10, 1);
+	ui_fill(window, 9, TOP + 5, PART_X - 22, TABLE_Y - TOP - 12, WHITE);
+	ui_text(window, 16, TOP + 10, k == &this_run ? "Score of this run" : "Score of the last run", -1, BLACK, 0);
+	number_text(text, sizeof text, k->have ? k->all : 0);
+	GrSetGCFont(ui_gc, big_font);
+	GrSetGCForeground(ui_gc, MWRGB(20, 70, 150));
+	GrText(window, ui_gc, 16, TOP + 30, text, (int)strlen(text), GR_TFASCII | GR_TFTOP);
+	ui_text(window, 16, TOP + 74, "1,000: the card model", -1, UI_SHADOW, 0);
+	for (i = 0; i < perf_count; i++) failed += results[i].have && results[i].ok == 0;
+	date_text(when, sizeof when, k->when);
+	ui_text(window, 16, TOP + 96, when, -1, BLACK, 0);
+	machine_text(text, sizeof text, k);
+	{	/* (the machine's words on two lines) */
+		char *comma = strchr(text, ',');
+
+		if (comma) *comma = 0;
+		ui_text(window, 16, TOP + 114, text, -1, BLACK, 0);
+		if (comma) ui_text(window, 16, TOP + 130, comma + 2, -1, BLACK, 0);
+	}
+	snprintf(text, sizeof text, failed ? "%d checks FAILED" : "every check held", failed);
+	ui_text(window, 16, TOP + 150, text, -1, failed ? MWRGB(200, 0, 0) : MWRGB(0, 120, 0), 0);
+	y = TOP + 176;
+	if (k == &this_run && last_run.have) {
+		date_text(when, sizeof when, last_run.when);
+		snprintf(text, sizeof text, "last run: %.0f", (double)last_run.all);
+		ui_text(window, 16, y, text, -1, BLACK, 0);
+		ui_text(window, 16, y + 16, when, -1, UI_SHADOW, 0);
+		y += 38;
+	}
+	if (best_run.have) {
+		date_text(when, sizeof when, best_run.when);
+		snprintf(text, sizeof text, "best: %.0f", (double)(this_run.have && this_run.all > best_run.all ? this_run.all : best_run.all));
+		ui_text(window, 16, y, text, -1, BLACK, 0);
+		ui_text(window, 16, y + 16, this_run.have && this_run.all > best_run.all ? "this run" : when, -1, UI_SHADOW, 0);
+	}
+	/* the parts */
+	for (p = 0; p < PERF_PARTS; p++)
+		if (k->parts[p] > most) most = k->parts[p];
+	for (p = 0; p < PERF_PARTS; p++) {
+		int w, yy = PART_Y + p * PART_H;
+
+		ui_fill(window, PART_X, yy, WIDTH - PART_X - 8, PART_H - 4, WHITE);
+		ui_text(window, PART_X + 6, yy + 7, perf_parts[p], -1, BLACK, 0);
+		ui_fill(window, PART_X + 100, yy + 6, PART_BAR, PART_H - 16, MWRGB(230, 230, 230));
+		w = k->parts[p] > 0 ? (int)(PART_BAR * k->parts[p] / most + 0.5f) : 0;
+		if (w > 0) ui_fill(window, PART_X + 100, yy + 6, w > PART_BAR ? PART_BAR : w, PART_H - 16, MWRGB(60, 140, 220));
+		/* the reference's 1,000 */
+		ui_fill(window, PART_X + 100 + (int)(PART_BAR * 1000 / most), yy + 3, 1, PART_H - 10, MWRGB(120, 120, 120));
+		number_text(text, sizeof text, k->parts[p]);
+		ui_text(window, PART_X + 110 + PART_BAR, yy + 7, text, -1, BLACK, 0);
+	}
+	/* the machines side by side: this run, then the others of perf_machines */
+	ui_fill(window, 8, TABLE_Y, WIDTH - 16, 6 * 16 + 4, WHITE);
+	ui_text(window, 12, TABLE_Y + 3, "machine", -1, UI_SHADOW, 0);
+	ui_text(window, 112, TABLE_Y + 3, "score", -1, UI_SHADOW, 0);
+	for (p = 0; p < PERF_PARTS; p++) {
+		static const char *const heads[PERF_PARTS] = {"single", "FPU", "memory", "multi", "lanes", "numbers", "media", "GPU"};
+
+		ui_text(window, 162 + 56 * p, TABLE_Y + 3, heads[p], -1, UI_SHADOW, 0);
+	}
+	for (m = -1; m < PERF_MACHINES; m++) {
+		int yy = TABLE_Y + 20 + (m + 1) * 16;
+		const float *shown = parts;
+
+		if (m < 0) {
+			all = k->have ? k->all : 0;
+			shown = k->parts;
+			ui_text(window, 12, yy, "this run", -1, BLACK, 0);
+		} else {
+			all = perf_machine_score(m, parts, NULL);
+			ui_text(window, 12, yy, perf_machines[m].name, -1, BLACK, 0);
+		}
+		number_text(text, sizeof text, all);
+		ui_text(window, 112, yy, text, -1, BLACK, 1);
+		for (p = 0; p < PERF_PARTS; p++) {
+			number_text(text, sizeof text, shown[p]);
+			ui_text(window, 162 + 56 * p, yy, text, -1, BLACK, 1);
+		}
+	}
+	ui_text(window, 12, TABLE_Y + 20 + 4 * 16 + 2, "486DX-33: estimates from published numbers (docs/apps/bench.md); - is not measured there", -1, UI_SHADOW, 0);
+}
+
+/* ---- every result: three columns of name, value, unit and check (a click shows the test's group) */
+
+#define RES_COLS 3
+#define RES_ROWS 21
+#define RES_ROW 16
+#define RES_W ((WIDTH - 16) / RES_COLS)
+
+static void draw_results(void)
+{
+	int i;
+
+	ui_fill(window, 0, TOP, WIDTH, HEIGHT - 24 - TOP, UI_FACE);
+	ui_fill(window, 8, TOP + 4, WIDTH - 16, RES_ROWS * RES_ROW + 4, WHITE);
+	for (i = 0; i < perf_count && i < RES_COLS * RES_ROWS; i++) {
+		const struct result *s = &results[i];
+		int x = 12 + (i / RES_ROWS) * RES_W, y = TOP + 6 + (i % RES_ROWS) * RES_ROW;
+		char text[40];
+
+		ui_text(window, x, y, perf_tests[i].name, -1, BLACK, 1);
+		if (s->have && s->ok >= 0) {
+			value_text(text, 24, s->value);
+			strcat(text, " ");
+			strcat(text, perf_tests[i].unit);
+			ui_text(window, x + 88, y, text, -1, BLACK, 0);
+		}
+		if (s->have)
+			ui_text(window, x + RES_W - 34, y, s->ok > 0 ? "OK" : s->ok == 0 ? "FAIL" : "-", -1,
+				s->ok > 0 ? MWRGB(0, 120, 0) : s->ok == 0 ? MWRGB(200, 0, 0) : UI_SHADOW, 0);
+	}
+}
+
 static void draw_all(void)
 {
 	draw_buttons();
-	draw_groups();
-	ui_fill(window, 0, PIC_Y - 4, LEFT - 4, HEIGHT - 24 - PIC_Y + 4, UI_FACE);
-	ui_text(window, PIC_X, PIC_Y + PIC_H + 4, "the GPU's tests", -1, UI_SHADOW, 0);
-	draw_rows();
+	if (view == VIEW_SCORE) draw_score();
+	else if (view == VIEW_RESULTS) draw_results();
+	else {
+		draw_groups();
+		ui_fill(window, 0, PIC_Y - 4, LEFT - 4, HEIGHT - 24 - PIC_Y + 4, UI_FACE);
+		ui_text(window, PIC_X, PIC_Y + PIC_H + 4, "the GPU's tests", -1, UI_SHADOW, 0);
+		draw_rows();
+	}
 	draw_status();
+}
+
+/* the GPU's square is the group view's: hidden under the other pages */
+static void show_view(int v)
+{
+	if (v == view) return;
+	view = v;
+	if (view == VIEW_GROUP) GrMapWindow(picture);
+	else GrUnmapWindow(picture);
+	draw_all();
 }
 
 /* the row of a test of the group shown, -1 for another */
@@ -317,6 +588,7 @@ static void run_list(const int *list, int n, int all)
 	int k, had = 0;
 
 	running = all ? 2 : 1, stop_asked = 0;
+	show_view(VIEW_GROUP);
 	draw_buttons();
 	if (wants_workers(list, n)) {
 		snprintf(status, sizeof status, "Opening the workers...");
@@ -336,7 +608,7 @@ static void run_list(const int *list, int n, int all)
 		}
 		current = i;
 		row = row_in_group(i);
-		snprintf(status, sizeof status, "%s: %s", perf_tests[i].name, perf_tests[i].what);
+		snprintf(status, sizeof status, "Running %s (Stop or Esc ends after it): %s", perf_tests[i].name, perf_tests[i].what);
 		draw_row(row);
 		draw_status();
 		GrFlush();
@@ -350,7 +622,6 @@ static void run_list(const int *list, int n, int all)
 		GrFlush();
 		poll_events();
 	}
-	workers_close();
 	running = 0;
 	if (stop_asked) snprintf(status, sizeof status, "Stopped.");
 	else if (n > 1) {
@@ -360,6 +631,16 @@ static void run_list(const int *list, int n, int all)
 		snprintf(status, sizeof status, "%d tests: %d OK, %d FAIL, %d not run", n, ok, failed, n - ok - failed);
 		if (had) snprintf(status + strlen(status), sizeof status - strlen(status), " (%d workers)", had);
 	}
+	/* every test run to its end: the score, kept and shown */
+	if (all && !stop_asked && n == perf_count) {
+		score_of_results(&this_run, had);
+		score_keep();
+		workers_close();
+		show_view(VIEW_SCORE);
+		draw_all();
+		return;
+	}
+	workers_close();
 	draw_all();
 }
 
@@ -374,24 +655,48 @@ static void run_group(int g, int all)
 
 static void click(int x, int y)
 {
-	if (y >= 6 && y < 28) {
-		if (x >= 176 && x < 228) {
+	int b;
+
+	if (y >= BUTTON_Y && y < BUTTON_Y + BUTTON_H) {
+		for (b = 0; b < (int)(sizeof buttons / sizeof buttons[0]); b++)
+			if (x >= buttons[b].x && x < buttons[b].x + buttons[b].w) break;
+		if (b == 2) {
 			stop_asked = 1;
 			return;
 		}
 		if (running) return;
-		if (x >= 8 && x < 80) run_group(0, 1);
-		else if (x >= 86 && x < 170) run_group(group, 0);
+		if (b == 0) run_group(0, 1);
+		else if (b == 1) run_group(group, 0);
+		else if (b == 3) show_view(view == VIEW_SCORE ? VIEW_GROUP : VIEW_SCORE);
+		else if (b == 4) show_view(view == VIEW_RESULTS ? VIEW_GROUP : VIEW_RESULTS);
 		return;
 	}
-	if (x >= 8 && x < LEFT - 12 && y >= TOP + 4 && y < TOP + 4 + perf_group_count * GROUP_H && !running) {
+	if (running) return;
+	if (view == VIEW_SCORE) {
+		/* a part's bar: its group */
+		if (x >= PART_X && y >= PART_Y && y < PART_Y + PERF_PARTS * PART_H) {
+			group = part_group((y - PART_Y) / PART_H);
+			show_view(VIEW_GROUP);
+		}
+		return;
+	}
+	if (view == VIEW_RESULTS) {
+		int col = (x - 8) / RES_W, row = (y - TOP - 6) / RES_ROW, i = col * RES_ROWS + row;
+
+		if (x >= 8 && col < RES_COLS && y >= TOP + 6 && row < RES_ROWS && i < perf_count) {
+			group = group_of(perf_tests[i].group), selected = i;
+			show_view(VIEW_GROUP);
+		}
+		return;
+	}
+	if (x >= 8 && x < LEFT - 12 && y >= TOP + 4 && y < TOP + 4 + perf_group_count * GROUP_H) {
 		group = (y - TOP - 4) / GROUP_H;
 		selected = -1;
 		draw_groups();
 		draw_rows();
 		return;
 	}
-	if (x >= LEFT && y >= TOP + 4 && !running) {
+	if (x >= LEFT && y >= TOP + 4) {
 		int row = (y - TOP - 4) / ROW, i = row < row_count(group) ? row_test(group, row) : -1;
 
 		if (i >= 0) {
@@ -414,9 +719,12 @@ static void handle(GR_EVENT *e)
 		if (e->keystroke.ch == MWKEY_ESCAPE) stop_asked = 1;
 		else if (running) break;
 		else if (e->keystroke.ch == 'a' || e->keystroke.ch == 'A') run_group(0, 1);
+		else if (e->keystroke.ch == 's' || e->keystroke.ch == 'S') show_view(view == VIEW_SCORE ? VIEW_GROUP : VIEW_SCORE);
+		else if (e->keystroke.ch == 'r' || e->keystroke.ch == 'R') show_view(view == VIEW_RESULTS ? VIEW_GROUP : VIEW_RESULTS);
 		else if (e->keystroke.ch == '\r' || e->keystroke.ch == '\n' || e->keystroke.ch == ' ') run_group(group, 0);
 		else if (e->keystroke.ch == MWKEY_UP || e->keystroke.ch == MWKEY_DOWN) {
 			group = (group + (e->keystroke.ch == MWKEY_UP ? perf_group_count - 1 : 1)) % perf_group_count;
+			show_view(VIEW_GROUP);
 			draw_groups();
 			draw_rows();
 		}
@@ -445,11 +753,14 @@ static void load_results(void)
 			snprintf(results[i].note, sizeof results[i].note, "the last run's");
 		}
 	}
+	score_read("nxperf.score", &last_run);
+	score_read("nxperf.best", &best_run);
 }
 
 static int window_main(void)
 {
 	GR_EVENT e;
+	const char *open_on = getenv("NXPERF_VIEW");	/* score or results: the page it opens on (captures) */
 
 	if (GrOpen() < 0) {
 		fprintf(stderr, "nxperf: no window system (nxperf --cli runs without one)\n");
@@ -458,6 +769,8 @@ static int window_main(void)
 	ui_init();
 	if (ui_single_instance()) return 0;
 	load_results();
+	big_font = GrCreateFontEx(access("/usr/share/font-sans-b-32.sef", R_OK) == 0 ? "/usr/share/font-sans-b-32.sef" : GR_FONT_SYSTEM_VAR,
+				  32, 0, NULL);
 	window = GrNewWindowEx(UI_FIXED, "Benchmark", GR_ROOT_WINDOW_ID, -1, -1, WIDTH, HEIGHT, UI_FACE);
 	GrSelectEvents(window, GR_EVENT_MASK_EXPOSURE | GR_EVENT_MASK_BUTTON_DOWN | GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_CLOSE_REQ);
 	picture = GrNewWindow(window, PIC_X, PIC_Y, PIC_W, PIC_H, 0, BLACK, BLACK);
@@ -465,7 +778,11 @@ static int window_main(void)
 	GrMapWindow(picture);
 	ui_framed();
 	if (perf_gpu_init(picture) < 0) snprintf(status, sizeof status, "The GPU is another program's: its tests are not run.");
+	if (open_on && !strcmp(open_on, "score")) show_view(VIEW_SCORE);
+	else if (open_on && !strcmp(open_on, "results")) show_view(VIEW_RESULTS);
 	draw_all();
+	/* NXPERF_RUN=all: Run all at once (a capture of the score page after a run) */
+	if (getenv("NXPERF_RUN") && !strcmp(getenv("NXPERF_RUN"), "all")) run_group(0, 1);
 	while (!quit_asked) {
 		GrGetNextEventTimeout(&e, 60000);
 		if (e.type != GR_EVENT_TYPE_TIMEOUT) handle(&e);

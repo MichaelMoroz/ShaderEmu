@@ -19,10 +19,18 @@ test, "Run group" (Enter) the group shown, a click on a row that test alone; Sto
 after the test in hand, and Up and Down choose the group. The GPU's tests draw into the black square
 under the groups. Each result is kept at once in the registry as `nxperf.NAME`, its value and its
 check (`1` held, `0` did not, `-` not run), and the window shows the last results when it opens.
+The buttons are 34 pixels high, for a hand in a world. "Score" (S) shows the score page and "Results"
+(R) every result on one page, three columns of name, value, unit and check; a click there on a test,
+or on the score page on a part's bar, shows that test's group. A Run all that ends without Stop opens
+the score page by itself (`NXPERF_RUN=all` starts one at once, `NXPERF_VIEW=score|results` opens on a
+page: for captures).
 
 `--cli` prints each result as `nxperf: NAME VALUE UNIT [I i/op] OK|FAIL|not run (what was checked)`,
-and ends with `nxperf: N results: A OK, B FAIL, C not run`; it exits 1 when a check failed. It reads
-and writes no registry key unless `--save` follows `--cli`. It draws the GPU's tests in a window of its
+and ends with `nxperf: N results: A OK, B FAIL, C not run`, then the score ("The score" below): `nxperf:
+score S of N results (1,000: the card model), MACHINE`, a `nxperf: part NAME S (N results)` line for each of
+the eight parts and a `nxperf: beside it: MACHINE S (...)` line for each reference machine. It exits 1 when a
+check failed. It reads and writes no registry key unless `--save` follows `--cli`; with `--save` a run of
+every test keeps its score too. It draws the GPU's tests in a window of its
 own when a window system runs, and leaves them out otherwise. `NXPERF_WORKERS=N` opens N workers (255
 by default); with 0 the tests that want workers are not run.
 
@@ -214,10 +222,79 @@ other run splits otherwise. Every check held in both, and in a run under `RVC_RA
   fill rate is the card's to say. A clear and a swap are 1,208 instructions, a small triangle from a
   vertex array 56, a textured quad by `seglQuad` 279 (with its clear and swap shared out).
 
+## The score
+
+Each result is divided by the reference machine's (larger is better; a time an operation, `ns/load`, the
+other way), a part's score is 1,000 times the geometric mean of its results' ratios, and the whole is the
+geometric mean of the parts there are (`linux/bench/perf_score.c`). A test that failed its check or was not
+run counts in none. The reference is the machine as the card model has it: the values of "Results" run 1
+above, so there every part and the whole are 1,000 (a run of the same binary under the model, 3 November
+2026: 1,007, its parts 989 to 1,063). The parts:
+
+| Part | Tests |
+|---|---|
+| single core | `int-alu`, `int-mul`, `int-div`, `branch` |
+| FPU | `fp-add`, `fp-mul`, `fp-div`, `fp-sqrt` |
+| memory | the memory group (16) |
+| multicore | the cores group (12) |
+| lanes | `lanes`, `field`, `shade` |
+| numerical | the numbers group (13) |
+| media | `inflate`, `png-dec`, `jpeg-enc`, `jpeg-dec` |
+| GPU | the GPU group (5) |
+
+The score page has the whole in large type, a bar for each part (the reference's 1,000 a grey mark), the
+date and the machine, whether every check held, the last run's score and the best (with their dates), and
+the reference machines' scores beside this run's in a table. The machine is told by the field: it has
+lanes on the card's lean tick only, so "the card (N lanes in the field)" or "no lanes: rvc_cpu or a tick
+without them", with the workers. A run of every test keeps its score in the registry as `nxperf.score`, and
+as `nxperf.best` when it is the highest yet: `SCORE PARTS... TIME WORKERS LANES`.
+
+### Reference machines
+
+`perf_machines` and the values table in `perf_score.c`: each machine's results of the same tests, scored by
+the same arithmetic, 3 November 2026.
+
+| Machine | Score | single core | FPU | memory | multicore | lanes | numerical | media | GPU |
+|---|---|---|---|---|---|---|---|---|---|
+| the card model (reference) | 1,000 | 1,000 | 1,000 | 1,000 | 1,000 | 1,000 | 1,000 | 1,000 | 1,000 |
+| 486DX-33 (1990, estimated) | 761 | 1,571 | 327 | 1,585 | 517 | - | 780 | 588 | - |
+| RTX 3090 (the card, 255 workers) | 1,175 | 1,064 | 762 | 649 | 1,324 | 8,904 | 858 | 990 | 691 |
+| rvc_cpu at full speed | 822 | 596 | 603 | 1,016 | 1,189 | 774 | 641 | 667 | 1,446 |
+
+- **The card**: `rvc_harness --d3d11` through `tools\gpu_queue.ps1` on the RTX 3090, `nano-X -p & sleep 2;
+  nxperf --cli`, 255 workers, the field 3,968 lanes, every check held. Against the model: the first core 1 to
+  25% faster in its own tests, the lanes real (`field` 1.80 M/s against the model's plain calls, 90 times;
+  `shade` 16.4 Mpx/s, 5 times), and the machine's copy and fill far slower: `memcpy` 5.82 MB/s, `memset` 7.41
+  and `gpu-copy` 5.76 against the model's 187, 749 and 187, about the speed of a loop of words. The model
+  times a copy as a pass's work; the harness's copies are not that fast: not looked into here.
+- **rvc_cpu at full speed**: plain `rvc_cpu`, no pass model, every host thread. Its clock is the first core's
+  instructions (a pass is a fixed number of them) and the workers' time is free, so its results hardly move with
+  the threads (821 in test_all's run on a few threads, 822 in one on all 24): it is not the
+  host's speed. Its first core is slower than the model's (a pass costs more instructions than the model's
+  pass costs time), its copies and fills much faster (`memcpy` 999 MB/s), the workers free.
+- **486DX-33**: an Intel 486DX at 33 MHz with an 8 KB cache inside, 256 KB outside and 70 ns memory, as most
+  were sold in 1990-1991. One number is published: LINPACK at 0.8 Mflop/s, the best on such a machine (33 MHz
+  486DX, 256 KB cache, 70 ns memory, the Salford compiler; NA Digest volume 92, issue 25, netlib.org
+  `na-digest-html/92/v92n25.html`), which is `lu`, `cholesky`, `trsv` and `qr` here (double precision there,
+  single here). **The rest are estimates**, from the i486's cycle counts (Intel's i486 Microprocessor
+  Programmer's Reference Manual, 1990: a register add or logic operation 1 clock, `imul` 13 to 42, `div` 40,
+  a taken jump 3, `fadd` 8 to 20, `fmul` 11 to 16, `fdiv` 73, `fsqrt` 83 to 87) with the loop round each
+  operation, and the bus's 33 MHz, 32 bits and a cache line of 16 bytes for memory: `int-alu` 25 Mop/s,
+  `int-mul` 1.6, `int-div` 0.75, `branch` 6.0, `fp-add` 3.3 Mflop/s, `fp-mul` 2.0, `fp-div` 0.45, `fp-sqrt`
+  0.37; loads 18, 14, 9 and 5 MB/s at the four strides, a dependent load 90 ns in the first cache, 150 in the
+  second, 250 from memory; stores 25 MB/s, `memcpy` 15, `memset` 25, `copy-loop` 12, `gather` 5 M/s; the
+  numerical kernels 0.8 to 1.3 Mflop/s; `sort` 0.9 M/s, `hash` 1.5, `crc32` 4 MB/s, `inflate` 1 MB/s, the
+  pictures 0.12 to 0.15 Mpx/s. It has one core: the multicore tests that are the same work on more cores
+  (`mc-0` to `mc-255` 4.0 Mop/s, `mc-copy` and `mc-fill` its `memcpy` and `memset`, `gemm-mc` its `gemm`)
+  are its one core's, and the hand-overs (`mc-for`, `mc-call`, `handoff`, `counters`, `hybrid-*`), the lanes
+  and the GPU have no counterpart (-). Its whole is of six parts. A MIPS R3000 of 1990 is not in the table.
+
 ## Adding a test
 
 A test is a function of `struct perf_run` in `perf_tests.c` (or `perf_gpu.c`) and a row of
-`perf_tests[]`: its name, group, unit, flags (`PERF_WORKERS`, `PERF_GPU`) and a line for the window. It
+`perf_tests[]`: its name, group, unit, flags (`PERF_WORKERS`, `PERF_GPU`) and a line for the window, and a
+row of the values table in `perf_score.c` (the reference's value, and the other machines' or 0): a test with
+no reference value counts in no part. It
 makes its data, calls `perf_begin` and `perf_end` round its work alone, sets its value with `perf_rate`
 or `perf_each_ns` (and `perf_cpo` on the first core), and ends with `perf_check`. A kernel function is
 `noipa`, or the compiler may call it once for several repetitions. A result whose work goes to the
