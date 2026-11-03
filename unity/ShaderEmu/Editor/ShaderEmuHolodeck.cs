@@ -768,6 +768,50 @@ public static partial class ShaderEmuBuilder
         Debug.Log("[ShaderEmu] the holodecks' world reads the ROM");
     }
 
+    // The HUD layer (GpuHolodeckHud.shader; docs/world/holodeck.md, "The HUD layer"): the program's flat draws on a unit quad
+    // before the sitter, the world's point mesh and machine state; off until somebody sits in a world (EmuHolodeck.Arrange).
+    static Transform HudLayer(Transform holodeck, Mesh points, Material sceneMat)
+    {
+        Gone(holodeck, "Holodeck HUD");
+        Material hudMat = Mat("GpuHolodeckHud", "ShaderEmu/GpuHolodeckHud");
+        hudMat.SetTexture("_State", sceneMat.GetTexture("_State"));
+        GiveRom(hudMat);
+        hudMat.SetFloat("_HudFlip", 1f);
+        hudMat.renderQueue = 3010;   // after the world (2503), the beams and the seal (2505), and the room's transparent things
+        EditorUtility.SetDirty(hudMat);
+        GameObject layer = new GameObject("Holodeck HUD", typeof(MeshFilter), typeof(MeshRenderer));
+        layer.transform.SetParent(holodeck, false);
+        layer.GetComponent<MeshFilter>().sharedMesh = points;
+        MeshRenderer r = layer.GetComponent<MeshRenderer>();
+        r.sharedMaterial = hudMat;
+        r.shadowCastingMode = ShadowCastingMode.Off;
+        r.receiveShadows = false;
+        r.lightProbeUsage = LightProbeUsage.Off;
+        r.reflectionProbeUsage = ReflectionProbeUsage.Off;
+        layer.SetActive(false);
+        return layer.transform;
+    }
+
+    [MenuItem("ShaderEmu/Add the holodecks' HUD layer to the open scene")]
+    public static void AddHudLayer()
+    {
+        Transform world = GameObject.Find("ShaderEmu").transform, holodeck = world.Find("Holodeck");
+        Mesh points = AssetDatabase.LoadAssetAtPath<Mesh>(Generated + "/HolodeckPoints.asset");
+        Material sceneMat = AssetDatabase.LoadAssetAtPath<Material>(Generated + "/GpuHolodeck.mat");
+        if (holodeck == null || points == null || sceneMat == null) { Debug.LogError("[ShaderEmu] no holodeck to add the HUD layer to: build the world first"); return; }
+        Transform layer = HudLayer(holodeck, points, sceneMat);
+        foreach (EmuHolodeck deck in holodeck.GetComponentsInChildren<EmuHolodeck>(true))
+        {
+            deck.hud = layer;
+            UdonSharpEditorUtility.CopyProxyToUdon(deck);
+            EditorUtility.SetDirty(deck);
+        }
+        UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(world.gameObject.scene);
+        UnityEditor.SceneManagement.EditorSceneManager.SaveOpenScenes();
+        AssetDatabase.SaveAssets();
+        Debug.Log("[ShaderEmu] the holodecks' HUD layer is in the scene");
+    }
+
     [MenuItem("ShaderEmu/Add the holodecks' guards to the open scene")]
     public static void AddHoloGuards()
     {
@@ -927,6 +971,7 @@ public static partial class ShaderEmuBuilder
         scene.SetActive(false);
 
         deck.sceneMaterial = sceneMat;
+        deck.hud = HudLayer(holodeck, points, sceneMat);
         deck.roomSize = new Vector3(side, tall, side);
         deck.screenAt = new Vector3(plan.screen[0], plan.screen[1], plan.screen[2]);
         deck.screenSize = new Vector3(plan.screen[3], plan.screen[4], 1f);

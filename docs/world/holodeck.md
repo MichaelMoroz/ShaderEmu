@@ -341,17 +341,38 @@ console out, or the program flat); a desktop sitter's is the view's middle and t
 its button, and with the view on it neither the click nor the wheel is the game's.
 On `rvc_cpu` (its closing line says the bit): Quake III's menu 1, its level 0.
 
-When each game says its frame is flat (read from the ports on 3 November 2026; no game's rule changed that day,
-and none of it was tried in the world then):
+What each game sends while seated, and what the room shows of it (3 November 2026). "Flat" is the large screen before
+the seat; "in space" the world round it; "flat over it" the draws the world cannot place, which the HUD layer (below)
+shows. Measured on `rvc_cpu` with a desktop sitter's words (`--host 00000112,0,0,0,0,00007f00,0,0`) and `--volume-log`,
+summed by `tools/volume_frames.py`:
 
-| Game | Flat (the large screen before the seat) |
-|---|---|
-| Doom | not in a level (the title, an intermission, the finale) or a menu up (`doom_video.c`) |
-| Quake | a menu or the console, not connected or not signed on, the loading plaque, a level's end (`vid_shaderemu.c`) |
-| Quake III | any key catcher (menu, console, chat), not active, the scoreboard at a level's end (`tr_shaderemu.c`) |
-| Half-Life | not playing: not active or signed on, the menu or console, an intermission (`playing()`, `vid_shaderemu.c`) |
-| ClassiCube | no world loaded, or a screen that takes the pointer (a menu, the inventory, chat) while not seated, or typing (`SE_Flat`) |
-| Jedi Outcast, the 2D games | not registered: always on the large screen, menus and all |
+| Game | Flat (the large screen) | Its HUD, before | Its HUD, now | Transitions seen seated |
+|---|---|---|---|---|
+| Doom | not in a level (the title, an intermission, the finale) or a menu up (`doom_video.c`) | its 4 flat draws (status bar, weapon, messages) left out | on the HUD layer | 42 s of a level: world and HUD in every one of 1,487 frames |
+| Quake | a menu or the console, not connected or not signed on, the loading plaque, a level's end (`vid_shaderemu.c`) | 5 to 7 flat draws (status bar, cross-hair, centre prints) left out | on the HUD layer | `kill` and `changelevel e1m2`: the last frame before each load is flat (the plaque on the large screen) and stays so while no frame comes (14 s and 18 s), then the world again; 0 frames of an empty world |
+| Quake III | any key catcher (menu, console, chat), not active, the scoreboard at a level's end (`tr_shaderemu.c`) | up to 19 flat draws (HUD, cross-hair, messages) left out | on the HUD layer | the load (21 s flat), then 4,005 frames of world and HUD, `kill` included |
+| Half-Life | not playing: not active or signed on, the menu or console, an intermission (`playing()`, `vid_shaderemu.c`) | its flat draws left out | on the HUD layer (not measured: this image had no Uplink data) | |
+| ClassiCube | no world loaded, or a screen that takes the pointer while not seated, or typing (`SE_Flat`) | its 2D was already a sheet in space before the sitter (`SheetMatrix`): 0 flat draws | as before (nothing on the HUD layer) | the start: 7 frames flat, 1 frame of an empty world (0.1 s), then the world |
+| Jedi Outcast, the 2D games | not registered: always on the large screen, menus and all | | | |
+
+## The HUD layer
+
+A program's frame has draws with a place in space (the world) and draws flat over its picture: a status bar, a cross-hair,
+messages, the console, a weapon drawn flat. The world round the seat can only place the first; until 3 November 2026 the
+rest was left out, so a seated game had no HUD at all. `GpuHolodeckHud.shader` (`GpuHolodeckHudPass.cginc`, and
+`volume_flat_command` and `volume_picture` in `src/gpu.h`) draws them on a quad of their own, "Holodeck HUD", in the GPU's
+pass order and blending, over everything of the room (no depth), each vertex at its place in the picture as a share of
+the quad. `EmuHolodeck.PlaceHud` keeps the quad before the sitter's eyes while a world is shown: 1.1 m ahead and 0.12 m
+below them (`hudDistance`, `hudDrop`), 1.0 m wide at the picture's shape (`hudWidth`); on a desktop it turns with the view,
+in a headset it follows the head's turn about the upright at `hudFollow` (2.5 a second), never its tilt or roll. A menu
+or a load is flat, and then the whole picture is on the large screen instead. `_HudFlip` (-1) turns it over if a
+platform's clip space is upside down there. "ShaderEmu/Add the holodecks' HUD layer to the open scene" puts it into a
+built scene. Compiled with fxc against Unity's includes (the same warnings as `GpuVolumePass.cginc`) and the Editor and
+runtime scripts with csc; not run in Unity or a headset.
+
+`rvc_cpu --volume-log FILE` writes a line for each whole frame a program gives a host (its words, its draws in space, flat
+and text), and `python tools/volume_frames.py FILE` prints them as runs of a kind: a flat screen, a world with or without
+draws over it, or an empty world (not flat and nothing in space: the room would show nothing; over a second is an exit 1).
 
 Only the registered games have a world round the seat (`EmuHolodeck.Registered`: Doom, Quake,
 ClassiCube, Quake III, nxphys and Half-Life, by the number of the program whose window has the keyboard,
