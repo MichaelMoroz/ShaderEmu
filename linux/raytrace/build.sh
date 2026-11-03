@@ -14,7 +14,9 @@ mkdir -p "$BUILD" "$OUT/usr/bin" "$OUT/usr/share"
 INC="-idirafter $REPO/programs/linux/include -I$MW/src/include -I$REPO/linux/userland -I$REPO/programs/mc -I$REPO/linux/apps"
 # single-precision constants: a float times 0.5 is a double multiplication otherwise, and the
 # machine has no doubles. No errno from sqrt: it is the machine's instruction then.
-rv32-cc -O2 -fno-pie -Wall -Wno-unused-function -fsingle-precision-constant -fno-math-errno $INC -c "$HERE/nxray.c" -o "$BUILD/nxray.o"
+# -O3 with loops unrolled: 148.6 to 140.3 million instructions of four pictures on every core, the same sums
+# (rvc_cpu, 3 November 2026; docs/system/flags.md)
+rv32-cc -O3 -fno-tree-vectorize -fsched-pressure -funroll-loops -fno-pie -Wall -Wno-unused-function -fsingle-precision-constant -fno-math-errno $INC -c "$HERE/nxray.c" -o "$BUILD/nxray.o"
 rv32-cc -O2 -fno-pie -w $INC -c "$REPO/programs/linux/gles.c" -o "$BUILD/gles.o"
 rv32-cc -O2 -fno-pie -w $INC -c "$REPO/programs/mc/mcw.c" -o "$BUILD/mcw.o"
 rv32-cc -O2 -no-pie "$BUILD/nxray.o" "$BUILD/gles.o" "$BUILD/mcw.o" "$MW/src/lib/libnano-X.a" -lm -o "$BUILD/nxray"

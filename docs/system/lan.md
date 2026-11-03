@@ -79,6 +79,10 @@ each direction; packet k of a direction is the one that made the count k.
 - A host that starts on a machine that is already running (a snapshot) takes `sent` as it
   finds it at its first readback and sends nothing from before.
 - A readback that never comes, or comes late, loses nothing: the guest waits for the ack.
+- A host whose own queue to the others is full may leave the window as it is, not taken and not
+  acked, and take it at a later readback: the guest's packets wait in its own queue meanwhile,
+  which slows its TCP down with nothing lost (the world and `--net-rate` wait up to 3 s, then
+  take the window and drop what does not fit; below, "A file over the world's link").
   One window is 640 bytes for every round trip of a readback, so the link carries one full
   packet, or up to eight small ones (a game's are 40 to 80 bytes), each round trip.
 
@@ -137,6 +141,11 @@ harness run, and copies the ring back into the interpreter's RAM after a pass th
 - `--net-loss P` loses P percent of the packets a machine sends and `--net-delay MS` holds
   the others back MS milliseconds: the VRChat link's part. Both ends given 250 make a round
   trip of half a second.
+- `--net-rate B` lets at most B bytes a second of what a machine sends leave, with 64 packets
+  waiting at most, as the world's link (some 4 KB a second, `EmuMachine`'s queue of 64): while
+  64 wait the guest's window is not taken (3 s at most, then what does not fit is dropped);
+  `RVC_NET_FULL=drop` takes it at once and drops, as the world did before 3 November 2026. The
+  run's last line counts the drops and the readbacks not taken.
 - `RVC_NET_LOG=1` in the environment prints a line for every packet in and out.
 - With `--net`, `rvc_cpu` keeps its guest clock to this computer's (it sleeps when the guest
   is ahead): machines that talk share one clock. Its instruction counts are as ever.
@@ -170,6 +179,10 @@ pass defines `GPU_NET`).
   serialized one, which waits for VRChat's next sending.
 - A batch goes out whether or not anybody watches the display, and while packets flow the
   display goes with one sending in six only (below, "A game has most of the world's link").
+- The machine's queue to the others is 64 packets (`NetQueue`). While it has no room for a
+  round's window, `NetWindow` leaves the window untaken and unacked, 3 s at most (`netFullSince`;
+  the `[Lan]` counts say `rounds whose packets waited for room to go out`), then takes it and
+  drops what does not fit, as it did at once before 3 November 2026.
 - In play mode with one visitor: `ifconfig lan0` says `10.0.0.1`; `ping -c 3 10.0.0.2` leaves three
   packets of 84 bytes in the machine's queue (`netSent`), acked. `EmuMachine`'s `netSent`,
   `netReceived`, `netBad` and the hub's `netBatches`, `netTaken` are there to read.
@@ -215,7 +228,10 @@ hook polls from the timer.
   fetched to `/tmp/net/ADDRESS/` and given to `open`, or copied into `/root` under a name
   that is free ("Copy to my Home"); Escape gives a file up while it comes. From a script:
   `nxnet --find`, `--ls ADDRESS PATH`, `--get ADDRESS PATH FILE`, between two interpreters (`--net 47000 --net-id 1`
-  and `2`) too. `NXNET_SELF=1` asks this computer itself (the loopback), for a test with one machine.
+  and `2`) too. A file's bytes may stop for 90 s (`STALL`) before either side gives up, and the
+  one that asks keeps a receive buffer of 16 KB (`RECEIVE_BUFFER`), so that what is in flight
+  stays under the world's queue (below, "A file over the world's link"); a broken transfer says why
+  (nothing for 90 s, or the other computer stopped sending). `NXNET_SELF=1` asks this computer itself (the loopback), for a test with one machine.
   Between two real clients: the hub's `lanTest`, a "Build & Test" with two clients on one computer;
   its `lanDoom` asks for the game of Doom instead. The world's link is some 4 KB a second at a thousand
   bytes a sending: a large picture is minutes.
@@ -250,6 +266,32 @@ hook polls from the timer.
   -O /tmp/w http://10.0.0.1/web-css.html` on another gives the same file. Nothing outside
   10.0.0.0/16 exists.
 
+## A file over the world's link
+
+Moving a file between two machines in the world stopped part of the way: the window's fetch, or
+`nxnet --get`, said "the link broke at N of M bytes" after some 256 KB. The same was made on
+`rvc_cpu` with the world's link as `--net-rate` has it (3 November 2026, `nxnet --serve` on one
+machine, `nxnet --get` of a file of random bytes on the other):
+
+- The guest's TCP put more in flight than the host's queue of 64 packets holds, at some 4 KB a
+  second (8.6 s of waiting at most); the host dropped the rest of a round at once. Losses at the end
+  of a queue that long make TCP wait for its retransmission timer, doubled at each loss, and
+  `nxnet` gave up on 15 s with nothing to read (the one that asks) or 20 s with nothing written
+  (the one that shares). With `RVC_NET_FULL=drop --net-rate 4000 --net-delay 115` on both, 1 MB
+  broke at 288,200 bytes in one run and at 688,012 in another.
+- Fixed in both places: the host does not take the window while its queue is full (above), and
+  `nxnet` waits 90 s for bytes and asks with a receive buffer of 16 KB, whose window (about 24 KB,
+  45 packets) stays under the queue. Either alone made 1 MB arrive: the guest's change with the
+  old host's drops in 289 s, the host's waiting with the old `nxnet` in 289 s, both with the same
+  MD5 as the file sent.
+- With both, at `--net-rate 4000 --net-delay 115`: 240 KB in 68 s, 256 KB in 73 s, 272 KB in 77 s,
+  1 MB in 289 s (3.6 KB a second of the link's 4); 4 MB at `--net-rate 11000 --net-delay 115 --net-loss 2` (VRChat's budget for a client, and losses) in 458 s. On the link with no rate,
+  600 KB in 22 s (24 s before: the receive buffer costs nothing there). Every file arrived with the
+  MD5 of the one sent.
+- `tools/test_all.py nxnet-get` sends 2 MB over the loopback with the same programs.
+- Not run: the world itself. `NetWindow`'s waiting is the same rule as `--net-rate`'s, written in
+  `EmuMachine.cs` and not compiled in Unity or tried between two clients (`lanTest`).
+
 ## Checking it
 
 `--until` texts and two machines at once want a script; these are the commands it runs, each
@@ -264,6 +306,9 @@ machine with its own `--uart-log`. Start them from PowerShell.
   bs=1024 count=200; md5sum /tmp/s; sleep 3; nc -w 3 10.0.0.1 5000 < /tmp/s`. The sums must
   be equal. (`nc -l` without `< /dev/null` waits for the console's end, not the
   connection's.)
+- **A file over the world's link** (`--net-rate 4000 --net-delay 115` on both): on 1, `nxnet --serve &`
+  and a file in `/root`; on 2, `nxnet --get 10.0.0.1 /FILE /tmp/f; md5sum /tmp/f`: the sums must be
+  equal, and `RVC_NET_FULL=drop` with the `nxnet` of before shows the old break.
 - **A shell on the other machine**: on 1, `telnetd -l /bin/sh`; on 2, `(sleep 3; echo
   "ifconfig lan0 | grep Bcast; exit"; sleep 5) | telnet 10.0.0.1` must print `inet
   addr:10.0.0.1`.

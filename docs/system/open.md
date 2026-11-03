@@ -40,7 +40,7 @@ program registered for what it is. The file manager opens a file the same way.
    handed over, a part of 256 KB at a time.
    A picture given as pixels is written a part at a time from a buffer, not a byte a `fputc`.
    A file that came inside a picture has its own name and a CRC-32, which is checked. A plain picture the host could only give
-   as pixels becomes a PPM file.
+   as pixels becomes a TGA file of 32 bits with its alpha (`FETCH_RGBA`, `docs/system/fetch.md`), or a PPM from a host of before.
    Closing that window (its frame's button, Alt+F4) ends `open` at once: the download is
    left to the host and nothing is opened.
 3. When it does not come, a small window says why and goes at OK, Enter, Escape or by itself

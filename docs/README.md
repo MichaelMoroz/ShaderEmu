@@ -25,6 +25,7 @@ One file per subject. A doc names another by its file name, which is unique acro
 - [nanox.md](system/nanox.md) – Nano-X
 - [fonts.md](system/fonts.md) – Fonts
 - [cc.md](system/cc.md) – A C compiler in the machine
+- [flags.md](system/flags.md) – Compiler flags of every build, and what paid
 - [hlsl.md](system/hlsl.md) – HLSL in the machine: shaders compiled for the lanes
 - [scripts.md](system/scripts.md) – Scripts: JavaScript and Python
 - [terminal.md](system/terminal.md) – Terminal programs
@@ -46,6 +47,7 @@ One file per subject. A doc names another by its file name, which is unique acro
 - [web.md](apps/web.md) – The browser
 - [physics.md](apps/physics.md) – Rigid boxes on every core
 - [pinball.md](apps/pinball.md) – Pinball
+- [solitaire.md](apps/solitaire.md) – Solitaire (Klondike)
 - [raytrace.md](apps/raytrace.md) – Rays on every core
 
 ## games

@@ -142,6 +142,7 @@ struct Options {
     std::string initialInput;
     std::string until;
     std::vector<std::string> open;   // --open: addresses or files the guest is told to open (docs/system/open.md)
+    std::vector<std::pair<std::string, std::string>> hostFiles;   // --host-file URL=FILE: an address answered with a file of this computer
     std::string openAfter;           // --open-after: not before the console has shown this
     std::string persist;             // --persist: the file the guest's /persistence is kept in (docs/system/persist.md)
     int ticks = 8192;
@@ -183,6 +184,7 @@ struct Options {
     int netPort = 0;          // --net PORT: the network device's link to other machines here (docs/system/lan.md)
     int netId = 1;            // --net-id N: this machine's number, its address 10.0.0.N
     double netLoss = 0, netDelay = 0;   // --net-loss percent, --net-delay milliseconds: of every packet sent
+    double netRate = 0;                 // --net-rate: bytes a second at most, as the world's link
     int cores = 1;            // core 0 and the worker cores: kCores wherever the machine has workers (docs/machine/multicore.md)
     bool blits = false;       // --blits: the commit's points and the GPU's lists as the world's blits (src/amp.h)
     bool noBands = false;     // --no-bands: the commit rewrites all of RAM, not only the bands written to (COMMIT_BANDS off)
@@ -306,6 +308,7 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
   --open ADDRESS       tell the guest to open an address, or a file of this computer (file:// and its path);
                        several are told ten seconds apart (docs/system/open.md)
   --open-after TEXT    not before the console has shown TEXT
+  --host-file URL=FILE the guest's fetch of URL answered with FILE, as if downloaded (a test with no network)
   --persist FILE       the file the guest's /persistence is kept in (docs/system/persist.md)
   --holodeck           tell the guest its owner sits in a holodeck's seat (docs/world/holodeck.md)
   --zap K,X,Y,R,W,M,S,Z  flip bits of RAM in one commit (docs/world/danger.md): kind 1 (word W of texel X,Y) or 2
@@ -317,6 +320,7 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
                        this computer, where the other machines started with the same PORT send (D3D11)
   --net-id N           its number N, 1 to 16 (default 1)
   --net-loss P         lose P percent of the packets it sends   --net-delay MS   and hold the rest back MS ms
+  --net-rate B         and let at most B bytes a second leave, 64 packets waiting at most (the world's link)
   --l1-log FILE        per frame: the addresses in the write cache, for tools/l1_study.py (D3D12)
   --stats-after S      print instructions/s and frames/s for the run after its first S seconds
                        (and start the pc log there)
@@ -471,6 +475,11 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--tabs") o.tabs = true;
         else if (a == "--open") o.open.push_back(next("--open"));
         else if (a == "--open-after") o.openAfter = unescape(next("--open-after"));
+        else if (a == "--host-file") {
+            std::string v = next("--host-file");
+            size_t eq = v.find('=');
+            if (eq != std::string::npos) o.hostFiles.push_back({v.substr(0, eq), v.substr(eq + 1)});
+        }
         else if (a == "--persist") o.persist = next("--persist");
         else if (a == "--viz-capture") { o.vizCapture = next("--viz-capture"); o.viz = true; }
         else if (a == "--no-gpu") o.noGpu = true;
@@ -503,6 +512,7 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--net-id") o.netId = atoi(next("--net-id").c_str());
         else if (a == "--net-loss") o.netLoss = atof(next("--net-loss").c_str());
         else if (a == "--net-delay") o.netDelay = atof(next("--net-delay").c_str());
+        else if (a == "--net-rate") o.netRate = atof(next("--net-rate").c_str());
         else if (a == "--cpu") o.cpu = true;
         else if (a == "--unity") {
             std::string v = next("--unity");
@@ -1281,6 +1291,7 @@ int main(int argc, char** argv) {
         if (opt.netId < 1 || opt.netId > (int)NetLink::kBroadcastTo) why = "--net-id is 1 to 16";
         else if (opt.dxc || !bo.gpuShader) why = "it needs the GPU device on D3D11";
         else net.open(opt.netPort, (unsigned)opt.netId, opt.netLoss, opt.netDelay, why);
+        net.rate(opt.netRate, 64);
         if (!net.on()) { fprintf(stderr, "[harness] no network: %s\n", why.c_str()); return 1; }
         fprintf(stderr, "[harness] network: this machine is 10.0.0.%d, UDP port %d\n", opt.netId, opt.netPort + opt.netId);
     }
@@ -1414,14 +1425,17 @@ int main(int argc, char** argv) {
                 if (!held) fprintf(stderr, "[harness] the guest asks for %s\n", url.c_str());
                 // (a file of the host's own only if this run was told to have the guest open it)
                 bool own = std::find(opt.open.begin(), opt.open.end(), url) != opt.open.end();
-                if (!held) std::thread([&fetch, url, picture, file, own] {
+                std::string standIn;   // (--host-file: this file in the address's place)
+                for (auto& hf : opt.hostFiles)
+                    if (hf.first == url) standIn = hf.second;
+                if (!held) std::thread([&fetch, url, picture, file, own, standIn] {
                     const size_t most = 16u << 20;
                     std::string body;
                     uint32_t status = 0, info = 0;
-                    if (url.rfind("http", 0) != 0 && !own) status = 3;   // never: docs/system/fetch.md
-                    else if (url.rfind("http", 0) != 0) {
-                        // a file of the host's own (--open): its path, or file:// and its path
-                        std::string path = url.rfind("file://", 0) == 0 ? url.substr(7) : url;
+                    if (url.rfind("http", 0) != 0 && !own && standIn.empty()) status = 3;   // never: docs/system/fetch.md
+                    else if (url.rfind("http", 0) != 0 || !standIn.empty()) {
+                        // a file of the host's own (--open): its path, or file:// and its path; or --host-file's
+                        std::string path = !standIn.empty() ? standIn : url.rfind("file://", 0) == 0 ? url.substr(7) : url;
                         if (FILE* f = fopen(path.c_str(), "rb")) {
                             char buf[65536];
                             size_t got;
@@ -1442,25 +1456,30 @@ int main(int argc, char** argv) {
                         }
                         if (net) InternetCloseHandle(net);
                     }
-                    if ((picture || (file && body.compare(0, 8, "\x89PNG\r\n\x1a\n") == 0)) && status == 200) {
-                        // A picture: the guest gets pixels, a word each, scaled to fit the 256 KB
-                        // it can be handed. Or, asked for as a file, a PNG may carry one in its
-                        // pixels (docs/system/fetch.md): then the guest gets that file, header first.
+                    // A PNG or a JPEG is what VRChat's picture loader takes (docs/system/fetch.md): the guest gets its
+                    // pixels at full size, four bytes each (red, green, blue, alpha), the size word with FETCH_RGBA
+                    // (0x8000); one over 2048 a side is refused with 413, as VRChat's loader refuses it. Asked for as a
+                    // file, a PNG may carry one in its pixels: then the guest gets that file, header first (201). A GIF
+                    // or anything else comes as its bytes, as VRChat's text loader gives them.
+                    bool png = body.compare(0, 8, "\x89PNG\r\n\x1a\n") == 0;
+                    bool jpeg = body.size() > 3 && (uint8_t)body[0] == 0xff && (uint8_t)body[1] == 0xd8 && (uint8_t)body[2] == 0xff;
+                    if ((picture || file) && (png || jpeg) && status == 200) {
                         std::string pixels;
                         CoInitializeEx(nullptr, COINIT_MULTITHREADED);
                         ComPtr<IWICImagingFactory> wic;
                         ComPtr<IWICStream> stream;
                         ComPtr<IWICBitmapDecoder> decoder;
                         ComPtr<IWICBitmapFrameDecode> frame;
-                        ComPtr<IWICBitmapScaler> scaler;
-                        ComPtr<IWICFormatConverter> converter;
+                        ComPtr<IWICFormatConverter> converter, rgba;
                         UINT w = 0, h = 0;
+                        bool decoded = false;
                         if (SUCCEEDED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wic))) &&
                             SUCCEEDED(wic->CreateStream(&stream)) &&
                             SUCCEEDED(stream->InitializeFromMemory((BYTE*)body.data(), (DWORD)body.size())) &&
                             SUCCEEDED(wic->CreateDecoderFromStream(stream.Get(), nullptr, WICDecodeMetadataCacheOnDemand, &decoder)) &&
                             SUCCEEDED(decoder->GetFrame(0, &frame)) && SUCCEEDED(frame->GetSize(&w, &h)) && w && h) {
-                            if (file) {
+                            decoded = true;
+                            if (file && png) {
                                 // its pixels as they are, three bytes each: a file if they begin with the mark
                                 std::string packed((size_t)w * h * 3, 0);
                                 if (SUCCEEDED(wic->CreateFormatConverter(&converter)) &&
@@ -1476,35 +1495,23 @@ int main(int argc, char** argv) {
                                         status = 201;   // a file with its header
                                     }
                                 }
-                            } else {
-                                UINT tw = w, th = h;
-                                while (tw > 256 || th > 256 || tw * th > 65536) {
-                                    tw = (std::max)(1u, tw * 7 / 8);
-                                    th = (std::max)(1u, h * tw / w);
-                                }
-                                if (SUCCEEDED(wic->CreateBitmapScaler(&scaler)) &&
-                                    SUCCEEDED(scaler->Initialize(frame.Get(), tw, th, WICBitmapInterpolationModeFant)) &&
-                                    SUCCEEDED(wic->CreateFormatConverter(&converter)) &&
-                                    SUCCEEDED(converter->Initialize(scaler.Get(), GUID_WICPixelFormat32bppBGRA, WICBitmapDitherTypeNone, nullptr, 0,
-                                                                    WICBitmapPaletteTypeCustom))) {
-                                    pixels.resize((size_t)tw * th * 4);
-                                    if (SUCCEEDED(converter->CopyPixels(nullptr, tw * 4, (UINT)pixels.size(), (BYTE*)pixels.data()))) {
-                                        for (size_t i = 0; i < pixels.size(); i += 4) {
-                                            // over white, as the page is; the word is 0x00RRGGBB
-                                            unsigned a = (unsigned char)pixels[i + 3];
-                                            for (int c = 0; c < 3; ++c)
-                                                pixels[i + c] = (char)(((unsigned char)pixels[i + c] * a + 255 * (255 - a)) / 255);
-                                            pixels[i + 3] = 0;
-                                        }
-                                        info = tw | th << 16;
-                                    }
-                                }
+                            }
+                            if (status == 200 && (w > 2048 || h > 2048)) {
+                                status = 413;   // over VRChat's 2048 a side
+                                body.clear();
+                            } else if (status == 200) {
+                                pixels.resize((size_t)w * h * 4);
+                                if (SUCCEEDED(wic->CreateFormatConverter(&rgba)) &&
+                                    SUCCEEDED(rgba->Initialize(frame.Get(), GUID_WICPixelFormat32bppRGBA, WICBitmapDitherTypeNone, nullptr, 0,
+                                                               WICBitmapPaletteTypeCustom)) &&
+                                    SUCCEEDED(rgba->CopyPixels(nullptr, w * 4, (UINT)pixels.size(), (BYTE*)pixels.data()))) {
+                                    info = w | h << 16 | 0x8000u;
+                                    body.swap(pixels);
+                                } else
+                                    decoded = false;
                             }
                         }
-                        if (picture) {
-                            if (info) body.swap(pixels);
-                            else status = 415;   // not a picture this host can read
-                        }
+                        if (!decoded && picture) status = 415;   // not a picture this host can read
                     }
                     std::lock_guard<std::mutex> lock(fetch.lock);
                     fetch.body.swap(body);
@@ -2432,8 +2439,8 @@ int main(int argc, char** argv) {
         fprintf(stderr, "[harness] %d workers: %llu instructions more, all cores avg %.1fk IPS\n", opt.cores - 1,
                 (unsigned long long)workerInstructions, wall > 0 ? (guestInstructions + workerInstructions) / wall / 1000.0 : 0.0);
     if (net.on())
-        fprintf(stderr, "[harness] network: %llu packets sent, %llu lost on the way (--net-loss), %llu received, %llu never taken\n",
-                (unsigned long long)net.sent, (unsigned long long)net.lost, (unsigned long long)net.received, (unsigned long long)net.dropped);
+        fprintf(stderr, "[harness] network: %llu packets sent, %llu lost on the way (--net-loss), %llu dropped for a full queue and %llu readbacks not taken for it (--net-rate), %llu received, %llu never taken\n",
+                (unsigned long long)net.sent, (unsigned long long)net.lost, (unsigned long long)net.full, (unsigned long long)net.held, (unsigned long long)net.received, (unsigned long long)net.dropped);
     if (uartLog) fclose(uartLog);
     fflush(stdout);
     // The stdin thread may be blocked in getchar(); exit without joining it.

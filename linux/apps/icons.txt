@@ -9,10 +9,11 @@ default,program         mimes/application-x-executable
 nxterm                  apps/utilities-terminal
 nxcalc                  apps/accessories-calculator
 nxclock                 apps/clock
-nxtetris                apps/quadrapassel apps/gnome-tetravex apps/gnome-sudoku
-nxmine                  apps/gnome-mines apps/mines
+nxtetris                nxtetris
+nxmine                  nxmine
 nxchess                 nxchess
-nxpinball               devices/joystick categories/gnome-joystick
+nxsolitaire             nxsolitaire
+nxpinball               nxpinball
 nxeyes                  nxeyes
 glxgears                glxgears
 nxedit                  apps/accessories-text-editor
@@ -21,11 +22,11 @@ nxpaint                 apps/kolourpaint apps/gnome-paint apps/gimp
 nxweb                   apps/internet-web-browser
 nxmon                   apps/utilities-system-monitor
 nxsettings              apps/preferences-desktop
-nxview                  apps/image-viewer
-nxgame                  devices/joystick
+nxview                  nxview
+nxgame                  nxgame
 nxnet                   places/network-workgroup places/network apps/preferences-system-network
-nxplay                  apps/multimedia-audio-player
-nxvideo                 apps/multimedia-video-player
+nxplay                  nxplay
+nxvideo                 nxvideo
 doom,doom.bin           doom
 quake,quake.bin         quake
 quake3,quake3.bin       quake3
@@ -37,12 +38,12 @@ nxmicropolis            micropolis
 openttd,openttd.bin     openttd
 aoe,aoe.bin             aoe
 jk2,jk2.bin             jk2
-nes,nes.bin             devices/input-gaming
-imdemo                  apps/desktop-effects apps/glade
-nxray                   apps/multimedia-photo-manager
-nxpath                  devices/camera-photo
-nxphys                  devices/processor
-nxide                   apps/geany
+nes,nes.bin             nes
+imdemo                  imdemo
+nxray                   nxray
+nxpath                  nxpath
+nxphys                  nxphys
+nxide                   nxide
 example                 mimes/text-x-csrc
 restart                 apps/system-restart
 nxoff                   apps/system-shutdown

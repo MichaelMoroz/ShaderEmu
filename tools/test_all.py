@@ -424,6 +424,24 @@ CASES = [
     case('nxask', 'desktop', X + "(nxkey 2500 n) & nxask 'Sure?' Yes No; echo ASK=$?", has=[r'^ASK=1']),
     case('nxpinball', 'desktop', X + 'PINBALL_DEMO=1800 nxpinball',   # docs/apps/pinball.md: three balls of a game played by itself
          has=[r'pinball: 1800 frames, 1 games, ball 3, high 0, score 18060 state 51ec1e4b']),
+    # docs/apps/solitaire.md, "Checking it": deal 15 (tools/solitaire_deal.py) played by the pointer, the window's inside at 43,46
+    # (a drag of 6c onto 7d; 5c picked, then put on 6h; a double click sends Ah up; the stock clicked and undone by the Undo
+    # button; 8h dragged onto 5h, which it does not fit; closed, taken up again and undone once by the key)
+    case('nxsolitaire', 'desktop', 'mkdir -p /persistence; ' + X + 'NXSOLITAIRE_PRINT=1 NXSOLITAIRE_DRAW=1 nxsolitaire 15 & sleep 6; '
+         'nxkey drag:83,182:293,206 153,188 363,206 223,194 223,194 83,116 147,498 drag:503,218:153,182 alt+f4 2000; '
+         'NXSOLITAIRE_PRINT=1 NXSOLITAIRE_DRAW=1 nxsolitaire & sleep 5; nxkey u 1000; killall nxsolitaire',
+         has=[r'^nxsolitaire: dragged: moves 1, stock 24, waste 0, home 0 0 0 0, playing', r'^nxsolitaire: piles: waste:- .* t1:- \| .* t4:## ## ## 7d 6c \|',
+              r'^nxsolitaire: picked t2, 1 cards', r'^nxsolitaire: placed: moves 2,', r'^nxsolitaire: piles: .* t2:5h \| t3:## ## Ah \| .* t5:## ## ## ## 6h 5c \|',
+              r'^nxsolitaire: up: moves 3, stock 24, waste 0, home 1 0 0 0, playing', r'^nxsolitaire: piles: waste:- \| f1:Ah \| .* t3:## 6d \|',
+              r'^nxsolitaire: stock: moves 4, stock 23, waste 1,', r'^nxsolitaire: piles: waste:2d \|', r'^nxsolitaire: undo: moves 3, stock 24, waste 0, home 1 0 0 0',
+              r'^nxsolitaire: dropped back: moves 3,', r'^nxsolitaire: game kept', r'^nxsolitaire: resumed: moves 3, stock 24, waste 0, home 1 0 0 0, playing',
+              r'^nxsolitaire: undo: moves 2, stock 24, waste 0, home 0 0 0 0, playing', r'^nxsolitaire: piles: waste:- .* t3:## ## Ah \|']),
+    # every card but the queens and kings home: the Finish button plays them out; a queen sent up by a double click starts it by itself
+    case('nxsolitaire-finish', 'desktop', 'mkdir -p /persistence; ' + X + 'NXSOLITAIRE_PRINT=2 NXSOLITAIRE_DEAL=nearly nxsolitaire & sleep 6; '
+         'nxkey 279,498 3000; killall nxsolitaire nano-X; sleep 1; ' + X + 'NXSOLITAIRE_PRINT=2 NXSOLITAIRE_DEAL=nearly nxsolitaire & sleep 6; '
+         'nxkey 83,212 83,212 3000; killall nxsolitaire',
+         has=[r'^nxsolitaire: finish: moves 0,'], count=[(r'^nxsolitaire: finished: moves 8, stock 0, waste 0, home 13 13 13 13, won', 2)],
+         sums=[(r'^nxsolitaire: statistics: (played \d+, won \d+, streak \d+)', ['played 1, won 1, streak 1', 'played 2, won 2, streak 2'])]),
     case('nxfiles', 'desktop', X + 'NXFILES_PRINT=1 nxfiles /usr/share & sleep 6; nxkey drag:643,86:343,196; sleep 4',
          has=[r'nxfiles: the box selected 8 ']),
     # docs/system/nanox.md, "A new name" and "Save to persistence": typed over the name, its ending kept; refused over 100 KB
@@ -611,6 +629,10 @@ CASES = [
          wall=120, has=[r'^FZ-DONE 0', r'FZ closed w \(x\)'], never=[r'FZ-BAD']),
     case('apps-net-stalled', 'desktop apps', "nx; sleep 3; nxnet --serve & sleep 2; (sleep 60 | nc 127.0.0.1 7474) & sleep 2; a=$(date +%s); nxnet --ls 127.0.0.1 /root | head -2; echo took=$(( $(date +%s) - a ))", True,
          wall=120, has=[r'^took=\d$']),
+    # a file of 2 MB through nxnet's server and --get on the loopback (docs/system/lan.md, "A file over the world's link":
+    # two machines on rvc_cpu's --net-rate are its test, which test_all cannot run)
+    case('nxnet-get', 'desktop apps', "nxnet --serve & sleep 2; head -c 2097152 /dev/urandom > /root/big; nxnet --get 127.0.0.1 /big /tmp/f; echo GET=$?; "
+         '[ "$(md5sum < /root/big)" = "$(md5sum < /tmp/f)" ] && echo SAME; ls -l /tmp/f', wall=200, has=[r'^GET=0', r'^SAME', r' 2097152 .*/tmp/f']),
     case('apps-menus', 'desktop apps', "nx; sleep 3; nxfuzz start:e:nxedit wait:e:20 sleep:500 menus:e close:e:x end", True,
          wall=200, has=[r'^FZ-DONE 0', r'FZ menus e: 1\d menus, \d{2,3} rows'], never=[r'FZ-BAD']),
     # a folder level 1 leaves over the limit goes on to harder levels (docs/system/persist.md): no host answers here, so 404 is its having fit

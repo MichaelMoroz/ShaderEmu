@@ -51,8 +51,8 @@ Shader "ShaderEmu/UdonAotFetch"
                     n += (uint)_Offset / 4;
                     if (n >= size.x * size.y) return 0;
                     float4 c = _MainTex.Load(int3(n % size.x, size.y - 1 - n / size.x, 0));
-                    uint3 b = (uint3)(saturate(lerp(1.0, seen(c), c.a)) * 255.0 + 0.5);   // over white
-                    word = (b.r << 16) | (b.g << 8) | b.b;
+                    uint4 b = (uint4)(saturate(float4(seen(c), c.a)) * 255.0 + 0.5);   // red, green, blue, alpha (fetch.md)
+                    word = b.r | (b.g << 8) | (b.b << 16) | (b.a << 24);
                 }
                 return float4(word & 255, (word >> 8) & 255, (word >> 16) & 255, word >> 24) / 255.0;
             }
