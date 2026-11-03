@@ -25,6 +25,22 @@ extern void aoe_palette_set(const PALETTEENTRY* p); // the window's palette
 extern void aoe_present(void);                      // the picture to the GPU
 extern void aoe_before_blit(void);                  // what the GPU reads of the page is done with
 
+// The script's "shot": the page and its palette as they are, kept in memory under a mark a host reads out of rvc_cpu's
+// --save-ram (tools/aoe_shots.py): the machine has no way to give a picture to the host's files
+extern "C" void aoe_shot(void) {
+    if (!primary) return;
+    static int n;
+    unsigned bytes = 32 + 1024 + primary->w * primary->h;
+    unsigned char* m = (unsigned char*) malloc(bytes);
+    if (!m) return;
+    memcpy(m, "AOESHOT!", 8);
+    int hdr[4] = {n, primary->w, primary->h, 0};
+    memcpy(m + 8, hdr, 16);
+    memcpy(m + 32, cur_pal, 1024);
+    for (int y = 0; y < primary->h; y++) memcpy(m + 1056 + y * primary->w, primary->bits + y * primary->pitch, primary->w);
+    fprintf(stderr, "aoeshot: %d at %p, %dx%d\n", n++, (void*) m, primary->w, primary->h);
+}
+
 static void dump_picture(void) {
     static const char* name; static int read;
     if (!read) { read = 1; name = getenv("AOE_DUMP"); }

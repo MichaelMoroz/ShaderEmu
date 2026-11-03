@@ -292,7 +292,7 @@ index f99cb6f1..7e582312 100644
  
                  if (frame_looped != 0) {
 diff --git a/src/basegame.cpp b/src/basegame.cpp
-index 2ec74351..695fe160 100644
+index 2ec74351..242214e7 100644
 --- a/src/basegame.cpp
 +++ b/src/basegame.cpp
 @@ -1,3 +1,5 @@
@@ -301,7 +301,7 @@ index 2ec74351..695fe160 100644
  
  #include <windows.h>
  #include "../include/program_mode.h"
-@@ -2931,12 +2933,27 @@ int RGE_Base_Game::handle_music_done(HWND wnd, UINT msg, WPARAM wparam, LPARAM l
+@@ -2931,12 +2933,28 @@ int RGE_Base_Game::handle_music_done(HWND wnd, UINT msg, WPARAM wparam, LPARAM l
      return this->action_music_done() != 0;
  }
  
@@ -325,11 +325,22 @@ index 2ec74351..695fe160 100644
      int result;
  
 +    this->aoe_frame_end();
++    aoe_world_picture();
 +
      color_log(0x32, 0x32, 4);
  
      time_a = debug_timeGetTime("C:\\msdev\\work\\age1_x1\\basegame.cpp", 4330);
-@@ -3021,6 +3038,18 @@ paint_done:
+@@ -3003,7 +3021,9 @@ paint_done:
+             panel->set_redraw(TPanel::RedrawImmediate);
+         }
+         panel = panel_system.currentPanel();
++        aoe_phase(AOE_PH_PAINT, 1);
+         panel->handle_paint();
++        aoe_phase(AOE_PH_PAINT, 0);
+         color_log(0x16, 0x5F, 1);
+     } else {
+         this->clear_window();
+@@ -3021,6 +3041,18 @@ paint_done:
  
      time_a = debug_timeGetTime("C:\\msdev\\work\\age1_x1\\basegame.cpp", 4427);
      color_log(0x32, 0x54, 4);
@@ -684,6 +695,59 @@ index 8833dbaf..08971e8b 100644
                      break;
                  }
                  ++i;
+diff --git a/src/obj_list.cpp b/src/obj_list.cpp
+index 10cb1784..4c950c4d 100644
+--- a/src/obj_list.cpp
++++ b/src/obj_list.cpp
+@@ -1,3 +1,4 @@
++#include "aoe_cores.h"
+ #include "../include/act_obj.h"
+ #include "../include/ani_obj.h"
+ #include "../include/dpl_obj.h"
+@@ -243,6 +244,7 @@ void RGE_Object_List::update() {
+             }
+         }
+         node = next;
++        aoe_world_may_give_way();   // the port: the world in slices gives way between two objects (port/aoe_world.cpp)
+     }
+ }
+ 
+diff --git a/src/pathsys.cpp b/src/pathsys.cpp
+index 6dab12a1..f658a20b 100644
+--- a/src/pathsys.cpp
++++ b/src/pathsys.cpp
+@@ -1,3 +1,4 @@
++#include "aoe_cores.h"   // the port: aoe_path_dist (port/aoe_path.c)
+ 
+ #include <math.h>
+ #include <stdio.h>
+@@ -458,7 +459,7 @@ int PathingSystem::findTilePath(
+     iterations = 0;
+     tmp = goalX - startX;
+     tmp2 = goalY - startY;
+-    dist = (int) (sqrt((double) (tmp * tmp) + (double) (tmp2 * tmp2)) * g_path_distance_scale);
++    dist = aoe_path_dist(tmp * tmp + tmp2 * tmp2);
+     dist /= 16;
+     numberIterationCap = dist * numberPathingIterations;
+     if (dist <= 10)
+@@ -486,7 +487,7 @@ int PathingSystem::findTilePath(
+ 
+         tmp = goalX - this->MGP_openPaths[1].x;
+         tmp2 = goalY - this->MGP_openPaths[1].y;
+-        currentEstimate = (int) (sqrt((double) (tmp * tmp) + (double) (tmp2 * tmp2)) * g_path_distance_scale);
++        currentEstimate = aoe_path_dist(tmp * tmp + tmp2 * tmp2);
+         if (this->MGP_closestTargetDistance == -1 || currentEstimate < this->MGP_closestTargetDistance) {
+             this->MGP_closestTargetDistance = currentEstimate;
+         }
+@@ -603,7 +604,7 @@ int PathingSystem::findTilePath(
+ 
+             tmp = temp.x - bestPathPoint.x;
+             tmp2 = temp.y - bestPathPoint.y;
+-            newCost = (int) (sqrt((double) (tmp * tmp) + (double) (tmp2 * tmp2)) * g_path_distance_scale);
++            newCost = aoe_path_dist(tmp * tmp + tmp2 * tmp2);
+             parentCost = this->MGP_costValue[bestPathPoint.x][bestPathPoint.y];
+             oldHeuristic = estimateDistanceOrdered(goalX, goalY, bestPathPoint.x, bestPathPoint.y);
+             newHeuristic = estimateDistanceOrdered(goalX, goalY, temp.x, temp.y);
 diff --git a/src/rmm_dbct.cpp b/src/rmm_dbct.cpp
 index f3e0cf3a..212817f2 100644
 --- a/src/rmm_dbct.cpp
@@ -703,10 +767,15 @@ index f3e0cf3a..212817f2 100644
      this->update_map_info(in_map);
      this->create_shared_resources();
 diff --git a/src/scr_game.cpp b/src/scr_game.cpp
-index 92412fb6..0206fa0f 100644
+index 92412fb6..a3196cc3 100644
 --- a/src/scr_game.cpp
 +++ b/src/scr_game.cpp
-@@ -167,7 +167,7 @@ TRIBE_Screen_Game::TRIBE_Screen_Game() : TScreenPanel(s_Game_Screen) {
+@@ -1,3 +1,4 @@
++#include "aoe_cores.h"
+ 
+ #include "../include/scr_game.h"
+ #include "../include/program_mode.h"
+@@ -167,7 +168,7 @@ TRIBE_Screen_Game::TRIBE_Screen_Game() : TScreenPanel(s_Game_Screen) {
          if (i < RGE_CULTURE_ROMAN) {
              this->button_bldg_pics[i] = new TShape(str, i + 0xc610);
          } else {
@@ -715,7 +784,7 @@ index 92412fb6..0206fa0f 100644
          }
          if (this->button_bldg_pics[i] == 0 || !(this->button_bldg_pics[i])->is_loaded()) {
              this->error_code = 1;
-@@ -745,6 +745,26 @@ void TRIBE_Screen_Game::set_overlapped_redraw(TPanel* redraw_panel, TPanel* call
+@@ -745,6 +746,26 @@ void TRIBE_Screen_Game::set_overlapped_redraw(TPanel* redraw_panel, TPanel* call
      }
  }
  
@@ -742,7 +811,7 @@ index 92412fb6..0206fa0f 100644
  void TRIBE_Screen_Game::set_map_buttons_redraw(TPanel::RedrawMode redraw_mode) {
      if (this->pnl_wid < 800) {
          this->button_panel[5]->set_redraw(redraw_mode);
-@@ -1083,6 +1103,66 @@ long TRIBE_Screen_Game::handle_idle() {
+@@ -1083,6 +1104,66 @@ long TRIBE_Screen_Game::handle_idle() {
      return result;
  }
  
@@ -809,15 +878,29 @@ index 92412fb6..0206fa0f 100644
  void TRIBE_Screen_Game::handle_game_update() {
      int update_counter = 0;
  
-@@ -1143,6 +1223,7 @@ void TRIBE_Screen_Game::handle_game_update() {
+@@ -1142,7 +1223,20 @@ void TRIBE_Screen_Game::handle_game_update() {
+             } else if (this->game_ended != 0) {
                  game_state = 1;
              } else {
-                 game_state = this->world->update();
+-                game_state = this->world->update();
++                aoe_phase(AOE_PH_UPDATE, 1);
++                // The port: the update in slices (port/aoe_world.cpp); while one is out the picture comes first
++                extern int aoe_world_run(RGE_Game_World* world, unsigned char* state);
++                int aoe_ended = aoe_world_run(this->world, &game_state);
++                aoe_phase(AOE_PH_UPDATE, 0);
++                if (!aoe_ended) {
++                    // a picture of the world as the slice left it: what moved in it is drawn, the rest as it was
++                    if (this->main_view->get_focus() != 0) {
++                        this->main_view->set_redraw(TPanel::RedrawNormal);
++                        rge_base_game->draw_window();
++                    }
++                    return;
++                }
 +                aoe_world_updated(this->world);
                  if (out_of_sync2 != 0) {
                      return;
                  }
-@@ -2270,11 +2351,12 @@ void TRIBE_Screen_Game::player_changed(int old_player_id, int new_player_id) {
+@@ -2270,11 +2364,12 @@ void TRIBE_Screen_Game::player_changed(int old_player_id, int new_player_id) {
                      game_pic_id = culture + 0xC631;
                  }
              } else {
@@ -833,7 +916,7 @@ index 92412fb6..0206fa0f 100644
                  }
              }
              this->game_screen_pic = new TShape(str, game_pic_id);
-@@ -3502,8 +3584,7 @@ void TRIBE_Screen_Game::draw() {
+@@ -3502,8 +3597,7 @@ void TRIBE_Screen_Game::draw() {
                      this->game_screen_pic->shape_draw(this->render_area, 0, 0, 0, 0, 0);
                      this->game_screen_pic->shape_draw(this->render_area, 0, 474, 1, 0, 0);
                  } else {
@@ -843,7 +926,7 @@ index 92412fb6..0206fa0f 100644
                  }
                  this->render_area->Unlock(s_scr_game_draw2);
              }
-@@ -3520,6 +3601,30 @@ void TRIBE_Screen_Game::draw() {
+@@ -3520,6 +3614,30 @@ void TRIBE_Screen_Game::draw() {
          this->draw_setup(flag);
          if (this->game_screen_pic) {
              if (this->render_area->Lock(s_scr_game_draw3, 1)) {
@@ -874,7 +957,7 @@ index 92412fb6..0206fa0f 100644
                  if (this->pnl_wid >= 1024 && this->pnl_hgt >= 768) {
                      this->game_screen_pic->shape_draw(this->render_area, 0, 0, 0, 0, 0);
                      this->game_screen_pic->shape_draw(this->render_area, 0, 642, 1, 0, 0);
-@@ -3527,8 +3632,14 @@ void TRIBE_Screen_Game::draw() {
+@@ -3527,8 +3645,14 @@ void TRIBE_Screen_Game::draw() {
                      this->game_screen_pic->shape_draw(this->render_area, 0, 0, 0, 0, 0);
                      this->game_screen_pic->shape_draw(this->render_area, 0, 474, 1, 0, 0);
                  } else {
@@ -1224,7 +1307,7 @@ index 016de3c5..ab44a128 100644
  
      this->idle_time = debug_timeGetTime("C:\\msdev\\work\\age1_x1\\tpnl_obj.cpp", 895);
 diff --git a/src/tribegam.cpp b/src/tribegam.cpp
-index a600fe04..1a52df67 100644
+index a600fe04..f93bbdd5 100644
 --- a/src/tribegam.cpp
 +++ b/src/tribegam.cpp
 @@ -453,6 +453,7 @@ int TRIBE_Game::setup() {
@@ -1262,6 +1345,14 @@ index a600fe04..1a52df67 100644
  
      this->disable_input();
      this->set_game_mode(RGE_GAME_MODE_NORMAL, 0);
+@@ -3133,6 +3138,7 @@ int TRIBE_Game::processCheatCode(int playerID, char* text) {
+     strcpy(str, text);
+     _mbsupr((unsigned char*) str);
+     encrypt_codes(str, encstr, 512);
++    if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: cheat? \"%s\" as \"%s\"\n", str, encstr);   // the port
+ 
+     if (this->allowCheatCodes() == 0) {
+         return 0;
 diff --git a/src/trig.cpp b/src/trig.cpp
 index f5e7b754..6036353b 100644
 --- a/src/trig.cpp

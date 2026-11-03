@@ -278,13 +278,16 @@ int _set_new_mode(int) { return 0; }
 
 // ------------------------------------------------------------------ the clock
 // A fixed step for runs that must come out the same (AOE_TICK_MS): the clock moves at each look for messages.
+unsigned long aoe_world_clock(unsigned long real);
+int aoe_world_busy(void);
+extern "C" void aoe_world_finish(void);
 static unsigned long virtual_now;
 static int tick_ms = -1;
 int aoe_clock_still;   // (the game told of a song's end: when that comes is the card's, and must not move this clock)
 extern "C" DWORD timeGetTime(void) {
     if (tick_ms < 0) { const char* e = getenv("AOE_TICK_MS"); tick_ms = e ? atoi(e) : 0; }
     if (tick_ms) return aoe_view_in_job() || aoe_clock_still ? virtual_now : virtual_now++;   // and a wait on the clock itself ends
-    return aoe_clock_ms();
+    return aoe_world_clock(aoe_clock_ms());   // (still while the world's update is out: port/aoe_world.cpp)
 }
 extern "C" DWORD GetTickCount(void) { return timeGetTime(); }
 extern "C" void Sleep(DWORD ms) { if (tick_ms > 0) virtual_now += ms; else aoe_idle(ms); }
@@ -640,6 +643,8 @@ LRESULT DispatchMessage(const MSG* m) {
     if (m->message == WM_PAINT) need_paint = 0;
     Wnd* w = (Wnd*) m->hwnd;
     if (!w) w = main_wnd;
+    // an input that changes the game waits for the world's update out to end (port/aoe_world.cpp); a move does not
+    if (m->message != WM_MOUSEMOVE && m->message != WM_PAINT && m->message != WM_TIMER && aoe_world_busy()) aoe_world_finish();
     // the keys go to an edit control with the focus, as on Windows; the game subclasses its edits (TEditPanel::sub_wnd_proc,
     // which sends a chat at Enter), so the control is known by its class, not its procedure: a char typed into the chat went
     // to the game's hotkeys before, and Enter opened the chat again

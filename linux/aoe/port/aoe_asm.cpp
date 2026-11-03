@@ -25,7 +25,7 @@ struct AsmState {
 } __attribute__((aligned(64)));
 static AsmState states[2];
 extern "C" int mcw_on_worker(void);
-static inline AsmState* asm_state(void) { return states + (mcw_on_worker() ? 1 : 0); }
+static inline AsmState* asm_state(void) { return states + aoe_view_core(); }
 #define surface_offsets A->surface_offsets_
 #define span_heads A->span_heads_
 #define span_tails A->span_tails_
