@@ -213,6 +213,11 @@ updates 200 to 350: `aoe-still-640`, `aoe-drag-scroll` (the script's `rsweep`: t
 | `aoe-still-640` | 14.1, 47.7 | 14.1, 47.7 |
 | `aoe-late-640` | 17.3, 39.1 | 15.2, 44.3 (a played game on the real clock: its frames are not the same frames) |
 
+On the card (`game_par.py --card`, the same image, one run each, lean tick, 3 November 2026): `aoe-drag-scroll` 7.9 to 10.0 frames a
+second (88.9 to 57.9 passes a frame), `aoe-still-640` 12.7 and 12.9 (45.2 and 44.6). The card gains more on the drag than the calibrated
+clock says: the model has no cost for the many short passes a copy by words left. Start Game with the settings shown (Large, Large Islands,
+4 players) to the game's screen: 93 s on the card, 88 s calibrated; it was never stuck (the clicks that missed were, "Windowed").
+
 - **A scroll by the machine's copy.** The view's worker moved the view's 200 KB by words at every scrolled frame (`OverlayMemCopy`:
   `memmove` was 20% of the worker, 106 thousand instructions a frame). The rows are one block in memory, and the machine's copy moves
   it in a pass or two from the worker; the scroll goes on 16 pixels across, not 8, so that the block is whole texels. `memmove` is gone
