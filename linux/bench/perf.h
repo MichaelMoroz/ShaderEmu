@@ -72,11 +72,15 @@ int perf_part_of(int test);
 float perf_ratio(int test, float value);
 float perf_score(const float *value, float *parts, int *counted);
 /* other machines' scores of the same tests, beside a run's */
-#define PERF_MACHINES 3
+#define PERF_MACHINES 4
 struct perf_machine { const char *name, *note; int column; };
 extern const struct perf_machine perf_machines[PERF_MACHINES];
 float perf_machine_score(int m, float *parts, int *counted);
 /* the lanes the field had in the last run of `field` (0: none, as on rvc_cpu) */
 extern int perf_field_lanes;
+/* 1: results timed by the host's clock (rvc_cpu without --pass-model), perf_host_name its processor */
+extern int perf_host_clock;
+extern char perf_host_name[52];
+void perf_clock_init(void);
 
 #endif

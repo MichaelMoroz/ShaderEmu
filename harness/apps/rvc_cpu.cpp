@@ -697,8 +697,34 @@ static void sbi_call(Core& c) {
 
 static const u32 SSTATUS_MASK = 0x000de162;
 
+// The host's own clock and processor for a program that measures the host, not the machine's model of time
+// (nxperf, docs/apps/bench.md "The host's clock"): CSRs 0x8c0 and 0x8c1 the host's nanoseconds since the run
+// began (0x8c0 latches them, 0x8c1 is the latched high word), 0x8c4 to 0x8cf the processor's brand string (CPUID
+// 0x80000002-4), four bytes a register. The tick reads these as 0: there is no host clock there.
+static const auto host_t0 = std::chrono::steady_clock::now();   // (at the process's start: never 0 when asked)
+static uint64_t host_ns_now() {
+    return 1 + (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - host_t0).count();
+}
+static u32 host_brand_word(int k) {
+    static int brand[12];
+    static bool known = false;
+    if (!known) {
+        for (int i = 0; i < 3; ++i) __cpuid(brand + 4 * i, (int)(0x80000002u + i));
+        known = true;
+    }
+    return (u32)brand[k];
+}
+
 static bool csr_read(Core& c, u32 n, u32& v) {
+    static thread_local uint64_t host_latched;
     switch (n) {
+    case 0x8c0: {   // (0 under --pass-model, whose clock is the card's, and with RVC_HOST_CLOCK=0)
+        static const bool off = getenv("RVC_HOST_CLOCK") && atoi(getenv("RVC_HOST_CLOCK")) == 0;
+        host_latched = opt.passModel || off ? 0 : host_ns_now(); v = (u32)host_latched; return true;
+    }
+    case 0x8c1: v = (u32)(host_latched >> 32); return true;
+    case 0x8c4: case 0x8c5: case 0x8c6: case 0x8c7: case 0x8c8: case 0x8c9:
+    case 0x8ca: case 0x8cb: case 0x8cc: case 0x8cd: case 0x8ce: case 0x8cf: v = host_brand_word((int)(n - 0x8c4)); return true;
     case 0x001: v = c.fcsr & 0x1f; return true;
     case 0x002: v = (c.fcsr >> 5) & 7; return true;
     case 0x003: v = c.fcsr & 0xff; return true;

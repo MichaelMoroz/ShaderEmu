@@ -222,6 +222,16 @@ other run splits otherwise. Every check held in both, and in a run under `RVC_RA
   fill rate is the card's to say. A clear and a swap are 1,208 instructions, a small triangle from a
   vertex array 56, a textured quad by `seglQuad` 279 (with its clear and swap shared out).
 
+## The host's clock
+
+`rvc_cpu` gives a program the host's own clock and processor: CSRs 0x8c0 and 0x8c1 are the host's nanoseconds since
+the run began (reading 0x8c0 latches them, 0x8c1 is the latched high word), 0x8c4 to 0x8cf the processor's CPUID brand
+string, four bytes each. nxperf times its tests by that clock where it is not 0 (`perf_now_ns` in `perf_tests.c`), so
+on `rvc_cpu` a result is the host's real speed, and says `the host's clock` and the processor on its first lines; the
+score page names `rvc_cpu on` the processor. Under `--pass-model` 0x8c0 reads 0 (the card's time is the model's), and
+with `RVC_HOST_CLOCK=0`; the tick reads them as 0 too, so on the card and under the model the guest's clock times them
+as before. `NXPERF_CLOCK=guest` takes the guest's clock anyway. The card's name is not passed to the guest.
+
 ## The score
 
 Each result is divided by the reference machine's (larger is better; a time an operation, `ns/load`, the
@@ -259,7 +269,8 @@ the same arithmetic, 3 November 2026.
 | the card model (reference) | 1,000 | 1,000 | 1,000 | 1,000 | 1,000 | 1,000 | 1,000 | 1,000 | 1,000 |
 | 486DX-33 (1990, estimated) | 761 | 1,571 | 327 | 1,585 | 517 | - | 780 | 588 | - |
 | RTX 3090 (the card, 255 workers) | 1,175 | 1,064 | 762 | 649 | 1,324 | 8,904 | 858 | 990 | 691 |
-| rvc_cpu at full speed | 822 | 596 | 603 | 1,016 | 1,189 | 774 | 641 | 667 | 1,446 |
+| rvc_cpu, one thread (Ryzen 9 5900X, the host's clock) | 23,109 | 55,021 | 28,896 | 42,979 | 19,093 | 3,928 | 28,315 | 8,501 | 65,921 |
+| rvc_cpu, 24 threads (the same) | 33,244 | 55,959 | 29,833 | 45,328 | 36,687 | 12,913 | 33,478 | 18,837 | 65,992 |
 
 - **The card**: `rvc_harness --d3d11` through `tools\gpu_queue.ps1` on the RTX 3090, `nano-X -p & sleep 2;
   nxperf --cli`, 255 workers, the field 3,968 lanes, every check held. Against the model: the first core 1 to
@@ -267,11 +278,12 @@ the same arithmetic, 3 November 2026.
   `shade` 16.4 Mpx/s, 5 times), and the machine's copy and fill far slower: `memcpy` 5.82 MB/s, `memset` 7.41
   and `gpu-copy` 5.76 against the model's 187, 749 and 187, about the speed of a loop of words. The model
   times a copy as a pass's work; the harness's copies are not that fast: not looked into here.
-- **rvc_cpu at full speed**: plain `rvc_cpu`, no pass model, every host thread. Its clock is the first core's
-  instructions (a pass is a fixed number of them) and the workers' time is free, so its results hardly move with
-  the threads (821 in test_all's run on a few threads, 822 in one on all 24): it is not the
-  host's speed. Its first core is slower than the model's (a pass costs more instructions than the model's
-  pass costs time), its copies and fills much faster (`memcpy` 999 MB/s), the workers free.
+- **rvc_cpu**: plain `rvc_cpu` (no pass model) on an AMD Ryzen 9 5900X, `RVC_THREADS=1` and `=24`, timed by the
+  host's clock ("The host's clock"). One thread: the first core 262 Mop/s in `int-alu` at 1.10 i/op, 288 million
+  instructions a second, 52 times the model's; 24 threads: the same first core, the workers' `mc-255` 625 Mop/s
+  against one thread's 61 (10.2 times), `gemm-mc` 601 Mflop/s. Before the host's clock nxperf timed rvc_cpu by its
+  guest clock, a pass a fixed number of the first core's instructions and the workers free: 822, the same at any
+  number of threads, which measured that model of time and not the host.
 - **486DX-33**: an Intel 486DX at 33 MHz with an 8 KB cache inside, 256 KB outside and 70 ns memory, as most
   were sold in 1990-1991. One number is published: LINPACK at 0.8 Mflop/s, the best on such a machine (33 MHz
   486DX, 256 KB cache, 70 ns memory, the Salford compiler; NA Digest volume 92, issue 25, netlib.org

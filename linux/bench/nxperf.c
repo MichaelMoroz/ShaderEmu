@@ -28,7 +28,7 @@
 #include "ui_single.h"
 
 #define WIDTH 620
-#define HEIGHT 430
+#define HEIGHT 450
 #define TOP 46
 #define ROW 19
 #define LEFT 144
@@ -44,7 +44,8 @@ static int workers_wanted = 255;
 
 /* ---------------------------------------------------------------- the score */
 
-/* a score as kept: the whole, the parts, when, with how many workers and lanes in the field (-1: not known) */
+/* a score as kept: the whole, the parts, when, with how many workers and lanes in the field (-1: not known, -2:
+ * timed by the host's clock: rvc_cpu, docs/apps/bench.md "The host's clock") */
 struct kept_score { float all, parts[PERF_PARTS]; long when; int workers, lanes, have; };
 static struct kept_score this_run, last_run, best_run;
 
@@ -55,7 +56,7 @@ static void score_of_results(struct kept_score *k, int workers)
 
 	for (i = 0; i < perf_count && i < 128; i++) v[i] = results[i].have && results[i].ok > 0 ? results[i].value : 0;
 	k->all = perf_score(v, k->parts, NULL);
-	k->when = (long)time(NULL), k->workers = workers, k->lanes = perf_field_lanes, k->have = k->all > 0;
+	k->when = (long)time(NULL), k->workers = workers, k->lanes = perf_host_clock > 0 ? -2 : perf_field_lanes, k->have = k->all > 0;
 }
 
 static void score_read(const char *key, struct kept_score *k)
@@ -91,7 +92,9 @@ static void score_keep(void)
 /* what the machine was: the field has lanes on the card's lean tick only */
 static void machine_text(char *to, int room, const struct kept_score *k)
 {
-	if (k->lanes > 0) snprintf(to, (size_t)room, "the card (%d lanes in the field), %d workers", k->lanes, k->workers);
+	if (k->lanes == -2)
+		snprintf(to, (size_t)room, "rvc_cpu on %s, by its clock, %d workers", perf_host_name[0] ? perf_host_name : "the host", k->workers);
+	else if (k->lanes > 0) snprintf(to, (size_t)room, "the card (%d lanes in the field), %d workers", k->lanes, k->workers);
 	else if (k->lanes == 0) snprintf(to, (size_t)room, "no lanes: rvc_cpu or a tick without them, %d workers", k->workers);
 	else snprintf(to, (size_t)room, "%d workers (the field not run)", k->workers);
 }
@@ -252,7 +255,10 @@ static int cli(int argc, char **argv, int save)
 		perf_gpu_init(window);
 	}
 	if (wants_workers(list, n)) workers_open();
-	printf("nxperf: %d tests, %d workers, GPU %s\n", n, perf_workers, perf_gpu_ready ? "in a window" : "none");
+	perf_clock_init();
+	printf("nxperf: %d tests, %d workers, GPU %s, %s\n", n, perf_workers, perf_gpu_ready ? "in a window" : "none",
+	       perf_host_clock ? "the host's clock" : "the guest's clock");
+	if (perf_host_clock) printf("nxperf: host %s\n", perf_host_name);
 	fflush(stdout);
 	for (k = 0; k < n; k++) {
 		struct result *s;
@@ -393,7 +399,7 @@ static void draw_rows(void)
 
 #define PART_X 214
 #define PART_Y (TOP + 6)
-#define PART_H 30
+#define PART_H 28
 #define PART_BAR 220
 #define TABLE_Y (PART_Y + PERF_PARTS * PART_H + 10)
 
@@ -474,7 +480,7 @@ static void draw_score(void)
 		ui_text(window, PART_X + 110 + PART_BAR, yy + 7, text, -1, BLACK, 0);
 	}
 	/* the machines side by side: this run, then the others of perf_machines */
-	ui_fill(window, 8, TABLE_Y, WIDTH - 16, 6 * 16 + 4, WHITE);
+	ui_fill(window, 8, TABLE_Y, WIDTH - 16, 7 * 16 + 6, WHITE);
 	ui_text(window, 12, TABLE_Y + 3, "machine", -1, UI_SHADOW, 0);
 	ui_text(window, 112, TABLE_Y + 3, "score", -1, UI_SHADOW, 0);
 	for (p = 0; p < PERF_PARTS; p++) {
@@ -501,7 +507,7 @@ static void draw_score(void)
 			ui_text(window, 162 + 56 * p, yy, text, -1, BLACK, 1);
 		}
 	}
-	ui_text(window, 12, TABLE_Y + 20 + 4 * 16 + 2, "486DX-33: estimates from published numbers (docs/apps/bench.md); - is not measured there", -1, UI_SHADOW, 0);
+	ui_text(window, 12, TABLE_Y + 20 + 5 * 16 + 2, "486DX-33: estimates from published numbers (docs/apps/bench.md); - is not measured there", -1, UI_SHADOW, 0);
 }
 
 /* ---- every result: three columns of name, value, unit and check (a click shows the test's group) */
@@ -769,6 +775,7 @@ static int window_main(void)
 	ui_init();
 	if (ui_single_instance()) return 0;
 	load_results();
+	perf_clock_init();
 	big_font = GrCreateFontEx(access("/usr/share/font-sans-b-32.sef", R_OK) == 0 ? "/usr/share/font-sans-b-32.sef" : GR_FONT_SYSTEM_VAR,
 				  32, 0, NULL);
 	window = GrNewWindowEx(UI_FIXED, "Benchmark", GR_ROOT_WINDOW_ID, -1, -1, WIDTH, HEIGHT, UI_FACE);

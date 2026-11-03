@@ -401,11 +401,12 @@ uint csr_read(uint n) {
            n == 0xc01 ? now_lo : n == 0xb00 || n == 0xc00 ? clock : n == 0xf14 ? core :
            n == 0x0be ? _PlayerID : n == 0x0b8 ? lanes_csr() : n == 0x0ba ? lane_left() :
            n == 0x0b9 ? (_LaneField != 0 ? (uint)FIELD_MAX : 0) :   // the field's lanes, where the host draws it
+           n == 0x8b0 ? (core == 0 ? 1u : 0u) :   // a program's copy is worth asking for on the first core (docs/machine/gpu.md)
            0;
 }
 void csr_write(uint n, uint v) {
     // (only what interrupts see, and the copy and fill, which stall: sscratch, sepc and the rest leave the next instruction to the fast loop)
-    if ((n & 0xfff) == 0x100 || n == 0x300 || (n & 0xdff) == 0x104 || (n & 0xdff) == 0x144 || n == 0x0b0) quiet = false;
+    if ((n & 0xfff) == 0x100 || n == 0x300 || (n & 0xdff) == 0x104 || (n & 0xdff) == 0x144 || (n & 0x7ff) == 0x0b0) quiet = false;
     if (n - 1 < 3) fcsr = n == 1 ? (fcsr & ~0x1fu) | (v & 0x1f) : n == 2 ? (fcsr & ~0xe0u) | ((v & 7) << 5) : v & 0xff;
     if (n == 0x100) mstatus = (mstatus & ~0xde162u) | (v & 0xde162);
     if (n == 0x300) mstatus = v;
@@ -417,10 +418,11 @@ void csr_write(uint n, uint v) {
     if (n == 0x141) sepc = v;
     if (n == 0x142) scause = v;
     if (n == 0x143) stval = v;
-    if (n == 0x0b1) msrc = v;
-    if (n == 0x0b2) mdst = v;
-    if (n == 0x0b3) mn = v;
-    if (n == 0x0b0) stall = v == 2 ? STALL_FILL : STALL_COPY;   // the kernel's copy and fill: the commit makes them
+    // the kernel's copy and fill (0x0b0-0x0b3), and a program's in the custom user range (0x8b0-0x8b3): the commit makes them
+    if ((n & 0x7ff) == 0x0b1) msrc = v;
+    if ((n & 0x7ff) == 0x0b2) mdst = v;
+    if ((n & 0x7ff) == 0x0b3) mn = v;
+    if ((n & 0x7ff) == 0x0b0) stall = v == 2 ? STALL_FILL : STALL_COPY;
     if (n == 0x0b8 && core != 0) { lane_word = v; stall = lane_mode ? STALL_LANE_FAIL : STALL_LANES_START; }   // a lanes job: v its descriptor
 }
 bool timer_due() { return (tcmp_lo | tcmp_hi) != 0 && (now_hi > tcmp_hi || (now_hi == tcmp_hi && now_lo >= tcmp_lo)); }
