@@ -73,7 +73,7 @@ if [ "${OPENCNC3D_TREE:-}" != keep ]; then
     git -C "$VC" add -A
     [ ! -s "$HERE/opencnc3d.patch" ] || git -C "$VC" apply --exclude='opencnc3d/*' "$HERE/opencnc3d.patch"
 fi
-cp "$HERE/brain_shaderemu.cpp" "$VC/tiberiandawn/"
+cp "$HERE/brain_shaderemu.cpp" "$HERE/se_dump.h" "$VC/tiberiandawn/"
 # built from a copy in which a file keeps its time unless its bytes change
 mkdir -p "$SRC" "$TOP/game"
 rsync -rc --delete --exclude .git "$VC/" "$SRC/"

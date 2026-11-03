@@ -33,7 +33,7 @@ cmp -s "$G/opencnc3d_build.h.new" "$G/opencnc3d_build.h" && rm "$G/opencnc3d_bui
 HDR=$TOP/brain/vanilla/tiberiandawn
 INC="-I$HERE/compat -I$S/SDL2-$SDLV/include -I$OCNC/game -I$OCNC/menu -I$OCNC/video -I$OCNC/audio -I$OCNC/app -I$HDR \
      -I$DEPS/include -I$G -I$S/curl/include"
-CXXF="-std=c++14 -O2 -fms-extensions -fpermissive -w -include $HERE/msvc_gcc.h -include $G/opencnc3d_build.h"
+CXXF="-std=c++14 -O2 -DSHADEREMU_OCNC -fms-extensions -fpermissive -w -include $HERE/msvc_gcc.h -include $G/opencnc3d_build.h"
 cd "$G"
 # (an object is made again when its source, a header of ours or this script is newer)
 newer() { [ ! -f "$2" ] || [ "$1" -nt "$2" ] || [ "$HERE/game.sh" -nt "$2" ]; }
@@ -62,15 +62,17 @@ cxx_one "$OCNC/app/opencnc3d.cpp" opencnc3d.o
 # ours
 ottd-cc -O2 -w -I$S/SDL2-$SDLV/include -I$MW/src/include -c "$HERE/sdl_nanox.c" -o ours/sdl_nanox.o
 ottd-cc -O2 -w -c "$HERE/brain_link.c" -o ours/brain_link.o
+ottd-cc -O2 -w -c "$HERE/fastmath.c" -o ours/fastmath.o
 ottd-cc -O2 -w -DSEGL_FLOAT -DMAX_TEXTURES=64 -idirafter $P/linux/include -I$MW/src/include -I$P/linux -I$REPO/linux/quake3 \
     -c "$REPO/linux/quake3/gpu_shaderemu.c" -o ours/gpu_shaderemu.o
 ottd-cc -O2 -w -I$REPO/linux/quake3 -I$P/mc -c "$HERE/gl_ocnc.c" -o ours/gl_ocnc.o
 ottd-cc -O2 -fno-common -fdata-sections -w -I$P/mc -c "$P/mc/mcw.c" -o ours/mcw.o
 ottd-cc -O2 -fno-common -fdata-sections -w -I$P/mc -c "$P/mc/mcwx.c" -o ours/mcwx.o
 
-# the program's gl calls renamed for gl_ocnc.c (gles.c, under the shim, has glX of its own)
+# the program's gl calls renamed for gl_ocnc.c (gles.c, under the shim, has glX of its own), and its sinf, cosf
+# and sincosf for fastmath.c's (musl reduces a large argument in soft doubles)
 for o in *.o; do
-    syms=$(riscv32-linux-nm -u "$o" | awk '$2 ~ /^gl[A-Z]/ {print "--redefine-sym " $2 "=ocnc_" $2}')
+    syms=$(riscv32-linux-nm -u "$o" | awk '$2 ~ /^(gl[A-Z]|sinf$|cosf$|sincosf$)/ {print "--redefine-sym " $2 "=ocnc_" $2}')
     riscv32-linux-objcopy $syms "$o" "renamed/$o"
 done
 # brain_link.c's names are weak, and a weak reference pulls nothing out of an archive: each the
