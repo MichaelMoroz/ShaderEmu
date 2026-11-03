@@ -286,6 +286,14 @@ CASES = [
          'nxkey drag:$((OX+220)),$((OY+40)):$((OX+420)),$((OY+240));sleep 4;killall aoe.bin;else echo AOE-NO-DATA; fi', wall=300,
          has=[r'^(aoeinput: order 425 110 1 0|AOE-NO-DATA)', r'^(aoeinput: drag -200 -100 0 625|AOE-NO-DATA)', r'^(aoeinput: order 380 150 1 0|AOE-NO-DATA)', r'^(aoeinput: box 220 40 420 240|AOE-NO-DATA)',
               r'^(aoeview: (\d+ \d+) selected 1\s+(?:aoe: step.*\s+)?aoeview: \2 selected 1|AOE-NO-DATA)']),
+    # the map dragged with the GPU's lists taken back late, as in a world (RVC_DEVICE_EVERY=6), the world in slices on the real clock
+    # (docs/games/aoe.md, "Scrolls checked"): at each check the picture the view made by its scrolls against one drawn whole from the
+    # same game, not a pixel apart; and the scroll's machine copy made by the first core
+    case('aoe-scroll-check', 'games aoe', AOE_UNPACK + X + 'if [ -f /tmp/aoe/Empires.dat ]; then AOE_DEBUG=1 AOE_SEED=1 AOE_SCRIPT="' + AOE_640 +
+         ';1000 check;1000 rsweep 400 200;1500 check;1500 check;1500 check;1500 check;1500 check;22000 check;2000 quit" aoe 2>&1 | grep -aE "aoecheck|copy"; '
+         'else echo AOE-NO-DATA; fi', wall=420, env={'RVC_DEVICE_EVERY': '6'},
+         has=[r"^(aoe: the machine's copy by the first core|AOE-NO-DATA)", r'^(aoecheck: 0 pixels differ \(first at 0,20\), 0 of 7 checks|AOE-NO-DATA)'],
+         never=[r'aoecheck: [1-9]']),
     # its window resized ("Windowed", 3 November 2026): the picture is stretched over it, and a click where a button is drawn lands on it,
     # maximised (Single Player at the main menu's 320,196) and tiled at the right half (Random Map at 320,138), by the window's size now
     case('aoe-resize', 'games aoe desktop', AOE_UNPACK + 'nx; sleep 3; ' + 'if [ -f /tmp/aoe/Empires.dat ]; then AOE_DEBUG=1 AOE_SCRIPT="3000 ready" aoe & '

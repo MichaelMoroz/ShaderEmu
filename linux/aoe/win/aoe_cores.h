@@ -54,6 +54,8 @@ static inline int aoe_view_core(void) {
     __asm__("mv %0, sp" : "=r"(sp));
     return sp - aoe_view_stack.lo < aoe_view_stack.hi - aoe_view_stack.lo;
 }
+// The machine's copy of a scroll, made by the first core: 0 when there is none (then by words)
+int aoe_view_first_copy(const void* src, void* dst, unsigned bytes);
 #define fog_next_shape (aoe_core_words[aoe_view_core()].fog)
 #define SDI_Capture_Info (aoe_core_words[aoe_view_core()].capture)
 #ifdef __cplusplus

@@ -319,6 +319,30 @@ What bounds it now, and why five times was not reached:
 A picture for checking: the script's `shot` step keeps the page and its palette in memory under a mark, and `rvc_cpu --save-ram FILE`
 at the end lets a host read them out (marked `AOESHOT!`, then the number, width and height, 1,024 bytes of palette and the pixels).
 
+### Scrolls checked (4 November 2026)
+
+A report from the world after the round above: scrolling "completely broken", the view drawn shifted and torn (black where terrain
+should be, its edges stair steps), and the caption's 22 frames a second where the picture changed far less often.
+
+- **The scroll's machine copy is the first core's.** The view's job, on a worker, asked for the machine's copy of its rows itself
+  (`OverlayMemCopy`, since the round before). CSR 0x8b0 reads 1 on the first core and 0 on a worker (docs/machine/gpu.md, "A program's
+  copy"): a program asks only where it reads 1. On `rvc_cpu` and under `rvc_harness --cpu` a worker's copy is made all the same, so no
+  run here showed it; a copy not made leaves the old rows where they were under the strips drawn for the new place, which is the
+  picture reported. Now the job hands the copy to the first core (`aoe_view_first_copy`): it writes the request into a texel of its own and
+  ends its passes until the first core, waiting for the walk or at the join, has made it. The first core reads 0x8b0 at the first view;
+  where it reads 0 the scroll goes by words. On the calibrated clock the drag is as fast as before (15.8 pictures a second, 16.7 before).
+- **The caption counts pictures.** With the world in slices a present can show nothing new (a slice with no view drawn). Those are
+  not frames for the caption now (`seglNotAFrame`), while the view draws others; a menu's presents still count.
+- **The check.** The script's `check` step finishes the world's update, draws a picture as the view makes it (its scrolls, its parts
+  drawn again) and then one with every tile drawn again, from the same game, and compares the view's rows: `aoecheck: N pixels differ`,
+  and both pictures as shots when they do. `test_all.py aoe-scroll-check` drags the map 20 s by the right button with the GPU's lists
+  taken back every sixth pass (`RVC_DEVICE_EVERY=6`, as in a world) and the world in slices: 7 checks, 0 pixels, and the copy by the first
+  core. `AOE_SCROLL_COPY=words AOE_WORLD=whole` gives the same 0. `RVC_RACES` with `RVC_RACES_NEAR=4`: 0 undone.
+
+What only the world can confirm: that the copy a worker asked for was the one not made there (no harness here makes a worker's copy
+otherwise), and the picture while dragging with a hand. The drag by the machine's pointer words (`--pointer-button`) logged no press in
+two runs under `nano-X -p` and was not followed further.
+
 ## The view on a worker
 
 `RGE_View::draw`, the walk and the raster, is one job on a worker (`port/aoe_view.cpp`). The first core draws the other

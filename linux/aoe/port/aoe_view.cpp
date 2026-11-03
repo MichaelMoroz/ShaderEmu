@@ -111,7 +111,9 @@ static TDrawArea* area_copy;
 static TDrawSystem* system_copy;
 static TDrawArea* area_real;
 
+static int first_copy_ok = -1;   // the first core's CSR 0x8b0: 1 when the machine has the copy (aoe_view_first_copy)
 struct AoeViewStack aoe_view_stack;
+
 static void job(uint32_t view, uint32_t) {
     job_counts.start = my_instructions();
     // the stack this job runs on (aoe_cores.h, aoe_view_core): noted once, the same worker's each time
@@ -156,6 +158,7 @@ void aoe_view_post(RGE_View* view) {
     view->TPanel::render_area = area_copy;
     view->cur_render_area = area_copy;
 
+    if (first_copy_ok < 0) { unsigned v; __asm__ volatile("csrr %0, 0x8b0" : "=r"(v)); first_copy_ok = v == 1; if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: the machine's copy %s\n", first_copy_ok ? "by the first core" : "none: by words"); }
     aoe_asm_for_worker();
     walked.v = 0;
     st.view = view;
@@ -170,11 +173,34 @@ void aoe_view_post(RGE_View* view) {
 }
 
 extern void aoe_lat(int kind, int a, int b);
+// The scroll's machine copy: asked of the first core by the view's job, since only that core may ask for one (CSR 0x8b0 reads
+// 0 on a worker). A worker's request on the card went unmade, and the view's rows stayed where they were under the new strips.
+static struct { const void* volatile src; void* volatile dst; volatile unsigned n, state; } copy_ask __attribute__((aligned(16)));
+static void copy_now(const void* src, void* dst, unsigned n) {
+    __asm__ volatile("csrw 0x8b1, %0\n csrw 0x8b2, %1\n csrw 0x8b3, %2\n csrw 0x8b0, %3" :: "r"(src), "r"(dst), "r"(n), "r"(1) : "memory");
+}
+static void copy_serve(void) {
+    if (copy_ask.state != 1) return;
+    copy_now(copy_ask.src, copy_ask.dst, copy_ask.n);
+    copy_ask.state = 2;
+}
+int aoe_view_first_copy(const void* src, void* dst, unsigned bytes) {
+    if (first_copy_ok <= 0) return 0;
+    if (!aoe_view_core()) { copy_now(src, dst, bytes); return 1; }
+    copy_ask.src = src; copy_ask.dst = dst; copy_ask.n = bytes;
+    __asm__ volatile("" ::: "memory");
+    copy_ask.state = 1;
+    while (copy_ask.state != 2) __asm__ volatile(".word 0x0000100f");   // (mc_end_pass: the first core makes it)
+    copy_ask.state = 0;
+    return 1;
+}
+
 void aoe_view_wait_walked(void) {
     if (!st.busy) return;
     aoe_lat('w', 0, 0);
     aoe_phase(AOE_PH_WALKED, 1);
     while (!walked.v) {
+        copy_serve();
         if (mcw_done(1)) break;
         mcw_rest();
     }
@@ -186,11 +212,26 @@ void aoe_view_join(void) {
     if (!st.busy) return;
     aoe_lat('j', 0, 0);
     aoe_phase(AOE_PH_JOIN, 1);
-    if (st.workers > 0) mcw_wait(1);
+    if (st.workers > 0) while (!mcw_done(1)) { copy_serve(); mcw_rest(); }   // (a scroll's copy the job asks for is made here too)
     aoe_phase(AOE_PH_JOIN, 0);
     aoe_lat('k', (job_counts.walked_at - job_counts.start) / 1000, (job_counts.end - job_counts.walked_at) / 1000);
     ph.walk += job_counts.walked_at - job_counts.start; ph.raster += job_counts.end - job_counts.walked_at; ph.jobs++;
     st.busy = 0;
+}
+
+// The script's "check" (host.cpp): the world's update run to its end, then a picture as the view draws it now (whole: every tile
+// again, as after a jump), joined
+extern void aoe_draw_window_now(void);
+void aoe_view_check_draw(int whole) {
+    aoe_world_finish();
+    aoe_view_join();
+    RGE_View* view = st.view;
+    if (!view) return;
+    if (whole) view->render_terrain_mode = 0;
+    view->set_redraw(TPanel::RedrawNormal);
+    aoe_draw_window_now();
+    aoe_view_join();
+    aoe_view_deferred();   // (the panels over the view, as the frame's end draws them)
 }
 
 // Panels over the view
