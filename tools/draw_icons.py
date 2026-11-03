@@ -3,7 +3,7 @@ tools/make_icons.py brings down): glxgears.png, the demo's three gears in its ow
 nxeyes.png, two eyes looking the same way, halflife.png, an orange lambda in a ring, and jk2.png, a blue
 light sword drawn up the diagonal (nothing of Jedi Outcast's own); and the programs and games written for
 the machine, each a picture of what it shows (DRAWN below: nxtetris, nxmine, nxpinball, nxsolitaire, nxgame,
-nxphys, nxray, nxpath, imdemo, nxide, nes), where the icon sets gave them another game's picture or a
+nxphys, nxray, nxpath, imdemo, nxide, nes, nxperf), where the icon sets gave them another game's picture or a
 joystick.
 
     python tools/draw_icons.py [NAME ...]      (names given: only those)
@@ -390,10 +390,28 @@ def framed_picture():
     return picture
 
 
+def gauge():
+    """A speed gauge, green to red, its needle high, over three bars of results (nxperf)."""
+    picture, draw = canvas()
+    u = UP
+    cx, cy, r = 32 * u, 34 * u, 28 * u
+    draw.pieslice((cx - r, cy - r, cx + r, cy + r), 180, 360, fill=(235, 235, 235, 255), outline=INK, width=2 * u)
+    for a0, colour in ((180, (60, 180, 70)), (240, (240, 200, 40)), (300, (220, 60, 50))):
+        draw.arc((cx - r + 4 * u, cy - r + 4 * u, cx + r - 4 * u, cy + r - 4 * u), a0, a0 + 60, fill=colour + (255,), width=6 * u)
+    a = math.radians(-35)
+    draw.line((cx, cy, cx + 22 * u * math.cos(a), cy + 22 * u * math.sin(a)), fill=INK, width=3 * u)
+    draw.ellipse((cx - 4 * u, cy - 4 * u, cx + 4 * u, cy + 4 * u), fill=INK)
+    for k, (w, colour) in enumerate(((44, (60, 140, 220)), (30, (60, 140, 220)), (54, (60, 140, 220)))):
+        y = 42 + 7 * k
+        draw.rectangle((5 * u, y * u, (5 + w) * u, (y + 5) * u), fill=colour + (255,), outline=INK, width=u)
+    return picture
+
+
 DRAWN = (('glxgears', gears), ('nxeyes', eyes), ('halflife', lambda_ring), ('jk2', light_sword),
          ('nxtetris', tetris), ('nxmine', mine), ('nxpinball', pinball), ('nxgame', network_game), ('nxphys', physics),
          ('nxray', ray_sphere), ('nxpath', teapot), ('imdemo', imgui_window), ('nxsolitaire', solitaire), ('nxide', ide),
-         ('nes', cartridge), ('nxplay', music), ('nxvideo', film), ('nxview', framed_picture))
+         ('nes', cartridge), ('nxplay', music), ('nxvideo', film), ('nxview', framed_picture),
+         ('nxperf', gauge))
 
 if __name__ == '__main__':
     import sys

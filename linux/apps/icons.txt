@@ -43,6 +43,7 @@ imdemo                  imdemo
 nxray                   nxray
 nxpath                  nxpath
 nxphys                  nxphys
+nxperf                  nxperf
 nxide                   nxide
 example                 mimes/text-x-csrc
 restart                 apps/system-restart
