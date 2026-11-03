@@ -286,6 +286,13 @@ CASES = [
          'nxkey drag:$((OX+220)),$((OY+40)):$((OX+420)),$((OY+240));sleep 4;killall aoe.bin;else echo AOE-NO-DATA; fi', wall=300,
          has=[r'^(aoeinput: order 425 110 1 0|AOE-NO-DATA)', r'^(aoeinput: drag -200 -100 0 625|AOE-NO-DATA)', r'^(aoeinput: order 380 150 1 0|AOE-NO-DATA)', r'^(aoeinput: box 220 40 420 240|AOE-NO-DATA)',
               r'^(aoeview: (\d+ \d+) selected 1\s+(?:aoe: step.*\s+)?aoeview: \2 selected 1|AOE-NO-DATA)']),
+    # its window resized ("Windowed", 3 November 2026): the picture is stretched over it, and a click where a button is drawn lands on it,
+    # maximised (Single Player at the main menu's 320,196) and tiled at the right half (Random Map at 320,138), by the window's size now
+    case('aoe-resize', 'games aoe desktop', AOE_UNPACK + 'nx; sleep 3; ' + 'if [ -f /tmp/aoe/Empires.dat ]; then AOE_DEBUG=1 AOE_SCRIPT="3000 ready" aoe & '
+         'while [ ! -e /tmp/aoe-size ];do sleep 1;done;sleep 2;nxkey ctrl+alt+up;sleep 3;read OX OY W H </tmp/aoe-size;echo SIZE $W $H;'
+         'nxkey $((OX+320*W/640)),$((OY+196*H/480));sleep 8;nxkey ctrl+alt+right;sleep 3;read OX OY W H </tmp/aoe-size;echo SIZE $W $H;'
+         'nxkey $((OX+320*W/640)),$((OY+138*H/480));sleep 8;killall aoe.bin;else echo AOE-NO-DATA; fi', wall=300,
+         has=[r'^(SIZE (?!640 480)\d+ \d+|AOE-NO-DATA)', r'^(aoe: panel Single Player Menu|AOE-NO-DATA)', r'^(aoe: panel MP Setup Screen|AOE-NO-DATA)']),
     # the trial's first start on the desktop (docs/system/install.md): its EULA read out of the installer in a window, Accept refused until
     # the text has been scrolled to its end, then accepted by Tab and Enter, the bar to the last of 105 files, and aoeprep's strings and faces
     case('aoe-install', 'games aoe desktop', X + 'if [ -f /usr/share/aoe/MSAoE.exe ]; then (sleep 6; nxkey a; sleep 1; nxkey pagedown; sleep 1; nxkey end; '
@@ -293,7 +300,7 @@ CASES = [
          has=[r'^(cabinst: licence eula\.txt: 5065 bytes, CRC-32 b81b406b|AOE-NO-DATA)', r'^(cabinst: licence shown, \d+ lines|AOE-NO-DATA)',
               r'^(cabinst: accept refused: the licence is not read to its end|AOE-NO-DATA)', r'^(cabinst: licence at line \d+ of \d+, its end|AOE-NO-DATA)',
               r'^(cabinst: accepted|AOE-NO-DATA)', r'^(cabinst: round 6: 34085752 of 34085752 bytes of the files, 105 of 105 whole|AOE-NO-DATA)',
-              r'^(aoeprep: 2276 strings .* 174 fonts|AOE-NO-DATA)', r'^(INSTALL=0|AOE-NO-DATA)', r'^(108|AOE-NO-DATA)']),
+              r'^(aoeprep: 2276 strings .* 174 fonts|AOE-NO-DATA)', r"^(aoeprep: 1 menus' pictures brought to 640 x 480|AOE-NO-DATA)", r'^(INSTALL=0|AOE-NO-DATA)', r'^(109|AOE-NO-DATA)']),
     # Jedi Outcast's demo, on images made with its installer only (docs/games/jk2.md, "Checking it"): its start played by a script of
     # keys from the menu (new game, a walk, a turn, a shot, the death and the autosave's load), and the build computer's sums;
     # no window, so the picture is nullgl's and the sound mixed into nothing (the card's pace would move the sums)

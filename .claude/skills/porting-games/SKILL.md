@@ -183,7 +183,11 @@ The canonical 2D driver is `linux/openttd/shaderemu_v.cpp` (and Doom's `doom_vid
    `LockVideoBuffer`, `Paint` and `Resize`; Doom in `D_Display`. Keep a `NAME_SWAP=wait` switch.
 5. Window resized: on `GR_UPDATE_SIZE` call `seglWindowChanged()`; map the pointer with
    `seglPicturePoint()`. Use whole multiples of the game's screen by default (non-integer scale
-   made texels of the atlas neighbour show at quad edges: C&C added gutters).
+   made texels of the atlas neighbour show at quad edges: C&C added gutters). A window the user
+   can resize scales the picture, so **every** pointer source goes through the picture's mapping
+   (`seglPicturePoint`, or its maths unclamped for a held button's drag): Nano-X's button and move
+   events and the machine's pointer words alike. Test a click on a button at a resized and at a
+   maximized size (`test_all.py aoe-resize`).
 6. Many small draws of different textures: `seglQuad` (~150 instructions) or `seglSprite(s)`;
    a tile map is one `SEGL_TILES` layer (Micropolis); a video frame `SEGL_YUV420`.
 7. 3D: keep the level in GPU memory once (`seglKeep`, `seglKeptQuads`; Doom, Quake, Quake III,
@@ -515,6 +519,9 @@ All written by the game's `build.sh` into `$OUT`:
 - Defaults sized for the machine: OpenTTD's new map 64x64 (256x256 takes ~16 min to make at
   2 MIPS), Tiberian Dawn's game speed 20 steps, ClassiCube's low-memory world.
 - A window that dies with no error is usually the developer closing it; run headless.
+- Age of Empires' clicks missed in a rescaled window (found 3 November 2026): its events and its
+  pointer words were taken as the picture's pixels, so in the world, where the window is stretched,
+  the menus seemed stuck and Start Game "hung". Map every pointer source by the window's size now.
 - An engine that clamps a frame's time (Quake-family engines at 200 ms) runs several game frames
   a client frame once a frame is slow: Jedi Outcast in real time was 23.0 million a frame against
   18.5 at `fixedtime 50`. Measure under a fixed step, and say which.

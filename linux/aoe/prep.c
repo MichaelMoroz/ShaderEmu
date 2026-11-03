@@ -2,12 +2,13 @@
  * aoeprep: what Age of Empires' port reads, made in the machine from the trial's own files once they are unpacked
  * (docs/games/aoe.md, "The trial in the machine"); it was make_data.py on the build computer before.
  *
- *	aoeprep DIR		DIR/language.dll's string table into DIR/language.txt (as LoadString reads it), and the
- *				trial's six TrueType faces at 8 to 36 pixels into DIR/aoe-fonts.bin, on the worker cores
+ *	aoeprep DIR		DIR/language.dll's string table into DIR/language.txt (as LoadString reads it), the
+ *				trial's six TrueType faces at 8 to 36 pixels into DIR/aoe-fonts.bin, and the menus' pictures for
+ *				800 x 600 brought down to the window's 640 x 480 into DIR/aoe-menus.bin, on the worker cores
  *
  * The faces are rasterised by ttf.h (the outlines' coverage, no hinting), not FreeType's hinting through Pillow as
  * make_data.py did: the bitmaps differ a little ("Text"). AOEPREP_WORKERS=N: the most worker cores (255).
- * Exit 0 when both are made; 2 and a line otherwise.
+ * Exit 0 when all three are made; 2 and a line otherwise.
  */
 #include <fcntl.h>
 #include <math.h>
@@ -22,6 +23,7 @@
 #include "mcw.h"
 #include "mcwx.h"
 #include "ttf.h"
+#include "port/aoe_slp.h"
 
 /* a core's own memory for a glyph's cells and points (a worker may not use the heap: multicore.md) */
 #define ARENA (64u << 10)
@@ -362,6 +364,200 @@ fonts(const char *dir, uint32_t *bytes)
 	return NULL;
 }
 
+/* ---------------------------------------------------------------- the menus' pictures */
+
+/* The trial has the menus' pictures only for 800 x 600; the window is 640 x 480. Each menu's (its information file, a binary
+ * resource of Interfac.drs, as TEasy_Panel::setup reads it: no picture of its own for 640 and one for 800) brought down whole
+ * in its palette (port/aoe_slp.h), on the workers, into aoe-menus.bin, which the game reads (port/aoe_scale.cpp). */
+#define MENU_W 640
+#define MENU_H 480
+#define MENUS_MOST 64
+
+struct drs_res { uint32_t id, at, bytes; };
+static const uint8_t *drs;
+static uint32_t drs_bytes;
+
+/* A resource of a kind ("slp ", "bina"; the file keeps the four letters backwards), or NULL. */
+static const struct drs_res *
+drs_find(const char *kind, int32_t id)
+{
+	uint32_t tables, t, n, i;
+
+	if (!drs || drs_bytes < 64)
+		return NULL;
+	tables = le32(drs + 56);
+	for (t = 0; t < tables && 64 + t * 12 + 12 <= drs_bytes; t++) {
+		const uint8_t *h = drs + 64 + t * 12;
+		uint32_t at = le32(h + 4);
+		if (!(h[0] == kind[3] && h[1] == kind[2] && h[2] == kind[1] && h[3] == kind[0]) && memcmp(h, kind, 4))
+			continue;
+		n = le32(h + 8);
+		for (i = 0; i < n && at + i * 12 + 12 <= drs_bytes; i++) {
+			const struct drs_res *r = (const struct drs_res *)(drs + at + i * 12);
+			if ((int32_t)r->id == id && r->at + r->bytes <= drs_bytes)
+				return r;
+		}
+	}
+	return NULL;
+}
+
+/* A palette resource (JASC-PAL text) as 256 x RGB; 0 if it is not one. */
+static int
+drs_palette(int32_t id, uint8_t *rgb)
+{
+	const struct drs_res *r = drs_find("bina", id);
+	char text[16384];
+	const char *p;
+	int i, n, c[3];
+
+	if (!r || r->bytes >= sizeof text)
+		return 0;
+	memcpy(text, drs + r->at, r->bytes);
+	text[r->bytes] = 0;
+	if (strncmp(text, "JASC-PAL", 8))
+		return 0;
+	for (p = text, i = 0; i < 3; i++)		/* the name, the version, the count */
+		if (!(p = strchr(p, '\n')) || !*++p)
+			return 0;
+	for (i = 0; i < 256; i++) {
+		if (sscanf(p, "%d %d %d%n", &c[0], &c[1], &c[2], &n) != 3)
+			return 0;
+		rgb[i * 3] = (uint8_t)c[0], rgb[i * 3 + 1] = (uint8_t)c[1], rgb[i * 3 + 2] = (uint8_t)c[2];
+		p += n;
+	}
+	return 1;
+}
+
+static struct {
+	const uint8_t *rgb;
+	uint8_t *table;			/* 32768: the nearest of the palette's to each 15-bit colour */
+	const uint8_t *slp;
+	struct slp_cover *cover;
+	int16_t *out;
+} m;
+
+static void
+nearest_part(void *ctx, uint32_t from, uint32_t to)
+{
+	uint32_t k;
+
+	(void)ctx;
+	for (k = from; k < to; k++)
+		m.table[k] = (uint8_t)slp_nearest(m.rgb, k);
+}
+
+static int
+nearest_table(void *ctx, unsigned key)
+{
+	return ((const uint8_t *)ctx)[key];
+}
+
+static void
+rows_part(void *ctx, uint32_t from, uint32_t to)
+{
+	(void)ctx;
+	slp_scale_rows(m.slp, m.rgb, MENU_W, (int)from, (int)to, nearest_table, m.table, m.cover,
+		       (int16_t *)(arenas + (size_t)mcw_self() * ARENA), m.out);
+}
+
+static const char *
+menus(const char *dir, int *made)
+{
+	struct { int32_t picture, palette; } want[MENUS_MOST];
+	struct slp_menus_entry entry[MENUS_MOST];
+	const struct drs_res *bina;
+	uint32_t tables, t, i, n, total;
+	int count = 0, k, j;
+	uint8_t *file;
+	static uint8_t rgb[768];
+	int32_t palette_done = -1;
+	mcw_for_opts o;
+
+	*made = 0;
+	if (!(drs = read_all(dir, "Interfac.drs", &drs_bytes)))
+		return "Interfac.drs is missing";
+	/* every information file: a menu with no picture for 640 and one of 800 x 600 or more */
+	tables = le32(drs + 56);
+	for (t = 0; t < tables; t++) {
+		const uint8_t *h = drs + 64 + t * 12;
+		if (memcmp(h, "anib", 4) && memcmp(h, "bina", 4))
+			continue;
+		n = le32(h + 8);
+		for (i = 0; i < n; i++) {
+			char text[4096], l[4][260], a1[260], a2[260], b1[260], b2[260], c1[260], c2[260], pal[260];
+			int a1i, a2i, b1i, b2i, c1i, c2i, pali, two[2], q;
+			const struct slp_frame *f;
+			const struct drs_res *pic;
+
+			bina = (const struct drs_res *)(drs + le32(h + 4) + i * 12);
+			if (bina->bytes >= sizeof text || bina->at + bina->bytes > drs_bytes)
+				continue;
+			memcpy(text, drs + bina->at, bina->bytes);
+			text[bina->bytes] = 0;
+			/* (TEasy_Panel::setup's reading, to the palette's number) */
+			if (sscanf(text, "%259s %259s %259s %d %d %259s %259s %259s %d %d %259s %259s %259s %d %d %259s %259s %d", l[0], a1, a2, &a1i,
+				   &a2i, l[1], b1, b2, &b1i, &b2i, l[2], c1, c2, &c1i, &c2i, l[3], pal, &pali) != 18)
+				continue;
+			if (!strcmp(b1, "none") || drs_find("slp ", a1i))
+				continue;
+			two[0] = b1i, two[1] = b2i;
+			for (q = 0; q < 2; q++) {
+				if (!(pic = drs_find("slp ", two[q])))
+					continue;
+				f = (const struct slp_frame *)(drs + pic->at + sizeof(struct slp_head));
+				if (f->width * MENU_H != f->height * MENU_W || f->width <= MENU_W)
+					continue;
+				for (k = 0; k < count && !(want[k].picture == two[q] && want[k].palette == pali); k++)
+					;
+				if (k == count && count < MENUS_MOST)
+					want[count].picture = two[q], want[count++].palette = pali;
+			}
+		}
+	}
+	if (!count)
+		return "no menu's picture to bring down";
+	if (posix_memalign((void **)&m.table, 16, 32768) || posix_memalign((void **)&m.out, 16, MENU_W * MENU_H * 2) ||
+	    !(m.cover = malloc(sizeof(struct slp_cover) * (MENU_W + MENU_H))))
+		return "not enough memory";
+	m.rgb = rgb;
+	/* the file: its head, then each picture on 16 bytes */
+	total = (sizeof(struct slp_menus_head) + count * sizeof(struct slp_menus_entry) + 15) & ~15u;
+	if (!(file = malloc(total + (size_t)count * ((slp_bound(MENU_W, MENU_H) + 15) & ~15))))
+		return "not enough memory";
+	memset(file, 0, total);
+	for (k = j = 0; k < count; k++) {
+		const struct drs_res *pic = drs_find("slp ", want[k].picture);
+		if (want[k].palette != palette_done) {
+			if (!drs_palette(want[k].palette, rgb))
+				continue;
+			palette_done = want[k].palette;
+			memset(&o, 0, sizeof o);
+			o.grain = 512, o.out_bytes = 1, o.touch = m.table, o.touch_bytes = 32768;
+			mcw_for_opt(32768, nearest_part, NULL, &o);
+		}
+		m.slp = drs + pic->at;
+		if (!slp_covers(m.slp, MENU_W, MENU_H, m.cover))
+			continue;
+		memset(&o, 0, sizeof o);
+		o.grain = 4, o.out_bytes = MENU_W * 2, o.touch = m.out, o.touch_bytes = MENU_W * MENU_H * 2;
+		mcw_for_opt(MENU_H, rows_part, NULL, &o);
+		entry[j].picture = want[k].picture, entry[j].palette = want[k].palette;
+		entry[j].width = MENU_W, entry[j].height = MENU_H, entry[j].pad = 0;
+		entry[j].at = total;
+		entry[j].bytes = (uint32_t)slp_encode(m.slp, m.out, MENU_W, MENU_H, file + total);
+		total = (total + entry[j].bytes + 15) & ~15u;
+		j++;
+	}
+	memcpy(file, "AOEMENU1", 8);
+	((struct slp_menus_head *)file)->count = (uint32_t)j;
+	memcpy(file + sizeof(struct slp_menus_head), entry, j * sizeof *entry);
+	if (write_all(dir, "aoe-menus.bin", file, total))
+		return "aoe-menus.bin could not be written";
+	free(file);
+	*made = j;
+	return NULL;
+}
+
 extern const char etext[];
 extern void _start(void);
 
@@ -369,7 +565,7 @@ int
 main(int argc, char **argv)
 {
 	const char *why, *e = getenv("AOEPREP_WORKERS");
-	int count = 0, workers = e ? atoi(e) : 255, got = 0;
+	int count = 0, workers = e ? atoi(e) : 255, got = 0, pictures = 0;
 	uint32_t bytes = 0;
 	double t0 = now(), t1;
 
@@ -401,6 +597,15 @@ main(int argc, char **argv)
 	}
 	printf("aoeprep: %d strings in %.2f s, %d fonts (%u bytes) in %.2f s on %d workers\n", count, t1 - t0, FONTS, bytes, now() - t1,
 	       got);
+	t1 = now();
+	if ((why = menus(argv[1], &pictures))) {
+		/* (the game then makes a menu's picture itself, more slowly: an empty file says it was tried) */
+		struct slp_menus_head none = {"AOEMENU1", 0, 0};
+
+		fprintf(stderr, "aoeprep: %s\n", why);
+		write_all(argv[1], "aoe-menus.bin", &none, sizeof none);
+	}
+	printf("aoeprep: %d menus' pictures brought to %d x %d in %.2f s\n", pictures, MENU_W, MENU_H, now() - t1);
 	mcw_close();
 	return 0;
 }

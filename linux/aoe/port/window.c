@@ -78,6 +78,20 @@ void aoe_win_present(void)
     drawn = 1;
 }
 
+/* A point of the window, in its pixels now, as a pixel of the picture: the window may have been resized or
+ * maximized, and the picture is stretched over it (docs/games/aoe.md, "Windowed"). Not held to the picture: a
+ * held button's words go on past the window's sides. */
+void aoe_win_map(int *x, int *y)
+{
+    int width, height;
+    seglSize(&width, &height);
+    if (width <= 0 || height <= 0 || (width == page_w && height == page_h)) return;
+    *x = (int) ((long long) *x * page_w / width) - (*x < 0);
+    *y = (int) ((long long) *y * page_h / height) - (*y < 0);
+}
+
+void aoe_win_size(int *w, int *h) { seglSize(w, h); }
+
 void aoe_win_origin(int *x, int *y)
 {
     GR_WINDOW_INFO info;
@@ -145,12 +159,14 @@ int aoe_win_event(struct aoe_event *e)
         case GR_EVENT_TYPE_BUTTON_UP:
             e->kind = g.type == GR_EVENT_TYPE_BUTTON_DOWN ? AOE_BUTTON_DOWN : AOE_BUTTON_UP;
             e->a = g.button.x; e->b = g.button.y;
+            aoe_win_map(&e->a, &e->b);
             e->c = g.type == GR_EVENT_TYPE_BUTTON_DOWN ? g.button.changebuttons : g.button.changebuttons;
             e->c = e->c & GR_BUTTON_L ? 1 : e->c & GR_BUTTON_R ? 2 : 0;
             if (!e->c) continue;
             return 1;
         case GR_EVENT_TYPE_MOUSE_POSITION:
             e->kind = AOE_MOVE; e->a = g.mouse.x; e->b = g.mouse.y;
+            aoe_win_map(&e->a, &e->b);
             return 1;
         case GR_EVENT_TYPE_CLOSE_REQ:
             e->kind = AOE_CLOSE;

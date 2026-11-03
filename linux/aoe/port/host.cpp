@@ -140,6 +140,7 @@ static void held_by_words(void) {
             if (!held_seen[c]) aoe_win_origin(&held_ox, &held_oy);
             held_seen[c] = 1;
             int x, y; aoe_win_pointer(&x, &y); x -= held_ox; y -= held_oy;
+            aoe_win_map(&x, &y);   // (the picture is stretched over a resized window)
             if (x != aoe_mouse_x || y != aoe_mouse_y) {
                 aoe_mouse_x = x; aoe_mouse_y = y;
                 aoe_lat('M', x, y);
@@ -153,6 +154,20 @@ static void held_by_words(void) {
     }
 }
 
+// After the script's "ready": /tmp/aoe-size says where the window is and how big, each time that changes (a test that resizes it).
+static int size_told;
+static void size_tell(void) {
+    static int last_w, last_h;
+    int w, h, ox, oy;
+    aoe_win_size(&w, &h);
+    if (w == last_w && h == last_h) return;
+    last_w = w; last_h = h;
+    aoe_win_origin(&ox, &oy);
+    FILE* f = fopen("/tmp/aoe-size.part", "w");
+    if (f) { fprintf(f, "%d %d %d %d\n", ox, oy, w, h); fclose(f); rename("/tmp/aoe-size.part", "/tmp/aoe-size"); }
+    fprintf(stderr, "aoe: window at %d,%d, %d x %d\n", ox, oy, w, h);
+}
+
 static void events_of_window(void) {
     static unsigned last;
     unsigned now = aoe_win_clock();
@@ -160,6 +175,7 @@ static void events_of_window(void) {
     last = now;
     struct aoe_event e;
     held_by_words();
+    if (size_told) size_tell();
     while (aoe_win_event(&e)) {
         switch (e.kind) {
         case AOE_KEY_DOWN:
@@ -241,6 +257,21 @@ void aoe_events(void) {
             fprintf(stderr, "aoe: mark over\n");   // (what a run stops at: the line before is whole by then)
         }
     }
+    // "rsweep X Y": the right button pressed at X,Y and the pointer moved 20 pixels every 100 ms, 200 to the left and back, ten
+    // times, then let go (game_par.py's aoe-drag-scroll: the map dragged all the time)
+    static int sweep_x, sweep_y, sweep_step = -1;
+    static unsigned long sweep_at;
+    if (sweep_step >= 0 && timeGetTime() - sweep_at >= 100) {
+        sweep_at = timeGetTime();
+        if (++sweep_step > 200) {
+            aoe_keys[2] = 0; sweep_step = -1;
+            aoe_post(WM_RBUTTONUP, 0, MAKELONG(aoe_mouse_x, aoe_mouse_y));
+        } else {
+            int k = sweep_step % 20;
+            aoe_mouse_x = sweep_x - 20 * (k <= 10 ? k : 20 - k); aoe_mouse_y = sweep_y;
+            aoe_post(WM_MOUSEMOVE, MK_RBUTTON, MAKELONG(aoe_mouse_x, aoe_mouse_y));
+        }
+    }
     if (!script || !*script) return;
     int at;
     if (sscanf(script, "%d", &at) != 1 || timeGetTime() - step_from < (unsigned long) at) return;
@@ -261,7 +292,12 @@ void aoe_events(void) {
         aoe_post(WM_RBUTTONUP, 0, MAKELONG(x, y));
     } else if (!strcmp(what, "move")) {
         aoe_mouse_x = x; aoe_mouse_y = y;
+        aoe_post(WM_MOUSEMOVE, (aoe_keys[1] ? MK_LBUTTON : 0) | (aoe_keys[2] ? MK_RBUTTON : 0), MAKELONG(x, y));
+    } else if (!strcmp(what, "rsweep")) {
+        aoe_mouse_x = sweep_x = x; aoe_mouse_y = sweep_y = y;
+        aoe_keys[2] = 1; sweep_step = 0; sweep_at = timeGetTime();
         aoe_post(WM_MOUSEMOVE, 0, MAKELONG(x, y));
+        aoe_post(WM_RBUTTONDOWN, MK_RBUTTON, MAKELONG(x, y));
     } else if (!strcmp(what, "close")) {
         aoe_post(WM_CLOSE, 0, 0);
     } else if (!strcmp(what, "key")) {
@@ -274,6 +310,7 @@ void aoe_events(void) {
         int ox = 0, oy = 0; aoe_win_origin(&ox, &oy);
         FILE* f = fopen("/tmp/aoe-ready", "w");
         if (f) { fprintf(f, "%d %d\n", ox, oy); fclose(f); }
+        size_told = 1;
     } else if (!strcmp(what, "view")) {
         // where the view stands, a hundredth of a tile, and how many are selected
         extern void aoe_view_place(float*, float*, int*);

@@ -54,7 +54,7 @@ The program alone:
 | Switch | Does |
 |---|---|
 | `AOE_TICK_MS=33` | a clock that moves by what the game does: a run comes out the same |
-| `AOE_SCRIPT="MS click X Y;MS rclick X Y;MS key K;MS char C;MS close;MS quit"` | each step MS after the screen last changed or the step before |
+| `AOE_SCRIPT="MS click X Y;MS rclick X Y;MS key K;MS char C;MS close;MS quit"` | each step MS after the screen last changed or the step before; `move X Y` keeps a held button, `rsweep X Y` presses the right button and drags 200 pixels to the left and back ten times, 20 a 100 ms (`game_par.py aoe-drag-scroll`), `ready` writes `/tmp/aoe-ready` and then `/tmp/aoe-size` |
 | `AOE_SUM_EVERY=N`, `AOE_SUM_END=N` | `aoesum:` a sum of the clock, the random state, players' attributes, objects' ids, hit points and places |
 | `AOE_STATS_MS=N`, `AOE_PLAYERS=1`, `AOE_DEBUG=1` | `aoestat:`, players' resources, panels by time |
 | `AOE_DUMP=FILE`, `AOE_DUMP_EVERY=N` | pictures under qemu |
@@ -63,6 +63,9 @@ The program alone:
 | `AOE_SCROLL=edge` | the map scrolls at the window's edges, and by the game's own right drag with nothing selected: the way before ("Controls") |
 | `AOE_SOUND=0`, `AOE_SOUND_LOG=1` | no sound; `aoesnd:` each wave found, played and seen to end (`python tools/aoe_sound_check.py LOG IMAGE`, "Sound") |
 | `AOE_MUSIC=0`, `AOE_MUSIC_LOG=1` or `2`, `AOE_MUSIC_CUT=S` | no music (`AOE_SOUND=0` has none either); `aoemus:` each song and what the card's words say, with 2 every note and instrument for `tools/aoe_music_check.py`; each song ends after S s ("Music") |
+| `AOE_SEED=N` | every seeding of the game's random numbers takes N, not the clock: the same map and start in a run on the real clock (`game_par.py`'s window scenes) |
+| `AOE_SCROLL_COPY=words`, `AOE_BLT=bytes` | a scroll moves the view by words on 8 pixels across, and a keyed copy goes a byte at a time: the ways before ("Speed in play") |
+| `AOE_MENU_PICTURE=middle` | a menu's picture for 800 x 600 cut to its middle in the window, the way before ("Windowed") |
 | `AOE_INPUT_LOG=1` | `aoeinput:` an order, a box and a drag, each with its places; the script's `view` step prints `aoeview:` where the view stands and how many are selected |
 
 `test_all.py aoe --image build/images/NAME` plays the script below to update 1000 (at 800 x 600), `aoe-640` the same at the window's size, and `aoe-drag` the controls. `aoe-music` is `aoe-640` with the card's clock moving (`RVC_SOUND=1`), which those have not, and songs cut to 4 s. An image with no data prints `AOE-NO-DATA` and passes.
@@ -196,6 +199,41 @@ The world update cannot start before the walk ends, since the walk reads the obj
 its terrain part after the world starts: the latter stores to tiles the world's stores share texels with, so tile state the view
 keeps must first move apart.
 
+### Scrolling and units in the window (3 November 2026)
+
+The world's complaint was "only when nothing happens": scrolling and units acting felt slow. Scenes of `game_par.py`, all in the
+640 x 480 window, the map's seed fixed (`AOE_SEED=1`: before it, two runs of one scene were two maps, 5.8 against 9.7 frames a second),
+updates 200 to 350: `aoe-still-640`, `aoe-drag-scroll` (the script's `rsweep`: the right button held and the map dragged 20 pixels every
+100 ms, 200 to the left and back, all the span), `aoe-late-640` (updates 3000 to 3200, the computer players' towns and units). Each has a
+`-before` twin that runs the same program the way before (`AOE_SCROLL_COPY=words AOE_BLT=bytes`). Calibrated clock, one run each:
+
+| Scene | Before: frames a second, passes a frame | After |
+|---|---|---|
+| `aoe-drag-scroll` | 11.6, 59.0 (core 0 264k, the view's worker 327k a frame) | 12.0, 56.9 (253k, 322k) |
+| `aoe-still-640` | 14.1, 47.7 | 14.1, 47.7 |
+| `aoe-late-640` | 17.3, 39.1 | 15.2, 44.3 (a played game on the real clock: its frames are not the same frames) |
+
+On the card (`game_par.py --card`, the same image, one run each, lean tick, 3 November 2026): `aoe-drag-scroll` 7.9 to 10.0 frames a
+second (88.9 to 57.9 passes a frame), `aoe-still-640` 12.7 and 12.9 (45.2 and 44.6). The card gains more on the drag than the calibrated
+clock says: the model has no cost for the many short passes a copy by words left. Start Game with the settings shown (Large, Large Islands,
+4 players) to the game's screen: 93 s on the card, 88 s calibrated; it was never stuck (the clicks that missed were, "Windowed").
+
+- **A scroll by the machine's copy.** The view's worker moved the view's 200 KB by words at every scrolled frame (`OverlayMemCopy`:
+  `memmove` was 20% of the worker, 106 thousand instructions a frame). The rows are one block in memory, and the machine's copy moves
+  it in a pass or two from the worker; the scroll goes on 16 pixels across, not 8, so that the block is whole texels. `memmove` is gone
+  from the worker's profile, the picture of a drag was looked at (whole, no seams), `aoe-drag`'s view moved as before, and `RVC_RACES`
+  with `RVC_RACES_NEAR=4` on the drag: 0 undone, 5 near places, none in this code (`memcpy` of `aoe_asm_for_worker`,
+  `view_function_terrain`, `ASMSet_Xlate_Table`, `SetClipRect`, as before).
+- **A keyed copy four pixels a test.** A message over the view is copied with its key every frame (`TMessagePanel::draw`, 58 thousand
+  instructions a frame when one shows); a word that is all key is passed over.
+
+What bounds it is not the drawing: the frame is the walk on the worker with the first core waiting, then the world's update (160 thousand
+instructions a frame, its objects, sprites and computer players) beside the raster, and the first core's own part is about 250 to 300
+thousand a frame either way. Five times faster, the aim asked for, is about 10 passes a frame: the world's update alone is 20. It needs
+the update and the walk to overlap (a frame behind, from copies of what the walk reads, as Half-Life and Doom do) or the update on
+several cores, neither done here. Measured and left: `mcw_on_worker` is 6% of the worker (a call at every sprite: `asm_state`, the fog
+word), `AddSpan` 7.6%, `view_function_terrain` 18% (it walks every visible tile each frame), and the first core's soft doubles 4%.
+
 Tried and not taken: `-O3 -fsched-pressure -funroll-loops` was no faster in play (10.9 against 11.6 on the calibrated clock).
 LTO does not link: the decompiled source defines a class differently in different files (`taiuaimd.h`). PGO was not tried.
 A branchless `get_tile_mask_num` was 64 instructions a call against 59.
@@ -237,9 +275,29 @@ The game opens as an ordinary window of 640 x 480, the size its code calls its l
 The game's code has a layout for 640 x 480 (`TRIBE_Screen_Game::handle_size`), but the trial has no pictures for it. So:
 
 - The game screen's two bands are cut from the 800 x 600 picture (`aoe_picture_cut`): the top bar without its columns 376 to 535, the bottom panel without 406 to 565, which the layout's places fit to the pixel. What is drawn is kept as before.
-- A menu's background is the middle of the picture for 800 x 600 (`background_pos` 1, in `TEasy_Panel::setup`): the title's top is cut off.
+- A menu with no picture of its own for 640 x 480 has the one for 800 x 600 brought down whole (3 November 2026; before, the middle of it
+  was shown, `background_pos` 1, and the title's top and the award's side were cut off). `port/aoe_slp.h` reads the shape's first frame
+  into pixels, makes each pixel of the smaller picture the average of the area it covers (800 to 640 is two source pixels each way,
+  weights 4 and 1, 3 and 2, ...) in the menu's palette, and maps it back by the nearest of the palette's colours to its 15 bits; the
+  result is a shape of copy and skip commands, which the game draws as it drew the other. `aoeprep` makes them on the workers once the
+  trial is unpacked (`aoe-menus.bin`: the information files of `Interfac.drs` that have no picture for 640 and one of 800 x 600, each in
+  its palette), and `TEasy_Panel::setup` takes the menu's from there (`aoe_picture_fit`, `port/aoe_scale.cpp`): 47 thousand instructions.
+  One not there is made by the game itself: 72 million instructions on the first core when it averaged every pixel through a lazily
+  filled table, 17 s at the world's 4 MIPS, which is why aoeprep makes them. In the trial only the main menu is such a menu (picture
+  50103, palette 50501; aoeprep 2.6 s of `rvc_cpu`'s plain clock on 173 workers). `AOE_MENU_PICTURE=middle` is the way before.
+  Looked at in captures under `rvc_harness --cpu --warp`: the main menu (whole, buttons where they were), the single player menu, the
+  game's settings, the scenario builder's menu and the multiplayer connection, which have pictures for 640 of their own. Help shows an
+  empty message box: Windows' help is not there.
 - At that size the buttons are five columns, with "more" and "cancel" over the map's corners (`button_other_pic`), as the code lays them out.
-- The victory and "history" screens ask for `bgA640` (`scr_end.cpp`, `scr_trb.cpp`): they were not looked at, and are likely to have no picture.
+- The victory and "history" screens ask for `bgA640` (`scr_end.cpp`, `scr_trb.cpp`): nothing in the game makes them (no `TribeEndScreen` or
+  `TribeSelectTribeScreen` is constructed), so they cannot be reached.
+
+The window can be resized and maximized, and the picture is stretched over it. Every pointer place the game gets goes through that
+stretch (`aoe_win_map` in `port/window.c`, as `seglPicturePoint` does but not held to the picture): Nano-X's button and move events, and
+the machine's pointer words read while a button is held (`held_by_words`), which go on past the window's sides. Before 3 November 2026
+they did not, so in a rescaled window (in the world) a click landed elsewhere and the menus seemed stuck. `test_all.py aoe-resize`
+maximizes the window (794 x 545) and clicks Single Player where it is drawn, then tiles it to the right half (394 x 545) and clicks Random
+Map: both menus come. The script's `ready` makes the game write `/tmp/aoe-size` (`X Y W H`) at each change of the window's size after it.
 
 The smaller view is faster. `game_par.py aoe-play` and `aoe-play-800` calibrated, on a model fitted to an older tick so only the comparison counts, six timings each, alternating, frames a second over the acts: 12.3 at 800 x 600 before this work, 12.1 at 800 x 600 now, 15.5 in the window (14.7 to 17.0). The acts are not quite the same: the window's two scroll acts are drags, the 800's rest at the edges.
 

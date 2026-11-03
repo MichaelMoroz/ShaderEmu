@@ -16,6 +16,9 @@ void aoe_any_free(void* p);
 // What the walk sets around a shape and a panel's drawing must not see: one for each core, in texels of their own.
 struct AoeCoreWords { long fog; int capture; char pad[8]; } __attribute__((aligned(16)));
 extern struct AoeCoreWords aoe_core_words[2];
+// A scroll by the machine's copy, the view on 16 pixels across (0), or by words on 8 (1): set by the first core before any view
+struct AoeScrollWay { int words; char pad[12]; } __attribute__((aligned(16)));
+extern struct AoeScrollWay aoe_scroll_way;
 #define fog_next_shape (aoe_core_words[mcw_on_worker() ? 1 : 0].fog)
 #define SDI_Capture_Info (aoe_core_words[mcw_on_worker() ? 1 : 0].capture)
 #ifdef __cplusplus

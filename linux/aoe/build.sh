@@ -81,7 +81,8 @@ riscv32-linux-g++ -march=rv32imaf -mabi=ilp32 -static -no-pie -nostdlib -L"$S" -
 riscv32-linux-nm -n "$OBJ/aoe.elf" > "$WORK/src/aoe.nm"
 echo "linked: $(riscv32-linux-size "$OBJ/aoe.elf" | tail -1)"
 
-# what the port reads that the trial does not have as it is: its strings and its faces' pixels, made in the machine (prep.c)
+# what the port reads that the trial does not have as it is: its strings, its faces' pixels and its menus' pictures at the
+# window's size, made in the machine (prep.c, port/aoe_slp.h)
 rv32-cc -O2 -Wall -Wno-unused-function -I"$HERE" -I"$REPO/programs/mc" "$HERE/prep.c" "$REPO/programs/mc/mcw.c" "$REPO/programs/mc/mcwx.c" \
     -lm -o "$OBJ/aoeprep"
 # Install: the program and its starter. The trial's installer comes when an image asks for it (data.py).
@@ -93,11 +94,11 @@ cat > "$OUT/usr/bin/aoe" <<'EOF'
 #!/bin/sh
 # Age of Empires (docs/games/aoe.md): Microsoft's trial lies unchanged in the ROM. The files the game reads are unpacked into
 # memory once a session, after the licence read out of it is accepted (cabinst, docs/system/install.md), and its strings and
-# its faces' pixels are made from them (aoeprep)
+# its faces' pixels and its menus' pictures at its window's size are made from them (aoeprep)
 D=/tmp/aoe
 cabinst --title "Age of Empires (trial)" --licence eula.txt --key aoe.eula /usr/share/aoe/MSAoE.exe $D '*.drs' '*.ai' '*.per' \
     '*.rps' '*.cty' '*.col' '*.scn' '*.cpn' '*.ply' '*.mid' '*.wav' '*.inf' Tileedge.dat Empires.dat language.dll '*.ttf' || exit $?
-[ -f $D/aoe-fonts.bin ] || aoeprep $D || exit 2
+[ -f $D/aoe-fonts.bin ] && [ -f $D/aoe-menus.bin ] || aoeprep $D || exit 2
 # (the music's instruments are not the trial's: DMXOPL's bank, in the ROM beside the installer)
 [ -e $D/genmidi.op2 ] || ln -s /usr/share/aoe/genmidi.op2 $D/genmidi.op2 2>/dev/null
 [ "$1" = --unpack ] && exit 0	# (only that: a test unpacks first, then plays)
