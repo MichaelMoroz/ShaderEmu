@@ -640,7 +640,11 @@ LRESULT DispatchMessage(const MSG* m) {
     if (m->message == WM_PAINT) need_paint = 0;
     Wnd* w = (Wnd*) m->hwnd;
     if (!w) w = main_wnd;
-    if (m->message == WM_CHAR && focus_wnd && focus_wnd->proc == edit_proc) return send_to(focus_wnd, m->message, m->wParam, m->lParam);
+    // the keys go to an edit control with the focus, as on Windows; the game subclasses its edits (TEditPanel::sub_wnd_proc,
+    // which sends a chat at Enter), so the control is known by its class, not its procedure: a char typed into the chat went
+    // to the game's hotkeys before, and Enter opened the chat again
+    if ((m->message == WM_CHAR || m->message == WM_KEYDOWN || m->message == WM_KEYUP) && focus_wnd && !strcasecmp(focus_wnd->cls, "edit"))
+        return send_to(focus_wnd, m->message, m->wParam, m->lParam);
     return send_to(w, m->message, m->wParam, m->lParam);
 }
 void PostQuitMessage(int) { fprintf(stderr, "aoe: quit asked from %p\n", __builtin_return_address(0)); quitting = 1; }
