@@ -1344,7 +1344,7 @@ index a3c3afc3..6be4416f 100644
                  case 0:
                      player = new TRIBE_Player(
 diff --git a/src/view.cpp b/src/view.cpp
-index 6439e31f..ed5ef9e1 100644
+index 6439e31f..f77a024a 100644
 --- a/src/view.cpp
 +++ b/src/view.cpp
 @@ -1,3 +1,4 @@
@@ -1352,7 +1352,26 @@ index 6439e31f..ed5ef9e1 100644
  #include <windows.h>
  #include "../include/program_mode.h"
  #include <ddraw.h>
-@@ -1863,7 +1864,84 @@ long RGE_View::view_function(
+@@ -856,12 +857,15 @@ void RGE_View::draw() {
+             if (new_rect.bottom < 0 || new_rect.right < 0 || old_rect.bottom < new_rect.top || old_rect.right < new_rect.left) {
+                 this->render_terrain_mode = 0;
+             } else {
+-                if ((x_diff & 7) != 0) {
++                // The port: across on 16 pixels, not 8, so that the moved rows are whole texels for the machine's copy
++                // (OverlayMemCopy in port/aoe_asm.cpp); AOE_SCROLL_COPY=words is on 8 as before
++                int aoe_x_step = aoe_scroll_way.words ? 8 : 16;
++                if ((x_diff & (aoe_x_step - 1)) != 0) {
+                     adjust = new_rect.left;
+                     if (x_diff <= 0) {
+-                        adjust += 7;
++                        adjust += aoe_x_step - 1;
+                     }
+-                    adjust = (adjust & ~7) - new_rect.left;
++                    adjust = (adjust & ~(aoe_x_step - 1)) - new_rect.left;
+                     x_diff = (short) (x_diff + adjust);
+                     this->map_scr_x_offset += adjust;
+                 }
+@@ -1863,7 +1867,84 @@ long RGE_View::view_function(
      return result;
  }
  
@@ -1437,7 +1456,7 @@ index 6439e31f..ed5ef9e1 100644
      int start_map_x;
      int start_row;
      int cols_2_scan;
-@@ -2011,7 +2089,7 @@ long RGE_View::view_function_terrain(unsigned char function_mode_in, tagRECT sav
+@@ -2011,7 +2092,7 @@ long RGE_View::view_function_terrain(unsigned char function_mode_in, tagRECT sav
  
                              draw_this_tile: {
                                  Tile_FogEdge_Table* edge_table = this->Tile_Edge_Tables[tile->tile_type];
@@ -1446,7 +1465,7 @@ index 6439e31f..ed5ef9e1 100644
                                  VSpanMiniList* normal_draw_data;
                                  VSpanMiniList* fog_draw_data;
                                  VSpanMiniList* black_draw_data;
-@@ -2044,7 +2122,7 @@ long RGE_View::view_function_terrain(unsigned char function_mode_in, tagRECT sav
+@@ -2044,7 +2125,7 @@ long RGE_View::view_function_terrain(unsigned char function_mode_in, tagRECT sav
  
                                  normal_draw_data = edge_table[black_tile_mask_num].normal_draw;
                                  fog_draw_data = edge_table[black_tile_mask_num].fog_draw;
@@ -1455,7 +1474,7 @@ index 6439e31f..ed5ef9e1 100644
  
                                  if (MapVis == RGE_TILE_FOGGED) {
                                      fog_draw_data = edge_table[0].normal_draw;
-@@ -2168,7 +2246,7 @@ long RGE_View::view_function_terrain(unsigned char function_mode_in, tagRECT sav
+@@ -2168,7 +2249,7 @@ long RGE_View::view_function_terrain(unsigned char function_mode_in, tagRECT sav
                                  tile->draw_attribute &= 0xbf;
                              }
  
@@ -1464,7 +1483,7 @@ index 6439e31f..ed5ef9e1 100644
                                  SDI_Capture_Info = 1;
                                  if (MapVis == 0) {
                                      this->futur_objs->SetCaptureLevel(0, 5);
-@@ -2374,81 +2452,26 @@ long RGE_View::view_function_terrain(unsigned char function_mode_in, tagRECT sav
+@@ -2374,81 +2455,26 @@ long RGE_View::view_function_terrain(unsigned char function_mode_in, tagRECT sav
          MouseSystem->Poll();
      }
  
@@ -1485,7 +1504,12 @@ index 6439e31f..ed5ef9e1 100644
 -                if (old_object_id == object_id) {
 -                    goto no_mouse_process;
 -                }
--
++    // The port: the job needs no more of the game than this
++    aoe_walked_list = this->futur_objs;
++    aoe_walked_rect = save_render_rect;
++    if (aoe_view_wanted()) aoe_view_walked();
++    else this->aoe_pick_touched(this->futur_objs, save_render_rect);
+ 
 -                this->UC_StartTime = current_time;
 -                this->UC_TouchedObj = object_id;
 -                {
@@ -1503,12 +1527,7 @@ index 6439e31f..ed5ef9e1 100644
 -                        goto no_mouse_process;
 -                    }
 -                }
-+    // The port: the job needs no more of the game than this
-+    aoe_walked_list = this->futur_objs;
-+    aoe_walked_rect = save_render_rect;
-+    if (aoe_view_wanted()) aoe_view_walked();
-+    else this->aoe_pick_touched(this->futur_objs, save_render_rect);
- 
+-
 -                MouseSystem->set_game_facet(0);
 -                if (this->message_panel != 0 && rge_base_game->rollover != 0) {
 -                    this->message_panel->remove_message();
@@ -1558,7 +1577,7 @@ index 6439e31f..ed5ef9e1 100644
              );
              if (new_node != 0) {
                  DClipInfo_Node* tail = this->futur_objs->Draw_Level_Tail[0x1e];
-@@ -2459,8 +2482,6 @@ no_mouse_process: {
+@@ -2459,8 +2485,6 @@ no_mouse_process: {
                  }
                  this->futur_objs->Draw_Level_Tail[0x1e] = new_node;
              }
@@ -1567,7 +1586,7 @@ index 6439e31f..ed5ef9e1 100644
      }
  }
  
-@@ -2759,6 +2780,8 @@ void RGE_View::Add_GDI_Clip_Mask(DClipInfo_Node* SDI, TSpan_List_Manager* Clip_M
+@@ -2759,6 +2783,8 @@ void RGE_View::Add_GDI_Clip_Mask(DClipInfo_Node* SDI, TSpan_List_Manager* Clip_M
      }
  }
  
@@ -1576,7 +1595,7 @@ index 6439e31f..ed5ef9e1 100644
  void RGE_View::draw_multi_object_outline() {
  }
  
-@@ -3731,6 +3754,11 @@ RGE_Static_Object* RGE_View::hit_object(
+@@ -3731,6 +3757,11 @@ RGE_Static_Object* RGE_View::hit_object(
      return picked;
  }
  
@@ -1588,7 +1607,7 @@ index 6439e31f..ed5ef9e1 100644
  int RGE_View::start_scroll_view(unsigned char scroll_action_in, long x, long y, int ctrl_key, int shift_key) {
      RGE_Pick_Info pick_info;
      int result;
-@@ -3752,6 +3780,10 @@ int RGE_View::start_scroll_view(unsigned char scroll_action_in, long x, long y,
+@@ -3752,6 +3783,10 @@ int RGE_View::start_scroll_view(unsigned char scroll_action_in, long x, long y,
          this->set_redraw((TPanel::RedrawMode) 1);
      }
  
@@ -1599,7 +1618,7 @@ index 6439e31f..ed5ef9e1 100644
      result = 0;
      this->scroll_action = scroll_action_in;
      this->mouse_last_x = x;
-@@ -3801,6 +3833,17 @@ int RGE_View::handle_scroll_view(long x, long y) {
+@@ -3801,6 +3836,17 @@ int RGE_View::handle_scroll_view(long x, long y) {
      save_view_y = this->player->view_y;
  
      switch (this->scroll_action) {
@@ -1617,7 +1636,7 @@ index 6439e31f..ed5ef9e1 100644
          case 2:
              this->mouse_last_x = x;
              this->mouse_last_y = y;
-@@ -3964,7 +4007,12 @@ void RGE_View::end_scroll_view() {
+@@ -3964,7 +4010,12 @@ void RGE_View::end_scroll_view() {
      long min_x, max_x, min_y, max_y;
  
      switch (this->scroll_action) {
@@ -1630,7 +1649,7 @@ index 6439e31f..ed5ef9e1 100644
              if (this->mouse_down_x > this->mouse_last_x) {
                  min_x = this->mouse_last_x;
                  max_x = this->mouse_down_x;
-@@ -4232,8 +4280,8 @@ void DClipInfo_List::SetNumZones(int New_Size) {
+@@ -4232,8 +4283,8 @@ void DClipInfo_List::SetNumZones(int New_Size) {
      int i;
  
      if (New_Size >= Max_Zones) {
@@ -1641,7 +1660,7 @@ index 6439e31f..ed5ef9e1 100644
          if (Zone_Ptrs != 0) {
              i = 0;
              if (Used_Zones > 0) {
-@@ -4243,8 +4291,8 @@ void DClipInfo_List::SetNumZones(int New_Size) {
+@@ -4243,8 +4294,8 @@ void DClipInfo_List::SetNumZones(int New_Size) {
                      i = i + 1;
                  } while (i < Used_Zones);
              }
@@ -1652,7 +1671,7 @@ index 6439e31f..ed5ef9e1 100644
          }
          Zone_Ptrs = Ptrs;
          Zone_Size_Ptrs = new_zone_sizes;
-@@ -4262,7 +4310,7 @@ void DClipInfo_List::InitNewZone(int Zone_Size) {
+@@ -4262,7 +4313,7 @@ void DClipInfo_List::InitNewZone(int Zone_Size) {
      Used_Zones = zone_index + 1;
      alloc_size = Element_Size * Zone_Size;
      Zone_Size_Ptrs[zone_index] = Zone_Size;

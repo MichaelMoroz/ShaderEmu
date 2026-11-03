@@ -162,13 +162,27 @@ GAMES = {
         what='the same game, the pointer at the right and left edges in turn for 1.5 s each (over what is explored), updates 100 to 300',
         cmd=AOE_UNPACK + 'nano-X -p & sleep 2; AOE_SIZE=800 AOE_SCROLL=edge AOE_MARK=100,300 AOE_SCRIPT="' + AOE_PLAY + ';1000 move 799 300' + ';1500 move 0 300;1500 move 799 300' * 12 + '" aoe', wall=900,
         mark='aoe: mark begins', until='aoe: mark over', frames=AOE_FRAMES, rate=AOE_RATE),
+    'aoe-still-640': dict(
+        what='aoe-drag-scroll with the map not dragged: what the drag costs, updates 200 to 350',
+        cmd=AOE_UNPACK + 'nano-X -p & sleep 2; AOE_SEED=1 AOE_MARK=${AOE_MARK:-200,350} AOE_SCRIPT="' + AOE_PLAY_640 + '" aoe', wall=900,
+        mark='aoe: mark begins', until='aoe: mark over', frames=AOE_FRAMES, rate=AOE_RATE),
+    'aoe-late-640': dict(
+        what='aoe-late in the window: the game left to the computer players, updates 3000 to 3200',
+        cmd=AOE_UNPACK + 'nano-X -p & sleep 2; AOE_SEED=1 AOE_MARK=${AOE_MARK:-3000,3200} AOE_SCRIPT="' + AOE_PLAY_640 + '" aoe', wall=1800,
+        mark='aoe: mark begins', until='aoe: mark over', frames=AOE_FRAMES, rate=AOE_RATE),
     # (the map dragged by the right button in the window by the script's rsweep: 20 pixels every 100 ms, 200 to the left and back,
     # ten times; docs/games/aoe.md, "Speed in play")
     'aoe-drag-scroll': dict(
         what='the game in its window, the map dragged by the right button to and fro all the time, updates 200 to 350',
-        cmd=AOE_UNPACK + 'nano-X -p & sleep 2; AOE_MARK=${AOE_MARK:-200,350} AOE_SCRIPT="' + AOE_PLAY_640 + ';1000 view;1000 rsweep 400 200;'
+        cmd=AOE_UNPACK + 'nano-X -p & sleep 2; AOE_SEED=1 AOE_MARK=${AOE_MARK:-200,350} AOE_SCRIPT="' + AOE_PLAY_640 + ';1000 view;1000 rsweep 400 200;'
             + ';'.join(['2000 view'] * 6) + '" aoe', wall=900,
         mark='aoe: mark begins', until='aoe: mark over', frames=AOE_FRAMES, rate=AOE_RATE),
+}
+# (each of those the way before 3 November 2026's speed work: the scroll by words, a keyed copy a byte at a time)
+for _n in ('aoe-still-640', 'aoe-drag-scroll', 'aoe-late-640'):
+    GAMES[_n + '-before'] = dict(GAMES[_n], what=GAMES[_n]['what'] + ', the way before (AOE_SCROLL_COPY=words AOE_BLT=bytes)',
+                                 cmd=GAMES[_n]['cmd'].replace('AOE_SEED=1 ', 'AOE_SEED=1 AOE_SCROLL_COPY=words AOE_BLT=bytes '))
+GAMES.update({
     # (a person's input: real events through the kernel and the window system on the desktop: tools/aoe_play.py reads the log)
     'aoe-play': dict(
         what='the game in its window on the desktop, each act by nxkey: selecting, ordering, a box dragged, the build menu, the map dragged by the right button',
@@ -199,7 +213,7 @@ GAMES = {
         cmd='nano-X -p & sleep 2; PHYS_SCENE=1 PHYS_STEPS=120 nxphys',
         mark='shares on ', frames=lambda log: int(re.search(r'physstat: done: \d+ boxes, (\d+) substeps', log)[1]),
         rate=lambda log: tuple(int(x) for x in re.search(r'physstat: done: \d+ boxes, (\d+) substeps in (\d+) ms', log).groups())),
-}
+})
 
 
 def game_fps(g, text, frames, seconds):

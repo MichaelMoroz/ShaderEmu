@@ -1,5 +1,6 @@
 // What upstream has in Asm_draw.asm, Inf32.asm and Drawarea_asm.asm (13,839 lines, one piece for
 // each span length and alignment): the same operations, one loop a kind of span.
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include "../include/drawarea.h"
@@ -513,6 +514,22 @@ void TDrawArea::OverlayMemCopy(tagRECT& a, tagRECT& b, int dx, int dy, int xo, i
     if (dy < 0) { step = -1; sy = a.bottom + yo; ty = b.bottom + yo; }
     else { sy = a.top + yo; ty = b.top + yo; }
     unsigned char** rows = (unsigned char**) this->CurDisplayOffsets;
+    // The port: a scroll moves most of the view, 200 KB a frame, 106 thousand instructions of the view's worker by words. Rows one
+    // after the other in memory are one block, which the machine's copy moves in a pass or two (CSRs 0x8b0 to 0x8b3; docs/machine/gpu.md,
+    // "A program's copy": a destination inside its source is copied from its end, as memmove). The columns between the rows' pieces
+    // get the neighbouring rows' pixels, where the old picture's were: both are the new strip, drawn again. The view keeps a scroll on
+    // 16 pixels across for it (view.cpp). AOE_SCROLL_COPY=words is the way before (aoe_scroll_way).
+    int by_words = aoe_scroll_way.words;
+    long first_s = dy < 0 ? sy - (h - 1) : sy, first_t = dy < 0 ? ty - (h - 1) : ty;
+    unsigned char* src = rows[first_s] + sx;
+    unsigned char* dst = rows[first_t] + tx;
+    long pitch = rows[1] - rows[0], bytes = (h - 1) * pitch + words * 4;
+    int whole = !by_words && h > 1 && pitch > 0;
+    for (long i = 1; whole && i < h; i++) whole = rows[first_s + i] == rows[first_s] + i * pitch && rows[first_t + i] == rows[first_t] + i * pitch;
+    if (whole && !(((uintptr_t) dst | (uintptr_t) src | (uintptr_t) bytes) & 15)) {
+        __asm__ volatile("csrw 0x8b1, %0\n csrw 0x8b2, %1\n csrw 0x8b3, %2\n csrw 0x8b0, %3"
+                         :: "r"(src), "r"(dst), "r"(bytes), "r"(1) : "memory");
+    } else
     for (; h > 0; h--, sy += step, ty += step) memmove(rows[ty] + tx, rows[sy] + sx, words * 4);
     if (locked) this->Unlock((char*) "OverlayMemCopy");
 }

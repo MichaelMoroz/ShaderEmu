@@ -31,9 +31,13 @@ static struct { unsigned start, walked_at, end; char pad[4]; } job_counts __attr
 static inline unsigned my_instructions(void) { unsigned n; __asm__ volatile("rdinstret %0" : "=r"(n)); return n; }
 static struct { RGE_View* view; int busy, inline_job, workers, opened, wanted; char pad[8]; } st __attribute__((aligned(16)));
 
+// AOE_SCROLL_COPY=words: a scroll moves the view by words, on 8 pixels across, as before (OverlayMemCopy); read here, on the first core
+struct AoeScrollWay aoe_scroll_way = {1};
 int aoe_view_wanted(void) {
     if (!st.opened) {
         st.opened = 1;
+        const char* c = getenv("AOE_SCROLL_COPY");
+        aoe_scroll_way.words = (c && !strcmp(c, "words")) || getenv("AOE_NOWINDOW") != 0;   // (qemu has no machine's copy)
         if (getenv("AOE_PICSUM")) fprintf(stderr, "aoebase %p\n", (void*) _start);
         const char* e = getenv("AOE_VIEW");
         st.wanted = !e || strcmp(e, "whole");   // whole: as before, without any of this

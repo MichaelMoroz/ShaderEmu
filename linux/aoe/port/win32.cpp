@@ -755,5 +755,10 @@ int main(int argc, char** argv) {
 
 static unsigned rand_state = 1;
 extern "C" int aoe_rand(void) { rand_state = rand_state * 214013 + 2531011; return (rand_state >> 16) & 0x7fff; }
-extern "C" void aoe_srand(unsigned s) { rand_state = s; }
+// AOE_SEED=N: every seeding takes N, not the clock's: the same map and the same start in a run on the real clock (game_par.py)
+extern "C" void aoe_srand(unsigned s) {
+    static int fixed = -1; static unsigned seed;
+    if (fixed < 0) { const char* e = getenv("AOE_SEED"); fixed = e != 0; seed = e ? (unsigned) atol(e) : 0; }
+    rand_state = fixed ? seed : s;
+}
 unsigned aoe_rand_state(void) { return rand_state; }

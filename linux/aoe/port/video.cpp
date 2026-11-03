@@ -3,6 +3,7 @@
 // Under AOE_NOWINDOW=1 (qemu, the host's counting) there is no window: AOE_DUMP=FILE writes the
 // picture with its palette at each AOE_DUMP_EVERY'th Blt to the primary surface.
 #include <stdarg.h>
+#include <stdint.h>
 #include "ddraw.h"
 #include "dsound.h"
 #include "aoe_port.h"
@@ -85,8 +86,24 @@ HRESULT IDirectDrawSurface::Blt(LPRECT dr, IDirectDrawSurface* src, LPRECT sr, D
             unsigned char* d = bits + (dr->top + y) * pitch + dr->left;
             unsigned char* s = src->bits + (sr->top + y) * src->pitch + sr->left;
             if (fl & DDBLT_KEYSRC) {
+                // Most of a keyed picture is the key (a message's text over the view, every frame): four of them at a time
+                // are passed over by one word's test.
                 unsigned char k = (unsigned char) src->key;
-                for (int x = 0; x < n; x++) if (s[x] != k) d[x] = s[x];
+                unsigned k4 = k * 0x01010101u;
+                static int bytes = -1;   // AOE_BLT=bytes: a byte at a time, the way before
+                if (bytes < 0) { const char* e = getenv("AOE_BLT"); bytes = e && !strcmp(e, "bytes"); }
+                int x = bytes ? n : 0;
+                if (bytes) for (int i = 0; i < n; i++) if (s[i] != k) d[i] = s[i];
+                for (; x < n && ((uintptr_t) (s + x) & 3); x++) if (s[x] != k) d[x] = s[x];
+                for (; x + 4 <= n; x += 4) {
+                    unsigned w = *(const unsigned*) (s + x);
+                    if (w == k4) continue;
+                    if ((w & 255) != k) d[x] = (unsigned char) w;
+                    if (((w >> 8) & 255) != k) d[x + 1] = (unsigned char) (w >> 8);
+                    if (((w >> 16) & 255) != k) d[x + 2] = (unsigned char) (w >> 16);
+                    if ((w >> 24) != k) d[x + 3] = (unsigned char) (w >> 24);
+                }
+                for (; x < n; x++) if (s[x] != k) d[x] = s[x];
             } else memcpy(d, s, n);
         }
     }

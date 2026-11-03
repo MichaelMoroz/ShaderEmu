@@ -63,6 +63,8 @@ The program alone:
 | `AOE_SCROLL=edge` | the map scrolls at the window's edges, and by the game's own right drag with nothing selected: the way before ("Controls") |
 | `AOE_SOUND=0`, `AOE_SOUND_LOG=1` | no sound; `aoesnd:` each wave found, played and seen to end (`python tools/aoe_sound_check.py LOG IMAGE`, "Sound") |
 | `AOE_MUSIC=0`, `AOE_MUSIC_LOG=1` or `2`, `AOE_MUSIC_CUT=S` | no music (`AOE_SOUND=0` has none either); `aoemus:` each song and what the card's words say, with 2 every note and instrument for `tools/aoe_music_check.py`; each song ends after S s ("Music") |
+| `AOE_SEED=N` | every seeding of the game's random numbers takes N, not the clock: the same map and start in a run on the real clock (`game_par.py`'s window scenes) |
+| `AOE_SCROLL_COPY=words`, `AOE_BLT=bytes` | a scroll moves the view by words on 8 pixels across, and a keyed copy goes a byte at a time: the ways before ("Speed in play") |
 | `AOE_MENU_PICTURE=middle` | a menu's picture for 800 x 600 cut to its middle in the window, the way before ("Windowed") |
 | `AOE_INPUT_LOG=1` | `aoeinput:` an order, a box and a drag, each with its places; the script's `view` step prints `aoeview:` where the view stands and how many are selected |
 
@@ -196,6 +198,36 @@ to do beside it: panels are redrawn only when they change), then the world updat
 The world update cannot start before the walk ends, since the walk reads the objects. Next would be the walk on more workers, or
 its terrain part after the world starts: the latter stores to tiles the world's stores share texels with, so tile state the view
 keeps must first move apart.
+
+### Scrolling and units in the window (3 November 2026)
+
+The world's complaint was "only when nothing happens": scrolling and units acting felt slow. Scenes of `game_par.py`, all in the
+640 x 480 window, the map's seed fixed (`AOE_SEED=1`: before it, two runs of one scene were two maps, 5.8 against 9.7 frames a second),
+updates 200 to 350: `aoe-still-640`, `aoe-drag-scroll` (the script's `rsweep`: the right button held and the map dragged 20 pixels every
+100 ms, 200 to the left and back, all the span), `aoe-late-640` (updates 3000 to 3200, the computer players' towns and units). Each has a
+`-before` twin that runs the same program the way before (`AOE_SCROLL_COPY=words AOE_BLT=bytes`). Calibrated clock, one run each:
+
+| Scene | Before: frames a second, passes a frame | After |
+|---|---|---|
+| `aoe-drag-scroll` | 11.6, 59.0 (core 0 264k, the view's worker 327k a frame) | 12.0, 56.9 (253k, 322k) |
+| `aoe-still-640` | 14.1, 47.7 | 14.1, 47.7 |
+| `aoe-late-640` | 17.3, 39.1 | 15.2, 44.3 (a played game on the real clock: its frames are not the same frames) |
+
+- **A scroll by the machine's copy.** The view's worker moved the view's 200 KB by words at every scrolled frame (`OverlayMemCopy`:
+  `memmove` was 20% of the worker, 106 thousand instructions a frame). The rows are one block in memory, and the machine's copy moves
+  it in a pass or two from the worker; the scroll goes on 16 pixels across, not 8, so that the block is whole texels. `memmove` is gone
+  from the worker's profile, the picture of a drag was looked at (whole, no seams), `aoe-drag`'s view moved as before, and `RVC_RACES`
+  with `RVC_RACES_NEAR=4` on the drag: 0 undone, 5 near places, none in this code (`memcpy` of `aoe_asm_for_worker`,
+  `view_function_terrain`, `ASMSet_Xlate_Table`, `SetClipRect`, as before).
+- **A keyed copy four pixels a test.** A message over the view is copied with its key every frame (`TMessagePanel::draw`, 58 thousand
+  instructions a frame when one shows); a word that is all key is passed over.
+
+What bounds it is not the drawing: the frame is the walk on the worker with the first core waiting, then the world's update (160 thousand
+instructions a frame, its objects, sprites and computer players) beside the raster, and the first core's own part is about 250 to 300
+thousand a frame either way. Five times faster, the aim asked for, is about 10 passes a frame: the world's update alone is 20. It needs
+the update and the walk to overlap (a frame behind, from copies of what the walk reads, as Half-Life and Doom do) or the update on
+several cores, neither done here. Measured and left: `mcw_on_worker` is 6% of the worker (a call at every sprite: `asm_state`, the fog
+word), `AddSpan` 7.6%, `view_function_terrain` 18% (it walks every visible tile each frame), and the first core's soft doubles 4%.
 
 Tried and not taken: `-O3 -fsched-pressure -funroll-loops` was no faster in play (10.9 against 11.6 on the calibrated clock).
 LTO does not link: the decompiled source defines a class differently in different files (`taiuaimd.h`). PGO was not tried.
