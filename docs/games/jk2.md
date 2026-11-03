@@ -379,8 +379,84 @@ buffer on core 0 whatever the GL under it.
   stays the engine's, as ICARUS waits for a sound's end, a frame missing is silence and one more cut off. The same run:
   **1,067,800 to 872,552 passes** (-18%), core 0 8.43 to 6.78 billion, the workers 3.3 billion. The game's sums to
   frame 450 (`JK2_SUM=50`) are the same both ways; `test_all.py jk2-sums` (1,200 s) was not run.
-- Left on core 0 (a profile of the first half of the load before the pictures): pak inflate 17% (`inflate_fast`,
-  `window`), `Q_stricmp` 6% (3.6 million calls), `mdfour` 2%.
+
+### Side by side (3 November 2026)
+
+The load's work went to the workers a file a worker, not a file over all of them: rd-vanilla and the sound system ask
+for one picture or sound at a time, and nothing waits for its pixels or samples until something is drawn or played.
+The same run as above (`rvc_cpu`, 16 workers, the desktop to `client state 7`), each step the tree against the one before:
+
+| Step | Passes | Core 0 |
+|---|---|---|
+| the pictures' JPEGs over all workers, one at a time (above) | 715,088 | 5.34 billion |
+| animation tables found by an index (`GetIDForString`); large pak entries by libmedia | 696,550 | 4.93 |
+| pictures side by side | 564,052 | 3.86 |
+| what `Upload32` makes of them before the upload, on their worker | 546,499 | 3.65 |
+| the map's MD4 on a worker | 537,297 | 3.54 |
+| the GPU's words made on the worker | 531,386 | 3.47 |
+| libmedia's split inflate given rings it can map | 506,078 | 3.26 |
+| sounds side by side | 397,211 | 2.38 |
+| the music's sizes kept; the autosave's screenshot by libmedia | 365,474 | 2.12 |
+| a picture's size from more than its first 4 KB, a TGA's from 32 bytes | 367,757 | 2.03 |
+| a pak entry's header in one read | 359,206 | 1.96 |
+| a picture with no free worker waits a pass (`mcw_rest`), not made here | 355,260 | 1.91 |
+| `strtod` exact in doubles (`--wrap=strtod`), configstrings copied as strings, `SkipBracedSection` in place | 348,409 | 1.86 |
+| the pictures out at once 20 MB at most, the sounds 6 MB | 351,309 | 1.86 |
+| the loading screen drawn at most every 250 ms (`JK2_LOADING_MS`): 256 pictures of the load to 176 | 348,110 | 1.83 |
+| a deflated WAV read packed, its head's 4 KB inflated here, the rest by its sound's worker (`se_wav_packed_read`) | 336,590 | 1.78 |
+| an MP3's unpacked size counted from its frames' headers (`se_mp3_count`, `cl_mp3.cpp`; `JK2_MP3_CHECK=1`: 0 of the load's differ) | 327,574 | 1.71 |
+| 32 workers opened (`JK2_WORKERS`), libmedia's teams kept at 16 (`JK2_TEAM`) but the large entries' split inflate on all: play with 32 not measured | 313,864 | 1.66 |
+| the string tables' `GetLine` (`strip.cpp`) with its tests inline and no 8 KB cleared a line (`JK2_PARSE_CHECK=1`: 0 differ) | 308,967 | 1.65 |
+| the game's `G_FindConfigstringIndex` searching the configstrings where they lie (`SV_SE_FindConfigstring`) | 306,791 | 1.63 |
+| `mcw_wait` serving only workers with something out (`programs/mc/mcw.c`: every program's; 96 million of `serve` before) | 307,014 | 1.57 |
+| the pak read where it lies: mapped once read only and shared (the page cache itself without an MMU, as `cabinst` wrote it in one piece), minizip's file functions over the map (`unzSE_OpenMapped`), the pictures', sounds' and large entries' packed bytes a pointer into it (`unzSE_PackedAt`, `FS_SE_FreeRaw`); `JK2_PAK_MAP=0` the file reads (303,013, 1.534) | 284,171 | 1.37 |
+
+More workers lose: 32 gave 339,814 passes and 1.82 billion, 64 gave 342,598 and 1.94, 255 did not reach the level in
+3 million passes; 64 opened with libmedia's teams kept at 16 (`JK2_TEAM`) and only the large entries' split inflate on
+all 64 did not either (2.7 million passes, 6.2 billion). The workers are idle four passes in five already: what is left on
+core 0 is mostly the engine's own work, a call at a time.
+
+- **Pictures** (`R_FindImageFile`, `tr_image.cpp`): the `image_t` is made at once as `R_CreateImage` makes it (its
+  texture's number, its name in `AllocatedImages`), the file's bytes as they lie in the pak (`FS_SE_ReadRaw`,
+  `unzSE_ReadPacked`) go to a worker with nothing to do (`mcw_try_call`, `SE_PictureGive`), which inflates
+  (`media_inflate_one`), decodes (`m_jpeg_decode_alone_shrunk`, new in libmedia, or `SE_TGAPixels`, `LoadTGA`'s own
+  loops), halves and scans the pixels as `Upload32` would (`se_prepare`) and makes the GPU's words
+  (`hlglWordsInPlace`, `GL_SE_WORDS` in the shim). This core uploads it when it is through, and every picture before
+  anything is drawn (`RE_BeginFrame`) or an image let go (`R_SE_PicturesFinish`). A picture is drawn only after its
+  upload and its size read only where it is drawn. `JK2_PICTURES_AHEAD=0` is the way before; `HLGL_TEX_SUM=1` prints
+  every texture's words (661 the same both ways), `JK2_PICTURES_SUM=1` the pixels given to the GL.
+- **Sounds** (`S_LoadSound_Actual`, `snd_mem.cpp`): the `sfx_t` gets its length and memory at once, a worker decodes an
+  MP3 (`media_mp3_decode_alone`, new in libmedia) and runs `ResampleSfx`'s loop; the samples and `fVolRange` are copied
+  in at the next sound loaded and before any sound is started, mixed or freed (`S_SE_SoundsFinish`). A stereo MP3 (the
+  engine makes it mono) and a decode under half the engine's length (a file of 10 frames, which minimp3 made silent from
+  the start) are made as before. `JK2_SOUNDS_AHEAD=0` is the way before; `JK2_SOUNDS_SUM=1` prints every sound's
+  samples' sum at the level's end (269 the same both ways).
+- **The map's MD4** (`CM_LoadMap_Actual`) on a worker while this core loads the lumps (`SE_ChecksumGive`, a copy of MD4
+  with its state on the worker's stack: md4.cpp keeps it in a static); `JK2_MD4_CHECK=1` makes both (`e0d5b5c7`).
+- **Large pak entries** (64 KB packed or more) by libmedia's split inflate as a PNG's stream (`SE_PakInflate`, no CRC),
+  whose room the machine without an MMU could not map in one piece for the 10 MB animation file: its rings are halved
+  until it can (`m_inflate.c`). Smaller ones stay zlib's, which is faster on one core than libmedia's.
+- **`strtod`** (every `atof` too, through the link's `--wrap=strtod`, `__wrap_strtod` in `sys_shaderemu.cpp`): musl's
+  makes each number in long doubles, software on this machine; a mantissa up to 2^53 and a power of ten up to 22 is one
+  rounded double operation, strtod's own value, the rest musl's. `JK2_STRTOD_CHECK=1` makes both: 0 differ over the load.
+- **`SV_GetConfigstring`** copies the string and its end, not `strncpy`'s zeros to 1,024 bytes (the game's
+  `G_FindConfigstringIndex` reads every configstring of a set for each name: 70 thousand reads).
+- **`SkipBracedSection`** walks `COM_ParseExt`'s tokens where they lie (the shader text's 200 thousand at the start):
+  `JK2_PARSE_CHECK=1` walks both, 0 differ (place, lines, token line, last token).
+- Memory: one run of four of the sums' (play past the load) was killed for want of memory as play began; the pictures'
+  memory out at once is capped at 20 MB and the sounds' at 6 MB since, and two runs since went through. 30 MB are free
+  after the load.
+- Checks on this build: the sums to frame 450 as before, `RVC_RACES` 0 changes undone over the load.
+- Tried and taken out: **the start's renderer and UI kept** at a map of the command line (`CL_FlushMemory` shuts both
+  down and `CL_StartHunkUsers` makes them again, every shader file and menu read twice): kept, the level did not come
+  in 1.2 million passes; not made at the start, the program crashed before the map.
+- Tried and taken out: **a pak's files read ahead**, after each entry `FS_ReadFile` read the next 32 of its folder and
+  ending inflated by idle workers. 299 of 1,329 reads found theirs ready, but a call keeps its worker busy until it is
+  joined, and the pictures, sounds and libmedia's teams then had fewer: core 0 1.96 to 3.15 billion.
+- **Left** (1.86 billion; per frame, the load's 256): frame 4 (the server's spawn, 0.44 billion: core 0's share of the
+  animations' split inflate, 0.1, `Q_stricmp`, the game's configstring searches), frames 1 and 2 (0.22), frame 174
+  (the world, 0.19), frame 255 (0.15: the screen's dissolve resampled, the music's start), and some 240 frames of 0.3
+  to 2 million each (small files inflated by zlib one at a time, the kept MP3s' decoders made, the frame itself).
 
 ## Memory
 

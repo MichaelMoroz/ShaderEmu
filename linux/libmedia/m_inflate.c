@@ -912,7 +912,13 @@ inflate_stream(const void *in, uint32_t in_size, void *out, uint32_t out_size, u
 		while (s.ring < out_size / parts * 2 && (uint64_t)(parts + LONGER) * s.ring * 4 <= 32u << 20)
 			s.ring <<= 1;
 	room_bytes = parts * (uint32_t)(sizeof(struct part) + sizeof(struct made) + sizeof(struct dec) + 16 * 5 + 64) + (parts - 1) * WINDOW + (parts + LONGER) * s.ring * 2 + 64;
-	if (!(room = m_map(room_bytes))) {
+	/* (a machine without an MMU may have no room of that many bytes in one piece: rings half as long, down to the window,
+	 * and a part that makes more than its ring is inflated again) */
+	while (!(room = m_map(room_bytes)) && s.ring > WINDOW) {
+		room_bytes -= (parts + LONGER) * s.ring;
+		s.ring >>= 1;
+	}
+	if (!room) {
 		m_workers_end();
 		return "not enough memory";
 	}

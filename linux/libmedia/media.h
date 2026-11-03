@@ -154,6 +154,11 @@ int media_audio_piece(struct media_audio *audio, int d, uint32_t piece, int16_t 
 uint32_t media_audio_piece_step(struct media_audio *audio, int d, uint32_t piece, int16_t *to, uint32_t done);
 /* The piece a frame is in. */
 uint32_t media_audio_piece_of(const struct media_audio *audio, uint32_t frame);
+/* An MP3 decoded whole on the core that calls, from its first frame, with no memory of its own but `room`
+ * (media_mp3_room() bytes, 16-aligned): for files decoded side by side, a core each. The frames media_audio_open keeps
+ * (the first one's kind), at most `frames` a channel's samples of `channels` into to[]: how many. */
+uint32_t media_mp3_room(void);
+uint32_t media_mp3_decode_alone(const void *data, uint32_t size, int16_t *to, uint32_t frames, int channels, void *room);
 /* Pieces about `frames` long (whole MP3 frames or FLAC blocks, whole 16 bytes): how many then. */
 uint32_t media_audio_set_piece(struct media_audio *audio, uint32_t frames);
 /* An MP3 file at half its rate (its lower 16 bands; the info and pieces halved): whether it took. */

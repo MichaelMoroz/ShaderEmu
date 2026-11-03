@@ -1354,6 +1354,34 @@ m_jpeg_decode_alone(const uint8_t *f, uint32_t size, struct media_image *out, vo
 	return failed ? "the picture is damaged" : NULL;
 }
 
+/* The same, 1, 2, 4 or 8 times smaller each way as m_jpeg_decode_shrunk makes it, on the core that calls. */
+const char *
+m_jpeg_decode_alone_shrunk(const uint8_t *f, uint32_t size, struct media_image *out, void *room, int shrink)
+{
+	struct jpg *j = room;
+	volatile uint32_t failed = 0;
+	struct row_at r;
+	const char *why;
+
+	memset(j, 0, sizeof *j);
+	j->file = f, j->size = size, j->out = out;
+	j->shrink = shrink == 2 || shrink == 4 || shrink == 8 ? shrink : 1;
+	if ((why = header(j, 1)) != NULL)
+		return why;
+	if (j->progressive)
+		return "a progressive JPEG, which is decoded over all cores only";
+	if (out->width != (j->w + j->shrink - 1) / j->shrink || out->height != (j->h + j->shrink - 1) / j->shrink)
+		return "the picture is not the size its pixels were given for";
+	j->failed = &failed;
+	j->bs = 8 / j->shrink;
+	j->ow = (j->w + j->shrink - 1) / j->shrink, j->oh = (j->h + j->shrink - 1) / j->shrink;
+	j->omcu_w = j->mcu_w / j->shrink, j->omcu_h = j->mcu_h / j->shrink;
+	memset(&r, 0, sizeof r);
+	r.at = f + j->scan_at, r.left = j->restart;
+	run_mcus(j, &r, 0, 0, j->mcus_x * j->mcus_y);
+	return failed ? "the picture is damaged" : NULL;
+}
+
 /* The same, 1, 2, 4 or 8 times smaller each way (out is (w + shrink - 1) / shrink wide). */
 const char *
 m_jpeg_decode_shrunk(const uint8_t *f, uint32_t size, struct media_image *out, int workers, int shrink)

@@ -601,7 +601,10 @@ int mcw_wait(int k)
 	int passes = 0, other;
 
 	while (!mcw_done(k)) {
-		for (other = 1; other <= count; other++) serve(other);
+		/* (only a worker with something out, or being started, can have stopped at a page: Jedi Outcast's load spent
+		 * 96 million instructions of its first core asking 32 workers, most with nothing out, every pass it waited) */
+		for (other = 1; other <= count; other++)
+			if (!settled[other] || starting[other]) serve(other);
 		mcw_rest();
 		passes++;
 	}

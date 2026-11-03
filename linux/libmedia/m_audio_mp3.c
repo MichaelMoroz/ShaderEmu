@@ -215,3 +215,42 @@ m_mp3_close(struct media_audio *a)
 	free(m->at);
 	free(m);
 }
+
+/* An MP3 decoded whole on the core that calls, from its first frame, with no memory but `room` (media_mp3_room() bytes,
+ * 16-aligned): for files decoded side by side, a core each. Its frames as m_mp3_open keeps them (those of the first one's
+ * kind), at most `frames` a channel's samples into to[]: how many. */
+uint32_t
+media_mp3_room(void)
+{
+	return (uint32_t)((sizeof(mp3dec_t) + 15) & ~(size_t)15);
+}
+
+uint32_t
+media_mp3_decode_alone(const void *data, uint32_t size, int16_t *to, uint32_t frames, int channels, void *room)
+{
+	const uint8_t *f = data;
+	mp3dec_t *dec = room;
+	mp3dec_frame_info_t info;
+	mp3d_sample_t pcm[MINIMP3_MAX_SAMPLES_PER_FRAME];
+	uint32_t pos = 0, made = 0, k;
+	int n, hz = 0, ch = 0, layer = 0, samples = 0;
+
+	if (size > 10 && !memcmp(f, "ID3", 3))
+		pos = 10 + ((f[6] & 127u) << 21 | (f[7] & 127u) << 14 | (f[8] & 127u) << 7 | (f[9] & 127u));
+	memset(dec, 0, sizeof *dec);
+	while (pos < size && made < frames) {
+		info.frame_bytes = 0;
+		n = m_mp3full_frame(dec, f + pos, (int)(size - pos), pcm, &info);
+		if (info.frame_bytes <= 0)
+			break;
+		if (n > 0 && !samples)
+			hz = info.hz, ch = info.channels, layer = info.layer, samples = n;
+		if (n > 0 && info.hz == hz && info.channels == ch && info.layer == layer && n == samples && ch == channels) {
+			k = (uint32_t)n < frames - made ? (uint32_t)n : frames - made;
+			memcpy(to + made * (uint32_t)channels, pcm, (size_t)k * (uint32_t)channels * 2);
+			made += k;
+		}
+		pos += (uint32_t)info.frame_bytes;
+	}
+	return made;
+}
