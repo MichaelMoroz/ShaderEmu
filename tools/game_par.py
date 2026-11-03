@@ -67,6 +67,8 @@ QUAKE_RATE = lines_rate(r'quakestat: (\d+) frames in (\d+) ms', skip=1)
 AOE_PLAY = '3000 click 400 245;3000 click 400 172;3000 click 237 568;2000 click 369 118;1000 rclick 505 170;1000 click 370 215;1000 click 163 508'
 # (the window of 640 x 480 the game opens as: menus' buttons x 0.8, the view's middle 80 and 60 less, the bottom panel 120 up)
 AOE_PLAY_640 = '3000 click 320 196;3000 click 320 138;3000 click 190 454;2000 click 289 58;1000 rclick 425 110;1000 click 290 155;1000 click 163 388'
+# (the trial unpacked from its installer in the ROM first, its licence answered on the terminal: docs/system/install.md)
+AOE_UNPACK = 'echo yes | aoe --unpack > /dev/null; '
 AOE_FRAMES = lambda log: int(re.search(r'aoe: mark ends, (\d+) frames', log)[1])
 AOE_RATE = lambda log: tuple(int(x) for x in re.search(r'aoe: mark ends, (\d+) frames in (\d+) ms', log).groups())
 
@@ -77,7 +79,7 @@ AOE_ACTS_800 = 'f select 369 118;f order 505 170 r:;f select-building 370 215;f 
 AOE_ACTS_640 = 'f select 289 58;f order 425 110 r:;f select-building 290 155;f train 163 388;f box 220 40 drag: :$((OX+420)),$((OY+240));' \
                'f order-many 370 290 r:;f select-again 289 58;f build-menu 40 388;f menu-back 40 388;f scroll 400 200 rdrag: :$((OX+200)),$((OY+100));f scroll-back 200 100 rdrag: :$((OX+400)),$((OY+200));f stop 320 180 wheel: :0;'
 def aoe_person(play, acts, before=''):
-    return (before + 'f(){ echo -n "act $1 ";cat /proc/uptime;X=$(($2+OX));Y=$(($3+OY));nxkey $4$X,$Y$5;sleep 5; };nx & sleep 10; AOE_LAT=1 AOE_SCRIPT="'
+    return (AOE_UNPACK + before + 'f(){ echo -n "act $1 ";cat /proc/uptime;X=$(($2+OX));Y=$(($3+OY));nxkey $4$X,$Y$5;sleep 5; };nx & sleep 10; AOE_LAT=1 AOE_SCRIPT="'
             + play.rsplit(';', 3)[0] + ';3000 ready" aoe & '
             'while [ ! -e /tmp/aoe-ready ];do sleep 1;done;read OX OY </tmp/aoe-ready;sleep 2;echo aoe: play begins;'
             + acts + 'killall -TERM aoe.bin;sleep 60')
@@ -150,15 +152,22 @@ GAMES = {
     # (on an image made with --aoe; three scenes of one script: docs/games/aoe.md, "Speed")
     'aoe': dict(
         what='a Random Map game, 4 players, a villager sent and one trained, updates 50 to 300',
-        cmd='nano-X -p & sleep 2; AOE_SIZE=800 AOE_MARK=${AOE_MARK:-50,300} AOE_SCRIPT="' + AOE_PLAY + '" aoe', wall=900,
+        cmd=AOE_UNPACK + 'nano-X -p & sleep 2; AOE_SIZE=800 AOE_MARK=${AOE_MARK:-50,300} AOE_SCRIPT="' + AOE_PLAY + '" aoe', wall=900,
         mark='aoe: mark begins', until='aoe: mark over', frames=AOE_FRAMES, rate=AOE_RATE),
     'aoe-late': dict(
         what='the same game left to the computer players, updates 4000 to 4300',
-        cmd='nano-X -p & sleep 2; AOE_SIZE=800 AOE_MARK=4000,4300 AOE_SCRIPT="' + AOE_PLAY + '" aoe', wall=1800,
+        cmd=AOE_UNPACK + 'nano-X -p & sleep 2; AOE_SIZE=800 AOE_MARK=4000,4300 AOE_SCRIPT="' + AOE_PLAY + '" aoe', wall=1800,
         mark='aoe: mark begins', until='aoe: mark over', frames=AOE_FRAMES, rate=AOE_RATE),
     'aoe-scroll': dict(
         what='the same game, the pointer at the right and left edges in turn for 1.5 s each (over what is explored), updates 100 to 300',
-        cmd='nano-X -p & sleep 2; AOE_SIZE=800 AOE_SCROLL=edge AOE_MARK=100,300 AOE_SCRIPT="' + AOE_PLAY + ';1000 move 799 300' + ';1500 move 0 300;1500 move 799 300' * 12 + '" aoe', wall=900,
+        cmd=AOE_UNPACK + 'nano-X -p & sleep 2; AOE_SIZE=800 AOE_SCROLL=edge AOE_MARK=100,300 AOE_SCRIPT="' + AOE_PLAY + ';1000 move 799 300' + ';1500 move 0 300;1500 move 799 300' * 12 + '" aoe', wall=900,
+        mark='aoe: mark begins', until='aoe: mark over', frames=AOE_FRAMES, rate=AOE_RATE),
+    # (the map dragged by the right button in the window by the script's rsweep: 20 pixels every 100 ms, 200 to the left and back,
+    # ten times; docs/games/aoe.md, "Speed in play")
+    'aoe-drag-scroll': dict(
+        what='the game in its window, the map dragged by the right button to and fro all the time, updates 200 to 350',
+        cmd=AOE_UNPACK + 'nano-X -p & sleep 2; AOE_MARK=${AOE_MARK:-200,350} AOE_SCRIPT="' + AOE_PLAY_640 + ';1000 view;1000 rsweep 400 200;'
+            + ';'.join(['2000 view'] * 6) + '" aoe', wall=900,
         mark='aoe: mark begins', until='aoe: mark over', frames=AOE_FRAMES, rate=AOE_RATE),
     # (a person's input: real events through the kernel and the window system on the desktop: tools/aoe_play.py reads the log)
     'aoe-play': dict(

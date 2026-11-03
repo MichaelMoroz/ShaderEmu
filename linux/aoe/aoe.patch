@@ -135,7 +135,7 @@ index 6fcfc515..3e39581a 100644
      if (dc != 0) {
          SelectClipRgn(dc, clip_rgn);
 diff --git a/src/Panel_ez.cpp b/src/Panel_ez.cpp
-index 1b7ed184..073b7104 100644
+index 1b7ed184..92c13257 100644
 --- a/src/Panel_ez.cpp
 +++ b/src/Panel_ez.cpp
 @@ -43,6 +43,7 @@ long TEasy_Panel::setup(
@@ -150,8 +150,8 @@ index 1b7ed184..073b7104 100644
          if (this->render_area->Width < 800 || stricmp(background_pic_file_name_b1, "none") == 0) {
              this->set_background(background_pic_file_name_a1, back_pic_id_a1);
              this->set_background2(background_pic_file_name_a2, back_pic_id_a2);
-+            // The port: the trial has no pictures for 640 x 480. The middle of the one for 800 x 600 (background_pos 1), which the
-+            // menu's buttons are laid out over at either size.
++            // The port: the trial has no pictures for 640 x 480. The one for 800 x 600, brought down whole to this size once the
++            // palette is known (aoe_picture_fit, below); the menu's buttons are laid out over it at either size.
 +            if (this->background_pic == 0 && this->render_area->Width < 800 && stricmp(background_pic_file_name_b1, "none") != 0) {
 +                this->set_background(background_pic_file_name_b1, back_pic_id_b1);
 +                this->set_background2(background_pic_file_name_b2, back_pic_id_b2);
@@ -160,11 +160,17 @@ index 1b7ed184..073b7104 100644
          } else if (this->render_area->Width < 1024) {
              this->set_background(background_pic_file_name_b1, back_pic_id_b1);
              this->set_background2(background_pic_file_name_b2, back_pic_id_b2);
-@@ -196,7 +204,7 @@ long TEasy_Panel::setup(
+@@ -196,7 +204,13 @@ long TEasy_Panel::setup(
          this->set_shadow_amount(shad_amt);
          this->set_palette(palette_file_name, pal_id);
          this->set_cursor(cursor_file_name, cursor_id);
 -        this->set_background_pos(background_pos_in);
++        // AOE_MENU_PICTURE=middle: the middle of the picture, cut, as before
++        if (aoe_centred && !(getenv("AOE_MENU_PICTURE") && !strcmp(getenv("AOE_MENU_PICTURE"), "middle"))) {
++            extern void aoe_picture_fit(TShape**, void*, int, int, int, int);
++            aoe_picture_fit(&this->background_pic, this->palette, this->render_area->Width, this->render_area->Height, back_pic_id_b1, pal_id);
++            aoe_picture_fit(&this->background_pic2, this->palette, this->render_area->Width, this->render_area->Height, back_pic_id_b2, pal_id);
++        }
 +        this->set_background_pos(aoe_centred ? 1 : background_pos_in);
          this->set_background_colors(background_color1_in, background_color1_in);
          this->set_bevel_colors(bc1, bc2, bc3, bc4, bc5, bc6);
@@ -510,7 +516,7 @@ index 09564326..bd589eb2 100644
      }
  
 diff --git a/src/main.cpp b/src/main.cpp
-index b672d36a..7c39465f 100644
+index b672d36a..24d97d6f 100644
 --- a/src/main.cpp
 +++ b/src/main.cpp
 @@ -26,7 +26,7 @@ extern "C" int __stdcall WinMain(HINSTANCE prog_inst, HINSTANCE prev_inst, char*
@@ -522,10 +528,7 @@ index b672d36a..7c39465f 100644
      info.max_players_per_cd = 3;
      info.instance = prog_inst;
      info.prev_instance = prev_inst;
-@@ -48,10 +48,10 @@ extern "C" int __stdcall WinMain(HINSTANCE prog_inst, HINSTANCE prev_inst, char*
-     info.fixed_window_size = 1;
-     info.use_dir_draw = 1;
-     info.use_sys_mem = 0;
+@@ -51,7 +51,7 @@ extern "C" int __stdcall WinMain(HINSTANCE prog_inst, HINSTANCE prev_inst, char*
      info.use_music = 1;
      info.use_sound = 1;
      info.fast_view = 1;

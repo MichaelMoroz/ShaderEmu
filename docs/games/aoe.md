@@ -54,7 +54,7 @@ The program alone:
 | Switch | Does |
 |---|---|
 | `AOE_TICK_MS=33` | a clock that moves by what the game does: a run comes out the same |
-| `AOE_SCRIPT="MS click X Y;MS rclick X Y;MS key K;MS char C;MS close;MS quit"` | each step MS after the screen last changed or the step before |
+| `AOE_SCRIPT="MS click X Y;MS rclick X Y;MS key K;MS char C;MS close;MS quit"` | each step MS after the screen last changed or the step before; `move X Y` keeps a held button, `rsweep X Y` presses the right button and drags 200 pixels to the left and back ten times, 20 a 100 ms (`game_par.py aoe-drag-scroll`), `ready` writes `/tmp/aoe-ready` and then `/tmp/aoe-size` |
 | `AOE_SUM_EVERY=N`, `AOE_SUM_END=N` | `aoesum:` a sum of the clock, the random state, players' attributes, objects' ids, hit points and places |
 | `AOE_STATS_MS=N`, `AOE_PLAYERS=1`, `AOE_DEBUG=1` | `aoestat:`, players' resources, panels by time |
 | `AOE_DUMP=FILE`, `AOE_DUMP_EVERY=N` | pictures under qemu |
@@ -63,6 +63,7 @@ The program alone:
 | `AOE_SCROLL=edge` | the map scrolls at the window's edges, and by the game's own right drag with nothing selected: the way before ("Controls") |
 | `AOE_SOUND=0`, `AOE_SOUND_LOG=1` | no sound; `aoesnd:` each wave found, played and seen to end (`python tools/aoe_sound_check.py LOG IMAGE`, "Sound") |
 | `AOE_MUSIC=0`, `AOE_MUSIC_LOG=1` or `2`, `AOE_MUSIC_CUT=S` | no music (`AOE_SOUND=0` has none either); `aoemus:` each song and what the card's words say, with 2 every note and instrument for `tools/aoe_music_check.py`; each song ends after S s ("Music") |
+| `AOE_MENU_PICTURE=middle` | a menu's picture for 800 x 600 cut to its middle in the window, the way before ("Windowed") |
 | `AOE_INPUT_LOG=1` | `aoeinput:` an order, a box and a drag, each with its places; the script's `view` step prints `aoeview:` where the view stands and how many are selected |
 
 `test_all.py aoe --image build/images/NAME` plays the script below to update 1000 (at 800 x 600), `aoe-640` the same at the window's size, and `aoe-drag` the controls. `aoe-music` is `aoe-640` with the card's clock moving (`RVC_SOUND=1`), which those have not, and songs cut to 4 s. An image with no data prints `AOE-NO-DATA` and passes.
@@ -237,9 +238,29 @@ The game opens as an ordinary window of 640 x 480, the size its code calls its l
 The game's code has a layout for 640 x 480 (`TRIBE_Screen_Game::handle_size`), but the trial has no pictures for it. So:
 
 - The game screen's two bands are cut from the 800 x 600 picture (`aoe_picture_cut`): the top bar without its columns 376 to 535, the bottom panel without 406 to 565, which the layout's places fit to the pixel. What is drawn is kept as before.
-- A menu's background is the middle of the picture for 800 x 600 (`background_pos` 1, in `TEasy_Panel::setup`): the title's top is cut off.
+- A menu with no picture of its own for 640 x 480 has the one for 800 x 600 brought down whole (3 November 2026; before, the middle of it
+  was shown, `background_pos` 1, and the title's top and the award's side were cut off). `port/aoe_slp.h` reads the shape's first frame
+  into pixels, makes each pixel of the smaller picture the average of the area it covers (800 to 640 is two source pixels each way,
+  weights 4 and 1, 3 and 2, ...) in the menu's palette, and maps it back by the nearest of the palette's colours to its 15 bits; the
+  result is a shape of copy and skip commands, which the game draws as it drew the other. `aoeprep` makes them on the workers once the
+  trial is unpacked (`aoe-menus.bin`: the information files of `Interfac.drs` that have no picture for 640 and one of 800 x 600, each in
+  its palette), and `TEasy_Panel::setup` takes the menu's from there (`aoe_picture_fit`, `port/aoe_scale.cpp`): 47 thousand instructions.
+  One not there is made by the game itself: 72 million instructions on the first core when it averaged every pixel through a lazily
+  filled table, 17 s at the world's 4 MIPS, which is why aoeprep makes them. In the trial only the main menu is such a menu (picture
+  50103, palette 50501; aoeprep 2.6 s of `rvc_cpu`'s plain clock on 173 workers). `AOE_MENU_PICTURE=middle` is the way before.
+  Looked at in captures under `rvc_harness --cpu --warp`: the main menu (whole, buttons where they were), the single player menu, the
+  game's settings, the scenario builder's menu and the multiplayer connection, which have pictures for 640 of their own. Help shows an
+  empty message box: Windows' help is not there.
 - At that size the buttons are five columns, with "more" and "cancel" over the map's corners (`button_other_pic`), as the code lays them out.
-- The victory and "history" screens ask for `bgA640` (`scr_end.cpp`, `scr_trb.cpp`): they were not looked at, and are likely to have no picture.
+- The victory and "history" screens ask for `bgA640` (`scr_end.cpp`, `scr_trb.cpp`): nothing in the game makes them (no `TribeEndScreen` or
+  `TribeSelectTribeScreen` is constructed), so they cannot be reached.
+
+The window can be resized and maximized, and the picture is stretched over it. Every pointer place the game gets goes through that
+stretch (`aoe_win_map` in `port/window.c`, as `seglPicturePoint` does but not held to the picture): Nano-X's button and move events, and
+the machine's pointer words read while a button is held (`held_by_words`), which go on past the window's sides. Before 3 November 2026
+they did not, so in a rescaled window (in the world) a click landed elsewhere and the menus seemed stuck. `test_all.py aoe-resize`
+maximizes the window (794 x 545) and clicks Single Player where it is drawn, then tiles it to the right half (394 x 545) and clicks Random
+Map: both menus come. The script's `ready` makes the game write `/tmp/aoe-size` (`X Y W H`) at each change of the window's size after it.
 
 The smaller view is faster. `game_par.py aoe-play` and `aoe-play-800` calibrated, on a model fitted to an older tick so only the comparison counts, six timings each, alternating, frames a second over the acts: 12.3 at 800 x 600 before this work, 12.1 at 800 x 600 now, 15.5 in the window (14.7 to 17.0). The acts are not quite the same: the window's two scroll acts are drags, the 800's rest at the edges.
 
