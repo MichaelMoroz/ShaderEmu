@@ -843,6 +843,7 @@ void SNDDMA_Activate( qboolean activate ) {}
 // the engine decodes and mixes as before.
 #ifdef SE_WINDOW
 #include "media.h"
+#include <zlib.h>
 #include "mcw.h"
 #include "mcwx.h"
 
@@ -1164,7 +1165,10 @@ int SE_SoundMP3( const void *data, int size, void *out, int bytes, int rate, int
 // the way before.
 extern "C" const char *m_inflate_stream_plain( const void *in, uint32_t in_size, void *out, uint32_t out_size, uint32_t *made,
 					       int workers );
+extern "C" const char *m_inflate_stream_rest( const void *in, uint32_t in_size, void *out, uint32_t out_size, uint32_t *made,
+					      uint32_t *crc, int workers );
 
+static void se_files_reap( int all );	// (files read ahead: below)
 extern "C" int SE_PakInflate( const void *in, unsigned in_size, void *out, unsigned out_size, unsigned *crc )
 {
 	static int engine = -1;
@@ -1178,9 +1182,13 @@ extern "C" int SE_PakInflate( const void *in, unsigned in_size, void *out, unsig
 	if ( !in )
 		return 0;	// (asked whether it would take it, before the bytes are read)
 	uint32_t made = 0;
+	se_files_reap( 1 );	// (every worker for the team)
 	mcw_touch( out, out_size );   // (stored to by this core first: the workers write it)
-	const char *why = crc ? media_inflate_stream( in, in_size, out, out_size, &made, NULL, crc, se_wide_workers() )
-			      : m_inflate_stream_plain( in, in_size, out, out_size, &made, se_wide_workers() );
+	// (JK2_PAK_REST=0: this core takes a part of each as the workers do, where it rests until they are through)
+	static int rest = env_int( "JK2_PAK_REST", 1 );
+	const char *why = rest ? m_inflate_stream_rest( in, in_size, out, out_size, &made, crc, se_wide_workers() )
+		: crc ? media_inflate_stream( in, in_size, out, out_size, &made, NULL, crc, se_wide_workers() )
+		      : m_inflate_stream_plain( in, in_size, out, out_size, &made, se_wide_workers() );
 	if ( getenv( "JK2_PAK_LOG" ) )
 		printf( "jk2: pak entry of %u packed bytes, %u made: %s\n", in_size, out_size,
 			why ? why : made != out_size ? "short: zlib's" : "libmedia's" );
@@ -1214,6 +1222,7 @@ struct __attribute__((aligned(16))) se_picture_t {
 static se_picture_t se_pictures[SE_PICTURES];
 static struct se_rooms_t { void *inflate, *jpeg, *mp3; } se_rooms[256];
 static void *se_head_room;
+static int se_rooms_made;	// (every worker's rooms: SE_PicturesOn)
 static void *se_head_room_mp3( void )
 {
 	static void *room;
@@ -1275,21 +1284,68 @@ int SE_PicturesOn( void ( *tga )( const void *file, unsigned char *rgba ),
 			uint8_t none[16];
 			uint32_t made;
 			media_inflate_one( empty, 2, none, sizeof none, &made, NULL, NULL, se_head_room );
+			se_rooms_made = on;
 		}
 	}
 	return on && !mcw_on_worker() && !SE_InPlay();
 }
 
-// A file's first bytes, to `room` of them, inflated when it is deflated: how many
+// A file's first bytes, to `room` of them, inflated when it is deflated: how many. By zlib, which stops where the room
+// is full (media_inflate_one made the whole first block: 139 thousand instructions a head; JK2_HEAD=media the way before),
+// its state in malloc's memory, not the engine's zone.
+static voidpf se_zalloc( voidpf, uInt items, uInt size ) { return malloc( (size_t)items * size ); }
+static void se_zfree( voidpf, voidpf at ) { free( at ); }
 int SE_PictureHead( const void *raw, int raw_len, int method, int len, void *head, int room )
 {
-	uint32_t made = 0;
+	static int by_media = -1;
+	if ( by_media < 0 ) {
+		const char *e = getenv( "JK2_HEAD" );
+		by_media = e && !strcmp( e, "media" );
+	}
+	uint32_t made = 0, want = (uint32_t)( len < room ? len : room );
 	if ( method != 8 ) {
 		made = (uint32_t)( raw_len < room ? raw_len : room );
 		memcpy( head, raw, made );
+	} else if ( by_media ) {
+		media_inflate_one( raw, (uint32_t)raw_len, head, want, &made, NULL, NULL, se_head_room );
 	} else {
-		media_inflate_one( raw, (uint32_t)raw_len, head, (uint32_t)( len < room ? len : room ), &made, NULL, NULL, se_head_room );
+		z_stream z;
+		memset( &z, 0, sizeof( z ) );
+		z.zalloc = se_zalloc, z.zfree = se_zfree;
+		if ( inflateInit2( &z, -MAX_WBITS ) != Z_OK )
+			return 0;
+		z.next_in = (Bytef *)raw, z.avail_in = (uInt)raw_len;
+		z.next_out = (Bytef *)head, z.avail_out = want;
+		int r = inflate( &z, Z_SYNC_FLUSH );
+		made = r == Z_OK || r == Z_STREAM_END || r == Z_BUF_ERROR ? want - z.avail_out : 0;
+		inflateEnd( &z );
 	}
+	return (int)made;
+}
+
+// A deflated file's first bytes inflated in steps, 512 bytes and then twice as many each time, until `known` says they are
+// enough or `room` of them (or the file) are made: how many (rd-vanilla's JPEG heads, whose frame is mostly in their first
+// few hundred bytes: 80 thousand instructions a head to 4 KB)
+int SE_PictureHeadUntil( const void *raw, int raw_len, int len, void *head, int room, int ( *known )( const unsigned char *head, int got ) )
+{
+	uint32_t made = 0, want = (uint32_t)( len < room ? len : room ), step = 512;
+	z_stream z;
+	memset( &z, 0, sizeof( z ) );
+	z.zalloc = se_zalloc, z.zfree = se_zfree;
+	if ( inflateInit2( &z, -MAX_WBITS ) != Z_OK )
+		return 0;
+	z.next_in = (Bytef *)raw, z.avail_in = (uInt)raw_len;
+	z.next_out = (Bytef *)head;
+	while ( made < want ) {
+		uint32_t to = want - made > step ? made + step : want;
+		z.avail_out = to - made;
+		int r = inflate( &z, Z_SYNC_FLUSH );
+		made = to - z.avail_out;
+		if ( r != Z_OK || known( (const unsigned char *)head, (int)made ) )
+			break;
+		step *= 2;
+	}
+	inflateEnd( &z );
 	return (int)made;
 }
 
@@ -1297,6 +1353,7 @@ int SE_PictureHead( const void *raw, int raw_len, int method, int len, void *hea
 int SE_PictureGive( const void *raw, int raw_len, int method, void *plain, int len, int kind, int shrink, void *rgba, int width,
 		    int height, int halvings, int lightscale )
 {
+	se_files_reap( 0 );
 	int i;
 	for ( i = 0; i < SE_PICTURES && se_pictures[i].handle; i++ ) {}
 	if ( i == SE_PICTURES )
@@ -1321,6 +1378,68 @@ int SE_PictureJoin( int given )
 	int answer = (int)mcw_join( p->handle );
 	p->handle = 0;
 	return answer;
+}
+
+// A file of the pak read ahead (files.cpp's FS_ReadFile, "files read ahead"): its deflated bytes where they lie inflated
+// into `out` on a worker with nothing to do, with that worker's room. Its handle, 0 when none has nothing to do, no record
+// is free or the rooms are not made (SE_PicturesOn); SE_FileJoin waits: 1 made whole. What a worker stores to is `out`.
+#define SE_FILES 64
+struct __attribute__((aligned(16))) se_file_t { const void *raw; uint32_t raw_len; void *out; uint32_t len; int handle, state, answer; };
+static se_file_t se_files[SE_FILES];	// state 0 free, 1 out on a worker, 2 through (its worker let go: se_files_reap)
+static int se_files_out;
+static uint32_t se_file_job( uint32_t a0, uint32_t a1 )
+{
+	(void)a1;
+	const se_file_t *f = (const se_file_t *)(uintptr_t)a0;
+	uint32_t made = 0;
+	return !media_inflate_one( f->raw, f->raw_len, f->out, f->len, &made, NULL, NULL, se_rooms[mcw_self()].inflate ) &&
+		made == f->len ? 1 : 2;
+}
+// Files out on workers: those through joined, so that their workers are free for libmedia's teams and the pictures;
+// with `all` every one waited for
+static void se_files_reap( int all )
+{
+	for ( int i = 0; i < SE_FILES && se_files_out; i++ ) {
+		se_file_t *f = &se_files[i];
+		if ( f->state == 1 && ( all || mcw_ready( f->handle ) ) ) {
+			f->answer = (int)mcw_join( f->handle );
+			f->handle = 0, f->state = 2;
+			se_files_out--;
+		}
+	}
+}
+int SE_FileGive( const void *raw, int raw_len, void *out, int len )
+{
+	if ( !se_rooms_made || mcw_on_worker() || SE_InPlay() || raw_len <= 0 || len <= 0 )
+		return 0;
+	se_files_reap( 0 );
+	int i;
+	for ( i = 0; i < SE_FILES && se_files[i].state; i++ ) {}
+	if ( i == SE_FILES )
+		return 0;
+	se_file_t *f = &se_files[i];
+	f->raw = raw, f->raw_len = (uint32_t)raw_len, f->out = out, f->len = (uint32_t)len;
+	mcw_touch( out, (unsigned)len );   // (stored to by this core first: the worker writes it)
+	int h = mcw_try_call( se_file_job, (uint32_t)(uintptr_t)f, 0 );
+	if ( !h )
+		return 0;
+	f->handle = h, f->state = 1;
+	se_files_out++;
+	return i + 1;
+}
+// A file given waited for and its record let go: 1 made whole
+int SE_FileJoin( int given )
+{
+	if ( given <= 0 || given > SE_FILES || !se_files[given - 1].state )
+		return 0;
+	se_file_t *f = &se_files[given - 1];
+	if ( f->state == 1 ) {
+		f->answer = (int)mcw_join( f->handle );
+		f->handle = 0;
+		se_files_out--;
+	}
+	f->state = 0;
+	return f->answer;
 }
 
 // The map's MD4 made on a worker while this core loads its lumps (cm_load.cpp's CM_LoadMap_Actual; docs/games/jk2.md,
@@ -1670,10 +1789,13 @@ int SE_SoundReady( int given ) { return 1; }
 int SE_SoundJoin( int given ) { return 1; }
 uint32_t SE_ChecksumJoin( int given, const void *buffer, int length ) { return 0; }
 int SE_PictureHead( const void *raw, int raw_len, int method, int len, void *head, int room ) { return 0; }
+int SE_PictureHeadUntil( const void *raw, int raw_len, int len, void *head, int room, int ( *known )( const unsigned char *head, int got ) ) { return 0; }
 int SE_PictureGive( const void *raw, int raw_len, int method, void *plain, int len, int kind, int shrink, void *rgba, int width,
 		    int height, int halvings, int lightscale ) { return 0; }
 int SE_PictureReady( int given ) { return 1; }
 int SE_PictureJoin( int given ) { return 2; }
+int SE_FileGive( const void *raw, int raw_len, void *out, int len ) { return 0; }
+int SE_FileJoin( int given ) { return 0; }
 void SE_PicturesRest( void ) {}
 extern "C" int SE_PakInflate( const void *in, unsigned in_size, void *out, unsigned out_size, unsigned *crc ) { return -1; }
 int SE_MixWorker( void ) { return 0; }

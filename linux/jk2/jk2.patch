@@ -141,7 +141,7 @@ index 1a5c2446..c449bdea 100644
  	RIT(Cvar_Set);
  	RIT(Cvar_SetValue);
 diff --git a/code/client/cl_mp3.cpp b/code/client/cl_mp3.cpp
-index c397a494..bcdab89b 100644
+index c397a494..cb2b3632 100644
 --- a/code/client/cl_mp3.cpp
 +++ b/code/client/cl_mp3.cpp
 @@ -51,6 +51,77 @@ qboolean MP3_IsValid( const char *psLocalFilename, void *pvData, int iDataLen, q
@@ -262,8 +262,109 @@ index c397a494..bcdab89b 100644
  
  		if (psError)
  		{
+@@ -253,6 +356,52 @@ void MP3_InitCvars(void)
+ //
+ // (note: the reason I pass in the unpacked size rather than working it out here is simply because I already have it)
+ //
++#ifdef SHADEREMU
++// (ShaderEmu: a sound kept as MP3 gets its 26.6 KB decoder state when it is first played, not at its load: the level
++// keeps 569 of them, 14.5 MB, most never played. Its record meanwhile says how to make it, as the load made it (the
++// load still makes it once, to know it can). JK2_MP3_LAZY=0 is the way before; JK2_MP3_LAZY_CHECK=1 compares each
++// state made at a play with the load's and says how many bytes differ.)
++#define SE_MP3_LAZY 0x4c415a59u	// (no function's address: the state's first word is one)
++typedef struct { unsigned magic; int len, speed; qboolean stereo; MP3STREAM *check; } se_mp3_lazy_t;
++static int se_mp3_lazy_on( void )
++{
++	static int on = -1;
++	if ( on < 0 ) {
++		const char *e = getenv( "JK2_MP3_LAZY" );
++		on = !e || atoi( e ) != 0;
++	}
++	return on;
++}
++static int se_mp3_lazy_check( void )
++{
++	static int on = -1;
++	if ( on < 0 )
++		on = getenv( "JK2_MP3_LAZY_CHECK" ) != NULL;
++	return on;
++}
++MP3STREAM *SE_MP3Header( sfx_t *sfx )
++{
++	MP3STREAM *h = sfx->pMP3StreamHeader;
++	if ( !h || ( (se_mp3_lazy_t *)h )->magic != SE_MP3_LAZY )
++		return h;
++	se_mp3_lazy_t lazy = *(se_mp3_lazy_t *)h;
++	static MP3STREAM made;	// (not on the stack: 26.6 KB)
++	memset( &made, 0, sizeof( made ) );
++	C_MP3Stream_DecodeInit( &made, sfx->pSoundData, lazy.len, lazy.speed, 2 * 8, lazy.stereo );
++	made.pbSourceData = (byte *) sfx->pSoundData;
++	if ( lazy.check ) {
++		int differ = 0;
++		for ( size_t i = 0; i < sizeof( MP3STREAM ); i++ )
++			differ += ( (byte *)&made )[i] != ( (byte *)lazy.check )[i];
++		Com_Printf( "jk2mp3lazy: %s: %d bytes differ\n", sfx->sSoundName, differ );
++		free( lazy.check );
++	}
++	Z_Free( h );
++	sfx->pMP3StreamHeader = (MP3STREAM *) Z_Malloc( sizeof(MP3STREAM), TAG_SND_MP3STREAMHDR, qfalse );
++	memcpy( sfx->pMP3StreamHeader, &made, sizeof(MP3STREAM) );
++	return sfx->pMP3StreamHeader;
++}
++#endif
+ qboolean MP3Stream_InitFromFile( sfx_t* sfx, byte *pbSrcData, int iSrcDatalen, const char *psSrcDataFilename,
+ 									int iMP3UnPackedSize, qboolean bStereoDesired /* = qfalse */
+ 								)
+@@ -317,6 +466,21 @@ qboolean MP3Stream_InitFromFile( sfx_t* sfx, byte *pbSrcData, int iSrcDatalen, c
+ 		//
+ 		// make a copy of the filled-in stream struct and attach to the sfx_t struct...
+ 		//
++#ifdef SHADEREMU
++		if ( se_mp3_lazy_on() ) {
++			// (what it needs to be made again; JK2_MP3_LAZY_CHECK=1 keeps the state made here too, to be compared)
++			se_mp3_lazy_t *lazy = (se_mp3_lazy_t *) Z_Malloc( sizeof(se_mp3_lazy_t), TAG_SND_MP3STREAMHDR, qfalse );
++			lazy->magic = SE_MP3_LAZY, lazy->len = iSrcDatalen, lazy->stereo = bStereoDesired, lazy->speed = dma.speed;
++			lazy->check = NULL;
++			if ( se_mp3_lazy_check() ) {
++				lazy->check = (MP3STREAM *) malloc( sizeof(MP3STREAM) );
++				if ( lazy->check )
++					memcpy( lazy->check, &SFX_MP3Stream, sizeof(MP3STREAM) );
++			}
++			sfx->pMP3StreamHeader = (MP3STREAM *) lazy;
++			return qtrue;
++		}
++#endif
+ 				sfx->pMP3StreamHeader = (MP3STREAM *) Z_Malloc( sizeof(MP3STREAM), TAG_SND_MP3STREAMHDR, qfalse );
+ 		memcpy(	sfx->pMP3StreamHeader, &SFX_MP3Stream,		    sizeof(MP3STREAM) );
+ 		//
+@@ -474,7 +638,11 @@ qboolean MP3Stream_Rewind( channel_t *ch )
+ 
+ 	// speed opt, since I know I already have the right data setup here...
+ 	//
++#ifdef SHADEREMU
++	memcpy(&ch->MP3StreamHeader, SE_MP3Header( ch->thesfx ), sizeof(ch->MP3StreamHeader));
++#else
+ 	memcpy(&ch->MP3StreamHeader, ch->thesfx->pMP3StreamHeader, sizeof(ch->MP3StreamHeader));
++#endif
+ 	return qtrue;
+ 
+ }
+diff --git a/code/client/cl_mp3.h b/code/client/cl_mp3.h
+index ccdab28d..c2ee9ab7 100644
+--- a/code/client/cl_mp3.h
++++ b/code/client/cl_mp3.h
+@@ -66,6 +66,9 @@ qboolean	MP3_FakeUpWAVInfo		( const char *psLocalFilename, void *pvData, int iDa
+ qboolean	MP3_ReadSpecialTagInfo	( byte *pbLoadedFile, int iLoadedFileLen,
+ 										id3v1_1** ppTAG = NULL, int *piUncompressedSize = NULL, float *pfMaxVol = NULL);
+ qboolean	MP3Stream_InitFromFile	( sfx_t* sfx, byte *pbSrcData, int iSrcDatalen, const char *psSrcDataFilename, int iMP3UnPackedSize, qboolean bStereoDesired = qfalse );
++#ifdef SHADEREMU
++MP3STREAM *SE_MP3Header( sfx_t *sfx );	// (the sound's decoder state, made at its first play: cl_mp3.cpp)
++#endif
+ int			MP3Stream_Decode		( LP_MP3STREAM lpMP3Stream,  qboolean bDoingMusic );
+ qboolean	MP3Stream_SeekTo		( channel_t *ch, float fTimeToSeekTo );
+ qboolean	MP3Stream_Rewind		( channel_t *ch );
 diff --git a/code/client/snd_dma.cpp b/code/client/snd_dma.cpp
-index bb539e4c..c3c1fbd4 100644
+index bb539e4c..a336e99e 100644
 --- a/code/client/snd_dma.cpp
 +++ b/code/client/snd_dma.cpp
 @@ -51,9 +51,35 @@ void S_StopAllSounds(void);
@@ -354,7 +455,38 @@ index bb539e4c..c3c1fbd4 100644
  	s_soundMuted = qfalse;		// we can play again
  
  #ifdef USE_OPENAL
-@@ -1441,6 +1489,9 @@ Starts an ambient, 'one-shot" sound.
+@@ -1003,6 +1051,30 @@ S_RegisterSound
+ Creates a default buzz sound if the file can't be loaded
+ ==================
+ */
++#ifdef SHADEREMU
++// (ShaderEmu: a sound about to be registered, named ahead: its MP3 read ahead on a worker (files.cpp's
++// FS_SE_QueueAhead), unless it is known already. The cgame's tables and configstrings name theirs before their loop.)
++void FS_SE_QueueAhead( const char *qpath );
++void S_SE_SoundAhead( const char *name )
++{
++	if ( !s_soundStarted || !name || !name[0] || strlen( name ) >= MAX_QPATH ) {
++		return;
++	}
++	char noext[MAX_QPATH], mp3[MAX_QPATH];
++	COM_StripExtension( name, noext, sizeof( noext ) );
++	for ( sfx_t *sfx = sfxHash[S_HashSFXName( noext )]; sfx; sfx = sfx->next ) {
++		if ( !Q_stricmp( sfx->sSoundName, noext ) ) {
++			if ( sfx->pSoundData || sfx->bDefaultSound ) {
++				return;
++			}
++			break;
++		}
++	}
++	Com_sprintf( mp3, sizeof( mp3 ), "%s.mp3", noext );
++	Q_strlwr( mp3 );
++	FS_SE_QueueAhead( mp3 );
++}
++#endif
+ sfxHandle_t	S_RegisterSound( const char *name)
+ {
+ 	sfx_t	*sfx;
+@@ -1441,6 +1513,9 @@ Starts an ambient, 'one-shot" sound.
  
  void S_StartAmbientSound( const vec3_t origin, int entityNum, unsigned char volume, sfxHandle_t sfxHandle )
  {
@@ -364,7 +496,19 @@ index bb539e4c..c3c1fbd4 100644
  	channel_t	*ch;
  	/*const*/ sfx_t *sfx;
  
-@@ -1519,6 +1570,9 @@ Entchannel 0 will never override a playing sound
+@@ -1498,7 +1573,11 @@ void S_StartAmbientSound( const vec3_t origin, int entityNum, unsigned char volu
+ 
+ 	if (sfx->pMP3StreamHeader)
+ 	{
++#ifdef SHADEREMU
++		memcpy(&ch->MP3StreamHeader,SE_MP3Header( sfx ),	sizeof(ch->MP3StreamHeader));
++#else
+ 		memcpy(&ch->MP3StreamHeader,sfx->pMP3StreamHeader,	sizeof(ch->MP3StreamHeader));
++#endif
+ 		//ch->iMP3SlidingDecodeWritePos = 0; // These will be zero from the memset in S_PickChannel(), but keep them here for reference...
+ 		//ch->iMP3SlidingDecodeWindowPos= 0; //
+ 	}
+@@ -1519,6 +1598,9 @@ Entchannel 0 will never override a playing sound
  */
  void S_StartSound(const vec3_t origin, int entityNum, soundChannel_t entchannel, sfxHandle_t sfxHandle )
  {
@@ -374,7 +518,19 @@ index bb539e4c..c3c1fbd4 100644
  	channel_t	*ch;
  	/*const*/ sfx_t *sfx;
  
-@@ -1641,6 +1695,9 @@ S_StartLocalSound
+@@ -1625,7 +1707,11 @@ void S_StartSound(const vec3_t origin, int entityNum, soundChannel_t entchannel,
+ 
+ 	if (sfx->pMP3StreamHeader)
+ 	{
++#ifdef SHADEREMU
++		memcpy(&ch->MP3StreamHeader,SE_MP3Header( sfx ),	sizeof(ch->MP3StreamHeader));
++#else
+ 		memcpy(&ch->MP3StreamHeader,sfx->pMP3StreamHeader,	sizeof(ch->MP3StreamHeader));
++#endif
+ 		//ch->iMP3SlidingDecodeWritePos = 0; // These will be zero from the memset in S_PickChannel(), but keep them here for reference...
+ 		//ch->iMP3SlidingDecodeWindowPos= 0; //
+ 	}
+@@ -1641,6 +1727,9 @@ S_StartLocalSound
  ==================
  */
  void S_StartLocalSound( sfxHandle_t sfxHandle, int channelNum ) {
@@ -384,7 +540,7 @@ index bb539e4c..c3c1fbd4 100644
  	if ( !s_soundStarted || s_soundMuted ) {
  		return;
  	}
-@@ -1658,6 +1715,9 @@ S_StartLocalLoopingSound
+@@ -1658,6 +1747,9 @@ S_StartLocalLoopingSound
  ==================
  */
  void S_StartLocalLoopingSound( sfxHandle_t sfxHandle) {
@@ -394,7 +550,7 @@ index bb539e4c..c3c1fbd4 100644
  	vec3_t nullVec = {0,0,0};
  
  	if ( !s_soundStarted || s_soundMuted ) {
-@@ -1702,6 +1762,9 @@ so sound doesn't stutter.
+@@ -1702,6 +1794,9 @@ so sound doesn't stutter.
  ==================
  */
  void S_ClearSoundBuffer( void ) {
@@ -404,7 +560,7 @@ index bb539e4c..c3c1fbd4 100644
  	int		clear;
  
  	if ( !s_soundStarted || s_soundMuted ) {
-@@ -1829,6 +1892,9 @@ S_StopAllSounds
+@@ -1829,6 +1924,9 @@ S_StopAllSounds
  ==================
  */
  void S_StopAllSounds(void) {
@@ -414,7 +570,7 @@ index bb539e4c..c3c1fbd4 100644
  	if ( !s_soundStarted ) {
  		return;
  	}
-@@ -1873,6 +1939,9 @@ Include velocity in case I get around to doing doppler...
+@@ -1873,6 +1971,9 @@ Include velocity in case I get around to doing doppler...
  ==================
  */
  void S_AddLoopingSound( int entityNum, const vec3_t origin, const vec3_t velocity, sfxHandle_t sfxHandle, soundChannel_t chan ) {
@@ -424,7 +580,7 @@ index bb539e4c..c3c1fbd4 100644
  	/*const*/ sfx_t *sfx;
  
    	if ( !s_soundStarted || s_soundMuted ) {
-@@ -2693,9 +2762,16 @@ Called once each time through the main loop
+@@ -2693,9 +2794,16 @@ Called once each time through the main loop
  ============
  */
  void S_Update( void ) {
@@ -441,7 +597,19 @@ index bb539e4c..c3c1fbd4 100644
  	if ( !s_soundStarted || s_soundMuted ) {
  		return;
  	}
-@@ -3063,6 +3139,13 @@ void S_Update_(void) {
+@@ -2900,7 +3008,11 @@ void S_Update_(void) {
+ 
+ 			if (ch->thesfx->pMP3StreamHeader)
+ 			{
++#ifdef SHADEREMU
++				memcpy(&ch->MP3StreamHeader, SE_MP3Header( ch->thesfx ),	sizeof(ch->MP3StreamHeader));
++#else
+ 				memcpy(&ch->MP3StreamHeader, ch->thesfx->pMP3StreamHeader,	sizeof(ch->MP3StreamHeader));
++#endif
+ 				ch->iMP3SlidingDecodeWritePos = 0;
+ 				ch->iMP3SlidingDecodeWindowPos= 0;
+ 
+@@ -3063,6 +3175,13 @@ void S_Update_(void) {
  			endtime = s_soundtime + samps;
  
  
@@ -455,7 +623,7 @@ index bb539e4c..c3c1fbd4 100644
  		SNDDMA_BeginPainting ();
  
  		S_PaintChannels (endtime);
-@@ -4062,6 +4145,9 @@ static void FreeMusic( MusicInfo_t *pMusicInfo )
+@@ -4062,6 +4181,9 @@ static void FreeMusic( MusicInfo_t *pMusicInfo )
  {
  	if (pMusicInfo->pLoadedData)
  	{
@@ -465,7 +633,7 @@ index bb539e4c..c3c1fbd4 100644
  		Z_Free(pMusicInfo->pLoadedData);
  		pMusicInfo->pLoadedData		= NULL;		// these two MUST be kept as valid/invalid together
  		pMusicInfo->sLoadedDataName[0]= '\0';	//
-@@ -4134,7 +4220,13 @@ static qboolean S_StartBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolean
+@@ -4134,7 +4256,13 @@ static qboolean S_StartBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolean
  											// scan up to halfway of it to find floating headers, so don't make it
  											// too small. 8k works fine.
  		qboolean bMusicSucceeded = qfalse;
@@ -480,7 +648,7 @@ index bb539e4c..c3c1fbd4 100644
  		{
  			if (!pMusicInfo->pLoadedData)
  			{
-@@ -4177,7 +4269,7 @@ static qboolean S_StartBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolean
+@@ -4177,7 +4305,7 @@ static qboolean S_StartBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolean
  							pMusicInfo->sfxMP3_Bgrnd.pMP3StreamHeader		= &pMusicInfo->streamMP3_Bgrnd;
  				Q_strncpyz( pMusicInfo->sfxMP3_Bgrnd.sSoundName, name, sizeof(pMusicInfo->sfxMP3_Bgrnd.sSoundName) );
  
@@ -489,7 +657,7 @@ index bb539e4c..c3c1fbd4 100644
  				{
  					MP3Stream_InitPlayingTimeFields ( &pMusicInfo->streamMP3_Bgrnd, name, pbMP3DataSegment, pMusicInfo->iLoadedDataLen, qtrue);
  				}
-@@ -4193,7 +4285,7 @@ static qboolean S_StartBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolean
+@@ -4193,7 +4321,7 @@ static qboolean S_StartBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolean
  						pMusicInfo->chMP3_Bgrnd.thesfx = &pMusicInfo->sfxMP3_Bgrnd;
  				memcpy(&pMusicInfo->chMP3_Bgrnd.MP3StreamHeader, pMusicInfo->sfxMP3_Bgrnd.pMP3StreamHeader, sizeof(*pMusicInfo->sfxMP3_Bgrnd.pMP3StreamHeader));
  
@@ -498,7 +666,7 @@ index bb539e4c..c3c1fbd4 100644
  				{
  					if (pMusicInfo->s_backgroundFile != -1)
  					{
-@@ -4711,6 +4803,54 @@ static qboolean S_UpdateBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolea
+@@ -4711,6 +4839,54 @@ static qboolean S_UpdateBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolea
  		return qfalse;
  	}
  
@@ -553,7 +721,7 @@ index bb539e4c..c3c1fbd4 100644
  	// see how many samples should be copied into the raw buffer
  	if ( s_rawend < s_soundtime ) {
  		s_rawend = s_soundtime;
-@@ -4935,6 +5075,9 @@ static void S_UpdateBackgroundTrack( void )
+@@ -4935,6 +5111,9 @@ static void S_UpdateBackgroundTrack( void )
  			if ( pMusicInfoCurrent->s_backgroundFile == -1)
  			{
  				int iRawEnd = s_rawend;
@@ -563,7 +731,7 @@ index bb539e4c..c3c1fbd4 100644
  				S_UpdateBackgroundTrack_Actual( pMusicInfoCurrent, qtrue, s_musicVolume->value );
  
  	/*			static int iPrevFrontVol = 0;
-@@ -4947,6 +5090,9 @@ static void S_UpdateBackgroundTrack( void )
+@@ -4947,6 +5126,9 @@ static void S_UpdateBackgroundTrack( void )
  				if (pMusicInfoFadeOut->bActive)
  				{
  					s_rawend = iRawEnd;
@@ -573,7 +741,7 @@ index bb539e4c..c3c1fbd4 100644
  					S_UpdateBackgroundTrack_Actual( pMusicInfoFadeOut, qfalse, s_musicVolume->value );	// inactive-checked internally
  	/*
  					static int iPrevFadeVol = 0;
-@@ -5096,6 +5242,9 @@ static int SND_MemUsed(sfx_t *sfx)
+@@ -5096,6 +5278,9 @@ static int SND_MemUsed(sfx_t *sfx)
  //
  static int SND_FreeSFXMem(sfx_t *sfx)
  {
@@ -583,7 +751,7 @@ index bb539e4c..c3c1fbd4 100644
  	int iBytesFreed = 0;
  
  #ifdef USE_OPENAL
-@@ -5255,6 +5404,23 @@ int SND_FreeOldestSound(void)
+@@ -5255,6 +5440,23 @@ int SND_FreeOldestSound(void)
  extern qboolean gbInsideLoadSound;
  qboolean SND_RegisterAudio_LevelLoadEnd(qboolean bDeleteEverythingNotUsedThisLevel /* 99% qfalse */)
  {
@@ -1161,10 +1329,10 @@ index aeaff246..187184e5 100644
  		com_speeds = Cvar_Get ("com_speeds", "0", 0);
  
 diff --git a/code/qcommon/files.cpp b/code/qcommon/files.cpp
-index d105742d..a3159aca 100644
+index d105742d..b3819598 100644
 --- a/code/qcommon/files.cpp
 +++ b/code/qcommon/files.cpp
-@@ -271,6 +271,13 @@ typedef struct fileHandleData_s {
+@@ -271,6 +271,17 @@ typedef struct fileHandleData_s {
  } fileHandleData_t;
  
  static fileHandleData_t	fsh[MAX_FILE_HANDLES];
@@ -1172,13 +1340,228 @@ index d105742d..a3159aca 100644
 +extern "C" unzFile unzSE_ReOpen( const char *path, unzFile file );
 +extern "C" unzFile unzSE_OpenMapped( const char *path );	// (minizip's: a pak read where it lies in its map)
 +extern "C" const void *unzSE_PackedAt( unzFile file, unsigned size );
++extern "C" const void *unzSE_EntryAt( unzFile file, unsigned long pos, int *method, unsigned long *packed, unsigned long *size );
 +extern "C" int unzSE_IsMapped( const void *p );	// (minizip's: a pak opened again, its state copied)
++struct pack_s;
++static struct pack_s *se_found_pak;	// FS_FOpenFileRead's last find in a pak, and its entry (NULL: elsewhere)
++static struct fileInPack_s *se_found;
 +#endif
 +
  
  // last valid game folder used
  char lastValidBase[MAX_OSPATH];
-@@ -1334,7 +1341,11 @@ long FS_FOpenFileRead( const char *filename, fileHandle_t *file, qboolean unique
+@@ -476,6 +487,112 @@ char *FS_BuildOSPath( const char *base, const char *game, const char *qpath ) {
+ 	return ospath[toggle];
+ }
+ 
++#ifdef SHADEREMU
++/*
++(ShaderEmu: what each folder of the search path holds, listed once and listed again after this file system changes a
++folder (SE_DIRS_TOUCHED): FS_FOpenFileRead looks for a file in every folder before and after the paks, and every file
++that is not there was a path made and a failed open, a system call's path walk (the sounds' WAVs tried before their MP3s:
++4,900 opens of the load's end, 45 million instructions with the kernel's). A folder of more files than are kept, or a
++name these lists cannot say, is opened as before. JK2_DIRS_LISTED=0 is the way before.)
++*/
++#include <dirent.h>
++#include <sys/stat.h>
++#define SE_DIRS 8
++#define SE_DIR_NAMES ( 64 << 10 )
++#define SE_DIR_FILES 2048
++static int se_dirs_gen = 1;
++#define SE_DIRS_TOUCHED() ( se_dirs_gen++ )
++static struct { const void *dir; int gen, ok, first, count; } se_dirs[SE_DIRS];
++static char se_dir_names[SE_DIR_NAMES];
++static int se_dir_name_at[SE_DIR_FILES], se_dir_used, se_dir_files;
++static int se_dirs_on( void )
++{
++	static int on = -1;
++	if ( on < 0 ) {
++		const char *e = getenv( "JK2_DIRS_LISTED" );
++		on = !e || atoi( e ) != 0;
++	}
++	return on;
++}
++// The files under `path` (relative names after `rel`) put in the lists: false when they do not fit
++static qboolean se_dir_walk( const char *path, const char *rel, int depth )
++{
++	DIR *d = opendir( path );
++	struct dirent *e;
++	if ( !d ) {
++		return qtrue;	// (no folder: no files)
++	}
++	qboolean ok = qtrue;
++	while ( ok && ( e = readdir( d ) ) != NULL ) {
++		if ( !strcmp( e->d_name, "." ) || !strcmp( e->d_name, ".." ) ) {
++			continue;
++		}
++		char full[MAX_OSPATH], name[MAX_OSPATH];
++		struct stat st;
++		Com_sprintf( full, sizeof( full ), "%s/%s", path, e->d_name );
++		Com_sprintf( name, sizeof( name ), "%s%s%s", rel, rel[0] ? "/" : "", e->d_name );
++		if ( strlen( full ) >= sizeof( full ) - 1 || strlen( name ) >= sizeof( name ) - 1 || stat( full, &st ) ) {
++			ok = qfalse;
++		} else if ( S_ISDIR( st.st_mode ) ) {
++			ok = depth < 8 ? se_dir_walk( full, name, depth + 1 ) : qfalse;
++		} else {
++			int len = (int)strlen( name ) + 1;
++			if ( se_dir_files == SE_DIR_FILES || se_dir_used + len > SE_DIR_NAMES ) {
++				ok = qfalse;
++			} else {
++				memcpy( se_dir_names + se_dir_used, name, len );
++				se_dir_name_at[se_dir_files++] = se_dir_used;
++				se_dir_used += len;
++			}
++		}
++	}
++	closedir( d );
++	return ok;
++}
++// Whether `filename` is known not to be in the folder dir (path, gamedir): no open is then needed
++static qboolean se_dir_lacks( const void *dir, const char *path, const char *gamedir, const char *filename )
++{
++	if ( !se_dirs_on() || !filename[0] || strchr( filename, '\\' ) || strstr( filename, "//" ) || strstr( filename, "./" ) ||
++		filename[strlen( filename ) - 1] == '/' ) {
++		return qfalse;
++	}
++	int i;
++	for ( i = 0; i < SE_DIRS && se_dirs[i].dir && se_dirs[i].dir != dir; i++ ) {}
++	if ( i == SE_DIRS ) {
++		return qfalse;
++	}
++	if ( !se_dirs[i].dir || se_dirs[i].gen != se_dirs_gen ) {
++		if ( se_dirs[0].gen != se_dirs_gen ) {	// (all listed again: the names' room from its start)
++			for ( int k = 0; k < SE_DIRS; k++ ) {
++				se_dirs[k].dir = NULL;
++			}
++			se_dir_used = se_dir_files = 0;
++			i = 0;
++		}
++		char top[MAX_OSPATH];
++		Com_sprintf( top, sizeof( top ), "%s/%s", path, gamedir );
++		se_dirs[i].dir = dir, se_dirs[i].gen = se_dirs_gen, se_dirs[i].first = se_dir_files;
++		int used = se_dir_used, files = se_dir_files;
++		se_dirs[i].ok = strlen( top ) < sizeof( top ) - 1 && se_dir_walk( top, "", 0 );
++		if ( !se_dirs[i].ok ) {
++			se_dir_used = used, se_dir_files = files;
++		}
++		se_dirs[i].count = se_dir_files - se_dirs[i].first;
++	}
++	if ( !se_dirs[i].ok ) {
++		return qfalse;
++	}
++	for ( int k = 0; k < se_dirs[i].count; k++ ) {
++		if ( !strcmp( se_dir_names + se_dir_name_at[se_dirs[i].first + k], filename ) ) {
++			return qfalse;
++		}
++	}
++	return qtrue;
++}
++#else
++#define SE_DIRS_TOUCHED() ( (void)0 )
++#endif
++
+ /*
+ ============
+ FS_CreatePath
+@@ -507,6 +624,7 @@ qboolean FS_CreatePath (char *OSPath) {
+ 		if (*ofs == PATH_SEP) {
+ 			// create the directory
+ 			*ofs = 0;
++			SE_DIRS_TOUCHED();	// (ShaderEmu: a folder may change)
+ 			if (!Sys_Mkdir (path)) {
+ 				Com_Error( ERR_FATAL, "FS_CreatePath: failed to create path \"%s\"",
+ 					path );
+@@ -588,6 +706,7 @@ void FS_CopyFile( char *fromOSPath, char *toOSPath, qboolean qbSilent ) {
+ 		return;
+ 	}
+ 
++	SE_DIRS_TOUCHED();	// (ShaderEmu: a folder may change)
+ 	f = fopen( toOSPath, "wb" );
+ 	if ( !f ) {
+ 		free ( buf );
+@@ -614,6 +733,7 @@ FS_Remove
+ void FS_Remove( const char *osPath ) {
+ 	FS_CheckFilenameIsMutable( osPath, __func__ );
+ 
++	SE_DIRS_TOUCHED();	// (ShaderEmu: a folder may change)
+ 	remove( osPath );
+ }
+ 
+@@ -626,6 +746,7 @@ FS_HomeRemove
+ void FS_HomeRemove( const char *homePath ) {
+ 	FS_CheckFilenameIsMutable( homePath, __func__ );
+ 
++	SE_DIRS_TOUCHED();	// (ShaderEmu: a folder may change)
+ 	remove( FS_BuildOSPath( fs_homepath->string,
+ 			fs_gamedir, homePath ) );
+ }
+@@ -660,6 +781,7 @@ qboolean FS_MoveUserGenFile( const char *filename_src, const char *filename_dst
+ 
+ 	FS_CheckFilenameIsMutable( to_ospath, __func__ );
+ 
++	SE_DIRS_TOUCHED();	// (ShaderEmu: a folder may change)
+ 	remove( to_ospath );
+ 	return (qboolean)!rename( from_ospath, to_ospath );
+ }
+@@ -697,6 +819,7 @@ void FS_Rmdir( const char *osPath, qboolean recursive ) {
+ 		FS_FreeFileList( directoriesToRemove );
+ 	}
+ 
++	SE_DIRS_TOUCHED();	// (ShaderEmu: a folder may change)
+ 	rmdir( osPath );
+ }
+ 
+@@ -797,6 +920,7 @@ fileHandle_t FS_SV_FOpenFileWrite( const char *filename ) {
+ 	}
+ 
+ 	Com_DPrintf( "writing to: %s\n", ospath );
++	SE_DIRS_TOUCHED();	// (ShaderEmu: a folder may change)
+ 	fsh[f].handleFiles.file.o = fopen( ospath, "wb" );
+ 
+ 	Q_strncpyz( fsh[f].name, filename, sizeof( fsh[f].name ) );
+@@ -918,6 +1042,7 @@ void FS_SV_Rename( const char *from, const char *to, qboolean safe ) {
+ 		FS_CheckFilenameIsMutable( to_ospath, __func__ );
+ 	}
+ 
++	SE_DIRS_TOUCHED();	// (ShaderEmu: a folder may change)
+ 	if (rename( from_ospath, to_ospath )) {
+ 		// Failed, try copying it and deleting the original
+ 		FS_CopyFile ( from_ospath, to_ospath );
+@@ -948,6 +1073,7 @@ void FS_Rename( const char *from, const char *to ) {
+ 
+ 	FS_CheckFilenameIsMutable( to_ospath, __func__ );
+ 
++	SE_DIRS_TOUCHED();	// (ShaderEmu: a folder may change)
+ 	if (rename( from_ospath, to_ospath )) {
+ 		// Failed, try copying it and deleting the original
+ 		FS_CopyFile ( from_ospath, to_ospath );
+@@ -1025,6 +1151,7 @@ fileHandle_t FS_FOpenFileWrite( const char *filename, qboolean safe ) {
+ 	// enabling the following line causes a recursive function call loop
+ 	// when running with +set logfile 1 +set developer 1
+ 	//Com_DPrintf( "writing to: %s\n", ospath );
++	SE_DIRS_TOUCHED();	// (ShaderEmu: a folder may change)
+ 	fsh[f].handleFiles.file.o = fopen( ospath, "wb" );
+ 
+ 	Q_strncpyz( fsh[f].name, filename, sizeof( fsh[f].name ) );
+@@ -1068,6 +1195,7 @@ fileHandle_t FS_FOpenFileAppend( const char *filename ) {
+ 		return 0;
+ 	}
+ 
++	SE_DIRS_TOUCHED();	// (ShaderEmu: a folder may change)
+ 	fsh[f].handleFiles.file.o = fopen( ospath, "ab" );
+ 	fsh[f].handleSync = qfalse;
+ 	if (!fsh[f].handleFiles.file.o) {
+@@ -1293,6 +1421,9 @@ long FS_FOpenFileRead( const char *filename, fileHandle_t *file, qboolean unique
+ 	}
+ 
+ 	isUserConfig = !Q_stricmp( filename, "autoexec_sp.cfg" ) || !Q_stricmp( filename, Q3CONFIG_NAME );
++#ifdef SHADEREMU
++	se_found_pak = NULL, se_found = NULL;
++#endif
+ 
+ 	//
+ 	// search through the path, one element at a time
+@@ -1334,7 +1465,11 @@ long FS_FOpenFileRead( const char *filename, fileHandle_t *file, qboolean unique
  
  						if ( uniqueFILE ) {
  							// open a new file on the pakfile
@@ -1190,17 +1573,346 @@ index d105742d..a3159aca 100644
  							if (fsh[*file].handleFiles.file.z == NULL) {
  								Com_Error (ERR_FATAL, "Couldn't open %s", pak->pakFilename);
  							}
-@@ -1747,6 +1758,9 @@ Filename are relative to the quake search path
+@@ -1370,6 +1505,9 @@ long FS_FOpenFileRead( const char *filename, fileHandle_t *file, qboolean unique
+ 							Com_Printf( "FS_FOpenFileRead: %s (found in '%s')\n",
+ 								filename, pak->pakFilename );
+ 						}
++#ifdef SHADEREMU
++						se_found_pak = pak, se_found = pakFile;
++#endif
+ 						return pakFile->len;
+ 					}
+ 					pakFile = pakFile->next;
+@@ -1378,6 +1516,11 @@ long FS_FOpenFileRead( const char *filename, fileHandle_t *file, qboolean unique
+ 				// check a file in the directory tree
+ 
+ 				dir = search->dir;
++#ifdef SHADEREMU
++				if ( se_dir_lacks( dir, dir->path, dir->gamedir, filename ) ) {
++					continue;
++				}
++#endif
+ 
+ 				netpath = FS_BuildOSPath( dir->path, dir->gamedir, filename );
+ 				fsh[*file].handleFiles.file.o = fopen (netpath, "rb");
+@@ -1747,6 +1890,305 @@ Filename are relative to the quake search path
  a null buffer will just return the file length without loading
  ============
  */
 +#ifdef SHADEREMU
 +unsigned long long SE_Instructions( void );
++/*
++(ShaderEmu: files read ahead. A pak's file FS_ReadFile reads has its neighbours in the pak of the same folder and
++extension inflated on workers with nothing to do (sys_shaderemu.cpp's SE_FileGive), each into memory of malloc's: the
++sounds of a character's folder are asked for one at a time, each 170 thousand instructions of zlib's on this core
++(docs/games/jk2.md, "Files read ahead"). FS_ReadFile copies a file read ahead into its buffer when it is asked for in
++that pak, waiting for it if it is not through; one never asked for is let go when the room is wanted, or its pak is.
++A file is read ahead once (se_seen), only while no other file of its pak is open on the pak's own handle, and only
++deflated where it lies in a mapped pak. A pak's folders are not together in it: its entries are chained by their folder
++(se_seen, made at the pak's first read). A folder is read ahead when two files of it with that extension are read one
++after the other (the sounds of a character's table: one of a character's lines, a file a folder of hundreds, is not),
++and what was read ahead of another folder is then let go. What is read ahead lies in one room of 512 KB (se_arena), and
++what is kept of one pak (the first read, of up to 32,768 files) in static arrays: memory of malloc's taken and let go
++a file at a time, or kept, left the machine without an MMU no 10 MB in one piece for the animations' file (a mapping
++takes a block of a power of two pages there). JK2_FILES_AHEAD=0 is the way before.)
++*/
++int SE_FileGive( const void *raw, int raw_len, void *out, int len );
++int SE_FileJoin( int given );
++#define SE_AHEAD 16
++#define SE_AHEAD_BYTES ( 512u << 10 )	// (the room's)
++#define SE_AHEAD_MOST ( 256 << 10 )	// (a file's)
++static struct { fileInPack_t *f; pack_t *pak; byte *buf; int len, given, queued, at; } se_ahead[SE_AHEAD];
++static int se_reads;	// (FS_ReadFile's reads of a pak's file: a queued file not read within 64 of its give is let go)
++static int se_ahead_count;
++static unsigned se_ahead_bytes;
++#define SE_PAK_FILES 32768
++#define SE_DIR_HASH 4096
++// the pak's: a byte an entry, read or read ahead; its entries chained by folder (the hash of the folder's name, the first
++// entry of each, the next of each entry)
++typedef struct { pack_t *pak; byte *seen; int *head, *next; } se_pak_t;
++static se_pak_t se_seen;
++static byte se_seen_bytes[SE_PAK_FILES];
++static int se_dir_head[SE_DIR_HASH], se_dir_next[SE_PAK_FILES];
++
++// The hash of a name's folder (up to its last '/'), its length in *dir
++static unsigned se_dir_hash( const char *name, int *dir )
++{
++	const char *slash = strrchr( name, '/' );
++	unsigned h = 0;
++	*dir = slash ? (int)( slash - name ) + 1 : 0;
++	for ( int i = 0; i < *dir; i++ ) {
++		h = h * 31 + (unsigned)tolower( (unsigned char)name[i] );
++	}
++	return h & ( SE_DIR_HASH - 1 );
++}
++
++static int se_ahead_on( void )
++{
++	static int on = -1;
++	if ( on < 0 ) {
++		const char *e = getenv( "JK2_FILES_AHEAD" );
++		on = !e || atoi( e ) != 0;
++	}
++	return on;
++}
++
++static se_pak_t *se_seen_of( pack_t *pak )
++{
++	int i;
++	if ( se_seen.pak == pak ) {
++		return &se_seen;
++	}
++	if ( se_seen.pak || pak->numfiles > SE_PAK_FILES ) {
++		return NULL;
++	}
++	se_pak_t *s = &se_seen;
++	s->seen = se_seen_bytes, s->head = se_dir_head, s->next = se_dir_next;
++	memset( s->seen, 0, pak->numfiles );
++	for ( i = 0; i < SE_DIR_HASH; i++ ) {
++		s->head[i] = -1;
++	}
++	for ( i = pak->numfiles - 1; i >= 0; i-- ) {	// (each chain in the pak's order)
++		int dir;
++		unsigned h = se_dir_hash( pak->buildBuffer[i].name, &dir );
++		s->next[i] = s->head[h];
++		s->head[h] = i;
++	}
++	s->pak = pak;
++	return s;
++}
++
++static se_pak_t *se_seen_of( pack_t *pak );
++
++// Room for a file read ahead in the arena: the lowest gap between the table's files
++static byte se_arena[SE_AHEAD_BYTES] __attribute__((aligned(16)));
++static byte *se_arena_take( unsigned bytes )
++{
++	unsigned at = 0;
++	for ( qboolean moved = qtrue; moved; ) {
++		moved = qfalse;
++		for ( int k = 0; k < se_ahead_count; k++ ) {
++			unsigned from = (unsigned)( se_ahead[k].buf - se_arena ), to = from + ( ( (unsigned)se_ahead[k].len + 15 ) & ~15u );
++			if ( from < at + bytes && to > at ) {
++				at = to, moved = qtrue;
++			}
++		}
++	}
++	return at + bytes <= SE_AHEAD_BYTES ? se_arena + at : NULL;
++}
++
++// Entry k of the table waited for and let go (unread: it may be read ahead again)
++static void se_ahead_drop( int k )
++{
++	if ( se_ahead[k].given ) {
++		se_pak_t *sp = se_seen_of( se_ahead[k].pak );
++		if ( sp ) {
++			sp->seen[se_ahead[k].f - se_ahead[k].pak->buildBuffer] = 0;
++		}
++	}
++	SE_FileJoin( se_ahead[k].given );
++	se_ahead_bytes -= ( (unsigned)se_ahead[k].len + 15 ) & ~15u;
++	memmove( &se_ahead[k], &se_ahead[k + 1], ( se_ahead_count - k - 1 ) * sizeof( se_ahead[0] ) );
++	se_ahead_count--;
++}
++
++// A pak let go: what was read ahead of it, and what of it was seen
++static void se_ahead_forget( pack_t *pak )
++{
++	for ( int k = se_ahead_count - 1; k >= 0; k-- ) {
++		if ( se_ahead[k].pak == pak ) {
++			SE_FileJoin( se_ahead[k].given );
++			se_ahead[k].given = 0;
++			se_ahead_drop( k );
++		}
++	}
++	if ( se_seen.pak == pak ) {
++		se_seen.pak = NULL;
++	}
++}
++
++
++// The file f of a pak into buf when it was read ahead (qtrue)
++static qboolean se_ahead_take( fileInPack_t *f, byte *buf, long len )
++{
++	for ( int k = 0; k < se_ahead_count; k++ ) {
++		if ( se_ahead[k].f == f ) {
++			qboolean ok = SE_FileJoin( se_ahead[k].given ) == 1 && se_ahead[k].len == len ? qtrue : qfalse;
++			if ( ok ) {
++				memcpy( buf, se_ahead[k].buf, len );
++			}
++			se_ahead[k].given = 0;
++			se_ahead_drop( k );
++			return ok;
++		}
++	}
++	return qfalse;
++}
++
++// f of pak just read (its handle closed): its neighbours of the same folder and extension read ahead
++static void se_ahead_more( pack_t *pak, fileInPack_t *f )
++{
++	se_pak_t *sp = se_seen_of( pak );
++	int i = (int)( f - pak->buildBuffer );
++	if ( !sp || i < 0 || i >= pak->numfiles ) {
++		return;
++	}
++	byte *seen = sp->seen;
++	seen[i] = 1;
++	for ( int h = 1; h < MAX_FILE_HANDLES; h++ ) {
++		if ( fsh[h].handleFiles.file.z == pak->handle && fsh[h].zipFile == qtrue && fsh[h].handleFiles.file.o ) {
++			if ( getenv( "JK2_AHEAD_LOG" ) ) Com_Printf( "jk2ahead: %s: handle %d open (%s)\n", f->name, h, fsh[h].name );
++			return;	// (another file of the pak open on its handle: its place in the pak is kept)
++		}
++	}
++	const char *slash = strrchr( f->name, '/' ), *dot = strrchr( f->name, '.' );
++	if ( !slash || !dot || dot < slash ) {
++		return;
++	}
++	int dir;
++	unsigned hash = se_dir_hash( f->name, &dir );
++	static char last[MAX_QPATH];	// (the file read before)
++	qboolean run = !Q_stricmpn( last, f->name, dir ) && !strchr( last + dir, '/' ) && strrchr( last, '.' ) &&
++		!Q_stricmp( strrchr( last, '.' ), dot ) ? qtrue : qfalse;
++	Q_strncpyz( last, f->name, sizeof( last ) );
++	if ( !run ) {
++		return;
++	}
++	for ( int k = se_ahead_count - 1; k >= 0; k-- ) {
++		const char *n = se_ahead[k].f->name;
++		if ( !se_ahead[k].queued && ( se_ahead[k].pak != pak || Q_stricmpn( n, f->name, dir ) || strchr( n + dir, '/' ) ) ) {
++			se_ahead_drop( k );	// (another folder's)
++		}
++	}
++	for ( int j = sp->head[hash]; j >= 0 && se_ahead_count < SE_AHEAD; j = sp->next[j] ) {
++		fileInPack_t *c = &pak->buildBuffer[j];
++		const char *cdot = strrchr( c->name, '.' );
++		unsigned bytes = ( (unsigned)c->len + 15 ) & ~15u;
++		if ( seen[j] || c->len <= 0 || c->len > SE_AHEAD_MOST || !cdot || cdot - c->name < dir || c->name[dir - 1] != '/' ||
++			strchr( c->name + dir, '/' ) || Q_stricmpn( c->name, f->name, dir ) || Q_stricmp( cdot, dot ) ) {
++			continue;
++		}
++		int method = 0;
++		unsigned long packed = 0, plain = 0;
++		const void *at = unzSE_EntryAt( pak->handle, c->pos, &method, &packed, &plain );
++		seen[j] = 1;
++		if ( !at || method != 8 || plain != c->len || !packed ) {
++			continue;
++		}
++		void *buf = se_arena_take( bytes );
++		if ( !buf ) {
++			seen[j] = 0;
++			break;
++		}
++		int given = SE_FileGive( at, (int)packed, buf, (int)c->len );
++		if ( !given ) {
++			seen[j] = 0;
++			if ( getenv( "JK2_AHEAD_LOG" ) ) Com_Printf( "jk2ahead: %s: none to give %s\n", f->name, c->name );
++			break;	// (no worker with nothing to do: the rest when the next is read)
++		}
++		se_ahead[se_ahead_count].f = c, se_ahead[se_ahead_count].pak = pak, se_ahead[se_ahead_count].buf = (byte *)buf;
++		se_ahead[se_ahead_count].len = (int)c->len, se_ahead[se_ahead_count].given = given;
++		se_ahead[se_ahead_count].queued = 0, se_ahead[se_ahead_count].at = se_reads;
++		se_ahead_count++;
++		se_ahead_bytes += bytes;
++		if ( getenv( "JK2_AHEAD_LOG" ) ) Com_Printf( "jk2ahead: %s: gave %s\n", f->name, c->name );
++	}
++}
++
++// (ShaderEmu: files named ahead, in the order they will be read: the sounds a table or the configstrings register one at
++// a time (snd_dma.cpp's S_SE_SoundAhead), each read ahead as soon as there is room and a worker, in the pak that has it
++// first. A folder of the search path before that pak is not looked at: a file read from there is another, and what was
++// read ahead is let go unread.)
++#define SE_QUEUE 512
++static char se_queue[SE_QUEUE][MAX_QPATH];
++static int se_queue_count, se_queue_next;
++static void se_queue_pump( void )
++{
++	for ( int k = se_ahead_count - 1; k >= 0; k-- ) {
++		if ( se_ahead[k].queued && se_reads - se_ahead[k].at > 64 ) {
++			se_ahead_drop( k );	// (named, and not read since)
++		}
++	}
++	while ( se_queue_next < se_queue_count && se_ahead_count < SE_AHEAD ) {
++		const char *name = se_queue[se_queue_next];
++		fileInPack_t *f = NULL;
++		pack_t *pk = NULL;
++		for ( searchpath_t *search = fs_searchpaths; search && !f; search = search->next ) {
++			if ( !search->pack ) {
++				continue;
++			}
++			long hash = FS_HashFileName( name, search->pack->hashSize );
++			for ( fileInPack_t *c = search->pack->hashTable[hash]; c; c = c->next ) {
++				if ( !FS_FilenameCompare( c->name, name ) ) {
++					f = c, pk = search->pack;
++					break;
++				}
++			}
++		}
++		se_pak_t *sp = f ? se_seen_of( pk ) : NULL;
++		int j = f ? (int)( f - pk->buildBuffer ) : -1;
++		if ( !sp || j < 0 || j >= pk->numfiles || sp->seen[j] || f->len <= 0 || f->len > SE_AHEAD_MOST ) {
++			se_queue_next++;
++			continue;
++		}
++		for ( int h = 1; h < MAX_FILE_HANDLES; h++ ) {
++			if ( fsh[h].handleFiles.file.z == pk->handle && fsh[h].zipFile == qtrue && fsh[h].handleFiles.file.o ) {
++				return;	// (its pak's handle in use: later)
++			}
++		}
++		int method = 0;
++		unsigned long packed = 0, plain = 0;
++		const void *at = unzSE_EntryAt( pk->handle, f->pos, &method, &packed, &plain );
++		if ( !at || method != 8 || plain != f->len || !packed ) {
++			sp->seen[j] = 1;
++			se_queue_next++;
++			continue;
++		}
++		unsigned bytes = ( (unsigned)f->len + 15 ) & ~15u;
++		void *buf = se_arena_take( bytes );
++		int given = buf ? SE_FileGive( at, (int)packed, buf, (int)f->len ) : 0;
++		if ( !given ) {
++			return;	// (no room or no worker: when the next file is read)
++		}
++		sp->seen[j] = 1;
++		se_ahead[se_ahead_count].f = f, se_ahead[se_ahead_count].pak = pk, se_ahead[se_ahead_count].buf = (byte *)buf;
++		se_ahead[se_ahead_count].len = (int)f->len, se_ahead[se_ahead_count].given = given;
++		se_ahead[se_ahead_count].queued = 1, se_ahead[se_ahead_count].at = se_reads;
++		se_ahead_count++;
++		se_ahead_bytes += bytes;
++		se_queue_next++;
++		if ( getenv( "JK2_AHEAD_LOG" ) ) Com_Printf( "jk2ahead: queued %s\n", f->name );
++	}
++}
++void FS_SE_QueueAhead( const char *qpath )
++{
++	if ( !se_ahead_on() || !qpath || !qpath[0] || strlen( qpath ) >= MAX_QPATH ) {
++		return;
++	}
++	if ( se_queue_next == se_queue_count ) {
++		se_queue_next = se_queue_count = 0;
++	}
++	if ( se_queue_count == SE_QUEUE ) {
++		return;
++	}
++	Q_strncpyz( se_queue[se_queue_count++], qpath, MAX_QPATH );
++	se_queue_pump();
++}
 +#endif
  long FS_ReadFile( const char *qpath, void **buffer ) {
  	fileHandle_t	h;
  	byte*			buf;
-@@ -1794,14 +1808,100 @@ long FS_ReadFile( const char *qpath, void **buffer ) {
+@@ -1765,6 +2207,10 @@ long FS_ReadFile( const char *qpath, void **buffer ) {
+ 
+ 	// look for it in the filesystem or pack files
+ 	len = FS_FOpenFileRead( qpath, &h, qfalse );
++#ifdef SHADEREMU
++	pack_t *se_pak = h && fsh[h].zipFile == qtrue && se_ahead_on() ? se_found_pak : NULL;
++	fileInPack_t *se_f = se_found;
++#endif
+ 	if ( h == 0 ) {
+ 		if ( buffer ) {
+ 			*buffer = NULL;
+@@ -1794,14 +2240,108 @@ long FS_ReadFile( const char *qpath, void **buffer ) {
  	}
  #endif
  
@@ -1212,6 +1924,7 @@ index d105742d..a3159aca 100644
 +		se_log = getenv( "JK2_FILES_LOG" ) != NULL;
 +	if ( se_log )
 +		se_from = SE_Instructions();
++	if ( !se_pak || !se_ahead_take( se_f, buf, len ) )
 +#endif
  	FS_Read (buf, len, h);
  
@@ -1222,6 +1935,13 @@ index d105742d..a3159aca 100644
 +		Com_Printf( "jk2file: %s %ld %d %u\n", qpath, len, fsh[h].zipFile == qtrue, (unsigned)( SE_Instructions() - se_from ) );
 +#endif
  	FS_FCloseFile( h );
++#ifdef SHADEREMU
++	if ( se_pak ) {
++		se_reads++;
++		se_ahead_more( se_pak, se_f );
++		se_queue_pump();
++	}
++#endif
  	return len;
  }
  
@@ -1301,7 +2021,7 @@ index d105742d..a3159aca 100644
  /*
  =============
  FS_FreeFile
-@@ -1877,7 +1977,11 @@ static pack_t *FS_LoadZipFile( const char *zipfile, const char *basename )
+@@ -1877,7 +2417,11 @@ static pack_t *FS_LoadZipFile( const char *zipfile, const char *basename )
  
  	fs_numHeaderLongs = 0;
  
@@ -1313,6 +2033,16 @@ index d105742d..a3159aca 100644
  	err = unzGetGlobalInfo (uf,&gi);
  
  	if (err != UNZ_OK)
+@@ -1967,6 +2511,9 @@ Frees a pak structure and releases all associated resources
+ 
+ void FS_FreePak(pack_t *thepak)
+ {
++#ifdef SHADEREMU
++	se_ahead_forget( thepak );
++#endif
+ 	unzClose(thepak->handle);
+ 	Z_Free(thepak->buildBuffer);
+ 	Z_Free(thepak);
 diff --git a/code/qcommon/q_shared.cpp b/code/qcommon/q_shared.cpp
 index 6eb1a670..7db52912 100644
 --- a/code/qcommon/q_shared.cpp
@@ -2196,7 +2926,7 @@ index 5464b70b..6e6d897a 100644
  
  		GL_Bind(mImage);
 diff --git a/code/rd-vanilla/tr_backend.cpp b/code/rd-vanilla/tr_backend.cpp
-index 741bb95b..420f0e23 100644
+index 741bb95b..0f77bee0 100644
 --- a/code/rd-vanilla/tr_backend.cpp
 +++ b/code/rd-vanilla/tr_backend.cpp
 @@ -27,6 +27,10 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
@@ -2210,7 +2940,48 @@ index 741bb95b..420f0e23 100644
  backEndState_t	backEnd;
  
  bool tr_stencilled = false;
-@@ -1568,6 +1572,9 @@ const void	*RB_SwapBuffers( const void *data ) {
+@@ -56,8 +60,17 @@ static const float s_flipMatrix[16] = {
+ /*
+ ** GL_Bind
+ */
++#ifdef SHADEREMU
++extern int se_pending_count;	// (tr_image.cpp: pictures out on the workers)
++void R_SE_PictureNeeded( image_t *image );
++#endif
+ void GL_Bind( image_t *image ) {
+ 	int texnum;
++#ifdef SHADEREMU
++	if ( se_pending_count && image ) {
++		R_SE_PictureNeeded( image );
++	}
++#endif
+ 
+ 	if ( !image ) {
+ 		ri.Printf( PRINT_WARNING, "GL_Bind: NULL image\n" );
+@@ -508,6 +521,22 @@ static void RB_BeginDrawingView (void) {
+ 		}
+ 	}
+ 
++#ifdef SHADEREMU
++	// (ShaderEmu: the world's view cleared to black where nothing else clears its colour: the sky's boxes leave places
++	// undrawn, which showed whatever the GPU's memory held before, in the world the desktop's bar. Not the view after a
++	// sky portal's, nor a view with no world (a model in a menu), nor the glow's pass. JK2_CLEAR=0 is the way before.)
++	static int se_clear = -1;
++	if ( se_clear < 0 ) {
++		const char *e = getenv( "JK2_CLEAR" );
++		se_clear = !e || atoi( e ) != 0;
++	}
++	if ( se_clear && !( clearBits & GL_COLOR_BUFFER_BIT ) && !( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) &&
++		!g_bRenderGlowingObjects && ( !skyboxportal || ( backEnd.refdef.rdflags & RDF_SKYBOXPORTAL ) ) )
++	{
++		qglClearColor( 0.0f, 0.0f, 0.0f, 1.0f );
++		clearBits |= GL_COLOR_BUFFER_BIT;
++	}
++#endif
+ 	if ( !( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) && ( r_DynamicGlow->integer && !g_bRenderGlowingObjects ) )
+ 	{
+ 		if (tr.world && tr.world->globalFog != -1)
+@@ -1568,6 +1597,9 @@ const void	*RB_SwapBuffers( const void *data ) {
  
      GLimp_LogComment( "***************** RB_SwapBuffers *****************\n\n\n" );
  
@@ -2220,7 +2991,7 @@ index 741bb95b..420f0e23 100644
  	ri.WIN_Present(&window);
  
  	backEnd.projection2D = qfalse;
-@@ -1604,7 +1611,15 @@ RB_ExecuteRenderCommands
+@@ -1604,7 +1636,15 @@ RB_ExecuteRenderCommands
  void RB_ExecuteRenderCommands( const void *data ) {
  	int		t1, t2;
  
@@ -2236,7 +3007,7 @@ index 741bb95b..420f0e23 100644
  
  	while ( 1 ) {
  		data = PADP(data, sizeof(void *));
-@@ -1640,7 +1655,11 @@ void RB_ExecuteRenderCommands( const void *data ) {
+@@ -1640,7 +1680,11 @@ void RB_ExecuteRenderCommands( const void *data ) {
  		case RC_END_OF_LIST:
  		default:
  			// stop rendering
@@ -2265,7 +3036,7 @@ index afbbb175..a5dbf9fd 100644
  	else
  	{
 diff --git a/code/rd-vanilla/tr_cmds.cpp b/code/rd-vanilla/tr_cmds.cpp
-index 04ad9bdb..a3f6b05d 100644
+index 04ad9bdb..e855ba45 100644
 --- a/code/rd-vanilla/tr_cmds.cpp
 +++ b/code/rd-vanilla/tr_cmds.cpp
 @@ -89,6 +89,20 @@ void R_PerformanceCounters( void ) {
@@ -2311,16 +3082,20 @@ index 04ad9bdb..a3f6b05d 100644
  	// at this point, the back end thread is idle, so it is ok
  	// to look at it's performance counters
  	if ( runPerformanceCounters ) {
-@@ -369,12 +398,21 @@ If running in stereo, RE_BeginFrame will be called twice
+@@ -369,12 +398,25 @@ If running in stereo, RE_BeginFrame will be called twice
  for each RE_EndFrame
  ====================
  */
 +#ifdef SHADEREMU
 +void R_SE_PicturesFinish( void );	// (the pictures decoded on the workers uploaded before anything is drawn: tr_image.cpp)
 +#endif
++extern "C" int SE_InPlay( void );
++int R_SE_PicturesAtBind( void );
  void RE_BeginFrame( stereoFrame_t stereoFrame ) {
 +#ifdef SHADEREMU
-+	R_SE_PicturesFinish();
++	// (while a level loads, its loading screen's pictures are uploaded as they are bound: tr_image.cpp's R_SE_PictureNeeded)
++	if ( SE_InPlay() || !R_SE_PicturesAtBind() )
++		R_SE_PicturesFinish();
 +#endif
  	drawBufferCommand_t	*cmd = NULL;
  
@@ -2333,6 +3108,103 @@ index 04ad9bdb..a3f6b05d 100644
  	glState.finishCalled = qfalse;
  
  	tr.frameCount++;
+diff --git a/code/rd-vanilla/tr_draw.cpp b/code/rd-vanilla/tr_draw.cpp
+index c67c5d0a..10b93d2f 100644
+--- a/code/rd-vanilla/tr_draw.cpp
++++ b/code/rd-vanilla/tr_draw.cpp
+@@ -209,6 +209,51 @@ void RE_GetScreenShot(byte *buffer, int w, int h)
+ 	R_Free(source);
+ }
+ 
++#ifdef SHADEREMU
++// (ShaderEmu: the resample's rows over the worker cores, each row as the loop below makes it; a worker stores only to
++// its rows of the buffer. The autosave's picture twice and the dissolve's once at a level's end, 39 million instructions
++// of this core. JK2_RESAMPLE=core is the way before.)
++typedef struct {
++	unsigned grain, out_bytes;
++	void *touch;
++	unsigned touch_bytes;
++	int workers, first_idle;
++} se_for_opts;	// (programs/mc/mcwx.h's mcw_for_opts)
++extern "C" void mcw_for_opt( unsigned n, void ( *fn )( void *ctx, unsigned from, unsigned to ), void *ctx, const se_for_opts *o );
++struct se_resample_t {
++	const byte *src;
++	byte *dst;
++	int srcW, dstW, total;
++	float fXStep, fYStep;
++};
++static void se_resample_rows( void *ctx, unsigned from, unsigned to )
++{
++	const se_resample_t *z = (const se_resample_t *)ctx;
++	for ( int y = (int)from; y < (int)to; y++ )
++	{
++		byte *pbDst = z->dst + (size_t)y * z->dstW * 4;
++		for ( int x = 0; x < z->dstW; x++ )
++		{
++			int r = 0, g = 0, b = 0;
++			for ( float yy = (float)y*z->fYStep; yy < (float)(y+1)*z->fYStep ; yy+=1 )
++			{
++				for ( float xx = (float)x*z->fXStep; xx < (float)(x+1)*z->fXStep ; xx+=1 )
++				{
++					const byte *pbSrc = z->src + 4 * ( ((int)yy * z->srcW) + (int)xx );
++					r += pbSrc[0];
++					g += pbSrc[1];
++					b += pbSrc[2];
++				}
++			}
++			pbDst[0] = r / z->total;
++			pbDst[1] = g / z->total;
++			pbDst[2] = b / z->total;
++			pbDst[3] = 255;
++			pbDst += 4;
++		}
++	}
++}
++#endif
+ // this is just a chunk of code from RE_TempRawImage_ReadFromFile() below, subroutinised so I can call it
+ //	from the screen dissolve code as well...
+ //
+@@ -240,6 +285,40 @@ static byte *RE_ReSample(byte *pbLoadedPic,			int iLoadedWidth,	int iLoadedHeigh
+ 
+ 		byte	*pbDst = pbReSampleBuffer;
+ 
++#ifdef SHADEREMU
++		static int se_core = -1;
++		if ( se_core < 0 ) {
++			const char *e = getenv( "JK2_RESAMPLE" );
++			se_core = e && !strcmp( e, "core" );
++		}
++		if ( !se_core && *piHeight > 0 && *piWidth > 0 )
++		{
++			// (the shares are whole 16 bytes from the buffer's start: a buffer not on 16 bytes is made in one that is and
++			// copied, or two cores' rows meet in a texel: RVC_RACES said undone)
++			unsigned bytes = (unsigned)( *piWidth * *piHeight * 4 );
++			byte *room = NULL, *to = pbReSampleBuffer;
++			if ( (size_t)pbReSampleBuffer & 15 ) {
++				room = (byte *)malloc( bytes + 15 );
++				if ( !room ) {
++					goto se_on_core;
++				}
++				to = (byte *)( ( (size_t)room + 15 ) & ~(size_t)15 );
++			}
++			se_resample_t z = { pbLoadedPic, to, iLoadedWidth, *piWidth, iTotPixelsPerDownSample, fXStep, fYStep };
++			se_for_opts o;
++			memset( &o, 0, sizeof( o ) );
++			o.out_bytes = (unsigned)*piWidth * 4;
++			o.touch = to, o.touch_bytes = bytes;
++			o.first_idle = 1;	// (this core rests: with its own share a texel was undone under RVC_RACES)
++			mcw_for_opt( (unsigned)*piHeight, se_resample_rows, &z, &o );
++			if ( room ) {
++				memcpy( pbReSampleBuffer, to, bytes );
++				free( room );
++			}
++			return pbReSampleBuffer;
++		}
++se_on_core:
++#endif
+ 		for ( int y=0; y<*piHeight; y++ )
+ 		{
+ 			for ( int x=0; x<*piWidth; x++ )
 diff --git a/code/rd-vanilla/tr_ghoul2.cpp b/code/rd-vanilla/tr_ghoul2.cpp
 index 5062daf5..9216301e 100644
 --- a/code/rd-vanilla/tr_ghoul2.cpp
@@ -2656,7 +3528,7 @@ index 5062daf5..9216301e 100644
  	}
  #endif
 diff --git a/code/rd-vanilla/tr_image.cpp b/code/rd-vanilla/tr_image.cpp
-index a13badd4..6fea8405 100644
+index a13badd4..48b7b4e3 100644
 --- a/code/rd-vanilla/tr_image.cpp
 +++ b/code/rd-vanilla/tr_image.cpp
 @@ -554,6 +554,27 @@ Upload32
@@ -2797,7 +3669,7 @@ index a13badd4..6fea8405 100644
  	Upload32( (unsigned *)pic,	format,
  								(qboolean)image->mipmap,
  								allowPicmip,
-@@ -1055,6 +1123,325 @@ image_t *R_CreateImage( const char *name, const byte *pic, int width, int height
+@@ -1055,6 +1123,409 @@ image_t *R_CreateImage( const char *name, const byte *pic, int width, int height
  	return image;
  }
  
@@ -2818,6 +3690,7 @@ index a13badd4..6fea8405 100644
 +int SE_PicturesOn( void ( *tga )( const void *file, unsigned char *rgba ),
 +	int ( *prepare )( unsigned char *rgba, int width, int height, int halvings, int lightscale ) );
 +int SE_PictureHead( const void *raw, int raw_len, int method, int len, void *head, int room );
++int SE_PictureHeadUntil( const void *raw, int raw_len, int len, void *head, int room, int ( *known )( const unsigned char *head, int got ) );
 +int SE_PictureGive( const void *raw, int raw_len, int method, void *plain, int len, int kind, int shrink, void *rgba, int width,
 +		    int height, int halvings, int lightscale );
 +int SE_PictureReady( int given );
@@ -2837,8 +3710,19 @@ index a13badd4..6fea8405 100644
 +	char name[MAX_QPATH];
 +};
 +static se_pending_t se_pending[SE_PENDING];
-+static int se_pending_count;
++int se_pending_count;	// (tr_backend.cpp's GL_Bind looks at it)
++static int se_uploading;	// (se_upload's own GL_Bind)
 +static unsigned se_pending_bytes;
++
++static int se_head_until( void )
++{
++	static int on = -1;
++	if ( on < 0 ) {
++		const char *e = getenv( "JK2_HEAD_UNTIL" );
++		on = !e || atoi( e ) != 0;
++	}
++	return on;
++}
 +
 +// A JPEG's size, where its first bytes say it: a baseline or extended frame of 1 or 3 components
 +static qboolean se_jpeg_size( const byte *d, int n, int *width, int *height )
@@ -2867,6 +3751,37 @@ index a13badd4..6fea8405 100644
 +		i += 2 + length;
 +	}
 +	return qfalse;
++}
++
++// Whether a JPEG's first n bytes say what se_jpeg_size will say of it whatever follows (its frame found, or a reason
++// it has none): the head is inflated until they do (SE_PictureHeadUntil), not to 4 KB and then 64 KB
++static int se_jpeg_known( const unsigned char *d, int n )
++{
++	if ( n < 4 ) {
++		return 0;
++	}
++	if ( d[0] != 0xff || d[1] != 0xd8 ) {
++		return 1;
++	}
++	for ( int i = 2; i + 9 < n; ) {
++		if ( d[i] != 0xff ) {
++			return 1;
++		}
++		int m = d[i + 1];
++		if ( m == 0xff ) {
++			i++;
++			continue;
++		}
++		int length = d[i + 2] << 8 | d[i + 3];
++		if ( m == 0xc0 || m == 0xc1 ) {
++			return 1;
++		}
++		if ( ( m >= 0xc2 && m <= 0xcf && m != 0xc4 && m != 0xc8 && m != 0xcc ) || m == 0xd9 || m == 0xda || length < 2 ) {
++			return 1;
++		}
++		i += 2 + length;
++	}
++	return 0;
 +}
 +
 +// (on a worker, after the decode: what Upload32 makes of the picture before it is uploaded, the halvings of r_picmip it was
@@ -2960,7 +3875,9 @@ index a13badd4..6fea8405 100644
 +		if ( qglActiveTextureARB ) {
 +			GL_SelectTexture( 0 );
 +		}
++		se_uploading = 1;
 +		GL_Bind( image );
++		se_uploading = 0;
 +		se_sum_name = p->name;
 +		Upload32( (unsigned *)pic, GL_RGBA, (qboolean)image->mipmap, p->allowPicmip, qfalse, p->allowTC, &image->internalFormat,
 +			&image->width, &image->height );
@@ -3023,6 +3940,43 @@ index a13badd4..6fea8405 100644
 +	}
 +}
 +
++// A picture about to be bound (GL_Bind) uploaded first if it is still out: while a level loads, the loading screen's
++// frames wait for the pictures they draw only, not for every picture out (RE_BeginFrame; 75 thousand passes of the first
++// core's waiting). The texture unit bound is kept. JK2_PICTURES_BIND=0 is the way before.
++int R_SE_PicturesAtBind( void )
++{
++	static int on = -1;
++	if ( on < 0 ) {
++		const char *e = getenv( "JK2_PICTURES_BIND" );
++		on = !e || atoi( e ) != 0;
++	}
++	return on;
++}
++void R_SE_PictureNeeded( image_t *image )
++{
++	if ( se_uploading ) {
++		return;
++	}
++	for ( int i = 0; i < se_pending_count; i++ ) {
++		se_pending_t *p = &se_pending[i];
++		if ( p->image != image ) {
++			continue;
++		}
++		if ( !p->given ) {
++			p->given = SE_PictureGive( p->raw, p->raw_len, p->method, p->plain, p->len, p->kind, p->shrink, p->rgba,
++				p->width, p->height, se_halvings( p, p->kind == 1 ? p->shrink : 0 ),
++				( p->image->mipmap ? 1 : 0 ) | ( glConfig.textureCompression == TC_NONE ? 2 : 0 ) );
++		}
++		int tmu = glState.currenttmu;
++		se_upload( p, p->given ? SE_PictureJoin( p->given ) : 2 );
++		se_pending[i] = se_pending[--se_pending_count];
++		if ( qglActiveTextureARB && glState.currenttmu != tmu ) {
++			GL_SelectTexture( tmu );
++		}
++		return;
++	}
++}
++
 +void R_SE_PicturesFinish( void )
 +{
 +	if ( se_pending_count ) {
@@ -3063,7 +4017,9 @@ index a13badd4..6fea8405 100644
 +	if ( !se_head )
 +		se_head = (byte *)malloc( 65536 );
 +	const byte *head = method == 0 ? (const byte *)raw : se_head;
++	// (a deflated JPEG's inflated until its frame is known, up to 64 KB: what 4 KB and then 64 KB said)
 +	int got = !kind ? 0 : method == 0 ? raw_len : !se_head ? 0 :
++		kind == 1 && se_head_until() ? SE_PictureHeadUntil( raw, raw_len, len, se_head, 65536, se_jpeg_known ) :
 +		SE_PictureHead( raw, raw_len, method, len, se_head, kind == 2 ? 32 : 4096 );
 +	int width = 0, height = 0, shrink = 0;
 +	if ( kind == 1 ) {
@@ -3123,7 +4079,7 @@ index a13badd4..6fea8405 100644
  /*
  ===============
  R_FindImageFile
-@@ -1083,16 +1470,38 @@ image_t	*R_FindImageFile( const char *name, qboolean mipmap, qboolean allowPicmi
+@@ -1083,16 +1554,38 @@ image_t	*R_FindImageFile( const char *name, qboolean mipmap, qboolean allowPicmi
  	if (image) {
  		return image;
  	}
@@ -3298,6 +4254,193 @@ index a6d5bc7b..bcfc3f67 100644
  	static CachedModels_t singleton;	// sorry vv, your dynamic allocation was a (false) memory leak
  	CachedModels = &singleton;
  
+diff --git a/code/rd-vanilla/tr_shader.cpp b/code/rd-vanilla/tr_shader.cpp
+index 89910449..d75fc01c 100644
+--- a/code/rd-vanilla/tr_shader.cpp
++++ b/code/rd-vanilla/tr_shader.cpp
+@@ -3757,6 +3757,34 @@ a single large text block that can be scanned for shader names
+ =====================
+ */
+ #define	MAX_SHADER_FILES	4096
++#ifdef SHADEREMU
++// (ShaderEmu: the text as the first scan made it, kept with what it was made of, its files' names and lengths: a scan
++// of the same files copies it into the hunk's room as that scan's, and makes the entries' map again from those it kept
++// (tr_stl.cpp). R_Init twice and the server's models once in a load, 22 million instructions each. JK2_SHADERS_KEEP=0
++// is the way before.)
++static char *se_shader_text, *se_shader_key;
++static int se_shader_bytes, se_shader_key_bytes;
++static char *se_shader_key_of( char **files, int count, const long *lengths, int *bytes )
++{
++	int n = 0;
++	for ( int i = 0; i < count; i++ ) {
++		n += strlen( files[i] ) + 1 + (int)sizeof( long );
++	}
++	char *key = (char *)malloc( n ? n : 1 ), *to = key;
++	if ( !key ) {
++		return NULL;
++	}
++	for ( int i = 0; i < count; i++ ) {
++		size_t len = strlen( files[i] ) + 1;
++		memcpy( to, files[i], len );
++		to += len;
++		memcpy( to, &lengths[i], sizeof( long ) );
++		to += sizeof( long );
++	}
++	*bytes = n;
++	return key;
++}
++#endif
+ static void ScanAndLoadShaderFiles( void )
+ {
+ 	char **shaderFiles;
+@@ -3778,6 +3806,38 @@ static void ScanAndLoadShaderFiles( void )
+ 	if ( numShaderFiles > MAX_SHADER_FILES ) {
+ 		numShaderFiles = MAX_SHADER_FILES;
+ 	}
++#ifdef SHADEREMU
++	static int se_keep = -1;
++	if ( se_keep < 0 ) {
++		const char *e = getenv( "JK2_SHADERS_KEEP" );
++		se_keep = !e || atoi( e ) != 0;
++	}
++	static long se_lengths[MAX_SHADER_FILES];
++	if ( se_keep && se_shader_text ) {
++		long total = 0;
++		for ( i = 0; i < numShaderFiles; i++ ) {
++			char filename[MAX_QPATH];
++			Com_sprintf( filename, sizeof( filename ), "shaders/%s", shaderFiles[i] );
++			se_lengths[i] = ri.FS_ReadFile( filename, NULL );
++			if ( se_lengths[i] < 0 ) {
++				break;
++			}
++			total += se_lengths[i];
++		}
++		int key_bytes = 0;
++		char *key = i == numShaderFiles ? se_shader_key_of( shaderFiles, numShaderFiles, se_lengths, &key_bytes ) : NULL;
++		if ( key && key_bytes == se_shader_key_bytes && !memcmp( key, se_shader_key, key_bytes ) &&
++			total + numShaderFiles * 2 == se_shader_bytes ) {
++			free( key );
++			s_shaderText = (char *) R_Hunk_Alloc( se_shader_bytes, qtrue );
++			memcpy( s_shaderText, se_shader_text, se_shader_bytes );
++			ri.FS_FreeFileList( shaderFiles );
++			ShaderEntryPtrs_Again( s_shaderText );
++			return;
++		}
++		free( key );
++	}
++#endif
+ 
+ 	// load and store shader files
+ 	for ( i = 0; i < numShaderFiles; i++ )
+@@ -3790,6 +3850,9 @@ static void ScanAndLoadShaderFiles( void )
+ 		summand = ri.FS_ReadFile( filename, (void **)&buffers[i] );
+ 		if ( !buffers[i] )
+ 			ri.Error( ERR_DROP, "Couldn't load %s", filename );
++#ifdef SHADEREMU
++		se_lengths[i] = summand;
++#endif
+ 
+ 		if ( buffers[i] )
+ 			sum += summand;
+@@ -3814,12 +3877,30 @@ static void ScanAndLoadShaderFiles( void )
+ 
+ 	COM_Compress( s_shaderText );
+ 
++#ifdef SHADEREMU
++	// (kept: the files' names before the list is let go)
++	if ( se_keep ) {
++		free( se_shader_text ), free( se_shader_key );
++		se_shader_text = se_shader_key = NULL;
++		se_shader_bytes = (int)( sum + numShaderFiles * 2 );
++		se_shader_key = se_shader_key_of( shaderFiles, numShaderFiles, se_lengths, &se_shader_key_bytes );
++		if ( se_shader_key && ( se_shader_text = (char *)malloc( se_shader_bytes ) ) ) {
++			memcpy( se_shader_text, s_shaderText, se_shader_bytes );
++		}
++	}
++#endif
+ 	// free up memory
+ 	ri.FS_FreeFileList( shaderFiles );
+ 
+ 	#ifdef USE_STL_FOR_SHADER_LOOKUPS
+ 	SetupShaderEntryPtrs();
+ 	#endif
++#ifdef SHADEREMU
++	if ( se_keep && se_shader_text && !ShaderEntryPtrs_Keep( s_shaderText ) ) {
++		free( se_shader_text );
++		se_shader_text = NULL;
++	}
++#endif
+ }
+ 
+ /*
+diff --git a/code/rd-vanilla/tr_stl.cpp b/code/rd-vanilla/tr_stl.cpp
+index f3648d1b..203a6e0d 100644
+--- a/code/rd-vanilla/tr_stl.cpp
++++ b/code/rd-vanilla/tr_stl.cpp
+@@ -63,6 +63,48 @@ void ShaderEntryPtrs_Insert(const char *token, const char *p)
+ 	}
+ }
+ 
++#ifdef SHADEREMU
++// (ShaderEmu: the entries kept as the first scan of the shader files made them, each its name and its place in the
++// text, in the map's order, and the map made again from them over another copy of that text, each put at the end:
++// tr_shader.cpp's ScanAndLoadShaderFiles, three times in a load)
++static char *se_kept_names;
++static int *se_kept_at, se_kept_count;
++int ShaderEntryPtrs_Keep(const char *base)
++{
++	size_t bytes = 0;
++	int n = 0;
++	free(se_kept_names), free(se_kept_at);
++	se_kept_names = NULL, se_kept_at = NULL, se_kept_count = 0;
++	for (ShaderEntryPtrs_t::iterator it = ShaderEntryPtrs.begin(); it != ShaderEntryPtrs.end(); ++it)
++		bytes += strlen((*it).first.c_str()) + 1;
++	se_kept_names = (char *)malloc(bytes ? bytes : 1);
++	se_kept_at = (int *)malloc((ShaderEntryPtrs.size() + 1) * sizeof(int));
++	if (!se_kept_names || !se_kept_at) {
++		free(se_kept_names), free(se_kept_at);
++		se_kept_names = NULL, se_kept_at = NULL;
++		return 0;
++	}
++	char *to = se_kept_names;
++	for (ShaderEntryPtrs_t::iterator it = ShaderEntryPtrs.begin(); it != ShaderEntryPtrs.end(); ++it, n++) {
++		size_t len = strlen((*it).first.c_str()) + 1;
++		memcpy(to, (*it).first.c_str(), len);
++		to += len;
++		se_kept_at[n] = (int)((*it).second - base);
++	}
++	se_kept_count = n;
++	return 1;
++}
++void ShaderEntryPtrs_Again(const char *base)
++{
++	const char *name = se_kept_names;
++	ShaderEntryPtrs.clear();
++	for (int i = 0; i < se_kept_count; i++) {
++		ShaderEntryPtrs.insert(ShaderEntryPtrs.end(), ShaderEntryPtrs_t::value_type(name, base + se_kept_at[i]));
++		name += strlen(name) + 1;
++	}
++}
++#endif
++
+ // returns NULL if not found...
+ //
+ const char *ShaderEntryPtrs_Lookup(const char *psShaderName)
+diff --git a/code/rd-vanilla/tr_stl.h b/code/rd-vanilla/tr_stl.h
+index 8aa032b0..5701e807 100644
+--- a/code/rd-vanilla/tr_stl.h
++++ b/code/rd-vanilla/tr_stl.h
+@@ -36,6 +36,10 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
+ 	int ShaderEntryPtrs_Size(void);
+ 	const char  *ShaderEntryPtrs_Lookup(const char *psShaderName);
+ 	void ShaderEntryPtrs_Insert(const char  *token, const char  *p);
++#ifdef SHADEREMU
++	int ShaderEntryPtrs_Keep(const char *base);
++	void ShaderEntryPtrs_Again(const char *base);
++#endif
+ #else
+ 
+ 	#define ShaderEntryPtrs_Clear()
 diff --git a/code/rd-vanilla/tr_surface.cpp b/code/rd-vanilla/tr_surface.cpp
 index 1e51e71c..19f1439d 100644
 --- a/code/rd-vanilla/tr_surface.cpp
@@ -3466,6 +4609,66 @@ index 4a20f0ee..27bb06df 100644
  /*
  =================
  UI_KeyEvent
+diff --git a/code/ui/ui_shared.cpp b/code/ui/ui_shared.cpp
+index 2f5cbdf8..70978752 100644
+--- a/code/ui/ui_shared.cpp
++++ b/code/ui/ui_shared.cpp
+@@ -285,11 +285,27 @@ qboolean PC_ParseRect(rectDef_t *r)
+ PC_Script_Parse
+ =================
+ */
++#ifdef SHADEREMU
++// (ShaderEmu: a script's text made at its end, as Q_strcat made it (up to the room less one byte), without va's print and
++// a strlen of all of it for every token: the menus' scripts were a third of the UI's parse, twice in a load)
++static void se_script_add( char *script, int *len, int size, const char *s, size_t n )
++{
++	size_t room = (size_t)( size - 1 - *len );
++	if ( n > room )
++		n = room;
++	memcpy( script + *len, s, n );
++	*len += (int)n;
++	script[*len] = 0;
++}
++#endif
+ qboolean PC_Script_Parse(const char **out)
+ {
+ 	char script[4096];
+ //	pc_token_t token;
+ 	char *token2;
++#ifdef SHADEREMU
++	int se_len = 0;
++#endif
+ 
+ 	script[0]=0;
+ 	// scripts start with { and have ; separated command lists.. commands are command, arg..
+@@ -320,6 +336,19 @@ qboolean PC_Script_Parse(const char **out)
+ 			return qtrue;
+ 		}
+ 
++#ifdef SHADEREMU
++		if (*(token2 +1) != '\0')
++		{
++			se_script_add( script, &se_len, sizeof( script ), "\"", 1 );
++			se_script_add( script, &se_len, sizeof( script ), token2, strlen( token2 ) );
++			se_script_add( script, &se_len, sizeof( script ), "\"", 1 );
++		}
++		else
++		{
++			se_script_add( script, &se_len, sizeof( script ), token2, token2[0] ? 1 : 0 );
++		}
++		se_script_add( script, &se_len, sizeof( script ), " ", 1 );
++#else
+ 		if (*(token2 +1) != '\0')
+ 		{
+ 			Q_strcat(script, sizeof(script), va("\"%s\"", token2));
+@@ -329,6 +358,7 @@ qboolean PC_Script_Parse(const char **out)
+ 			Q_strcat(script, sizeof(script), token2);
+ 		}
+ 		Q_strcat(script, sizeof(script), " ");
++#endif
+ 	}
+ }
+ 
 diff --git a/codeJK2/cgame/FxPrimitives.cpp b/codeJK2/cgame/FxPrimitives.cpp
 index 0b83bc19..6b3b6d7c 100644
 --- a/codeJK2/cgame/FxPrimitives.cpp
@@ -3531,6 +4734,31 @@ index bdb72696..0919f611 100644
  	{
  		char	text[1024]={0};
  		cgi_SP_GetStringTextString( "INGAME_ALONGTIME", text, sizeof(text) );
+diff --git a/codeJK2/cgame/cg_main.cpp b/codeJK2/cgame/cg_main.cpp
+index 9be003e9..2ff22402 100644
+--- a/codeJK2/cgame/cg_main.cpp
++++ b/codeJK2/cgame/cg_main.cpp
+@@ -743,6 +743,20 @@ static void CG_RegisterSounds( void ) {
+ 
+ 	cg.loadLCARSStage = 2;
+ 	CG_LoadingString( "preregistered sounds" );
++#ifdef SHADEREMU
++	{
++		extern void S_SE_SoundAhead( const char *name );	// (the engine's: its MP3 read ahead)
++		for ( i = 1 ; i < MAX_SOUNDS ; i++ ) {
++			soundName = CG_ConfigString( CS_SOUNDS+i );
++			if ( !soundName[0] ) {
++				break;
++			}
++			if ( soundName[0] != '*' ) {
++				S_SE_SoundAhead( soundName );
++			}
++		}
++	}
++#endif
+ 
+ 	for ( i = 1 ; i < MAX_SOUNDS ; i++ ) {
+ 		soundName = CG_ConfigString( CS_SOUNDS+i );
 diff --git a/codeJK2/cgame/cg_marks.cpp b/codeJK2/cgame/cg_marks.cpp
 index f4bcfa8d..ba92f91b 100644
 --- a/codeJK2/cgame/cg_marks.cpp
@@ -3559,10 +4787,30 @@ index f4bcfa8d..ba92f91b 100644
  		}
  
 diff --git a/codeJK2/cgame/cg_players.cpp b/codeJK2/cgame/cg_players.cpp
-index ef21d32f..ccd51a90 100644
+index ef21d32f..183dd4f9 100644
 --- a/codeJK2/cgame/cg_players.cpp
 +++ b/codeJK2/cgame/cg_players.cpp
-@@ -2861,7 +2861,80 @@ void CG_PlayerPowerups( centity_t *cent )
+@@ -231,10 +231,19 @@ static const char *GetCustomSound_VariantCapped(const char *ppsTable[], int iEnt
+ 	return ppsTable[iEntryNum];
+ }
+ 
++#ifdef SHADEREMU
++void S_SE_SoundAhead( const char *name );	// (the engine's snd_dma.cpp: its MP3 read ahead)
++#endif
+ static void CG_RegisterCustomSounds(clientInfo_t *ci, int iSoundEntryBase,
+ 									int iTableEntries, const char *ppsTable[], const char *psDir
+ 									)
+ {
++#ifdef SHADEREMU
++	for ( int i=0 ; i<iTableEntries && ppsTable[i]; i++ )
++	{
++		S_SE_SoundAhead( va("sound/chars/%s/misc/%s", psDir, ppsTable[i] + 1) );
++	}
++#endif
+ 	for ( int i=0 ; i<iTableEntries; i++ )
+ 	{
+ 		const char *s = GetCustomSound_VariantCapped(ppsTable,i, qfalse);
+@@ -2861,7 +2870,80 @@ void CG_PlayerPowerups( centity_t *cent )
  }
  
  #define	SHADOW_DISTANCE		128
@@ -3597,7 +4845,7 @@ index ef21d32f..ccd51a90 100644
 +	e->polys++;
 +}
 +static qboolean _PlayerShadowMade( const vec3_t origin, const float orientation, float *const shadowPlane, const float radius );
- static qboolean _PlayerShadow( const vec3_t origin, const float orientation, float *const shadowPlane, const float radius ) {
++static qboolean _PlayerShadow( const vec3_t origin, const float orientation, float *const shadowPlane, const float radius ) {
 +	if ( se_shadow_off < 0 ) {
 +		const char *s = getenv( "JK2_SHADOWS" );
 +		se_shadow_off = s && !strcmp( s, "made" );
@@ -3638,12 +4886,12 @@ index ef21d32f..ccd51a90 100644
 +}
 +static qboolean _PlayerShadowMade( const vec3_t origin, const float orientation, float *const shadowPlane, const float radius ) {
 +#else
-+static qboolean _PlayerShadow( const vec3_t origin, const float orientation, float *const shadowPlane, const float radius ) {
+ static qboolean _PlayerShadow( const vec3_t origin, const float orientation, float *const shadowPlane, const float radius ) {
 +#endif
  	vec3_t		end, mins = {-7, -7, 0}, maxs = {7, 7, 2};
  	trace_t		trace;
  	float		alpha;
-@@ -3007,11 +3080,13 @@ void _PlayerSplash( const vec3_t origin, const vec3_t velocity, const float radi
+@@ -3007,11 +3089,13 @@ void _PlayerSplash( const vec3_t origin, const vec3_t velocity, const float radi
  
  	float alpha = ( t / 8192.0f ) * 0.6f + 0.2f;
  
@@ -3658,7 +4906,7 @@ index ef21d32f..ccd51a90 100644
  								cgs.media.wakeMarkShader, FX_ALPHA_LINEAR | FX_SIZE_LINEAR );
  }
  
-@@ -3349,7 +3424,9 @@ static void CG_ForceElectrocution( centity_t *cent, const vec3_t origin, vec3_t
+@@ -3349,7 +3433,9 @@ static void CG_ForceElectrocution( centity_t *cent, const vec3_t origin, vec3_t
  	{
  		// Just use the lerp Origin and a random direction
  		VectorCopy( cent->lerpOrigin, fxOrg );
@@ -3879,7 +5127,7 @@ index 657ed823..bf34d99f 100644
  
  	ent->s.modelindex = G_ModelIndex( "models/map_objects/kejim/weaponsrung.md3" );
 diff --git a/codeJK2/game/g_navigator.cpp b/codeJK2/game/g_navigator.cpp
-index 024b3fad..e22c9779 100644
+index 024b3fad..f4347db4 100644
 --- a/codeJK2/game/g_navigator.cpp
 +++ b/codeJK2/game/g_navigator.cpp
 @@ -358,7 +358,7 @@ int	CNode::Save( int numNodes, fileHandle_t file )
@@ -3891,25 +5139,165 @@ index 024b3fad..e22c9779 100644
  	gi.FS_Write( &header, sizeof( header ), file );
  
  	//Write out the basic information
-@@ -397,7 +397,7 @@ Load
+@@ -395,11 +395,38 @@ Load
+ -------------------------
+ */
  
++#ifdef SHADEREMU
++// (ShaderEmu: the nav file read whole once (FS_ReadFile) and its values taken from that memory as FS_Read gave them,
++// short at its end as FS_Read is: 43 thousand reads of a few bytes, each through the pak's inflate, 18 million
++// instructions. JK2_NAV_WHOLE=0 is the way before.)
++static const byte *se_nav_at, *se_nav_end;
++static int se_nav_read( void *buffer, int len, fileHandle_t f )
++{
++	if ( !se_nav_at ) {
++		return gi.FS_Read( buffer, len, f );
++	}
++	int n = (int)( se_nav_end - se_nav_at );
++	if ( n > len ) {
++		n = len;
++	}
++	if ( n > 0 ) {
++		memcpy( buffer, se_nav_at, n );
++		se_nav_at += n;
++	} else {
++		n = 0;
++	}
++	return n;
++}
++#define SE_NAV_READ se_nav_read
++#else
++#define SE_NAV_READ gi.FS_Read
++#endif
++
  int CNode::Load( int numNodes, fileHandle_t file )
  {
 -	unsigned long header;
 +	uint32_t header;	// (32 bits in the file, whatever long is)
  	int i;
- 	gi.FS_Read( &header, sizeof(header), file );
+-	gi.FS_Read( &header, sizeof(header), file );
++	SE_NAV_READ( &header, sizeof(header), file );
  
-@@ -524,7 +524,7 @@ GetLong
+ 	//Validate the header
+ 	if ( header != NODE_HEADER_ID )
+@@ -407,20 +434,20 @@ int CNode::Load( int numNodes, fileHandle_t file )
+ 
+ 	//Get the basic information
+ 	for ( i = 0; i < 3; i++ )
+-		gi.FS_Read( &m_position[i], sizeof( float ), file );
++		SE_NAV_READ( &m_position[i], sizeof( float ), file );
+ 
+-	gi.FS_Read( &m_flags, sizeof( m_flags ), file );
+-	gi.FS_Read( &m_ID, sizeof( m_ID ), file );
+-	gi.FS_Read( &m_radius, sizeof( m_radius ), file );
++	SE_NAV_READ( &m_flags, sizeof( m_flags ), file );
++	SE_NAV_READ( &m_ID, sizeof( m_ID ), file );
++	SE_NAV_READ( &m_radius, sizeof( m_radius ), file );
+ 
+ 	//Get the edge information
+-	gi.FS_Read( &m_numEdges, sizeof( m_numEdges ), file );
++	SE_NAV_READ( &m_numEdges, sizeof( m_numEdges ), file );
+ 
+ 	for ( i = 0; i < m_numEdges; i++ )
+ 	{
+ 		edge_t	edge;
+ 
+-		gi.FS_Read( &edge, sizeof( edge_t ), file );
++		SE_NAV_READ( &edge, sizeof( edge_t ), file );
+ 
+ 		STL_INSERT( m_edges, edge );
+ 	}
+@@ -428,14 +455,14 @@ int CNode::Load( int numNodes, fileHandle_t file )
+ 	//Read the node ranks
+ 	int	numRanks;
+ 
+-	gi.FS_Read( &numRanks, sizeof( numRanks ), file );
++	SE_NAV_READ( &numRanks, sizeof( numRanks ), file );
+ 
+ 	//Allocate the memory
+ 	InitRanks( numRanks );
+ 
+ 	for ( i = 0; i < numRanks; i++ )
+ 	{
+-		gi.FS_Read( &m_ranks[i], sizeof( int ), file );
++		SE_NAV_READ( &m_ranks[i], sizeof( int ), file );
+ 	}
+ 
+ 	return true;
+@@ -481,7 +508,7 @@ char CNavigator::GetChar( fileHandle_t file )
+ {
+ 	char value;
+ 
+-	gi.FS_Read( &value, sizeof( value ), file );
++	SE_NAV_READ( &value, sizeof( value ), file );
+ 
+ 	return value;
+ }
+@@ -496,7 +523,7 @@ int	CNavigator::GetInt( fileHandle_t file )
+ {
+ 	int value;
+ 
+-	gi.FS_Read( &value, sizeof( value ), file );
++	SE_NAV_READ( &value, sizeof( value ), file );
+ 
+ 	return value;
+ }
+@@ -511,7 +538,7 @@ float CNavigator::GetFloat( fileHandle_t file )
+ {
+ 	float value;
+ 
+-	gi.FS_Read( &value, sizeof( value ), file );
++	SE_NAV_READ( &value, sizeof( value ), file );
+ 
+ 	return value;
+ }
+@@ -524,9 +551,9 @@ GetLong
  
  long CNavigator::GetLong( fileHandle_t file )
  {
 -	long value;
 +	int32_t value;	// (32 bits in the file, whatever long is)
  
- 	gi.FS_Read( &value, sizeof( value ), file );
+-	gi.FS_Read( &value, sizeof( value ), file );
++	SE_NAV_READ( &value, sizeof( value ), file );
  
-@@ -638,7 +638,7 @@ bool CNavigator::Save( const char *filename, int checksum )
+ 	return value;
+ }
+@@ -567,6 +594,24 @@ Load
+ bool CNavigator::Load( const char *filename, int checksum )
+ {
+ 	fileHandle_t	file;
++#ifdef SHADEREMU
++	struct se_nav_whole {
++		void *buf;
++		~se_nav_whole() {
++			if ( buf ) {
++				gi.FS_FreeFile( buf );
++			}
++			se_nav_at = se_nav_end = NULL;
++		}
++	} se_whole = { NULL };
++	const char *se_e = getenv( "JK2_NAV_WHOLE" );
++	if ( !se_e || atoi( se_e ) ) {
++		long se_len = gi.FS_ReadFile( va( "maps/%s.nav", filename ), &se_whole.buf );
++		if ( se_whole.buf && se_len >= 0 ) {
++			se_nav_at = (const byte *)se_whole.buf, se_nav_end = se_nav_at + se_len;
++		}
++	}
++#endif
+ 
+ 	//Attempt to load the file
+ 	gi.FS_FOpenFile( va( "maps/%s.nav", filename ), &file, FS_READ );
+@@ -609,7 +654,7 @@ bool CNavigator::Load( const char *filename, int checksum )
+ 	}
+ 
+ 	//read in the failed edges
+-	gi.FS_Read( &failedEdges, sizeof( failedEdges ), file );
++	SE_NAV_READ( &failedEdges, sizeof( failedEdges ), file );
+ 	for ( int j = 0; j < MAX_FAILED_EDGES; j++ )
+ 	{
+ 		m_edgeLookupMap.insert(std::pair<int, int>(failedEdges[j].startID, j));
+@@ -638,7 +683,7 @@ bool CNavigator::Save( const char *filename, int checksum )
  		return false;
  
  	//Write out the header id
@@ -4005,7 +5393,7 @@ index 04c5aa25..c80c7579 100644
  			break;
  		case CLASS_ATST://much too big to grip!
 diff --git a/lib/minizip/unzip.c b/lib/minizip/unzip.c
-index e93e46c8..98e56894 100644
+index e93e46c8..65f97178 100644
 --- a/lib/minizip/unzip.c
 +++ b/lib/minizip/unzip.c
 @@ -138,6 +138,146 @@ typedef struct unz_file_info64_internal_s
@@ -4258,7 +5646,7 @@ index e93e46c8..98e56894 100644
  
      lSeek+=file_info.size_filename;
      if ((err==UNZ_OK) && (szFileName!=NULL))
-@@ -1688,6 +1910,47 @@ extern ZPOS64_T ZEXPORT unzGetCurrentFileZStreamPos64( unzFile file)
+@@ -1688,6 +1910,75 @@ extern ZPOS64_T ZEXPORT unzGetCurrentFileZStreamPos64( unzFile file)
    return <0 with error code if there is an error
      (UNZ_ERRNO for IO error, or zLib error for uncompress error)
  */
@@ -4292,6 +5680,34 @@ index e93e46c8..98e56894 100644
 +        return NULL;
 +    return m->m->base + at;
 +}
++/* (ShaderEmu: the entry whose central directory record is at pos, packed where it lies in a mapped pak, found from its
++ * local header without opening it (files.cpp's files read ahead): its method, packed and plain sizes; NULL when the pak
++ * is not mapped, or the entry is encrypted or its header not as it should be. The current file becomes that entry.) */
++extern const void * ZEXPORT unzSE_EntryAt (unzFile file, unsigned long pos, int *method, unsigned long *packed,
++                                           unsigned long *size)
++{
++    unz64_s* s = (unz64_s*)file;
++    const se_mem_t *m;
++    const unsigned char *h;
++    unsigned long at;
++    if (s == NULL || s->z_filefunc.zopen32_file != se_mem_open || s->z_filefunc.zfile_func64.zopen64_file != NULL ||
++        unzSetOffset(file, pos) != UNZ_OK || (s->cur_file_info.flag & 1))
++        return NULL;
++    m = (const se_mem_t *)s->filestream;
++    at = (unsigned long)(s->cur_file_info_internal.offset_curfile + s->byte_before_the_zipfile);
++    if (at > m->m->size || m->m->size - at < 30)
++        return NULL;
++    h = m->m->base + at;
++    if (h[0] != 0x50 || h[1] != 0x4b || h[2] != 3 || h[3] != 4)
++        return NULL;
++    at += 30 + (unsigned long)(h[26] | h[27] << 8) + (unsigned long)(h[28] | h[29] << 8);
++    if (at > m->m->size || s->cur_file_info.compressed_size > m->m->size - at)
++        return NULL;
++    *method = (int)s->cur_file_info.compression_method;
++    *packed = (unsigned long)s->cur_file_info.compressed_size;
++    *size = (unsigned long)s->cur_file_info.uncompressed_size;
++    return m->m->base + at;
++}
 +extern const void * ZEXPORT unzSE_PackedAt (unzFile file, unsigned size)
 +{
 +    unz64_s* s = (unz64_s*)file;
@@ -4306,7 +5722,7 @@ index e93e46c8..98e56894 100644
  extern int ZEXPORT unzReadCurrentFile  (unzFile file, voidp buf, unsigned len)
  {
      int err=UNZ_OK;
-@@ -1708,6 +1971,45 @@ extern int ZEXPORT unzReadCurrentFile  (unzFile file, voidp buf, unsigned len)
+@@ -1708,6 +1999,45 @@ extern int ZEXPORT unzReadCurrentFile  (unzFile file, voidp buf, unsigned len)
      if (len==0)
          return 0;
  
@@ -4352,7 +5768,7 @@ index e93e46c8..98e56894 100644
      pfile_in_zip_read_info->stream.next_out = (Bytef*)buf;
  
      pfile_in_zip_read_info->stream.avail_out = (uInt)len;
-@@ -1788,7 +2090,7 @@ extern int ZEXPORT unzReadCurrentFile  (unzFile file, voidp buf, unsigned len)
+@@ -1788,7 +2118,7 @@ extern int ZEXPORT unzReadCurrentFile  (unzFile file, voidp buf, unsigned len)
  
              pfile_in_zip_read_info->total_out_64 = pfile_in_zip_read_info->total_out_64 + uDoCopy;
  
@@ -4361,7 +5777,7 @@ index e93e46c8..98e56894 100644
                                  pfile_in_zip_read_info->stream.next_out,
                                  uDoCopy);
              pfile_in_zip_read_info->rest_read_uncompressed-=uDoCopy;
-@@ -1825,7 +2127,7 @@ extern int ZEXPORT unzReadCurrentFile  (unzFile file, voidp buf, unsigned len)
+@@ -1825,7 +2155,7 @@ extern int ZEXPORT unzReadCurrentFile  (unzFile file, voidp buf, unsigned len)
  
              pfile_in_zip_read_info->total_out_64 = pfile_in_zip_read_info->total_out_64 + uOutThis;
  
@@ -4370,7 +5786,7 @@ index e93e46c8..98e56894 100644
              pfile_in_zip_read_info->rest_read_uncompressed -= uOutThis;
              iRead += (uInt)(uTotalOutAfter - uTotalOutBefore);
  
-@@ -1869,7 +2171,7 @@ extern int ZEXPORT unzReadCurrentFile  (unzFile file, voidp buf, unsigned len)
+@@ -1869,7 +2199,7 @@ extern int ZEXPORT unzReadCurrentFile  (unzFile file, voidp buf, unsigned len)
              pfile_in_zip_read_info->total_out_64 = pfile_in_zip_read_info->total_out_64 + uOutThis;
  
              pfile_in_zip_read_info->crc32 =
@@ -4379,7 +5795,7 @@ index e93e46c8..98e56894 100644
                          (uInt)(uOutThis));
  
              pfile_in_zip_read_info->rest_read_uncompressed -=
-@@ -2024,7 +2326,7 @@ extern int ZEXPORT unzCloseCurrentFile (unzFile file)
+@@ -2024,7 +2354,7 @@ extern int ZEXPORT unzCloseCurrentFile (unzFile file)
  
  
      if ((pfile_in_zip_read_info->rest_read_uncompressed == 0) &&

@@ -426,6 +426,25 @@ The same run as above (`rvc_cpu`, 16 workers, the desktop to `client state 7`), 
 | the game's `G_FindConfigstringIndex` searching the configstrings where they lie (`SV_SE_FindConfigstring`) | 306,791 | 1.63 |
 | `mcw_wait` serving only workers with something out (`programs/mc/mcw.c`: every program's; 96 million of `serve` before) | 307,014 | 1.57 |
 | the pak read where it lies: mapped once read only and shared (the page cache itself without an MMU, as `cabinst` wrote it in one piece), minizip's file functions over the map (`unzSE_OpenMapped`), the pictures', sounds' and large entries' packed bytes a pointer into it (`unzSE_PackedAt`, `FS_SE_FreeRaw`); `JK2_PAK_MAP=0` the file reads (303,013, 1.534) | 284,171 | 1.37 |
+| core 0 rests while the large entries' split inflate runs, not taking a part (`m_inflate_stream_rest`; `JK2_PAK_REST=0`) | | 1.274 |
+| a picture's head inflated by zlib, which stops when the room is full, not libmedia's whole first block (`SE_PictureHead`; `JK2_HEAD=media`) | | 1.218 |
+| a folder's files read ahead by idle workers once two of one folder are read in a row (`SE_FileGive`/`SE_FileJoin` in `files.cpp`, a 512 KB room of their own, the entry found by its local header, `unzSE_EntryAt`; every libmedia team reaps them first; `JK2_FILES_AHEAD=0`, `JK2_AHEAD_LOG=1`) | | 1.167 |
+| the shader files' text kept from the first of the load's three scans (`tr_stl.cpp`; `JK2_SHADERS_KEEP=0`) | | 1.140 |
+| the UI's scripts parsed without `va` and `Q_strcat` (the same bytes); the navigation file read whole, not in 43 thousand reads (`g_navigator.cpp`; `JK2_NAV_WHOLE=0`) | 257,852 | 1.111 |
+| a JPEG's head inflated in steps until its frame header (`SE_PictureHeadUntil`; `JK2_HEAD_UNTIL=0`); folder listings kept for the search path's misses, listed again after any write, rename, removal or new folder (`se_dir_lacks`; `JK2_DIRS_LISTED=0`); libmedia's JPEG encoder asks for 105 bytes a block first, 420 only when an interval overflows (the autosave's 5 MB room had failed and libjpeg ran here) | | 1.028 |
+| libmedia's inflate asks for no room over 1 MB in one piece (`ONE_PIECE`: the rings apart); a kept MP3's 26.6 KB decoder state made when it first plays (`SE_MP3Header`; `JK2_MP3_LAZY=0`, `JK2_MP3_LAZY_CHECK=1`) | | 1.013 |
+| the colour cleared at a world view nothing else clears (`RB_BeginDrawingView`; `JK2_CLEAR=0`): the sky's boxes are black where they are not drawn, not the GPU memory's old pictures | 248,497 | 1.008 |
+| a loading screen's frame waits only for the pictures it binds (`R_SE_PictureNeeded`; `JK2_PICTURES_BIND=0`); the dissolve's and the autosave's resample in rows on the workers, in a room on 16 bytes, core 0 resting (`JK2_RESAMPLE=core`) | 165,094 | 0.876 |
+
+The last nine rows (3 November 2026, evening) give the same sums to frame 450, no failed allocation over the load (the
+20, 10.6 and 5 MB tries before), the zone at most 56.4 MB at the load's end (71.5 before) and 43.8 MB free (28.5).
+`RVC_RACES` with `RVC_RACES_NEAR=4` over the load: one store undone, libmedia's (`second_jobs`), at a part's edge,
+which core 0 writes again from the part's own copy (`m_inflate.c`, "the texels two parts share"). The resample with core 0
+taking a share, or into a buffer not on 16 bytes, had a texel undone: hence the room and the rest. On core 0 at
+1.008 billion (three profiled windows, before the last row, which took much of the waiting): the sounds' registration (about 140 million: their inflate, MP3 sizes and decoders), waiting
+for workers (about 90: `mcw_wait`, `serve`, 75 thousand `REST`s, the timer), the UI parsed twice (82; 540 thousand
+`Q_stricmp`), the entities' spawn (86, the NPCs' animation files 40), the effects' parse through `std::istream` (29),
+the string packages (26), the collision's patches (24), the shader files (25) and the autosave (23).
 
 More workers lose: 32 gave 339,814 passes and 1.82 billion, 64 gave 342,598 and 1.94, 255 did not reach the level in
 3 million passes; 64 opened with libmedia's teams kept at 16 (`JK2_TEAM`) and only the large entries' split inflate on

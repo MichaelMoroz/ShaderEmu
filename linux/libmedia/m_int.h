@@ -40,6 +40,8 @@ void m_scratch_done(int slot, void *memory, uint32_t bytes);
 
 /* One deflate stream on every core, without its CRC-32 (m_inflate.c): what `made` says is all of it, or a reason. */
 const char *m_inflate_stream_plain(const void *in, uint32_t in_size, void *out, uint32_t out_size, uint32_t *made, int workers);
+/* the same (crc NULL: no CRC-32, as the plain one) with the first core resting, taking no part */
+const char *m_inflate_stream_rest(const void *in, uint32_t in_size, void *out, uint32_t out_size, uint32_t *made, uint32_t *crc, int workers);
 
 /* The output's pixel for red, green, blue, alpha (3 or 4 channels, either order). */
 static inline void
