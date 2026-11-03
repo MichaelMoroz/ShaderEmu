@@ -111,6 +111,16 @@ a mouse's wheel tilted (Shift) and turned on a desktop.
 | Solitaire (`nxsolitaire`) | | | as before: drag, click | A turns the stock, B takes back, Y finishes |
 | Chess (`nxchess`) | moves the keyboard's square | | as before | A picks and drops, B takes back |
 
+| Tiberian Dawn, Red Alert (`linux/tdawn/host.c`) | pans the map: an arrow key pressed and let go a notch | | as before (the right button dragged scrolls) | Y is Escape |
+| OpenTTD (`shaderemu_v.cpp`) | pans the main view: an arrow held 120 ms a notch | zooms (its wheel) | as before | |
+| Age of Empires (`port/window.c`) | pans the map: an arrow held 120 ms a notch | | as before | |
+| Quake, Quake III, Half-Life, Jedi Outcast | | the next weapon up or right, the one before down or left (Half-Life: its own wheel binds) | as before | A jumps, B uses (not Quake), the left stick pressed crouches (not Quake), Y is Escape |
+| Doom | | | as before | A or B uses |
+
+A sitter in a holodeck's seat keeps the controller's own mapping (`EmuGamepad`): the 3D games take none of
+these while seated. Groups of units in the C&C games and AoE are not mapped: the game says nothing of which
+groups exist, so a button that cycles them would select empty ones.
+
 `NXTETRIS_PRINT=1` and `NXPINBALL_PRINT=1` say each move a controller made, and `test_all.py
 pad-tetris`, `pad-pinball`, `pad-mines` and `pad-chess` play them with `--scroll` and `--pointer-button`.
 

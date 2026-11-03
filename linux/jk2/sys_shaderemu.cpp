@@ -188,6 +188,9 @@ static void se_window_open( int w, int h )
 	GrSelectEvents( se_window, GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_KEY_UP | GR_EVENT_MASK_BUTTON_DOWN |
 		GR_EVENT_MASK_BUTTON_UP | GR_EVENT_MASK_MOUSE_ENTER | GR_EVENT_MASK_MOUSE_EXIT | GR_EVENT_MASK_CLOSE_REQ |
 		GR_EVENT_MASK_UPDATE );
+	GR_WM_PROPERTIES props;     // the wheel tilted too (se_input: the weapons)
+	props.flags = GR_WM_FLAGS_COMMAND, props.props = GR_WMC_BUTTONS, props.background = 1;
+	GrSetWMProperties( se_window, &props );
 	GrMapWindow( se_window );
 	GrSetFocus( se_window );
 	if ( jk2glOpen( se_window ) < 0 ) {
@@ -474,6 +477,26 @@ static void se_menu_pointer( int x, int y )
 			se_origin_x, se_origin_y, se_win_w, se_win_h );
 }
 
+// A controller (docs/machine/input.md, "Game controls"; the bits are linux/apps/input_words.h's): the jump button
+// (A) jumps, B uses, the left stick pressed crouches, Y is Escape; the wheel (the right stick, tilted too) is the next
+// weapon up or right, the one before down or left, and the menus' own wheel in a menu.
+static void se_pad_buttons( unsigned buttons )
+{
+	static unsigned held;
+	unsigned down = buttons & ~held, up = held & ~buttons;
+	held = buttons;
+	if ( ( down | up ) & 0x10000 )
+		Sys_QueEvent( 0, SE_KEY, A_SPACE, ( down & 0x10000 ) != 0, 0, NULL );
+	if ( ( down | up ) & 0x8000 )
+		Sys_QueEvent( 0, SE_KEY, 'e', ( down & 0x8000 ) != 0, 0, NULL );
+	if ( ( down | up ) & 0x1000 )
+		Sys_QueEvent( 0, SE_KEY, 'c', ( down & 0x1000 ) != 0, 0, NULL );
+	if ( down & 0x4000 ) {
+		Sys_QueEvent( 0, SE_KEY, A_ESCAPE, qtrue, 0, NULL );
+		Sys_QueEvent( 0, SE_KEY, A_ESCAPE, qfalse, 0, NULL );
+	}
+}
+
 static void se_input( void )
 {
 	static unsigned seen[4], asked_ms;
@@ -494,8 +517,11 @@ static void se_input( void )
 	if ( !ui )
 		se_menu_x = -1;     // (a menu that comes is told where the pointer is at once)
 	for ( int i = 2; i < 4; i++ )
-		if ( seen[i] != input[i] )
+		if ( seen[i] != input[i] ) {
 			seen[i] = input[i], ask = 8;
+			if ( i == 2 )
+				se_pad_buttons( seen[2] );
+		}
 	if ( !ask && *clock - asked_ms >= 250 )
 		ask = 1;
 	while ( ask ) {
@@ -526,6 +552,16 @@ static void se_input( void )
 		case GR_EVENT_TYPE_BUTTON_DOWN:
 		case GR_EVENT_TYPE_BUTTON_UP:
 			down = e.type == GR_EVENT_TYPE_BUTTON_DOWN;
+			if ( e.button.changebuttons & ( GR_BUTTON_SCROLLUP | GR_BUTTON_SCROLLDN | GR_BUTTON_SCROLLLEFT | GR_BUTTON_SCROLLRIGHT ) ) {
+				int ahead = ( e.button.changebuttons & ( GR_BUTTON_SCROLLUP | GR_BUTTON_SCROLLRIGHT ) ) != 0;
+				if ( !menu && down )
+					Cbuf_AddText( ahead ? "weapnext\n" : "weapprev\n" );
+				else if ( menu )
+					Sys_QueEvent( 0, SE_KEY, ahead ? A_MWHEELUP : A_MWHEELDOWN, down, 0, NULL );
+				break;
+			}
+			if ( e.button.changebuttons & GR_BUTTON_EXTRA )
+				break;
 			// (where the window is, for nothing: the press's place in it and on the display)
 			se_origin_x = e.button.rootx - e.button.x, se_origin_y = e.button.rooty - e.button.y, se_origin_known = 1;
 			// a click in a menu lands where it was pressed, whatever the words said meanwhile (nxkey's presses are not in them)
