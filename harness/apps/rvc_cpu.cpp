@@ -103,7 +103,7 @@ struct Options {
     double hostWheel = 0;                          // --host-wheel: notches a second their wheel turns up
     bool desktop = false, tabs = false, quiet = false;
     int netPort = 0, netId = 1;          // --net, --net-id: the link to other machines (docs/system/lan.md)
-    double netLoss = 0, netDelay = 0;
+    double netLoss = 0, netDelay = 0, netRate = 0;   // --net-rate: bytes a second, as the world's link
     std::string persist;                 // --persist FILE: the guest's kept folder (docs/system/persist.md)
     std::string saveRam;                 // --save-ram FILE: the 288 MB of RAM as the run ends
     std::string save, load;              // --save FILE, --load FILE: the whole machine at the run's end, and from one
@@ -2993,6 +2993,7 @@ int main(int argc, char** argv) {
         else if (a == "--net-id") opt.netId = atoi(next("--net-id").c_str());
         else if (a == "--net-loss") opt.netLoss = atof(next("--net-loss").c_str());
         else if (a == "--net-delay") opt.netDelay = atof(next("--net-delay").c_str());
+        else if (a == "--net-rate") opt.netRate = atof(next("--net-rate").c_str());
         else if (a == "--persist") opt.persist = next("--persist");
         else if (a == "--threads") pool_size = std::max(1, std::min(64, atoi(next("--threads").c_str())));
         else if (a == "--no-stdin" || a == "--d3d11" || a == "--dxc") {}
@@ -3032,6 +3033,7 @@ int main(int argc, char** argv) {
                    "  --net PORT --net-id N  the network: this machine is 10.0.0.N (1 to 16) and hears UDP port\n"
                    "                         PORT + N; its clock then keeps to this computer's (docs/system/lan.md)\n"
                    "  --net-loss P --net-delay MS   lose P percent of what it sends, hold the rest back MS ms\n"
+                   "  --net-rate B           and let at most B bytes a second leave, 64 packets waiting at most (the world's link)\n"
                    "  --persist FILE         the file the guest's /persistence is kept in (docs/system/persist.md)\n"
                    "  --threads N            host threads for the worker cores (RVC_THREADS; default half this computer's,\n"
                    "                         at most 8; 1: one after another, the same every run)\n");
@@ -3097,6 +3099,7 @@ int main(int argc, char** argv) {
             fprintf(stderr, "rvc_cpu: no network: %s\n", why.c_str());
             return 2;
         }
+        net.rate(opt.netRate, 64);
     }
 
     auto t0 = std::chrono::steady_clock::now();
@@ -3178,8 +3181,8 @@ int main(int argc, char** argv) {
             if (trap_counts[k][i]) fprintf(stderr, " %s%d x %llu", k ? "interrupt " : "", i, (unsigned long long)trap_counts[k][i]);
     fprintf(stderr, "; sstatus %08x sie %x sip %x, timer at %llu of %llu\n", c0.mstatus, c0.mie, c0.mip, (unsigned long long)c0.timecmp, (unsigned long long)mtime_now);
     if (net.on())
-        fprintf(stderr, "[cpu] network: %llu packets sent, %llu lost on the way (--net-loss), %llu received, %llu never taken\n",
-                (unsigned long long)net.sent, (unsigned long long)net.lost, (unsigned long long)net.received, (unsigned long long)net.dropped);
+        fprintf(stderr, "[cpu] network: %llu packets sent, %llu lost on the way (--net-loss), %llu dropped for a full queue and %llu readbacks not taken for it (--net-rate), %llu received, %llu never taken\n",
+                (unsigned long long)net.sent, (unsigned long long)net.lost, (unsigned long long)net.full, (unsigned long long)net.held, (unsigned long long)net.received, (unsigned long long)net.dropped);
     if (getenv("RVC_CPU_LAST"))
         for (u64 k = 1; k <= 32; k++)
             fprintf(stderr, "  %08x: %08x\n", last_pc[(c0.clock + k) & 31], last_ins[(c0.clock + k) & 31]);

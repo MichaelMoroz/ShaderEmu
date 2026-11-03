@@ -629,6 +629,10 @@ CASES = [
          wall=120, has=[r'^FZ-DONE 0', r'FZ closed w \(x\)'], never=[r'FZ-BAD']),
     case('apps-net-stalled', 'desktop apps', "nx; sleep 3; nxnet --serve & sleep 2; (sleep 60 | nc 127.0.0.1 7474) & sleep 2; a=$(date +%s); nxnet --ls 127.0.0.1 /root | head -2; echo took=$(( $(date +%s) - a ))", True,
          wall=120, has=[r'^took=\d$']),
+    # a file of 2 MB through nxnet's server and --get on the loopback (docs/system/lan.md, "A file over the world's link":
+    # two machines on rvc_cpu's --net-rate are its test, which test_all cannot run)
+    case('nxnet-get', 'desktop apps', "nxnet --serve & sleep 2; head -c 2097152 /dev/urandom > /root/big; nxnet --get 127.0.0.1 /big /tmp/f; echo GET=$?; "
+         '[ "$(md5sum < /root/big)" = "$(md5sum < /tmp/f)" ] && echo SAME; ls -l /tmp/f', wall=200, has=[r'^GET=0', r'^SAME', r' 2097152 .*/tmp/f']),
     case('apps-menus', 'desktop apps', "nx; sleep 3; nxfuzz start:e:nxedit wait:e:20 sleep:500 menus:e close:e:x end", True,
          wall=200, has=[r'^FZ-DONE 0', r'FZ menus e: 1\d menus, \d{2,3} rows'], never=[r'FZ-BAD']),
     # a folder level 1 leaves over the limit goes on to harder levels (docs/system/persist.md): no host answers here, so 404 is its having fit

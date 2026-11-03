@@ -120,15 +120,35 @@ void NetLink::fromGuest(uint32_t sentSoFar, uint32_t taken, const uint32_t* wind
             whole = number == sentSoFar;
             at += 16 + ((length + 15) & ~15u);
         }
+        // The world's link full (--net-rate): the guest's packets are not taken and not acked, and wait in its own
+        // queue, which tells its TCP to slow down without a loss; 3 s at most, then they go and what does not fit
+        // is dropped, as before 3 November 2026 at once (RVC_NET_FULL=drop: that way)
+        if (whole && rate_ > 0 && !dropFull_) {
+            double t = now();
+            unsigned waiting = 0;
+            for (auto q = out_.rbegin(); q != out_.rend() && q->due - delay_ > t; ++q) ++waiting;
+            if (waiting + fresh.size() > queue_) {
+                if (fullSince_ < 0) fullSince_ = t;
+                if (t - fullSince_ < 3.0) { ++held; pump(); return; }
+            }
+            fullSince_ = -1;
+        }
         if (whole)
             for (auto& p : fresh) {
                 note(id_, "out", p.first, p.second);
                 rng_ ^= rng_ << 13; rng_ ^= rng_ >> 17; rng_ ^= rng_ << 5;
-                if ((rng_ % 10000) < (uint32_t)(loss_ * 100.0)) ++lost;
-                else {
-                    out_.push_back({now() + delay_, std::vector<uint8_t>(p.first, p.first + p.second)});
-                    ++sent;
+                if ((rng_ % 10000) < (uint32_t)(loss_ * 100.0)) { ++lost; continue; }
+                double leaves = now();
+                if (rate_ > 0) {
+                    // (the packets still waiting to leave: those whose time to leave has not come)
+                    unsigned waiting = 0;
+                    for (auto q = out_.rbegin(); q != out_.rend() && q->due - delay_ > leaves; ++q) ++waiting;
+                    if (waiting >= queue_) { ++full; continue; }
+                    free_ = (free_ > leaves ? free_ : leaves) + p.second / rate_;
+                    leaves = free_;
                 }
+                out_.push_back({leaves + delay_, std::vector<uint8_t>(p.first, p.first + p.second)});
+                ++sent;
             }
         // (a window that never comes whole is given up, or the guest would wait for ever)
         if (whole || ++stale_ > 200) {

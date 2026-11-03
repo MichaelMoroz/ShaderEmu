@@ -1583,6 +1583,16 @@ public class EmuMachine : UdonSharpBehaviour
             found = 0;
         }
         netBad = 0;
+        // The queue to the others full (the link is some 4 KB a second): the packets are not taken and not
+        // acked, and wait in the guest's own queue, which slows its TCP down with nothing lost; 3 s at most,
+        // then they are taken and what does not fit is dropped. Dropped at once, a file of 1 MB between two
+        // machines broke off after 288 KB (docs/system/lan.md, "A file over the world's link").
+        if (found > NetQueue - 1 - NetWaiting())
+        {
+            if (netFullSince < 0f) netFullSince = Time.time;
+            if (Time.time - netFullSince < 3f) { lanHeld++; return; }
+        }
+        netFullSince = -1f;
         for (int k = 0; k < found; k++)
         {
             int next = (netOutTail + 1) & (NetQueue - 1);
@@ -1647,7 +1657,8 @@ public class EmuMachine : UdonSharpBehaviour
     // ---- what the network did, in VRChat's log ([Lan] lines, docs/system/lan.md) ----
 
     private const int LanDetailMost = 40;   // packets described one by one after power-on; then only the counts
-    private int lanOut, lanMine, lanOthers, lanOff, lanFull, lanGiven, lanDetail, lanSaid;
+    private int lanOut, lanMine, lanOthers, lanOff, lanFull, lanGiven, lanDetail, lanSaid, lanHeld;
+    private float netFullSince = -1f;   // since when the queue to the others has been too full to take the window
     private float lanAt;
 
     // A packet in words: its length, what it is, from where to where, and its ports.
@@ -1673,14 +1684,15 @@ public class EmuMachine : UdonSharpBehaviour
     {
         if (Time.time < lanAt) return;
         lanAt = Time.time + 5f;
-        int sum = lanOut + lanMine + lanOthers + lanOff + lanFull + lanGiven + (int)(netTaken & 0xffffff);
+        int sum = lanOut + lanMine + lanOthers + lanOff + lanFull + lanGiven + lanHeld + (int)(netTaken & 0xffffff);
         if (sum == lanSaid) return;
         lanSaid = sum;
         Debug.Log("[Lan] 10.0." + (netId >> 8) + "." + (netId & 255) + (powered ? "" : " (off)") + ": the guest sent " + lanOut
                   + "; heard for this machine " + lanMine + ", for others " + lanOthers + ", while off " + lanOff
                   + "; given to the guest " + lanGiven + ", of which it has taken " + netTaken
                   + "; waiting to go out " + NetWaiting() + ", to go in " + ((netInTail - netInHead) & (NetQueue - 1))
-                  + (lanFull > 0 ? "; dropped for a full queue " + lanFull : ""));
+                  + (lanFull > 0 ? "; dropped for a full queue " + lanFull : "")
+                  + (lanHeld > 0 ? "; rounds whose packets waited for room to go out " + lanHeld : ""));
     }
 
     // Readbacks complete in the order they were asked for: a frame's rounds, a row each.

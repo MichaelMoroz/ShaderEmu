@@ -44,6 +44,16 @@ own_address(void)
 	return got == 0 ? ((struct sockaddr_in *)&request.ifr_addr)->sin_addr.s_addr : 0;
 }
 
+/* How long a file's bytes may stop before it is given up, either side. The world's link is some 4 KB a
+ * second behind a queue of 64 packets: TCP waits seconds for an answer there, and a loss doubles the
+ * wait (3 November 2026: 15 and 20 s gave transfers up after 288 KB and 688 KB of 1 MB under rvc_cpu's
+ * --net-rate 4000). TCP gives up by itself long after this. */
+#define STALL 90
+/* What a computer that asks takes in at a time (its socket's buffer: Linux keeps twice this, and offers
+ * the other side about half of that): under the world's queue of 64 packets of 536 bytes, so a file
+ * never fills it, and a loss there is one packet, not a run of them. */
+#define RECEIVE_BUFFER 16384
+
 static void
 seconds(int s, int n)
 {
@@ -118,6 +128,7 @@ serve(int s)
 		closedir(folder);
 	} else if (line[0] == 'G' && S_ISREG(info.st_mode) && (file = open(path, O_RDONLY)) >= 0) {
 		n = snprintf(line, sizeof line, "OK %ld\n", (long)info.st_size);
+		seconds(s, STALL);
 		all_to(s, line, (size_t)n);
 		while ((n = (int)read(file, block, sizeof block)) > 0 && all_to(s, block, (size_t)n))
 			continue;
@@ -253,8 +264,11 @@ ask(in_addr_t address, char what, const char *path, char *line, int size)
 	struct sockaddr_in to = { AF_INET, htons(PORT), { address } };
 	int s = socket(AF_INET, SOCK_STREAM, 0);
 	char request[600];
+	int room = RECEIVE_BUFFER;
 
 	seconds(s, 15);
+	if (s >= 0)	/* (before the connection: its window is offered at the start) */
+		setsockopt(s, SOL_SOCKET, SO_RCVBUF, &room, sizeof room);
 	if (s < 0 || connect(s, (struct sockaddr *)&to, sizeof to) != 0) {
 		snprintf(line, size, "it does not answer");
 	} else if (!all_to(s, request, (size_t)snprintf(request, sizeof request, "%c %.500s\n", what, path)) ||
@@ -309,8 +323,8 @@ static int
 file_of(in_addr_t address, const char *path, const char *to, char *why, int size, void (*coming)(long have, long all))
 {
 	char block[2048];
-	int s = ask(address, 'G', path, why, size), out;
-	long all, have = 0;
+	int s = ask(address, 'G', path, why, size), out, e;
+	long all, have = 0, quiet;
 	ssize_t n;
 
 	if (s < 0)
@@ -322,7 +336,32 @@ file_of(in_addr_t address, const char *path, const char *to, char *why, int size
 		return 0;
 	}
 	stop = 0;
-	while (have < all && !stop && (n = read(s, block, sizeof block)) > 0 && write(out, block, (size_t)n) == n) {
+	n = 1, e = 0;
+	/* (in steps of a quarter of a second, the window's events between them: TCP may wait long for the bytes) */
+	for (quiet = 0; have < all && !stop;) {
+		struct timeval step = { 0, 250000 };
+		fd_set set;
+		int r;
+
+		FD_ZERO(&set);
+		FD_SET(s, &set);
+		r = select(s + 1, &set, NULL, NULL, &step);
+		if (r < 0 && errno == EINTR)
+			continue;
+		if (r <= 0) {
+			if (r < 0 || (quiet += 250) >= STALL * 1000L) {
+				n = -1, e = r < 0 ? errno : EAGAIN;
+				break;
+			}
+			if (waiting)
+				waiting();
+			continue;
+		}
+		if ((n = read(s, block, sizeof block)) <= 0 || write(out, block, (size_t)n) != n) {
+			e = n < 0 ? errno : 0;	/* (before the closes change it) */
+			break;
+		}
+		quiet = 0;
 		have += n;
 		if (coming)
 			coming(have, all);
@@ -331,7 +370,13 @@ file_of(in_addr_t address, const char *path, const char *to, char *why, int size
 	close(out);
 	if (have < all) {
 		unlink(to);
-		snprintf(why, size, stop ? "given up" : "the link broke at %ld of %ld bytes", have, all);
+		if (stop)
+			snprintf(why, size, "given up");
+		else if (e == EAGAIN)
+			snprintf(why, size, "the link broke at %ld of %ld bytes (nothing came for %d s)", have, all, STALL);
+		else
+			snprintf(why, size, "the link broke at %ld of %ld bytes (%s)", have, all,
+				 n == 0 ? "the other computer stopped sending" : n < 0 ? strerror(e) : "it could not be written here");
 		return 0;
 	}
 	return 1;

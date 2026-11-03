@@ -183,6 +183,7 @@ struct Options {
     int netPort = 0;          // --net PORT: the network device's link to other machines here (docs/system/lan.md)
     int netId = 1;            // --net-id N: this machine's number, its address 10.0.0.N
     double netLoss = 0, netDelay = 0;   // --net-loss percent, --net-delay milliseconds: of every packet sent
+    double netRate = 0;                 // --net-rate: bytes a second at most, as the world's link
     int cores = 1;            // core 0 and the worker cores: kCores wherever the machine has workers (docs/machine/multicore.md)
     bool blits = false;       // --blits: the commit's points and the GPU's lists as the world's blits (src/amp.h)
     bool noBands = false;     // --no-bands: the commit rewrites all of RAM, not only the bands written to (COMMIT_BANDS off)
@@ -317,6 +318,7 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
                        this computer, where the other machines started with the same PORT send (D3D11)
   --net-id N           its number N, 1 to 16 (default 1)
   --net-loss P         lose P percent of the packets it sends   --net-delay MS   and hold the rest back MS ms
+  --net-rate B         and let at most B bytes a second leave, 64 packets waiting at most (the world's link)
   --l1-log FILE        per frame: the addresses in the write cache, for tools/l1_study.py (D3D12)
   --stats-after S      print instructions/s and frames/s for the run after its first S seconds
                        (and start the pc log there)
@@ -503,6 +505,7 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--net-id") o.netId = atoi(next("--net-id").c_str());
         else if (a == "--net-loss") o.netLoss = atof(next("--net-loss").c_str());
         else if (a == "--net-delay") o.netDelay = atof(next("--net-delay").c_str());
+        else if (a == "--net-rate") o.netRate = atof(next("--net-rate").c_str());
         else if (a == "--cpu") o.cpu = true;
         else if (a == "--unity") {
             std::string v = next("--unity");
@@ -1281,6 +1284,7 @@ int main(int argc, char** argv) {
         if (opt.netId < 1 || opt.netId > (int)NetLink::kBroadcastTo) why = "--net-id is 1 to 16";
         else if (opt.dxc || !bo.gpuShader) why = "it needs the GPU device on D3D11";
         else net.open(opt.netPort, (unsigned)opt.netId, opt.netLoss, opt.netDelay, why);
+        net.rate(opt.netRate, 64);
         if (!net.on()) { fprintf(stderr, "[harness] no network: %s\n", why.c_str()); return 1; }
         fprintf(stderr, "[harness] network: this machine is 10.0.0.%d, UDP port %d\n", opt.netId, opt.netPort + opt.netId);
     }
@@ -2432,8 +2436,8 @@ int main(int argc, char** argv) {
         fprintf(stderr, "[harness] %d workers: %llu instructions more, all cores avg %.1fk IPS\n", opt.cores - 1,
                 (unsigned long long)workerInstructions, wall > 0 ? (guestInstructions + workerInstructions) / wall / 1000.0 : 0.0);
     if (net.on())
-        fprintf(stderr, "[harness] network: %llu packets sent, %llu lost on the way (--net-loss), %llu received, %llu never taken\n",
-                (unsigned long long)net.sent, (unsigned long long)net.lost, (unsigned long long)net.received, (unsigned long long)net.dropped);
+        fprintf(stderr, "[harness] network: %llu packets sent, %llu lost on the way (--net-loss), %llu dropped for a full queue and %llu readbacks not taken for it (--net-rate), %llu received, %llu never taken\n",
+                (unsigned long long)net.sent, (unsigned long long)net.lost, (unsigned long long)net.full, (unsigned long long)net.held, (unsigned long long)net.received, (unsigned long long)net.dropped);
     if (uartLog) fclose(uartLog);
     fflush(stdout);
     // The stdin thread may be blocked in getchar(); exit without joining it.
