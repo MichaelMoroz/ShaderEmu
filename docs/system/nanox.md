@@ -1140,7 +1140,8 @@ button go, at that last place, usually tens of pixels short of the 8 that snap (
   300 ms of a last step that, taken once more, would have reached the edge snaps there (`wm_thrown_zone`). A mouse slows down by small steps, or waits, and does not
   snap short of the edge: `test_all.py wm-snap-beam` and `wm-snap-mouse`.
 - In the world: a button pressed on the room's display stays down when the beam runs off the picture, the pointer on the edge where the beam's line meets the display's
-  plane, unsmoothed there (`EdgeOf`). Written but never run: no editor was at hand when this was done (31 October 2026).
+  plane, unsmoothed there (`EdgeOf`). Written but never run: no editor was at hand when this was done (31 October 2026). Since 3 November 2026 a margin
+  round the picture holds the pointer on the edge with no button too (`docs/machine/input.md`, "The screen's edge").
 
 A title set while another window has the keyboard reaches the bar by `GR_WM_TELL_TITLE`: the server's old word for a new title is about the window with the
 keyboard, and so the browser's button stayed "Loading: Page" under its Notice (`test_all.py wm-retitle`; that case fails on the window system of before).

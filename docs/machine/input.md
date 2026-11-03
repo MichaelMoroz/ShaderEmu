@@ -49,6 +49,27 @@ kept in their PlayerData as `pointer.steady`), in a headset only:
 The guest's own thresholds (the window system's double click, a game's drag box) are unchanged.
 Not yet tried in a headset.
 
+## The screen's edge (the VRChat world)
+
+A mouse rests on the screen's edge; a beam has nothing to rest on, and the sample after the last on
+the picture used to be off it, the pointer gone. So the room's display and a holodeck's screen have a
+margin round the picture, `EmuPointer.edgeMargin` (0.04: 4% of the picture's width at its sides, 4% of
+its height above and below), where the beam is still the pointer, held on the nearest pixel of the
+edge, buttons as they are (a press there is a press on the edge). Edge scrolling, a button in a corner
+and a drag that rests on the edge work with a hand that wavers by a few centimetres. The margin is the
+display's plane, not its collider: a beam past the quad's side misses the collider, so `OnPlane` meets
+the plane itself, and anything of the room 10 cm or more before it (not the display's own frame)
+stops the beam as before. Beyond the margin a button pressed on the picture still holds the pointer
+on the edge until it is let go (`EdgeOf`, "A drag that leaves the screen" in `docs/system/nanox.md`).
+On the edge the steady pointer does not smooth: a lag there would stop short of it. The desktop's
+mouse is the middle of the view, the same beam, and has the margin too. A classroom tube has none (its
+glass is curved).
+
+`EdgeOf` had a fault of its own (3 November 2026): it took the beam's way into the quad's frame
+unscaled and its origin scaled, so on the room's display (a unit quad scaled to 16:9) the place along
+the edge where a beam ran off was wrong by the quad's shape. Both now meet the plane in the world.
+Compiled against the world's assemblies; not run in Unity or a headset.
+
 ## From Linux
 
 This project's kernel (`linux/kernel/shaderemu_input.c`) presents the block as two evdev
