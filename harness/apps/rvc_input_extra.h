@@ -62,6 +62,32 @@ inline bool parse_input_event(const std::string& v, std::vector<TimedInput>& int
     return true;
 }
 
+// --pointer-button B,S,T, given as often as wanted: the buttons word is the bits of every one whose
+// seconds hold now (a hand's trigger held while another button comes and goes)
+struct ButtonSpan {
+    unsigned bits;
+    double from, to;
+};
+
+inline bool parse_button(const std::string& v, std::vector<ButtonSpan>& into) {
+    ButtonSpan b = {};
+    int bits = 0;
+    if (sscanf(v.c_str(), "%i,%lf,%lf", &bits, &b.from, &b.to) != 3) {
+        fprintf(stderr, "--pointer-button B,S,T (%s)\n", v.c_str());
+        return false;
+    }
+    b.bits = (unsigned)bits;
+    into.push_back(b);
+    return true;
+}
+
+inline unsigned buttons_at(const std::vector<ButtonSpan>& spans, double now) {
+    unsigned bits = 0;
+    for (const ButtonSpan& b : spans)
+        if (now >= b.from && now < b.to) bits |= b.bits;
+    return bits;
+}
+
 // The events due by second `now`, at most `room` of them, from `next` on.
 inline int due_inputs(const std::vector<TimedInput>& list, size_t& next, double now, unsigned* out, int room) {
     int n = 0;

@@ -93,6 +93,27 @@ gives, and `test_all.py input-more`, `input-plain` hold them. What only Unity ca
 (`Oculus_CrossPlatform_*` axes read with `Input.GetAxis`), the sticks as wheels and `Immobilize`
 stopping VRChat's own turn; none was run there (compiled against the world's assemblies).
 
+## Game controls
+
+What each game does with them (3 November 2026). A desktop game asks for the extra buttons and reads
+the hands' buttons from the word where its loop wakes, through `linux/apps/ui_pad.h` (`ui_pad_ask`,
+`ui_pad_poll`, `ui_pad_scroll`, `ui_pad_arrow`, `ui_pad_key`); while a headset's hands are told
+(bit 7) it wakes at least ten times a second for them, since they are no event. A beam on the
+display is still the pointer: the trigger is the left button and the grip the right one, as before.
+"Left stick" and "right stick" below are each hand's stick with that hand's beam on the display, or
+a mouse's wheel tilted (Shift) and turned on a desktop.
+
+| Game | Left stick (second wheel) | Right stick (wheel) | Pointer's buttons | A / B / Y |
+|---|---|---|---|---|
+| Tetris (`nxtetris`) | across moves a cell a notch, down a row, up holds | turns (up or right clockwise) | a click on the well turns, the right button drops | A drops (or starts), B holds, Y pauses |
+| Pinball (`nxpinball`) | | | with a mouse: left and right buttons on the table are the flippers, middle or a side button the plunger | each hand's trigger is its flipper, a grip or A the plunger, Y pauses |
+| Mines (`nxmine`) | moves the keyboard's cell | | as before: open, flag | A opens the cell, B flags it |
+| Solitaire (`nxsolitaire`) | | | as before: drag, click | A turns the stock, B takes back, Y finishes |
+| Chess (`nxchess`) | moves the keyboard's square | | as before | A picks and drops, B takes back |
+
+`NXTETRIS_PRINT=1` and `NXPINBALL_PRINT=1` say each move a controller made, and `test_all.py
+pad-tetris`, `pad-pinball`, `pad-mines` and `pad-chess` play them with `--scroll` and `--pointer-button`.
+
 ## A beam as the pointer, steadied (the VRChat world)
 
 A hand in a headset shakes by a few pixels of the display, which makes a click with a beam a

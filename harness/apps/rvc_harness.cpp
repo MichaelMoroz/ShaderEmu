@@ -152,8 +152,7 @@ struct Options {
     double maxSeconds = 0;
     double fixedDt = 0;  // 0 = real time
     long long pointerSweep = -1;  // from this frame on the pointer goes round the display; -1 = it does not
-    int pointerButton = 0;        // --pointer-button: the buttons word, between these seconds of the clock
-    double pointerButtonFrom = 0, pointerButtonTo = 0;
+    std::vector<ButtonSpan> pointerButtons;   // --pointer-button: the buttons word, between seconds of the clock
     std::vector<TimedInput> inputs;   // --scroll, --input-event: the key ring's events by the clock's second
     double statsInterval = 0;
     int64_t benchWarmup = -1;  // >= 0: benchmark mode, this many unmeasured frames first
@@ -245,7 +244,8 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
   --fixed-dt S         drive _Time as frame*S seconds (deterministic) instead of wall clock
   --pointer-sweep N    from frame N on the pointer goes round the middle of the display, a pixel
                        every few frames: what a program pays for a pointer that moves
-  --pointer-button B,S,T  the buttons word is B (2: the right one) from second S to T of the clock
+  --pointer-button B,S,T  the buttons word is B (2: the right one) from second S to T of the clock; given
+                       again, the bits of each that holds then
   --scroll S,W,N       at second S of the clock, N notches of wheel W (y x: the pointer's; ly lx, ry rx: a
                        hand's stick); B above takes hex too (0x400: the right hand's trigger)
   --input-event S,HEX  at second S, the key ring's event HEX (bit 31 a press)
@@ -428,7 +428,7 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--no-stdin") o.readStdin = false;
         else if (a == "--fixed-dt") o.fixedDt = atof(next("--fixed-dt").c_str());
         else if (a == "--pointer-sweep") o.pointerSweep = atoll(next("--pointer-sweep").c_str());
-        else if (a == "--pointer-button") sscanf(next("--pointer-button").c_str(), "%i,%lf,%lf", &o.pointerButton, &o.pointerButtonFrom, &o.pointerButtonTo);
+        else if (a == "--pointer-button") { if (!parse_button(next("--pointer-button"), o.pointerButtons)) exit(2); }
         else if (a == "--scroll") { if (!parse_scroll(next("--scroll"), o.inputs)) exit(2); }
         else if (a == "--input-event") { if (!parse_input_event(next("--input-event"), o.inputs)) exit(2); }
         else if (a == "--uart-log") o.uartLog = next("--uart-log");
@@ -1866,7 +1866,7 @@ int main(int argc, char** argv) {
                 pointer.x = 400 + 80 * (float)cos(turn);
                 pointer.y = 300 + 60 * (float)sin(turn);
             }
-            if (opt.pointerButton) pointer.buttons = t >= opt.pointerButtonFrom && t < opt.pointerButtonTo ? opt.pointerButton : 0;
+            if (!opt.pointerButtons.empty()) pointer.buttons = buttons_at(opt.pointerButtons, t);
             if (!replay.empty()) pointer.x = replayPointer.x, pointer.y = replayPointer.y, pointer.panelW = replayPointer.panelW,
                                  pointer.panelH = replayPointer.panelH, pointer.buttons = replayPointer.buttons;
             if (inputLog && (pointer.x != recorded.x || pointer.y != recorded.y || pointer.panelW != recorded.panelW ||

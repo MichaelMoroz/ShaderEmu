@@ -94,8 +94,7 @@ struct Options {
     int cores = 256;         // core 0 and 255 workers, as the shader machine
     long long sweep = -1;
     int circleX = -1, circleY = 0, circleR = 0;    // --pointer-circle: the sweep's own circle
-    int button = 0;                                // --pointer-button: the buttons word,
-    double buttonFrom = 0, buttonTo = 0;           // between these seconds of the guest's
+    std::vector<ButtonSpan> buttons;               // --pointer-button: the buttons word, between seconds of the guest's
     unsigned host[8] = {};                         // --host: the host's eight words, hex (docs/world/holodeck.md)
     unsigned hostLater[4][8] = {};                 // --host-from S W0,...: the words from guest second S on
     double hostFrom[4] = {};                       // (given again, up to four steps, each later than the last)
@@ -2455,7 +2454,7 @@ static void control_pass() {
         if (opt.hostMouse != 0) word(CTRL + 0x370) = (u32)(long long)(guest_seconds * opt.hostMouse) & 0xffffu;
         if (opt.hostWheel != 0) word(CTRL + 0x374) = (opt.host[5] & 0xff00ffffu) | ((u32)(long long)(guest_seconds * opt.hostWheel) & 255u) << 16;
     }
-    if (opt.button) word(CTRL + 0x28) = guest_seconds >= opt.buttonFrom && guest_seconds < opt.buttonTo ? opt.button : 0;
+    if (!opt.buttons.empty()) word(CTRL + 0x28) = buttons_at(opt.buttons, guest_seconds);
     if (!opt.inputs.empty()) {
         // up to four a pass, as a host gives them, at ring positions (sequence number) mod 32
         static size_t input_next = 0;
@@ -2994,7 +2993,7 @@ int main(int argc, char** argv) {
         }
         else if (a == "--host-mouse") opt.hostMouse = atof(next("--host-mouse").c_str());
         else if (a == "--host-wheel") opt.hostWheel = atof(next("--host-wheel").c_str());
-        else if (a == "--pointer-button") sscanf(next("--pointer-button").c_str(), "%i,%lf,%lf", &opt.button, &opt.buttonFrom, &opt.buttonTo);
+        else if (a == "--pointer-button") { if (!parse_button(next("--pointer-button"), opt.buttons)) return 2; }
         else if (a == "--scroll") { if (!parse_scroll(next("--scroll"), opt.inputs)) return 2; }
         else if (a == "--input-event") { if (!parse_input_event(next("--input-event"), opt.inputs)) return 2; }
         else if (a == "--desktop") opt.desktop = true;
@@ -3039,7 +3038,8 @@ int main(int argc, char** argv) {
                    "  --host-mouse N          and a sitter's mouse going right N counts a second\n"
                    "  --host-wheel N          and their wheel turning up N notches a second\n"
                    "  --host-from S W0,...,W7 the host's words from second S of the guest's on (up to four)\n"
-                   "  --pointer-button B,S,T the buttons word is B (2: the right one) from second S to T of the guest's\n"
+                   "  --pointer-button B,S,T the buttons word is B (2: the right one) from second S to T of the guest's;\n"
+                   "                         given again, the bits of each that holds then\n"
                    "  --scroll S,W,N         at second S, N notches of wheel W (y x: the pointer's; ly lx, ry rx: a hand's stick)\n"
                    "  --input-event S,HEX    at second S, the key ring's event HEX (bit 31 a press); B above takes hex too\n"
                    "  --desktop --tabs       the host flags of those names\n"

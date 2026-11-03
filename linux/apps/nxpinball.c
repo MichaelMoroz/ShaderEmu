@@ -2,11 +2,15 @@
  * nxpinball: a pinball table: two flippers, a plunger, three pop bumpers, two slingshots, three
  * rollover lanes, a bank of drop targets and an orbit round the top; three balls a game, the best
  * score the registry's (nxpinball.high). PINBALL_DEMO=N plays N frames itself and prints a sum.
+ * A controller plays it (docs/machine/input.md, "Game controls"; ui_pad.h): in a headset each hand's trigger
+ * is its flipper and a grip or the jump button (A) the plunger; with a mouse the left and right
+ * buttons on the table are the flippers and a side button the plunger. NXPINBALL_PRINT=1 says each.
  */
 #include "ui.h"
 #include "ui_icons.h"
 #include "ui_menu.h"
 #include "ui_ask.h"
+#include "ui_pad.h"
 #include <math.h>
 #include <sys/select.h>
 #include <sys/time.h>
@@ -41,7 +45,7 @@
 #define PAD 8
 #define PANEL_W 150
 #define EVENTS (GR_EVENT_MASK_EXPOSURE | GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_KEY_UP | GR_EVENT_MASK_BUTTON_DOWN | \
-	GR_EVENT_MASK_CLOSE_REQ | GR_EVENT_MASK_FOCUS_OUT)
+	GR_EVENT_MASK_BUTTON_UP | GR_EVENT_MASK_CLOSE_REQ | GR_EVENT_MASK_FOCUS_OUT)
 #define FONT_BIG "/usr/share/font-ui-b-17.sef"
 #define PI 3.14159265f
 
@@ -1328,6 +1332,66 @@ key_up(int ch)
 		flipper_key(c, 0);
 }
 
+/* What holds a control besides the keys (key_bit's 1, 2, 4): the hands, a mouse's button. */
+#define BY_HANDS 8
+#define BY_MOUSE 16
+static struct ui_pad pad;
+static int pad_print;
+
+static void
+control_set(int c, int by, int down)
+{
+	int was = keys_held[c] != 0;
+
+	keys_held[c] = down ? keys_held[c] | by : keys_held[c] & ~by;
+	if ((keys_held[c] != 0) == was)
+		return;
+	if (pad_print) {
+		printf("nxpinball: %s %s\n", c == 0 ? "left flipper" : c == 1 ? "right flipper" : "plunger", down ? "held" : "let go");
+		fflush(stdout);
+	}
+	if (c == 2)
+		plunger_key(keys_held[c] != 0);
+	else
+		flipper_key(c, keys_held[c] != 0);
+}
+
+/* The hands' buttons, from the machine's word each frame of play: the triggers are the flippers. */
+static void
+pad_buttons(void)
+{
+	ui_pad_poll(&pad);
+	if (pad.held & INPUT_HANDS || pad.up & INPUT_HANDS) {
+		int hands = (pad.held & INPUT_HANDS) != 0;
+
+		control_set(0, BY_HANDS, hands && (pad.held & INPUT_LEFT_TRIGGER));
+		control_set(1, BY_HANDS, hands && (pad.held & INPUT_RIGHT_TRIGGER));
+		control_set(2, BY_HANDS, hands && (pad.held & (INPUT_LEFT_GRIP | INPUT_RIGHT_GRIP | INPUT_JUMP)));
+	}
+	if (state != PLAYING && (pad.down & INPUT_JUMP))
+		go();
+	else if (state == PLAYING && (pad.down & INPUT_LEFT_UPPER))
+		pause_game();
+}
+
+/* A mouse's buttons on the table (not in a headset, where the triggers are the pointer's buttons too). */
+static int
+pad_mouse(const GR_EVENT *event)
+{
+	GR_BUTTON b = event->button.changebuttons;
+	int down = event->type == GR_EVENT_TYPE_BUTTON_DOWN;
+
+	if (pad.held & INPUT_HANDS || event->button.y < MENU_H || (state != PLAYING && down))
+		return 0;
+	if (b & GR_BUTTON_L)
+		control_set(0, BY_MOUSE, down);
+	if (b & GR_BUTTON_R)
+		control_set(1, BY_MOUSE, down);
+	if (b & (GR_BUTTON_BACK | GR_BUTTON_FORWARD | GR_BUTTON_M))
+		control_set(2, BY_MOUSE, down);
+	return (b & (GR_BUTTON_L | GR_BUTTON_R | GR_BUTTON_M | GR_BUTTON_BACK | GR_BUTTON_FORWARD)) != 0;
+}
+
 int
 main(void)
 {
@@ -1352,14 +1416,17 @@ main(void)
 	art_make();
 	window = GrNewWindowEx(UI_FIXED, "Pinball", GR_ROOT_WINDOW_ID, -1, -1, width, height, UI_FACE);
 	GrSelectEvents(window, EVENTS);
+	ui_pad_ask(window);
+	pad_print = getenv("NXPINBALL_PRINT") != NULL;
 	GrMapWindow(window);
 	GrSetFocus(window);
 	if (demo)
 		demo_run(atoi(a), getenv("PINBALL_HOLD"));
 	for (;;) {
 		long long now = now_us();
-		int steps = 0;
+		int steps = 0, wait;
 
+		pad_buttons();
 		if (state == PLAYING && now >= frame_due) {
 			while (state == PLAYING && tick_due <= now && steps++ < 8)
 				tick(), tick_due += STEP_US;
@@ -1371,7 +1438,10 @@ main(void)
 		}
 		draw_changes();
 		now = now_us();
-		next_event(&event, state != PLAYING ? -1 : frame_due <= now ? 0 : (int)((frame_due - now + 999) / 1000));
+		wait = state != PLAYING ? -1 : frame_due <= now ? 0 : (int)((frame_due - now + 999) / 1000);
+		if (pad.held & INPUT_HANDS && (wait < 0 || wait > 100))
+			wait = 100;	/* (a headset's buttons are no event: looked at ten times a second) */
+		next_event(&event, wait);
 		if (event.type != GR_EVENT_TYPE_TIMEOUT && ui_restyle()) {	/* (Settings changed the look) */
 			ui_menu_restyle();
 			fonts();
@@ -1407,8 +1477,14 @@ main(void)
 		case GR_EVENT_TYPE_FOCUS_OUT:
 			pause_game();
 			break;
+		case GR_EVENT_TYPE_BUTTON_UP:
+			if (event.button.wid == window)
+				pad_mouse(&event);
+			break;
 		case GR_EVENT_TYPE_BUTTON_DOWN:
 			if (event.button.wid != window || ui_wheel(&event))
+				break;
+			if (overlay_shown < 0 && pad_mouse(&event))
 				break;
 			if (event.button.y < MENU_H) {
 				for (i = 0; i < 2; i++)
