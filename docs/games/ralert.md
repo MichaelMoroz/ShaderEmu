@@ -238,3 +238,19 @@ From the command to the menu and to a mission's first frame is most of the wait:
 - Skirmish, saving and loading.
 - The vortex in the GPU's scene; ground units sorted among walls as the game sorts them (the scene draws overlays first, then every object).
 - Scroll steps sized by time, and frames left undrawn when late (`docs/games/tdawn.md` has both).
+
+## The window's size
+
+Since 4 November 2026 Red Alert is laid out again at the window's size as Tiberian Dawn is (`docs/games/tdawn.md`, "The window's
+size"; `TDAWN_LAYOUT=stretch` the way before). It opens at scale 1 on the 800 x 600 desktop, so a maximised window is a 792 x 544 screen
+(up to twice the first, 1,280 x 800). Its layout was written in 320 units times `RESFACTOR`, the sidebar's left edge a constant
+(`SIDE_X`, 240 units): that edge and the power bar's (`POWER_X`) are now statics placed 80 units from the screen's right edge
+(`SidebarClass::ShaderEmu_Layout`), the strips', Repair's, Sell's and Map's places go by `SIDE_X`, and the tabs (`tab.cpp`), the
+scroll's pull at the pointer (`scroll.cpp`) and the view beside the sidebar (`Activate`) go by the screen's width in those units
+instead of 320. The sidebar's picture keeps its 400 rows; below it is black. `test_all.py ralert-window`: maximised, 792 x 544 (the
+view 624 x 528, 26 cells), a soldier selected by a click, Repair pressed where the sidebar now has it, put back 640 x 400 (the view
+480 x 384) and Repair where it always was; the `ralert-*` sums as before, `ralert-window` under `RVC_RACES` 0 undone; captures of both.
+
+The counts: GCC (13.3) stopped with an internal error in `TabClass::Draw_Credits_Tab` while reading `ralert.profile`'s counts of the
+changed `tab.cpp`, so that file's counts are taken out of the profile (92 lines); the rest are kept, and functions changed elsewhere
+are compiled without theirs, as always. No speed is claimed for this change: the counts were not made again.

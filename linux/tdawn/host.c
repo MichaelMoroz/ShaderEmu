@@ -328,8 +328,8 @@ host_page(int page)
 
 /*
  * The size the window asks the screen to be laid out at (docs/games/tdawn.md, "The window's size"): a second after its last
- * change of size, the window's size at the first scale, in whole 8s across, from the first screen's size up to 640 x 400
- * (the game's largest view port). 1 and the size when that is not the screen's now; TDAWN_LAYOUT=stretch: never (the picture
+ * change of size, the window's size at the first scale, in whole 8s across and 2s down, from the first screen's size up to
+ * twice it (Tiberian Dawn's 320 x 200 to its largest view port, 640 x 400; Red Alert's 640 x 400 to 1,280 x 800). 1 and the size when that is not the screen's now; TDAWN_LAYOUT=stretch: never (the picture
  * stretched over the window, the way before).
  */
 int
@@ -347,9 +347,9 @@ host_relayout_wanted(int *width, int *height)
 		return 0;
 	sized_at = 0;
 	w = (sized_w / (open_scale ? open_scale : 1)) & ~7;
-	h = sized_h / (open_scale ? open_scale : 1);
-	w = w < unit_w ? unit_w : w > 640 ? 640 : w;
-	h = h < unit_h ? unit_h : h > 400 ? 400 : h;
+	h = (sized_h / (open_scale ? open_scale : 1)) & ~1;
+	w = w < unit_w ? unit_w : w > 2 * unit_w ? 2 * unit_w : w;
+	h = h < unit_h ? unit_h : h > 2 * unit_h ? 2 * unit_h : h;
 	*width = w, *height = h;
 	return w != screen_w || h != screen_h;
 }

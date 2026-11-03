@@ -198,6 +198,15 @@ CASES = [
          'killall game', True, wall=600,
          has=[r'tdawn: the screen laid out at 392x272 \(the view 312x264\)', r'tdawn: 1 selected', r'tdawn: the screen laid out at 320x200 \(the view 240x192\)'],
          count=[(r'tdawn: the sidebar.s repair button pressed', 2)]),
+    # docs/games/ralert.md, "The window's size": the same for Red Alert (scale 1): maximised 792 x 544 (the view 624 x 528), a soldier
+    # selected, Repair pressed where the sidebar now has it; put back, 640 x 400 and Repair where it always was
+    case('ralert-window', 'games ralert desktop', 'nx; sleep 3; (TDAWN_AUTO=1 RALERT_SIDE=allies RALERT_SEED=7 TDAWN_INPUT_LOG=1 ralert 2>&1 | grep -v ralstat &); '
+         'sleep 90; nxkey ctrl+f10; sleep 25; set -- $(nxwintest list | grep "Red Alert"); P=${5%,*}; Q=${5#*,}; S=$6; W=${S%x*}; H=${S#*x}; '
+         'nxkey $((P+3+214*(W-6)/792)),$((Q+26+199*(H-29)/544)); sleep 5; nxkey $((P+3+660*(W-6)/792)),$((Q+26+158*(H-29)/544)); sleep 5; '
+         'nxkey ctrl+f10; sleep 25; set -- $(nxwintest list | grep "Red Alert"); P=${5%,*}; Q=${5#*,}; nxkey $((P+3+508)),$((Q+26+158)); sleep 5; '
+         'killall game', True, wall=600,
+         has=[r'ralert: the screen laid out at 792x544 \(the view 624x528\)', r'ralert: [1-9]\d* selected', r'ralert: the screen laid out at 640x400 \(the view 480x384\)'],
+         count=[(r'ralert: the sidebar.s repair button pressed', 2)]),
     # docs/games/tdawn.md, "A mission won": the demo's first mission won, its score screen, the next mission played
     case('tdawn-won', 'games tdawn', X + TD + 'TDAWN_SCEN=1 TDAWN_WIN=100 TDAWN_FRAMES=300 tdawn FROMINSTALL', True, wall=400,
          has=[r'^tdawn: score: ends', r'done at frame 300: SCG10EA, .* state 325b1830'], never=[r'Segmentation fault', r'out of memory']),
