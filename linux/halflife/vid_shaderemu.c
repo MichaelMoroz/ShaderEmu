@@ -204,6 +204,7 @@ static void pad_buttons( unsigned buttons )
 	unsigned down = buttons & ~held, up = held & ~buttons;
 
 	held = buttons;
+	if(( down | up ) && getenv( "HL_PAD_LOG" )) Con_Printf( "halflife: pad down %x up %x\n", down, up );
 	if(( down | up ) & 0x10000 ) Key_Event( K_SPACE, ( down & 0x10000 ) != 0 );
 	if(( down | up ) & 0x8000 ) Key_Event( 'e', ( down & 0x8000 ) != 0 );
 	if(( down | up ) & 0x1000 ) Key_Event( K_CTRL, ( down & 0x1000 ) != 0 );

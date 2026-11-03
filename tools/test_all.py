@@ -286,6 +286,11 @@ CASES = [
          'nxkey drag:$((OX+220)),$((OY+40)):$((OX+420)),$((OY+240));sleep 4;killall aoe.bin;else echo AOE-NO-DATA; fi', wall=300,
          has=[r'^(aoeinput: order 425 110 1 0|AOE-NO-DATA)', r'^(aoeinput: drag -200 -100 0 625|AOE-NO-DATA)', r'^(aoeinput: order 380 150 1 0|AOE-NO-DATA)', r'^(aoeinput: box 220 40 420 240|AOE-NO-DATA)',
               r'^(aoeview: (\d+ \d+) selected 1\s+(?:aoe: step.*\s+)?aoeview: \2 selected 1|AOE-NO-DATA)']),
+    # a notch of the left hand's stick holds an arrow 120 ms over the window (docs/machine/input.md, "Game controls"), the pointer over it
+    case('aoe-pad', 'games aoe', AOE_UNPACK + X + 'if [ -f /tmp/aoe/Empires.dat ]; then AOE_TICK_MS=33 AOE_INPUT_LOG=1 AOE_SCRIPT="' + AOE_640.rsplit(';', 4)[0] + ';3000 ready" aoe & '
+         'while [ ! -e /tmp/aoe-ready ];do sleep 1;done;sleep 30;killall aoe.bin;else echo AOE-NO-DATA; fi', wall=400,
+         more=['--pointer-sweep', '0', '--pointer-circle', '300,250,0'] + [x for t in range(40, 400, 10) for x in ('--scroll', f'{t},lx,1')],
+         has=[r'^(aoe: pad holds key 39|AOE-NO-DATA)']),
     # the map dragged with the GPU's lists taken back late, as in a world (RVC_DEVICE_EVERY=6), the world in slices on the real clock
     # (docs/games/aoe.md, "Scrolls checked"): at each check the picture the view made by its scrolls against one drawn whole from the
     # same game, not a pixel apart; and the scroll's machine copy made by the first core
@@ -793,6 +798,21 @@ CASES = [
          more=['--pointer-sweep', '0', '--pointer-circle', '300,250,0', '--scroll', '8,ly,-1', '--scroll', '9,lx,1',
                '--pointer-button', '0x10080,10,10.5'],
          has=[r'nes: pad holds down', r'nes: pad holds right']),
+    # Doom: A or B uses (DOOM_PAD_LOG says the first); Quake III: the hands' buttons as its keys (QUAKE3_PAD_LOG); ClassiCube unseated: a
+    # notch of the left hand's stick holds W, the jump button is Space
+    case('pad-doom', 'games doom', X + 'DOOM_PAD_LOG=1 doom -warp 1 1 & sleep 40; killall doom.bin', True, wall=300,
+         more=['--pointer-button', '0x10080,20,20.5'], has=[r'doom: pad uses']),
+    case('pad-quake3', 'games quake3', X + 'QUAKE3_PAD_LOG=1 ' + Q3, True, until='pad down 10080', wall=400,
+         more=['--pointer-button', '0x10080,45,45.5'], has=[r'quake3: pad down 10080']),
+    case('pad-classicube', 'games classicube', CC + 'CLASSICUBE_PAD_LOG=1 CLASSICUBE_SEED=7 classicube', True, until='pad key', wall=300,
+         more=['--pointer-sweep', '0', '--pointer-circle', '300,250,0', '--expect', 'classicube: steady', '--send', '\\n',
+               '--scroll', '30,ly,1', '--pointer-button', '0x10080,32,32.5'],
+         has=[r'classicube: pad walks W']),
+    # ClassiCube's pause menu: a click on "Host on the LAN" (left column, a row under "Hotkeys...") hosts (docs/games/classicube.md, "Played together")
+    case('classicube-lan-menu', 'games classicube', CC + 'CLASSICUBE_SEAT=1 CLASSICUBE_LAN_LOG=1 CLASSICUBE_SEED=7 classicube', True, until='Hosting on',
+         wall=300, more=['--expect', 'classicube: steady', '--send', 'down Escape\\nup Escape\\n', '--expect', 'seat:',
+                         '--send', 'point 160 340\\ndown LeftMouse\\nup LeftMouse\\n'],
+         has=[r'lan: Hosting on the LAN at [\d.]+:25565']),
     case('pad-pinball', 'desktop games', X + 'NXPINBALL_PRINT=1 nxpinball & sleep 4; nxkey space; sleep 8; killall nxpinball', wall=120,
          more=['--pointer-button', '0x80,5,20', '--pointer-button', '0x100,8,8.5', '--pointer-button', '0x400,9,9.5', '--pointer-button', '0x10000,10,11'],
          has=[r'^nxpinball: left flipper held', r'^nxpinball: left flipper let go', r'^nxpinball: right flipper held', r'^nxpinball: plunger held',

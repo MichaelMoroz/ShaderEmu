@@ -423,8 +423,15 @@ G_BuildTiccmd_seat(doom_cmd *cmd)
 		const char *words = (const char *)seglPalette();
 		unsigned buttons = words ? ((const volatile uint32_t *)(words - REG_PALETTE + REG_INPUT))[2] : 0;
 
-		if (!menuactive && (buttons & 0x18000))
+		if (!menuactive && (buttons & 0x18000)) {
+			static int said;
+
 			cmd->buttons |= 2;
+			if (!said++ && getenv("DOOM_PAD_LOG")) {
+				printf("doom: pad uses\n");
+				fflush(stdout);
+			}
+		}
 	}
 	if (seated == 2) {
 		/* (the keys they walk by come as the left stick: no window need have the keyboard) */
