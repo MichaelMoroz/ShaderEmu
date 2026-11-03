@@ -618,20 +618,58 @@ index d0051ed6..79a87628 100644
  //
  void Z_TagFree(memtag_t eTag)
 diff --git a/code/rd-common/tr_image_jpg.cpp b/code/rd-common/tr_image_jpg.cpp
-index a3ddb84a..fe42c2cf 100644
+index a3ddb84a..f19cf2f5 100644
 --- a/code/rd-common/tr_image_jpg.cpp
 +++ b/code/rd-common/tr_image_jpg.cpp
-@@ -59,6 +59,9 @@ static void R_JPGOutputMessage(j_common_ptr cinfo)
+@@ -59,6 +59,14 @@ static void R_JPGOutputMessage(j_common_ptr cinfo)
  	Com_Printf("%s\n", buffer);
  }
  
 +#ifdef SHADEREMU
 +int se_jpeg_shrink, se_jpeg_shrunk;	// halvings asked for (r_picmip, tr_image.cpp) and made by the decoder
 +#endif
++#ifdef SHADEREMU
++// a JPEG decoded by libmedia on the workers (sys_shaderemu.cpp; -1: by libjpeg, as before)
++int SE_PictureJPG( const void *data, int size, int shrink, int *width, int *height, unsigned char *pic );
++#endif
++
  void LoadJPG( const char *filename, unsigned char **pic, int *width, int *height ) {
  	/* This struct contains the JPEG decompression parameters and pointers to
  	* working space (which is allocated as needed by the JPEG library).
-@@ -132,6 +135,15 @@ void LoadJPG( const char *filename, unsigned char **pic, int *width, int *height
+@@ -98,6 +106,32 @@ void LoadJPG( const char *filename, unsigned char **pic, int *width, int *height
+ 	if (!fbuffer.b || len < 0) {
+ 		return;
+ 	}
++#ifdef SHADEREMU
++	// (JK2_PICTURES_CHECK=1: libjpeg decodes it too, and a line says how far apart the two are)
++	static int se_check = -1;
++	byte *se_mine = NULL;
++	int se_w = 0, se_h = 0;
++	if ( se_check < 0 )
++		se_check = getenv( "JK2_PICTURES_CHECK" ) != NULL;
++	{
++		int w, h;
++		if ( SE_PictureJPG( fbuffer.b, len, se_jpeg_shrink, &w, &h, NULL ) == 0 ) {
++			byte *rgba = (byte *)R_Malloc( w * h * 4, TAG_TEMP_WORKSPACE, qfalse );
++			if ( SE_PictureJPG( fbuffer.b, len, se_jpeg_shrink, &w, &h, rgba ) != 0 ) {
++				R_Free( rgba );
++			} else if ( se_check ) {
++				se_mine = rgba, se_w = w, se_h = h;
++			} else {
++				*pic = rgba;
++				*width = w;
++				*height = h;
++				se_jpeg_shrunk = se_jpeg_shrink;
++				ri.FS_FreeFile( fbuffer.v );
++				return;
++			}
++		}
++	}
++#endif
+ 
+ 	/* Step 1: allocate and initialize JPEG decompression object */
+ 
+@@ -132,6 +166,15 @@ void LoadJPG( const char *filename, unsigned char **pic, int *width, int *height
  	/* Make sure it always converts images to RGB color space. This will
  	* automatically convert 8-bit greyscale images to RGB as well.	*/
  	cinfo.out_color_space = JCS_RGB;
@@ -647,6 +685,27 @@ index a3ddb84a..fe42c2cf 100644
  
  	/* Step 5: Start decompressor */
  
+@@ -222,6 +265,20 @@ void LoadJPG( const char *filename, unsigned char **pic, int *width, int *height
+ 	/* At this point you may want to check to see whether any corrupt-data
+ 	* warnings occurred (test whether jerr.pub.num_warnings is nonzero).
+ 	*/
++#ifdef SHADEREMU
++	if ( se_mine ) {
++		unsigned most = 0, over = 0;
++		double sum = 0;
++		if ( se_w == *width && se_h == *height )
++			for ( unsigned i = 0; i < memcount; i++ ) {
++				unsigned d = se_mine[i] > out[i] ? se_mine[i] - out[i] : out[i] - se_mine[i];
++				most = d > most ? d : most, over += d > 16, sum += d;
++			}
++		ri.Printf( PRINT_ALL, "jk2: picture %s %dx%d (libmedia %dx%d): most %u, %u over 16, mean %.2f\n", filename, *width, *height,
++			se_w, se_h, most, over, sum / memcount );
++		R_Free( se_mine );
++	}
++#endif
+ 
+ 	/* And we're done! */
+ }
 diff --git a/code/rd-common/tr_public.h b/code/rd-common/tr_public.h
 index a0f0ace4..e1a2ddd9 100644
 --- a/code/rd-common/tr_public.h

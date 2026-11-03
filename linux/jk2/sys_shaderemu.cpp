@@ -885,20 +885,38 @@ void SE_MixSettle( void )
 	jk2MixSettle();
 }
 
+// The workers libmedia decodes a load's sounds and pictures on (JK2_WORKERS, 16), opened at the first; 0 for none.
+static int se_load_workers( void )
+{
+	static int workers = -1;
+	if ( workers < 0 ) {
+		workers = mcw_open( env_int( "JK2_WORKERS", 16 ) );
+		if ( workers > 0 )
+			mcw_touch_code( _start, (unsigned)( etext - _start ) );   // (a worker stops at a page of code no core has run)
+		else
+			workers = 0;
+	}
+	return mcw_on_worker() ? 0 : workers;
+}
+
+// Whether JK2_<what> asks for the engine's own decoder (the way before).
+static int se_engine_decodes( const char *what )
+{
+	const char *how = getenv( what );
+	return how && !strcmp( how, "engine" );
+}
+
 // A sound effect's MP3 decoded by libmedia on the workers, for S_LoadSound (docs/games/jk2.md, "The load"): the level's
 // load decoded about 220 of them on this core, one after another, 1.65 billion instructions. Only where libmedia has the
 // same rate and channels and the engine's length to a frame, or -1 and the engine decodes it.
 // JK2_SOUNDS=engine is the way before.
 int SE_SoundMP3( const void *data, int size, void *out, int bytes, int rate, int channels )
 {
-	static int workers = -1;
-	if ( workers < 0 ) {
-		const char *how = getenv( "JK2_SOUNDS" );
-		workers = how && !strcmp( how, "engine" ) ? 0 : mcw_open( env_int( "JK2_WORKERS", 16 ) );
-		if ( workers > 0 )
-			mcw_touch_code( _start, (unsigned)( etext - _start ) );   // (a worker stops at a page of code no core has run)
-	}
-	if ( workers <= 0 || mcw_on_worker() || bytes <= 0 || channels < 1 )
+	static int engine = -1;
+	if ( engine < 0 )
+		engine = se_engine_decodes( "JK2_SOUNDS" );
+	int workers = engine ? 0 : se_load_workers();
+	if ( workers <= 0 || bytes <= 0 || channels < 1 )
 		return -1;
 	const char *why;
 	struct media_audio *a = media_audio_open( data, (uint32_t)size, &why );
@@ -923,8 +941,38 @@ int SE_SoundMP3( const void *data, int size, void *out, int bytes, int rate, int
 	media_audio_close( a );
 	return done;
 }
+
+extern "C" const char *m_jpeg_decode_shrunk( const uint8_t *f, uint32_t size, struct media_image *out, int workers, int shrink );
+
+// A picture's JPEG decoded by libmedia on the workers, for rd-common's LoadJPG (docs/games/jk2.md, "The load"): JPEG was a
+// fifth of core 0's load, libjpeg's. `shrink` halvings each way (r_picmip), as libjpeg's scaled IDCT makes them: a side
+// (n + 2^shrink - 1) >> shrink. With `pic` NULL the size alone; then RGBA into `pic`, rows width * 4 apart. 0, or -1 and
+// libjpeg decodes it. JK2_PICTURES=engine is the way before, JK2_PICTURES_CHECK=1 both and how far apart.
+int SE_PictureJPG( const void *data, int size, int shrink, int *width, int *height, unsigned char *pic )
+{
+	static int engine = -1;
+	if ( engine < 0 )
+		engine = se_engine_decodes( "JK2_PICTURES" );
+	struct media_info info;
+	if ( engine || mcw_on_worker() || size <= 0 || shrink < 0 || shrink > 3 ||
+	     media_probe( data, (uint32_t)size, &info ) || info.kind != MEDIA_JPEG || !info.width || !info.height )
+		return -1;
+	int s = 1 << shrink, w = ( info.width + s - 1 ) / s, h = ( info.height + s - 1 ) / s;
+	if ( !pic ) {
+		*width = w, *height = h;
+		return 0;
+	}
+	if ( *width != w || *height != h )
+		return -1;
+	struct media_image out;
+	memset( &out, 0, sizeof out );
+	out.width = w, out.height = h, out.channels = 4, out.stride = w * 4, out.pixels = pic;
+	mcw_touch( pic, (unsigned)( w * h * 4 ) );   // (stored to by this core first: the workers write it)
+	return m_jpeg_decode_shrunk( (const uint8_t *)data, (uint32_t)size, &out, se_load_workers(), s ) ? -1 : 0;
+}
 #else
 int SE_SoundMP3( const void *data, int size, void *out, int bytes, int rate, int channels ) { return -1; }
+int SE_PictureJPG( const void *data, int size, int shrink, int *width, int *height, unsigned char *pic ) { return -1; }
 int SE_MixWorker( void ) { return 0; }
 void SE_MixGive( void ( *fn )( void ) ) { fn(); }
 void SE_MixSettle( void ) {}

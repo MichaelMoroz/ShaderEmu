@@ -360,8 +360,15 @@ buffer on core 0 whatever the GL under it.
   down to single points, asked as `CM_PointContents` asks. `JK2_WEATHER_CHECK=1` asks every point too: **0 of 423,192
   words differ** (the demo's zone, 229 x 264 x 224 points, 155,330 outside; the build computer, 2 November 2026). The
   cache file the game wrote into its home (a file made from the level) is neither read nor written.
-- **Pictures** at `r_picmip`'s size and no levels under the first ("The picture"). Not done: decoding on the workers
-  by libmedia; rd-vanilla loads a picture at a time as its shaders are parsed, so that needs the loads gathered first.
+- **Pictures** at `r_picmip`'s size and no levels under the first ("The picture").
+- **A picture's JPEG decoded by libmedia on the workers** (`SE_PictureJPG` in `sys_shaderemu.cpp`, asked first by
+  rd-common's `LoadJPG`; `JK2_PICTURES=engine` is libjpeg's): one picture at a time as rd-vanilla parses its shaders,
+  each over the workers ("Without markers" in `docs/system/media.md`; one under 16,384 pixels on this core), at
+  `r_picmip`'s size by `m_jpeg_decode_shrunk`, whose sides are libjpeg's scaled ones. The pixels are not libjpeg's:
+  `JK2_PICTURES_CHECK=1` decodes each both ways and prints how far apart: over the load's 414 pictures (`r_picmip 2`) a
+  mean of 0.69 levels a channel, the most 124 (small glows a quarter of their size); at `r_picmip 0` 0.51 and 67 (the
+  R5 droid's body), the fast IDCT and fancy upsampling against libmedia's. The same run as the sounds' below: **872,552
+  to 715,088 passes**, core 0 6.78 to 5.34 billion; the sums to frame 450 the same.
 - **No CRC-32 of a pak's file** read whole (`se_pak_crc` in minizip's `unzip.c`; `JK2_PAK_CRC=1` checks again): the
   inflate already fails on a broken stream. Core 0 from the desktop to the level played (`client state 7`, the
   installer's files unpacked first, `fixedtime 50`), `rvc_cpu`: 9.05 to 8.43 billion (3 November 2026).
@@ -372,8 +379,8 @@ buffer on core 0 whatever the GL under it.
   stays the engine's, as ICARUS waits for a sound's end, a frame missing is silence and one more cut off. The same run:
   **1,067,800 to 872,552 passes** (-18%), core 0 8.43 to 6.78 billion, the workers 3.3 billion. The game's sums to
   frame 450 (`JK2_SUM=50`) are the same both ways; `test_all.py jk2-sums` (1,200 s) was not run.
-- Left on core 0 (the profile of the first half of that load): pak inflate 17% (`inflate_fast`, `window`), JPEG 20%
-  (`decode_mcu`, the IDCTs, `ycc_rgb_convert`), `Q_stricmp` 6% (3.6 million calls), `mdfour` 2%.
+- Left on core 0 (a profile of the first half of the load before the pictures): pak inflate 17% (`inflate_fast`,
+  `window`), `Q_stricmp` 6% (3.6 million calls), `mdfour` 2%.
 
 ## Memory
 
