@@ -59,6 +59,8 @@ void aoe_win_palette(const uint8_t *rgbx)
         words[i] = rgbx[i * 4] << 16 | rgbx[i * 4 + 1] << 8 | rgbx[i * 4 + 2];
 }
 
+void aoe_win_not_a_frame(void) { seglNotAFrame(); }
+
 void aoe_win_present(void)
 {
     static const GLfixed whole[16] = { 2 * ONE, 0, 0, 0, 0, -2 * ONE, 0, 0, 0, 0, -ONE, 0, -ONE, ONE, 0, ONE };

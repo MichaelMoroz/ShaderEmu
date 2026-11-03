@@ -526,9 +526,9 @@ void TDrawArea::OverlayMemCopy(tagRECT& a, tagRECT& b, int dx, int dy, int xo, i
     long pitch = rows[1] - rows[0], bytes = (h - 1) * pitch + words * 4;
     int whole = !by_words && h > 1 && pitch > 0;
     for (long i = 1; whole && i < h; i++) whole = rows[first_s + i] == rows[first_s] + i * pitch && rows[first_t + i] == rows[first_t] + i * pitch;
-    if (whole && !(((uintptr_t) dst | (uintptr_t) src | (uintptr_t) bytes) & 15)) {
-        __asm__ volatile("csrw 0x8b1, %0\n csrw 0x8b2, %1\n csrw 0x8b3, %2\n csrw 0x8b0, %3"
-                         :: "r"(src), "r"(dst), "r"(bytes), "r"(1) : "memory");
+    // Only the first core asks for the machine's copy (CSR 0x8b0 reads 1 there and 0 on a worker, docs/machine/gpu.md, "A program's
+    // copy"): the view's job, on a worker, has the first core make it, which waits for the walk meanwhile (aoe_view_first_copy).
+    if (whole && !(((uintptr_t) dst | (uintptr_t) src | (uintptr_t) bytes) & 15) && aoe_view_first_copy(src, dst, bytes)) {
     } else
     for (; h > 0; h--, sy += step, ty += step) memmove(rows[ty] + tx, rows[sy] + sx, words * 4);
     if (locked) this->Unlock((char*) "OverlayMemCopy");

@@ -118,7 +118,9 @@ void aoe_present(void) {
         if (frames == picdump) for (int r = 0; r < 30; r++) { fprintf(stderr, "aoegrid %02d ", r); for (int c = 0; c < 40; c++) { unsigned g = 0; for (int y = 0; y < 20; y++) for (int x = 0; x < 20; x++) g = g * 31 + page[(r * 20 + y) * aoe_w + c * 20 + x]; fprintf(stderr, "%02x", (g ^ g >> 8 ^ g >> 16) & 255); } fprintf(stderr, "\n"); }
         if (frames == picdump && getenv("AOE_PICROWS")) for (int y = aoe_h - 126; y < aoe_h; y++) { fprintf(stderr, "aoerow "); for (int x = 0; x < 260; x++) fprintf(stderr, "%02x", page[y * aoe_w + x]); fprintf(stderr, "\n"); }
     }
-    if (window_open) aoe_win_present();
+    // the caption's rate counts pictures that show something new: a present between two slices with no view drawn is not one
+    extern int aoe_view_new_picture(void);
+    if (window_open) { if (!aoe_view_new_picture()) aoe_win_not_a_frame(); aoe_win_present(); }
 }
 void aoe_before_blit(void) { if (window_open) aoe_win_settle(); }
 void aoe_window_make(int, int, const char*) {}
@@ -228,6 +230,31 @@ void aoe_panel_changed(const char* n) {
     if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: panel %s at %lu, frame %ld\n", n, step_from, frames);
 }
 static int mark_read, mark_a, mark_b;
+void aoe_view_check_draw(int whole);
+static unsigned checks, checks_bad;
+static void aoe_view_check(int quiet) {
+    if (!page) return;
+    int top = 20, bottom = aoe_h - 126;   // (the view's rows at 640 x 480 in the window; 800: 20 to 474)
+    if (aoe_w == 800) bottom = 474;
+    unsigned bytes = aoe_w * (bottom - top);
+    static unsigned char* drawn;
+    if (!drawn) drawn = (unsigned char*) malloc(bytes);
+    aoe_view_check_draw(0);
+    memcpy(drawn, page + top * aoe_w, bytes);
+    aoe_view_check_draw(1);
+    unsigned differ = 0, first = 0;
+    for (unsigned i = 0; i < bytes; i++) if (drawn[i] != page[top * aoe_w + i]) { if (!differ++) first = i; }
+    checks++;
+    if (differ) checks_bad++;
+    fprintf(stderr, "aoecheck: %u pixels differ (first at %u,%u), %u of %u checks\n", differ, first % aoe_w, top + first / aoe_w, checks_bad, checks);
+    if (differ && !quiet) {
+        static unsigned char* whole;
+        if (!whole) whole = (unsigned char*) malloc(bytes);
+        memcpy(whole, page + top * aoe_w, bytes);
+        memcpy(page + top * aoe_w, drawn, bytes); aoe_shot();
+        memcpy(page + top * aoe_w, whole, bytes); aoe_shot();
+    }
+}
 static void mark_from_script(int n) { mark_read = 1; mark_a = (int) aoe_updates + 1; mark_b = mark_a + n; }
 void aoe_events(void) {
     if (lat_stop) lat_write();
@@ -341,7 +368,12 @@ void aoe_events(void) {
     } else if (!strcmp(what, "mark")) {
         // "mark N": AOE_MARK's span from the next update, N updates long (a scene measured from a step of its script)
         mark_from_script(x);
+    } else if (!strcmp(what, "check")) {
+        // "check": the picture the view has drawn by its scrolls and redraws against one drawn whole from the same state of the
+        // game (as OpenTTD_CHECK): "aoecheck: N pixels differ" in the view's rows, and both pictures as shots when they do
+        aoe_view_check(x);
     } else if (!strcmp(what, "shot")) {
+        aoe_view_join();   // (the view's job done: a picture whole, not one half drawn)
         aoe_shot();
     } else if (!strcmp(what, "close")) {
         aoe_post(WM_CLOSE, 0, 0);

@@ -292,7 +292,7 @@ index f99cb6f1..7e582312 100644
  
                  if (frame_looped != 0) {
 diff --git a/src/basegame.cpp b/src/basegame.cpp
-index 2ec74351..242214e7 100644
+index 2ec74351..2e16c172 100644
 --- a/src/basegame.cpp
 +++ b/src/basegame.cpp
 @@ -1,3 +1,5 @@
@@ -301,11 +301,12 @@ index 2ec74351..242214e7 100644
  
  #include <windows.h>
  #include "../include/program_mode.h"
-@@ -2931,12 +2933,28 @@ int RGE_Base_Game::handle_music_done(HWND wnd, UINT msg, WPARAM wparam, LPARAM l
+@@ -2931,12 +2933,29 @@ int RGE_Base_Game::handle_music_done(HWND wnd, UINT msg, WPARAM wparam, LPARAM l
      return this->action_music_done() != 0;
  }
  
 +static int aoe_frame_owed;
++void aoe_draw_window_now(void) { rge_base_game->draw_window(); }   // the port: the script's check (host.cpp)
 +void RGE_Base_Game::aoe_frame_end() {
 +    RGE_Base_Game* game = this;
 +    if (!aoe_frame_owed) { aoe_view_join(); return; }
@@ -330,7 +331,7 @@ index 2ec74351..242214e7 100644
      color_log(0x32, 0x32, 4);
  
      time_a = debug_timeGetTime("C:\\msdev\\work\\age1_x1\\basegame.cpp", 4330);
-@@ -3003,7 +3021,9 @@ paint_done:
+@@ -3003,7 +3022,9 @@ paint_done:
              panel->set_redraw(TPanel::RedrawImmediate);
          }
          panel = panel_system.currentPanel();
@@ -340,7 +341,7 @@ index 2ec74351..242214e7 100644
          color_log(0x16, 0x5F, 1);
      } else {
          this->clear_window();
-@@ -3021,6 +3041,18 @@ paint_done:
+@@ -3021,6 +3042,18 @@ paint_done:
  
      time_a = debug_timeGetTime("C:\\msdev\\work\\age1_x1\\basegame.cpp", 4427);
      color_log(0x32, 0x54, 4);
