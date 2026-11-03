@@ -42,7 +42,10 @@ done
 # -fwrapv: the engine's sums overflow 32 bits in a large city, which C leaves undefined and
 # the compiler then worked out differently for each machine (Haight-Ashbury's sums differed).
 SOURCES=$(cd "$ENGINE" && ls *.cpp | grep -v -e '^emscripten.cpp$' -e '^callback.cpp$')
-CXXFLAGS="-O2 -fwrapv -fno-pie -w -I$ENGINE -I$HERE"
+# The guest's engine at -O3 with loops unrolled: 355.8 to 229.5 million instructions of the two sums' runs,
+# the same sums (rvc_cpu, 3 November 2026; docs/system/flags.md). Objects of other flags are made again.
+CXXFLAGS="-O3 -fno-tree-vectorize -fsched-pressure -funroll-loops -fwrapv -fno-pie -w -I$ENGINE -I$HERE"
+[ "$(cat "$BUILD/guest/flags" 2>/dev/null)" = "$CXXFLAGS" ] || { rm -f "$BUILD"/guest/*.o; echo "$CXXFLAGS" > "$BUILD/guest/flags"; }
 export ENGINE BUILD CXXFLAGS HERE
 { for f in $SOURCES; do echo "$ENGINE/$f"; done; echo "$HERE/engine.cpp"; echo "$REPO/linux/tdawn/cxxrt.cpp"; echo "$BUILD/tree.cc"; echo "$BUILD/list.cc"; } |
     xargs -P "$(nproc)" -I{} sh -c 'o=$BUILD/guest/$(basename {} | sed "s/\.c[cp]*$//").o; [ "$o" -nt {} ] && [ "$o" -nt "$HERE/micropolis.patch" ] && [ "$o" -nt "$HERE/mp.h" ] || rv32-c++ $CXXFLAGS -c {} -o "$o"'

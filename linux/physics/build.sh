@@ -15,7 +15,9 @@ INC="-idirafter $REPO/programs/linux/include -I$MW/src/include -I$REPO/linux/use
 # single-precision constants (the machine has no doubles), and the machine's own square root
 FLOATS="-fsingle-precision-constant -fno-math-errno"
 # a substep is a hundred floats alive at once: scheduled to keep them in registers, 5% fewer instructions
-OPT="-O3 -fsched-pressure"
+# (and loops unrolled: 157.9 to 157.5 million instructions of 120 substeps on the first core, the same sum;
+# docs/system/flags.md)
+OPT="-O3 -fsched-pressure -fno-tree-vectorize -funroll-loops"
 rv32-cc $OPT -fno-pie -Wall -Wno-unused-function $FLOATS $INC -c "$HERE/physics.c" -o "$BUILD/physics.o"
 rv32-cc $OPT -fno-pie -Wall -Wno-unused-function $FLOATS $INC -c "$HERE/nxphys.c" -o "$BUILD/nxphys.o"
 # the OpenGL library with floats: a box's corners are vertices as they are
