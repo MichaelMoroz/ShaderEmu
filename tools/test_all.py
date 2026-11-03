@@ -306,12 +306,16 @@ CASES = [
          has=[r"^(aoe: the machine's copy by the first core|AOE-NO-DATA)", r'^(aoecheck: 0 pixels differ \(first at 0,20\), 0 of 7 checks|AOE-NO-DATA)'],
          never=[r'aoecheck: [1-9]']),
     # its window resized ("Windowed", 3 November 2026): the picture is stretched over it, and a click where a button is drawn lands on it,
-    # maximised (Single Player at the main menu's 320,196) and tiled at the right half (Random Map at 320,138), by the window's size now
+    # maximised (Single Player at the main menu's 320,196) and tiled at the right half (Random Map at 320,138), by the window's size now;
+    # each menu made again in the layout of the window's size first ("Two layouts": the main menu at 800 x 600, the single player menu at 640)
     case('aoe-resize', 'games aoe desktop', AOE_UNPACK + 'nx; sleep 3; ' + 'if [ -f /tmp/aoe/Empires.dat ]; then AOE_DEBUG=1 AOE_SCRIPT="3000 ready" aoe & '
-         'while [ ! -e /tmp/aoe-size ];do sleep 1;done;sleep 2;nxkey ctrl+alt+up;sleep 3;read OX OY W H </tmp/aoe-size;echo SIZE $W $H;'
-         'nxkey $((OX+320*W/640)),$((OY+196*H/480));sleep 8;nxkey ctrl+alt+right;sleep 3;read OX OY W H </tmp/aoe-size;echo SIZE $W $H;'
-         'nxkey $((OX+320*W/640)),$((OY+138*H/480));sleep 8;killall aoe.bin;else echo AOE-NO-DATA; fi', wall=300,
-         has=[r'^(SIZE (?!640 480)\d+ \d+|AOE-NO-DATA)', r'^(aoe: panel Single Player Menu|AOE-NO-DATA)', r'^(aoe: panel MP Setup Screen|AOE-NO-DATA)']),
+         'while [ ! -e /tmp/aoe-size ];do sleep 1;done;sleep 2;nxkey ctrl+alt+up;'
+         'until [ "$(cat /tmp/aoe-layout 2>/dev/null)" = 800 ];do sleep 1;done;sleep 2;read OX OY W H </tmp/aoe-size;echo SIZE $W $H;'
+         'nxkey $((OX+320*W/640)),$((OY+196*H/480));sleep 8;nxkey ctrl+alt+right;'
+         'until [ "$(cat /tmp/aoe-layout 2>/dev/null)" = 640 ];do sleep 1;done;sleep 2;read OX OY W H </tmp/aoe-size;echo SIZE $W $H;'
+         'nxkey $((OX+320*W/640)),$((OY+138*H/480));sleep 8;killall aoe.bin;else echo AOE-NO-DATA; fi', wall=600,
+         has=[r'^(SIZE (?!640 480)\d+ \d+|AOE-NO-DATA)', r'^(aoe: panel Single Player Menu|AOE-NO-DATA)', r'^(aoe: panel MP Setup Screen|AOE-NO-DATA)',
+              r'^(aoe: Main Menu made again at 800 x 600|AOE-NO-DATA)', r'^(aoe: Single Player Menu made again at 640 x 480|AOE-NO-DATA)']),
     # the layout follows the window in play ("Two layouts"): maximised it is 800 x 600, put back 640 x 480, the game goes on and a click in
     # the window's middle is the picture's middle in each; the menus before the game kept theirs
     case('aoe-layout', 'games aoe desktop', AOE_UNPACK + 'nx; sleep 3; if [ -f /tmp/aoe/Empires.dat ]; then AOE_TICK_MS=33 AOE_INPUT_LOG=1 '
