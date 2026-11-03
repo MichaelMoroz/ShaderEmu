@@ -1521,7 +1521,7 @@ index 8cd596fb..b8e4be48 100644
  	// clear all gentity pointers that might still be set from
  	// a previous level
 diff --git a/code/ui/ui_main.cpp b/code/ui/ui_main.cpp
-index 4a20f0ee..bc231fa6 100644
+index 4a20f0ee..27bb06df 100644
 --- a/code/ui/ui_main.cpp
 +++ b/code/ui/ui_main.cpp
 @@ -1061,7 +1061,7 @@ static qboolean UI_RunMenuScript ( const char **args )
@@ -1533,6 +1533,20 @@ index 4a20f0ee..bc231fa6 100644
  #else
  			ui.Cmd_ExecuteText( EXEC_APPEND, "map yavin1\n");
  #endif
+@@ -4037,6 +4037,13 @@ void _UI_MouseEvent( int dx, int dy )
+ 
+ }
+ 
++// ShaderEmu: the menus' cursor put where the desktop's pointer is, in 640 x 480 (linux/jk2/sys_shaderemu.cpp,
++// se_menu_pointer): told how far it went, it stopped at the menu's edges and the pointer did not
++void _UI_MouseTo( int x, int y )
++{
++	_UI_MouseEvent( x - uiInfo.uiDC.cursorx, y - uiInfo.uiDC.cursory );
++}
++
+ /*
+ =================
+ UI_KeyEvent
 diff --git a/codeJK2/cgame/FxPrimitives.cpp b/codeJK2/cgame/FxPrimitives.cpp
 index 0b83bc19..6b3b6d7c 100644
 --- a/codeJK2/cgame/FxPrimitives.cpp

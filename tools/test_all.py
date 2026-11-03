@@ -322,6 +322,11 @@ CASES = [
     # the level played with no input for 4,000 frames: host_sum.sh's nine lines (the last two of them here)
     # the demo's first start on the desktop (docs/system/install.md): LucasArts' licence read out of the installer in a window, Accept
     # refused until it is scrolled to its end, the pak unpacked into memory with the bar, and its CRC-32 7-Zip's (239abc19)
+    # the menus' cursor is the pointer (docs/games/jk2.md, "Input"): the pointer's place in the window, not its travel, at the window's place
+    case('jk2-pointer', 'games jk2 desktop long', X + 'if [ -f /usr/share/jk2/jk2demo.exe ]; then (sleep 6; nxkey pagedown; sleep 1; nxkey end; sleep 1; '
+         'nxkey tab enter) & jk2 --unpack; JK2_POINTER_LOG=1 JK2_FRAMES=150 jk2; else echo JK2-NO-DATA; fi', True, wall=1800,
+         more=['--pointer-sweep', '0', '--pointer-circle', '400,300,100'],
+         has=[r'(jk2pointer: (\d+),(\d+) of the display to \d+,\d+ of the menu \(window at \d+,\d+, 640x480\)|JK2-NO-DATA)']),
     case('jk2-install', 'games jk2 desktop', X + 'if [ -f /usr/share/jk2/jk2demo.exe ]; then (sleep 6; nxkey a; sleep 1; nxkey pagedown; sleep 1; nxkey end; '
          'sleep 1; nxkey tab enter) & CABINST_PRINT=1 CABINST_SUMS=1 jk2 --unpack; echo INSTALL=$?; else echo JK2-NO-DATA; fi', True, wall=300,
          has=[r'^(cabinst: licence \\Disk1\\Install\\license\.txt: 3529 bytes, CRC-32 4361c574|JK2-NO-DATA)', r'^(cabinst: licence shown, \d+ lines|JK2-NO-DATA)',
