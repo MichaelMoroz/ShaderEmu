@@ -145,7 +145,8 @@ freed once the renderer has the world (`tr_bsp.cpp`: 9.5 MB); the `.nav` file's 
     JK2_GL=plain        rd-vanilla's triangles through Half-Life's shim as before ("Speed"); =passes the GPU's passes as
                         before ("What the menu was missing"); =nomemo no large draw kept; JK2_GL_LOG=F frame F's draws
     JK2_SHADOWS=made    every blob shadow made anew each frame ("Fewer instructions")
-    JK2_RENDER=core     the drawing on core 0 ("The drawing on a worker"); JK2_SKIN=drawing Ghoul2 skinned by the drawing alone
+    JK2_RENDER=core     the drawing on core 0 ("The drawing on a worker"); JK2_SKIN=drawing Ghoul2 skinned by the drawing alone;
+                        JK2_MIX=core the mix painted on core 0 ("The mix on a worker")
     HL_POOL_MB=N        the GPU's texture memory, MB of RAM (36); HLGL_LOG=1 every texture uploaded
     jk2gpu:             with JK2_STATS, the textures in GPU memory, how many found no room, vertices drawn a frame
     +set com_demo 1     the demo (the starter's)
@@ -434,7 +435,7 @@ a slow frame):
 | | before (650f94c3) | after | |
 |---|---|---|---|
 | The main menu (frames 100 to 300, `game_par.py jk2-menu`) | 1.16 frames a second, 4.62 million instructions of core 0 a frame | 7.1 frames a second, 0.63 million (with the logo, the title and the saber it was missing drawn) | |
-| The walk (frames 1,500 to 1,700, `jk2-walk`) | 0.31 frames a second, 3.27 s a frame (about 2,200 passes), about 17 million | 1.0 frames a second, 704 passes a frame; core 0 5.2 million, the drawing's worker 2.6 (0.64 and 1,046 passes with the drawing on core 0) | |
+| The walk (frames 1,500 to 1,700, `jk2-walk`) | 0.31 frames a second, 3.27 s a frame (about 2,200 passes), about 17 million | 1.1 frames a second, 655 passes a frame; core 0 4.7 million, the drawing's worker 2.6 (1.0 and 704 passes with the mix on core 0; 0.64 and 1,046 with the drawing too) | |
 | The opening scene's march, the busiest stretch of the start (1,250 to 1,450, `jk2-march`) | 0.28, 3.61 s a frame | 0.7, 1,008 passes a frame; core 0 5.9 million, the drawing's worker 3.6 (0.53 with the drawing on core 0) | |
 | The walk on after the turn (1,750 to 1,900) | 0.48, 2.09 s | 0.96, 1.04 s (with the drawing on core 0) | |
 
@@ -529,31 +530,39 @@ Checked: captures (`rvc_harness --cpu`) drawn on the worker and on core 0 a fram
 at frame 900, the march at 1,400, the walk at 1,650 with Kyle in view: 0 of 307,680 differ); `RVC_RACES` with
 `RVC_RACES_NEAR=4` 0 undone on the walk, the march and the menu; with no window (the sums' runs) nothing changes.
 
+### The mix on a worker
+
+Since 3 November 2026 (`JK2_MIX=core` is the way before). `S_Update_`'s painting, the card's submit and the lip syncs go at
+the end of `S_Update` to a worker of their own (one of the first 16 cores other than the drawing's) and are settled at the
+start of `CL_Frame`, before the client's game starts or places a sound, and before the sound system is stopped, cleared,
+shut down or registers anew: the mix overlaps the server's frame, which reads of the sound only the voices' loudness
+(`gi.VoiceVolume`, a frame old now). Only with the card: the sums' runs mix on core 0 as before. The walk 704 to 655 passes
+a frame (core 0 5.24 to 4.67 million); the march is bound by the drawing's worker and did not move.
+
 ### What bounds it
 
-After all of the above a frame of the walk is still about 8 million instructions of core 0 (prof.py, frames 1,500 to
-1,650): rd-vanilla's back end about 3.3 million (the GL shim's vertices 1.0, Ghoul2's skinning 0.9, its shaders'
-stages and surfaces the rest), the client's game about 2.5 million (its players and their bones, the effects, the
-shadows), the game's frame about 1.5 million (NPCs' behaviours: `ST_Commander` and `NPC_FindCombatPoint` 0.5,
-traces 0.6, Ghoul2 bolts), the mix 0.6 million (by the card's time: about 40 thousand a frame at 15 frames a
-second). 15 frames a second is 44 passes, about 366 thousand instructions of core 0 a frame.
+After both rounds (3 November 2026, calibrated, `game_par.py`): the walk 655 passes a frame (1.1 frames a second), the
+march 1,004 (0.7), the menu 96.5 (7.1). 15 frames a second is 44 passes, about 366 thousand instructions of core 0.
 
-- **The game's frame alone is five times that**, and it cannot leave core 0 as Quake III's and Half-Life's servers did:
-  Jedi Outcast's single player has no client and server apart. The client's game reads the game's entities directly
-  (`cent->gent`, its client, its NPC state, `ghoul2`), and the renderer's Ghoul2 bone caches are the game's own
-  (`CBoneCache::EvalRender` evaluates lazily into the instance the game's bolts use). A game frame on a worker beside
-  the client's frame would race every one of those; a copy of the entities and the Ghoul2 instances each frame is the
-  size of the state itself. At 1.5 million a 50 ms game frame the game wants 30 million instructions a second for real
-  time, five or six calibrated cores.
-- **The back end is on a worker now** ("The drawing on a worker"): core 0 keeps the game (1.5 million), the client's
-  game and the renderer's front end (about 3 million) and the mix (0.6). The drawing's worker runs about 3,500
-  instructions a pass where core 0 runs 7,500: a worker's write cache is smaller, and the drawing stores every vertex
-  several times (tess, the shim's words); in the march it, not core 0, bounds the frame.
-- **The level kept in GPU memory** (Half-Life's `gl_kept.c`) or a renderer of our own: the world's 200 draws a frame
-  through the shim are about 1 million.
+- **Core 0** (the walk, `prof.py`, 4.67 million a frame): the game's frame 1.48 million (`G_RunFrame`: NPCs' behaviours,
+  `ST_Commander` and `NPC_FindCombatPoint` 0.5, the game's traces 0.8 through `SV_Trace`, Ghoul2 bolts 0.4); the client's
+  game 2.67 million (`CG_AddPacketEntities` 1.42 of which the players' blob shadows 0.71, the effects 0.56, the renderer's
+  front end `R_RenderView` 0.48); the kernel, the window and the rest about 0.5.
+- **The drawing's worker** (the march, 3.56 million a frame): it stores every vertex several times (tess, the shim's
+  words: 20 thousand vertices a frame of the GPU's words alone) and a worker's write cache ends its passes: 563
+  thousand worker passes ended full over a march run against 46 thousand of core 0's; core 0 waits about 420 passes a
+  frame of the march for it.
+- **The game's frame cannot simply go to a worker.** Jedi Outcast's single player has no client and server apart: the
+  client's game reads the game's entities directly (`cent->gent`, its client, its NPC state, `ghoul2`) and makes the
+  game's Ghoul2 instances' bones and bolts (`G2API_GetBoltMatrix` on the shared caches); about 640 entities are in use. A
+  game frame beside the client's would need copies of all that at each handover (about 1 MB of entities and the Ghoul2
+  instances' vectors), or a check of every read: not done.
+- **Even with the game's frame and the front end off core 0 at no cost**, the client's game (about 2.2 million) would stay
+  on core 0's chain: about 270 passes, at most 2 frames a second; and the drawing's worker would have to come down from
+  1,000 passes to 44, which its stores alone forbid while every vertex's words are made by a core (Ghoul2 skinned by the
+  GPU's vertex shader, "Ghoul2", and the level kept in GPU memory are what would change that).
 
-So the menu at about 7.1 frames a second and play at 0.7 to 1.0 frames a second is where this stands; 15 frames a
-second in play would need the game's frame itself several times cheaper and the client's game off core 0 too.
+So 15 frames a second in play is not reachable with this game's structure on this machine; the menu is at 7.1.
 
 ## What is left, in order
 

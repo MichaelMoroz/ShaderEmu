@@ -55,10 +55,25 @@ index 94051760..12c752d9 100644
  	key->msec = 0;
  
 diff --git a/code/client/cl_main.cpp b/code/client/cl_main.cpp
-index 1a5c2446..aa845ee0 100644
+index 1a5c2446..32f835dc 100644
 --- a/code/client/cl_main.cpp
 +++ b/code/client/cl_main.cpp
-@@ -1127,6 +1127,9 @@ void CL_InitRef( void ) {
+@@ -761,8 +761,14 @@ CL_Frame
+ extern cvar_t	*cl_newClock;
+ static unsigned int frameCount;
+ float avgFrametime=0.0;
++#ifdef SHADEREMU
++void SE_MixSettle( void );
++#endif
+ void CL_Frame ( int msec,float fractionMsec ) {
+ 
++#ifdef SHADEREMU
++	SE_MixSettle();	// (the mix painted on a worker during the game's frame: done before the client's sounds)
++#endif
+ 	if ( !com_cl_running->integer ) {
+ 		return;
+ 	}
+@@ -1127,6 +1133,9 @@ void CL_InitRef( void ) {
  	RIT(CM_DeleteCachedMap);
  	RIT(CM_DrawDebugSurface);
  	RIT(CM_PointContents);
@@ -69,10 +84,10 @@ index 1a5c2446..aa845ee0 100644
  	RIT(Cvar_Set);
  	RIT(Cvar_SetValue);
 diff --git a/code/client/snd_dma.cpp b/code/client/snd_dma.cpp
-index bb539e4c..76f33461 100644
+index bb539e4c..d545805c 100644
 --- a/code/client/snd_dma.cpp
 +++ b/code/client/snd_dma.cpp
-@@ -54,6 +54,15 @@ static int SND_FreeSFXMem(sfx_t *sfx);
+@@ -54,6 +54,29 @@ static int SND_FreeSFXMem(sfx_t *sfx);
  
  extern qboolean Sys_LowPhysicalMemory();
  
@@ -82,13 +97,27 @@ index bb539e4c..76f33461 100644
 +int SE_MusicGive( const void *track, int bytes, int pos, int want, float volume, int raw_time );
 +void SE_MusicForget( const void *track );
 +void SE_MusicRound( int sound_time, int muted );
-+static int se_music_end;	// the card's music as far as the engine has given it (as s_rawend is the mixer's)
++static int se_music_end;
++// the mix painted on a worker while the next frame's game runs (sys_shaderemu.cpp; docs/games/jk2.md, "The mix on a worker")
++int SE_MixWorker( void );
++void SE_MixGive( void ( *fn )( void ) );
++void SE_MixSettle( void );
++static unsigned se_mix_end;
++static int se_mix_old;
++void S_DoLipSynchs( const int s_oldpaintedtime );
++static void se_mix_job( void )
++{
++	SNDDMA_BeginPainting ();
++	S_PaintChannels ( se_mix_end );
++	SNDDMA_Submit ();
++	S_DoLipSynchs( se_mix_old );
++}	// the card's music as far as the engine has given it (as s_rawend is the mixer's)
 +#endif
 +
  //////////////////////////
  //
  // vars for bgrnd music track...
-@@ -106,15 +115,31 @@ typedef struct
+@@ -106,15 +129,31 @@ typedef struct
  	fileHandle_t s_backgroundFile;	// valid handle, else -1 if an MP3 (so that NZ compares still work)
  	wavinfo_t	s_backgroundInfo;
  	int			s_backgroundSamples;
@@ -120,17 +149,72 @@ index bb539e4c..76f33461 100644
  		chMP3_Bgrnd.iMP3SlidingDecodeWindowPos = 0;
  		chMP3_Bgrnd.iMP3SlidingDecodeWritePos = 0;
  		MP3Stream_SeekTo( &chMP3_Bgrnd, fTime );
-@@ -2696,6 +2721,9 @@ void S_Update( void ) {
+@@ -668,6 +707,9 @@ void S_ReloadAllUsedSounds(void)
+ 
+ void S_Shutdown( void )
+ {
++#ifdef SHADEREMU
++	SE_MixSettle();
++#endif
+ 	if ( !s_soundStarted ) {
+ 		return;
+ 	}
+@@ -917,6 +959,9 @@ S_BeginRegistration
+ */
+ void S_BeginRegistration( void )
+ {
++#ifdef SHADEREMU
++	SE_MixSettle();
++#endif
+ 	s_soundMuted = qfalse;		// we can play again
+ 
+ #ifdef USE_OPENAL
+@@ -1702,6 +1747,9 @@ so sound doesn't stutter.
+ ==================
+ */
+ void S_ClearSoundBuffer( void ) {
++#ifdef SHADEREMU
++	SE_MixSettle();
++#endif
+ 	int		clear;
+ 
+ 	if ( !s_soundStarted || s_soundMuted ) {
+@@ -1829,6 +1877,9 @@ S_StopAllSounds
+ ==================
+ */
+ void S_StopAllSounds(void) {
++#ifdef SHADEREMU
++	SE_MixSettle();
++#endif
+ 	if ( !s_soundStarted ) {
+ 		return;
+ 	}
+@@ -2696,6 +2747,10 @@ void S_Update( void ) {
  	int			i;
  	channel_t	*ch;
  
 +#ifdef SHADEREMU
++	SE_MixSettle();
 +	SE_MusicRound( s_soundtime, !s_soundStarted || s_soundMuted );
 +#endif
  	if ( !s_soundStarted || s_soundMuted ) {
  		return;
  	}
-@@ -4062,6 +4090,9 @@ static void FreeMusic( MusicInfo_t *pMusicInfo )
+@@ -3063,6 +3118,13 @@ void S_Update_(void) {
+ 			endtime = s_soundtime + samps;
+ 
+ 
++#ifdef SHADEREMU
++		if ( SE_MixWorker() ) {
++			se_mix_end = endtime, se_mix_old = s_oldpaintedtime;
++			SE_MixGive( se_mix_job );
++			return;
++		}
++#endif
+ 		SNDDMA_BeginPainting ();
+ 
+ 		S_PaintChannels (endtime);
+@@ -4062,6 +4124,9 @@ static void FreeMusic( MusicInfo_t *pMusicInfo )
  {
  	if (pMusicInfo->pLoadedData)
  	{
@@ -140,7 +224,7 @@ index bb539e4c..76f33461 100644
  		Z_Free(pMusicInfo->pLoadedData);
  		pMusicInfo->pLoadedData		= NULL;		// these two MUST be kept as valid/invalid together
  		pMusicInfo->sLoadedDataName[0]= '\0';	//
-@@ -4134,7 +4165,13 @@ static qboolean S_StartBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolean
+@@ -4134,7 +4199,13 @@ static qboolean S_StartBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolean
  											// scan up to halfway of it to find floating headers, so don't make it
  											// too small. 8k works fine.
  		qboolean bMusicSucceeded = qfalse;
@@ -155,7 +239,7 @@ index bb539e4c..76f33461 100644
  		{
  			if (!pMusicInfo->pLoadedData)
  			{
-@@ -4177,7 +4214,7 @@ static qboolean S_StartBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolean
+@@ -4177,7 +4248,7 @@ static qboolean S_StartBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolean
  							pMusicInfo->sfxMP3_Bgrnd.pMP3StreamHeader		= &pMusicInfo->streamMP3_Bgrnd;
  				Q_strncpyz( pMusicInfo->sfxMP3_Bgrnd.sSoundName, name, sizeof(pMusicInfo->sfxMP3_Bgrnd.sSoundName) );
  
@@ -164,7 +248,7 @@ index bb539e4c..76f33461 100644
  				{
  					MP3Stream_InitPlayingTimeFields ( &pMusicInfo->streamMP3_Bgrnd, name, pbMP3DataSegment, pMusicInfo->iLoadedDataLen, qtrue);
  				}
-@@ -4193,7 +4230,7 @@ static qboolean S_StartBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolean
+@@ -4193,7 +4264,7 @@ static qboolean S_StartBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolean
  						pMusicInfo->chMP3_Bgrnd.thesfx = &pMusicInfo->sfxMP3_Bgrnd;
  				memcpy(&pMusicInfo->chMP3_Bgrnd.MP3StreamHeader, pMusicInfo->sfxMP3_Bgrnd.pMP3StreamHeader, sizeof(*pMusicInfo->sfxMP3_Bgrnd.pMP3StreamHeader));
  
@@ -173,7 +257,7 @@ index bb539e4c..76f33461 100644
  				{
  					if (pMusicInfo->s_backgroundFile != -1)
  					{
-@@ -4711,6 +4748,54 @@ static qboolean S_UpdateBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolea
+@@ -4711,6 +4782,54 @@ static qboolean S_UpdateBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolea
  		return qfalse;
  	}
  
@@ -228,7 +312,7 @@ index bb539e4c..76f33461 100644
  	// see how many samples should be copied into the raw buffer
  	if ( s_rawend < s_soundtime ) {
  		s_rawend = s_soundtime;
-@@ -4935,6 +5020,9 @@ static void S_UpdateBackgroundTrack( void )
+@@ -4935,6 +5054,9 @@ static void S_UpdateBackgroundTrack( void )
  			if ( pMusicInfoCurrent->s_backgroundFile == -1)
  			{
  				int iRawEnd = s_rawend;
@@ -238,7 +322,7 @@ index bb539e4c..76f33461 100644
  				S_UpdateBackgroundTrack_Actual( pMusicInfoCurrent, qtrue, s_musicVolume->value );
  
  	/*			static int iPrevFrontVol = 0;
-@@ -4947,6 +5035,9 @@ static void S_UpdateBackgroundTrack( void )
+@@ -4947,6 +5069,9 @@ static void S_UpdateBackgroundTrack( void )
  				if (pMusicInfoFadeOut->bActive)
  				{
  					s_rawend = iRawEnd;

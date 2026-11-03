@@ -81,6 +81,45 @@ void jk2RenderGive(void (*fn)(const void*), const void* arg) {
     mcw_post(rw0.worker, render_job, rw0.gives + 1, 0);
     rw0.out = 1, rw0.gives++;
 }
+// ---- the mix painted on a worker of its own while the next frame's game runs (sys_shaderemu.cpp's SE_MixGive;
+// docs/games/jk2.md, "The mix on a worker") ----
+#define MIX_STACK (128 * 1024)
+static uint8_t mix_stack[MIX_STACK] __attribute__((aligned(16)));
+static struct __attribute__((aligned(16))) { int worker, out, unused[2]; } mw0;   // this core's
+static struct __attribute__((aligned(16))) { void (*fn)(void); int unused[3]; } mix_job;   // the worker's while out
+static uint32_t mix_body(uint32_t unused) {
+    (void)unused;
+    mix_job.fn();
+    return 0;
+}
+static uint32_t mix_post(uint32_t a0, uint32_t a1) {
+    (void)a0, (void)a1;
+    return jk2_call_on_stack(mix_body, 0, mix_stack + MIX_STACK);
+}
+int jk2MixOn(void) {
+    if (!mw0.worker && rw0.mode == 1) {   // (a worker of the larger caches other than the drawing's)
+        const char* how = getenv("JK2_MIX");
+        mw0.worker = -1;
+        if (!(how && !strcmp(how, "core"))) {
+            for (int k = 1; k <= mcw_count(); k++)
+                if (k != rw0.worker && mcw_fast(k)) { mw0.worker = k; break; }
+            if (mw0.worker > 0) mcw_touch(mix_stack, MIX_STACK), mcw_touch(&mix_job, sizeof mix_job);
+        }
+    }
+    return on && mw0.worker > 0;
+}
+void jk2MixSettle(void) {
+    if (!mw0.out) return;
+    while (!mcw_done(mw0.worker)) mcw_rest_for(&mw0.worker, 1);
+    mw0.out = 0;
+}
+void jk2MixGive(void (*fn)(void)) {
+    jk2MixSettle();
+    mix_job.fn = fn;
+    mcw_post(mw0.worker, mix_post, 0, 0);
+    mw0.out = 1;
+}
+
 // The given frame may begin (posted first, so that no helper's job takes its worker)
 void jk2RenderGo(void) { job_go.go = rw0.gives; }
 
