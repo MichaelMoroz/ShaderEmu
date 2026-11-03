@@ -731,6 +731,45 @@ bool volume_command(uint id, out uint base, out uint4 head) {
     return ram(texel_of(how.b) + 3).b != 0;
 }
 
+// The frame's command that claims mesh vertices id to id + 2 if it is drawn flat over the picture: a
+// status bar, a cross-hair, a message, the console (a draw with no place in space, a rectangle, text).
+// The holodeck shows these on a layer of their own before the sitter (docs/world/holodeck.md, "The
+// HUD layer"). Clears and sprite records are not drawn there.
+bool volume_flat_command(uint id, out uint base, out uint4 head) {
+    base = 0;
+    head = 0;
+    uint4 frame = ram(VOLUME_LIST);
+    uint list = texel_of(frame.r), count = min(frame.g, GPU_MAX_COMMANDS);
+    if (frame.r == 0 || count == 0) return false;
+    uint lo = 0, hi = count;
+    for (uint step = 0; step < 12; step++) {
+        uint mid = (lo + hi) >> 1;
+        if (hi - lo > 1) {
+            if (ram(list + 4 * mid).a <= id) lo = mid;
+            else hi = mid;
+        }
+    }
+    base = list + 4 * lo;
+    head = ram(base);
+    uint op = head.r;
+    uint slots = op == CMD_RECT ? 6 : op == CMD_DRAW ? head.b : op == CMD_TEXT ? 6 * ram(base + 1).b : 0;
+    if (slots == 0 || id < head.a || id + 3 > head.a + slots) return false;
+    uint drawn_in = op == CMD_DRAW ? FRAGMENT_PASS(ram(base + 1).g) : FRAGMENT_PASS(ram(base + 2).r);
+#ifdef GPU_VOLUME_PASS
+    if ((drawn_in & 3) != GPU_VOLUME_PASS) return false;
+#endif
+    if (op != CMD_DRAW) return true;
+    uint4 how = ram(base + 1);
+    // the world's draws are the volume's: a perspective with a modelview
+    return (how.r & VERTEX_MODELVIEW) == 0 || (how.r & 0xff) == VERTEX_SCREEN || ram(texel_of(how.b) + 3).b == 0;
+}
+
+// The picture's size (the frame's size word): what a flat vertex's place is a share of.
+float2 volume_picture() {
+    uint s = ram(VOLUME_LIST).a;
+    return float2(max(s & 0xffff, 1u), max((s >> 16) & 0xfff, 1u));
+}
+
 // The frame's camera: the modelview of its first draw with a place in space, which for a
 // program that draws its world before what moves in it is the view alone. Rows of its
 // rotation and its translation: camera = rows * world + move. False: no such draw.

@@ -188,6 +188,25 @@ CASES = [
     case('tdawn-move', 'games tdawn long', X + TD + 'TDAWN_SCEN=3 TDAWN_MOVE=100,8,0 TDAWN_SUMS=1 TDAWN_FRAMES=600 tdawn FROMINSTALL', True, count=[(r'^tdsum: ', 600)]),
     case('tdawn-move-refresh', 'games tdawn long', X + TD + 'TDAWN_SCEN=3 TDAWN_MOVE=100,8,0 TDAWN_SUMS=1 TDAWN_REFRESH=1 TDAWN_FRAMES=600 tdawn FROMINSTALL', True,
          same=[(r'^(tdsum: .*)', 'tdawn-move')]),
+    # docs/games/tdawn.md, "The window's size": the sidebar opened (Tab), the window maximised: the screen laid out at 392 x 272 with the
+    # sidebar at its right edge, a click on a unit of the map selects it and one on the sidebar's Repair (where it is now) presses it;
+    # put back, 320 x 200 again and Repair where it always was
+    case('tdawn-window', 'games tdawn desktop', 'nx; sleep 3; (' + TD + 'TDAWN_SCEN=10 TDAWN_INPUT_LOG=1 tdawn FROMINSTALL 2>&1 | grep -v tdstat &); '
+         'sleep 60; nxkey tab; sleep 3; nxkey ctrl+f10; sleep 20; set -- $(nxwintest list | grep Tiberian); P=${5%,*}; Q=${5#*,}; S=$6; W=${S%x*}; '
+         'H=${S#*x}; nxkey $((P+3+82*(W-6)/392)),$((Q+26+89*(H-29)/272)); sleep 5; nxkey $((P+3+330*(W-6)/392)),$((Q+26+84*(H-29)/272)); sleep 5; '
+         'nxkey ctrl+f10; sleep 20; set -- $(nxwintest list | grep Tiberian); P=${5%,*}; Q=${5#*,}; nxkey $((P+3+258*2)),$((Q+26+84*2)); sleep 5; '
+         'killall game', True, wall=600,
+         has=[r'tdawn: the screen laid out at 392x272 \(the view 312x264\)', r'tdawn: 1 selected', r'tdawn: the screen laid out at 320x200 \(the view 240x192\)'],
+         count=[(r'tdawn: the sidebar.s repair button pressed', 2)]),
+    # docs/games/ralert.md, "The window's size": the same for Red Alert (scale 1): maximised 792 x 544 (the view 624 x 528), a soldier
+    # selected, Repair pressed where the sidebar now has it; put back, 640 x 400 and Repair where it always was
+    case('ralert-window', 'games ralert desktop', 'nx; sleep 3; (TDAWN_AUTO=1 RALERT_SIDE=allies RALERT_SEED=7 TDAWN_INPUT_LOG=1 ralert 2>&1 | grep -v ralstat &); '
+         'sleep 90; nxkey ctrl+f10; sleep 25; set -- $(nxwintest list | grep "Red Alert"); P=${5%,*}; Q=${5#*,}; S=$6; W=${S%x*}; H=${S#*x}; '
+         'nxkey $((P+3+214*(W-6)/792)),$((Q+26+199*(H-29)/544)); sleep 5; nxkey $((P+3+660*(W-6)/792)),$((Q+26+158*(H-29)/544)); sleep 5; '
+         'nxkey ctrl+f10; sleep 25; set -- $(nxwintest list | grep "Red Alert"); P=${5%,*}; Q=${5#*,}; nxkey $((P+3+508)),$((Q+26+158)); sleep 5; '
+         'killall game', True, wall=600,
+         has=[r'ralert: the screen laid out at 792x544 \(the view 624x528\)', r'ralert: [1-9]\d* selected', r'ralert: the screen laid out at 640x400 \(the view 480x384\)'],
+         count=[(r'ralert: the sidebar.s repair button pressed', 2)]),
     # docs/games/tdawn.md, "A mission won": the demo's first mission won, its score screen, the next mission played
     case('tdawn-won', 'games tdawn', X + TD + 'TDAWN_SCEN=1 TDAWN_WIN=100 TDAWN_FRAMES=300 tdawn FROMINSTALL', True, wall=400,
          has=[r'^tdawn: score: ends', r'done at frame 300: SCG10EA, .* state 325b1830'], never=[r'Segmentation fault', r'out of memory']),
@@ -255,6 +274,12 @@ CASES = [
     case('micropolis', 'games', 'MICROPOLIS_SUM=/usr/share/micropolis/cities/haight.cty,1000 nxmicropolis; '
          'MICROPOLIS_SUM=1,500 nxmicropolis; MICROPOLIS_SUM=8,1500 nxmicropolis',
          sums=[(r'micropolis: .* ticks: .* sum ([0-9a-f]+)', ['909517ac', 'e14d1a50', '75e86f73'])]),
+    # its window made larger shows more of the map ("The window"), and a controller: the left stick's notches pan the map, A pauses
+    case('micropolis-window', 'games micropolis desktop', 'nx; sleep 3; MICROPOLIS_REPORT=1 nxmicropolis & sleep 50; nxkey ctrl+alt+up; sleep 40; killall nxmicropolis',
+         True, wall=400, more=['--pointer-sweep', '0', '--pointer-circle', '400,300,0', '--scroll', '60,lx,1', '--scroll', '62,ly,-1',
+                               '--pointer-button', '0x10080,64,64.5'],
+         has=[r'nxmicropolis: the window is \d+x\d+, the map (7[0-9][0-9]|8[0-9][0-9]|9[0-6]\d)x\d+', r'nxmicropolis: pad scrolls the map to',
+              r'nxmicropolis: pad pauses']),
     # OpenTTD (docs/games/openttd.md): two new games of test.cfg without a window, the sums of the native build's run
     case('openttd', 'games', 'cp /usr/share/openttd/test.cfg /tmp/t.cfg; OPENTTD_SUM=1 openttd.bin -v null:ticks=500 -s null -m null -g -G 1 -c /tmp/t.cfg; '
          'OPENTTD_SUM=1 openttd.bin -v null:ticks=2000 -s null -m null -g -G 2 -c /tmp/t.cfg',
@@ -286,6 +311,11 @@ CASES = [
          'nxkey drag:$((OX+220)),$((OY+40)):$((OX+420)),$((OY+240));sleep 4;killall aoe.bin;else echo AOE-NO-DATA; fi', wall=300,
          has=[r'^(aoeinput: order 425 110 1 0|AOE-NO-DATA)', r'^(aoeinput: drag -200 -100 0 625|AOE-NO-DATA)', r'^(aoeinput: order 380 150 1 0|AOE-NO-DATA)', r'^(aoeinput: box 220 40 420 240|AOE-NO-DATA)',
               r'^(aoeview: (\d+ \d+) selected 1\s+(?:aoe: step.*\s+)?aoeview: \2 selected 1|AOE-NO-DATA)']),
+    # a notch of the left hand's stick holds an arrow 120 ms over the window (docs/machine/input.md, "Game controls"), the pointer over it
+    case('aoe-pad', 'games aoe', AOE_UNPACK + X + 'if [ -f /tmp/aoe/Empires.dat ]; then AOE_TICK_MS=33 AOE_INPUT_LOG=1 AOE_SCRIPT="' + AOE_640.rsplit(';', 4)[0] + ';3000 ready" aoe & '
+         'while [ ! -e /tmp/aoe-ready ];do sleep 1;done;sleep 30;killall aoe.bin;else echo AOE-NO-DATA; fi', wall=400,
+         more=['--pointer-sweep', '0', '--pointer-circle', '300,250,0'] + [x for t in range(40, 400, 10) for x in ('--scroll', f'{t},lx,1')],
+         has=[r'^(aoe: pad holds key 39|AOE-NO-DATA)']),
     # the map dragged with the GPU's lists taken back late, as in a world (RVC_DEVICE_EVERY=6), the world in slices on the real clock
     # (docs/games/aoe.md, "Scrolls checked"): at each check the picture the view made by its scrolls against one drawn whole from the
     # same game, not a pixel apart; and the scroll's machine copy made by the first core
@@ -295,12 +325,25 @@ CASES = [
          has=[r"^(aoe: the machine's copy by the first core|AOE-NO-DATA)", r'^(aoecheck: 0 pixels differ \(first at 0,20\), 0 of 7 checks|AOE-NO-DATA)'],
          never=[r'aoecheck: [1-9]']),
     # its window resized ("Windowed", 3 November 2026): the picture is stretched over it, and a click where a button is drawn lands on it,
-    # maximised (Single Player at the main menu's 320,196) and tiled at the right half (Random Map at 320,138), by the window's size now
+    # maximised (Single Player at the main menu's 320,196) and tiled at the right half (Random Map at 320,138), by the window's size now;
+    # each menu made again in the layout of the window's size first ("Two layouts": the main menu at 800 x 600, the single player menu at 640)
     case('aoe-resize', 'games aoe desktop', AOE_UNPACK + 'nx; sleep 3; ' + 'if [ -f /tmp/aoe/Empires.dat ]; then AOE_DEBUG=1 AOE_SCRIPT="3000 ready" aoe & '
-         'while [ ! -e /tmp/aoe-size ];do sleep 1;done;sleep 2;nxkey ctrl+alt+up;sleep 3;read OX OY W H </tmp/aoe-size;echo SIZE $W $H;'
-         'nxkey $((OX+320*W/640)),$((OY+196*H/480));sleep 8;nxkey ctrl+alt+right;sleep 3;read OX OY W H </tmp/aoe-size;echo SIZE $W $H;'
-         'nxkey $((OX+320*W/640)),$((OY+138*H/480));sleep 8;killall aoe.bin;else echo AOE-NO-DATA; fi', wall=300,
-         has=[r'^(SIZE (?!640 480)\d+ \d+|AOE-NO-DATA)', r'^(aoe: panel Single Player Menu|AOE-NO-DATA)', r'^(aoe: panel MP Setup Screen|AOE-NO-DATA)']),
+         'while [ ! -e /tmp/aoe-size ];do sleep 1;done;sleep 2;nxkey ctrl+alt+up;'
+         'until [ "$(cat /tmp/aoe-layout 2>/dev/null)" = 800 ];do sleep 1;done;sleep 2;read OX OY W H </tmp/aoe-size;echo SIZE $W $H;'
+         'nxkey $((OX+320*W/640)),$((OY+196*H/480));sleep 8;nxkey ctrl+alt+right;'
+         'until [ "$(cat /tmp/aoe-layout 2>/dev/null)" = 640 ];do sleep 1;done;sleep 2;read OX OY W H </tmp/aoe-size;echo SIZE $W $H;'
+         'nxkey $((OX+320*W/640)),$((OY+138*H/480));sleep 8;killall aoe.bin;else echo AOE-NO-DATA; fi', wall=600,
+         has=[r'^(SIZE (?!640 480)\d+ \d+|AOE-NO-DATA)', r'^(aoe: panel Single Player Menu|AOE-NO-DATA)', r'^(aoe: panel MP Setup Screen|AOE-NO-DATA)',
+              r'^(aoe: Main Menu made again at 800 x 600|AOE-NO-DATA)', r'^(aoe: Single Player Menu made again at 640 x 480|AOE-NO-DATA)']),
+    # the layout follows the window in play ("Two layouts"): maximised it is 800 x 600, put back 640 x 480, the game goes on and a click in
+    # the window's middle is the picture's middle in each; the menus before the game kept theirs
+    case('aoe-layout', 'games aoe desktop', AOE_UNPACK + 'nx; sleep 3; if [ -f /tmp/aoe/Empires.dat ]; then AOE_TICK_MS=33 AOE_INPUT_LOG=1 '
+         'AOE_STATS_MS=5000 AOE_SCRIPT="' + AOE_640.rsplit(';', 4)[0] + ';3000 ready" aoe & while [ ! -e /tmp/aoe-ready ];do sleep 1;done;sleep 2;'
+         'nxkey ctrl+f10;sleep 12;read OX OY W H </tmp/aoe-size;echo SIZE $W $H;nxkey $((OX+W/2)),$((OY+H/2));sleep 6;'
+         'nxkey ctrl+f10;sleep 12;read OX OY W H </tmp/aoe-size;echo SIZE $W $H;nxkey $((OX+W/2)),$((OY+H/2));sleep 6;killall aoe.bin;'
+         'else echo AOE-NO-DATA; fi', wall=600,
+         has=[r'^(aoe: layout 800 x 600 at Game Screen \(from 640 x 480\)|AOE-NO-DATA)', r'^(aoeinput: press 1 (39\d|40\d) (29\d|30\d)|AOE-NO-DATA)',
+              r'^(aoe: layout 640 x 480 at Game Screen \(from 800 x 600\)|AOE-NO-DATA)', r'^(aoeinput: press 1 (31\d|32\d) (23\d|24\d)|AOE-NO-DATA)']),
     # the trial's first start on the desktop (docs/system/install.md): its EULA read out of the installer in a window, Accept refused until
     # the text has been scrolled to its end, then accepted by Tab and Enter, the bar to the last of 105 files, and aoeprep's strings and faces
     case('aoe-install', 'games aoe desktop', X + 'if [ -f /usr/share/aoe/MSAoE.exe ]; then (sleep 6; nxkey a; sleep 1; nxkey pagedown; sleep 1; nxkey end; '
@@ -322,6 +365,20 @@ CASES = [
     # the level played with no input for 4,000 frames: host_sum.sh's nine lines (the last two of them here)
     # the demo's first start on the desktop (docs/system/install.md): LucasArts' licence read out of the installer in a window, Accept
     # refused until it is scrolled to its end, the pak unpacked into memory with the bar, and its CRC-32 7-Zip's (239abc19)
+    # the menus' cursor is the pointer (docs/games/jk2.md, "Input"): the pointer's place in the window, not its travel, at the window's place
+    case('jk2-pointer', 'games jk2 desktop long', X + 'if [ -f /usr/share/jk2/jk2demo.exe ]; then (sleep 6; nxkey pagedown; sleep 1; nxkey end; sleep 1; '
+         'nxkey tab enter) & jk2 --unpack; JK2_POINTER_LOG=1 JK2_FRAMES=150 jk2; else echo JK2-NO-DATA; fi', True, wall=1800,
+         more=['--pointer-sweep', '0', '--pointer-circle', '400,300,100'],
+         has=[r'(jk2pointer: (\d+),(\d+) of the display to \d+,\d+ of the menu \(window at \d+,\d+, 640x480\)|JK2-NO-DATA)']),
+    # the window maximised at the main menu: the renderer restarted at the window's size (docs/games/jk2.md, "The window's size"), then
+    # New and a click on Begin Game where the stretched menu has it (500, 455 of 640 x 480) in the window's place: the level loads
+    case('jk2-resize', 'games jk2 desktop long', 'nx; sleep 3; if [ -f /usr/share/jk2/jk2demo.exe ]; then (sleep 6; nxkey pagedown; sleep 1; '
+         'nxkey end; sleep 1; nxkey tab enter) & jk2 --unpack; (JK2_POINTER_LOG=1 jk2 &); sleep 320; nxkey ctrl+alt+up; sleep 120; '
+         'set -- $(nxwintest list | grep Jedi); P=${5%,*}; Q=${5#*,}; S=$6; W=${S%x*}; H=${S#*x}; echo PLACE $P $Q $W $H; nxkey enter; sleep 40; '
+         'nxkey $((P+3+500*(W-6)/640)),$((Q+26+455*(H-29)/480)); sleep 200; killall jk2.bin; else echo JK2-NO-DATA; fi', True, wall=2400,
+         has=[r'(jk2: the window is \d+x\d+: the renderer restarted at \d+x\d+|JK2-NO-DATA)', r'(^PLACE \d+ \d+ \d+ \d+|JK2-NO-DATA)',
+              r'(jk2pointer: \d+,\d+ of the display to (49\d|50\d),(44\d|45\d|46\d) of the menu|JK2-NO-DATA)',
+              r'(Server Initialization|SpawnServer|JK2-NO-DATA)']),
     case('jk2-install', 'games jk2 desktop', X + 'if [ -f /usr/share/jk2/jk2demo.exe ]; then (sleep 6; nxkey a; sleep 1; nxkey pagedown; sleep 1; nxkey end; '
          'sleep 1; nxkey tab enter) & CABINST_PRINT=1 CABINST_SUMS=1 jk2 --unpack; echo INSTALL=$?; else echo JK2-NO-DATA; fi', True, wall=300,
          has=[r'^(cabinst: licence \\Disk1\\Install\\license\.txt: 3529 bytes, CRC-32 4361c574|JK2-NO-DATA)', r'^(cabinst: licence shown, \d+ lines|JK2-NO-DATA)',
@@ -362,6 +419,25 @@ CASES = [
          True, wall=600, has=[r'openttd: play PL-DONE', r'openttd: play scroll: .* [1-9]\d* made again by workers',
                               r'openttd: play round 1: .*checked \d+, 0 differ \(0 pixels'],
          sums=[(r'openttd: 1 ticks, map 256 x 256, .* sum ([0-9a-f]+)', ['e49e18e3'])]),
+    # chat lines over the scroll in a network game (docs/games/openttd.md, "Chat lines"): six lines added and ended one by one while it
+    # scrolls, every picture against one drawn whole with the lines drawn again over it, on workers and on the first core alone; then
+    # the GPU's blitter, whose lines are records of their own (rvc_cpu draws no list: its run counts the sets of lines and the lists that drew them)
+    case('openttd-chat', 'games openttd', X + ' ; '.join(
+        f'OPENTTD_HOST=1 OPENTTD_PLAY=1 OPENTTD_PLAY_PART=scroll OPENTTD_PLAY_CHAT=1 {e} openttd -g /usr/share/openttd/busy.sav' for e in (
+            'OPENTTD_DRAW=cpu OPENTTD_PLAY_ODD=1 OPENTTD_PAUSE=1 OPENTTD_CHECK=1', 'OPENTTD_DRAW=cpu OPENTTD_PAUSE=1 OPENTTD_CHECK=1 OPENTTD_WORKERS=0', '')),
+         True, wall=600, count=[(r'openttd: play chat: 6 lines added, 6 ended, [1-9]\d pictures with lines, 0 up at the end', 3),
+                               (r'openttd: play round 1: 61 pictures .*checked 6\d, 0 differ \(0 pixels', 2)],
+         has=[r'openttd: play chat: .* 0 up at the end; [1-9]\d* sets of lines made, [1-9]\d* lists drew them'], never=[r'not a network game']),
+    # the same with light pictures (the game running, OPENTTD_CHECK=last: the part's last picture alone checked, after the lines ended)
+    case('openttd-chat-light', 'games openttd', X + 'OPENTTD_HOST=1 OPENTTD_DRAW=cpu OPENTTD_PLAY=1 OPENTTD_PLAY_PART=scroll OPENTTD_PLAY_CHAT=1 OPENTTD_CHECK=last '
+         'openttd -g /usr/share/openttd/busy.sav',
+         True, wall=400, has=[r'openttd: play chat: 6 lines added, 6 ended, [1-9]\d pictures with lines, 0 up at the end',
+                              r'openttd: play round 1: 61 pictures .*checked 1, 0 differ \(0 pixels'], never=[r'not a network game']),
+    # and with the device taken back only every sixth pass, as a world draws a list once a frame (lists that do not wait for the GPU)
+    case('openttd-chat-device', 'games openttd', X + 'OPENTTD_HOST=1 OPENTTD_DRAW=cpu OPENTTD_PLAY=1 OPENTTD_PLAY_PART=scroll OPENTTD_PLAY_CHAT=1 OPENTTD_CHECK=1 '
+         'OPENTTD_PAUSE=1 openttd -g /usr/share/openttd/busy.sav', True, wall=600, env={'RVC_DEVICE_EVERY': '6'},
+         has=[r'openttd: play chat: 6 lines added, 6 ended, [1-9]\d pictures with lines, 0 up at the end',
+              r'openttd: play round 1: 61 pictures .*checked 6\d, 0 differ \(0 pixels'], never=[r'not a network game']),
     # the GPU's blitter: its lists made by the first core and the workers' records (with --races, what the workers store)
     case('openttd-gpu', 'games openttd', X + 'OPENTTD_PLAY=1 OPENTTD_PLAY_SHORT=1 OPENTTD_PAUSE=1 openttd -g /usr/share/openttd/busy.sav',
          True, wall=400, has=[r'openttd: play PL-DONE', r'openttd: play scroll: .* [1-9]\d* made again by workers']),
@@ -521,6 +597,9 @@ CASES = [
               r'^nxedit: read /usr/share/doc/shaderemu/README\.md: \d+ nodes, 526 x \d+; \d+ texts \(\d+ characters, \d+ links\), \d+ boxes; 0 texts past the edge; sum'],
          never=[r'^nxedit: read /tmp/']),
     # the script languages (docs/system/scripts.md): QuickJS's pi example, MicroPython with its built-in modules
+    # the benchmark (docs/apps/bench.md): every test's own check, the GPU's in a window of its own; some 30 s of the guest's
+    case('nxperf', 'programs', X + 'nxperf --cli', True, has=[r'^nxperf: 61 results: 61 OK, 0 FAIL, 0 not run'],
+         never=[r'^nxperf: .* FAIL \(', r'Segmentation fault']),
     case('qjs', 'programs', "qjs /examples/pi.js 50; qjs --std -e 'print([1, 2, 3].map(x => x * x).join(), std.getenv(\"HOME\"))'",
          has=[r'^3\.14159265358979323846264338327950288419716939937510\r?$', r'^1,4,9 /root']),
     case('micropython', 'programs', "micropython -c 'import asyncio, json, os, re, random, time; print(json.dumps({\"a\": [1, 2]}), "
@@ -722,6 +801,68 @@ CASES = [
     case('wm-gpu', 'desktop wm', "nxreg set bar.pinned 'sh -c glxgears'; export UI_ASK_PRINT=1 UI_LAUNCH=print; " + WM + "glxgears >/dev/null & P=$!; sleep 3; nxkey 49,586; sleep 4; nxwintest list; nxkey enter; sleep 6; nxwintest list; "
          "kill -0 $P 2>/dev/null || echo FIRST-GONE; cat /proc/gpu | head -3; nxreg unset bar.pinned", wall=120,
          has=[r'^FIRST-GONE', r'^win \d .*gears']),
+    # more of a mouse and the hands (docs/machine/input.md): the wheel tilted, the left hand's stick as a second wheel, the right hand's,
+    # the side buttons and a hand's trigger, as rvc_cpu's --scroll and --pointer-button give them; a window that asked (GR_WMC_BUTTONS)
+    # has them as button events of their own, evdev has REL_HWHEEL, REL_DIAL, REL_MISC and BTN_SIDE, BTN_EXTRA, BTN_TRIGGER_HAPPY3
+    case('input-more', 'desktop', X + 'nxinput 6', wall=120,
+         more=['--scroll', '5,x,2', '--scroll', '5.5,ly,-1', '--scroll', '5.6,lx,1', '--scroll', '6,ry,1', '--pointer-button', '0x419,6.5,7'],
+         has=[r'^nx down 0x200 ', r'^nx down 0x2000 ', r'^nx down 0x8000 ', r'^nx down 0x20 ', r'^nx down 0xc00 ', r'^nx up 0xc00 ',
+              r'^ev rel 6 2', r'^ev rel 7 -1', r'^ev rel 9 1', r'^ev rel 8 1', r'^ev key 0x113 1', r'^ev key 0x114 1', r'^ev key 0x2c2 1',
+              r'^word 0x419', r'^nxinput done']),
+    # and a window that did not ask has the usual buttons alone: most programs take any button that goes down for a click
+    case('input-plain', 'desktop', X + 'nxinput 6 plain', wall=120,
+         more=['--scroll', '5,x,2', '--scroll', '5.5,ly,-1', '--scroll', '6,ry,1', '--pointer-button', '0x419,6.5,7'],
+         has=[r'^nx down 0x20 ', r'^nx down 0x1 ', r'^ev rel 6 2', r'^nxinput done'], never=[r'^nx (down|up) 0x(200|2000|c00|c01) ']),
+    # the desktop's games played by a controller (docs/machine/input.md, "Game controls"): the hands' bits (0x80 told, 0x100 the left
+    # trigger, 0x400 the right, 0x8000 B, 0x10000 A) and the sticks' notches, with the pointer over each window (WM places it at 40,20)
+    case('pad-tetris', 'desktop games', X + 'NXTETRIS_PRINT=1 NXTETRIS_SEED=1 nxtetris & sleep 4; nxkey enter; sleep 10; killall nxtetris', wall=120,
+         more=['--pointer-sweep', '0', '--pointer-circle', '400,300,0', '--scroll', '12,lx,-2', '--scroll', '12.5,ly,-1', '--scroll', '13,y,1',
+               '--scroll', '13.3,x,-1', '--pointer-button', '0x80,7,16', '--pointer-button', '0x10000,14,14.3'],
+         has=[r'^nxtetris: pad left: piece \d at 2,', r'^nxtetris: pad left: piece \d at 1,', r'^nxtetris: pad down: .* score 1$',
+              r'^nxtetris: pad cw: .* turned 1,', r'^nxtetris: pad ccw: .* turned 0,', r'^nxtetris: pad drop: ']),
+    # the C&C games: a notch of the left hand's stick is an arrow pressed and let go (the map scrolls a step) over Tiberian Dawn's window
+    case('pad-tdawn', 'games tdawn', X + 'TDAWN_INPUT_LOG=1 ' + TD + 'TDAWN_SCEN=10 TDAWN_FRAMES=2000 tdawn FROMINSTALL', True, until='pad key 38 up', wall=300,
+         more=['--pointer-sweep', '0', '--pointer-circle', '300,250,0', '--scroll', '14,lx,-2', '--scroll', '15,ly,1'],
+         count=[(r'tdinput: pad key 37 down', 2)], has=[r'tdinput: pad key 38 down']),
+    # OpenTTD: a notch holds an arrow 120 ms (the main view scrolls); Quake: the jump button (A, bit 16) jumps
+    case('pad-openttd', 'games openttd', X + 'OPENTTD_PAD_LOG=1 openttd -g /usr/share/openttd/busy.sav', True, until='pad pans down', wall=400,
+         more=['--pointer-sweep', '0', '--pointer-circle', '300,250,0', '--scroll', '60,lx,-1', '--scroll', '62,ly,-1', '--scroll', '64,ly,-1',
+               '--scroll', '66,ly,-1'],
+         has=[r'openttd: pad pans left', r'openttd: pad pans down']),
+    case('pad-quake', 'games quake', X + 'QUAKE_TRACK=5 quake +map e1m1 +host_framerate 0.05', True, until='track 200:', wall=300,
+         more=['--pointer-button', '0x10080,32,32.5'], has=[r'quake: track \d+: .* on ground 0']),
+    # the NES: a notch of the left hand's stick holds the d-pad's way 9 frames, A and B are the pad's (the frames' state sums show the presses)
+    case('pad-nes', 'games nes', X + 'NES_PAD_LOG=1 NES_FRAMES=900 nes thwaite', True, wall=300,
+         more=['--pointer-sweep', '0', '--pointer-circle', '300,250,0', '--scroll', '8,ly,-1', '--scroll', '9,lx,1',
+               '--pointer-button', '0x10080,10,10.5'],
+         has=[r'nes: pad holds down', r'nes: pad holds right']),
+    # Doom: A or B uses (DOOM_PAD_LOG says the first); Quake III: the hands' buttons as its keys (QUAKE3_PAD_LOG); ClassiCube unseated: a
+    # notch of the left hand's stick holds W, the jump button is Space
+    case('pad-doom', 'games doom', X + 'DOOM_PAD_LOG=1 doom -warp 1 1 & sleep 40; killall doom.bin', True, wall=300,
+         more=['--pointer-button', '0x10080,20,20.5'], has=[r'doom: pad uses']),
+    case('pad-quake3', 'games quake3', X + 'QUAKE3_PAD_LOG=1 ' + Q3, True, until='pad down 10080', wall=400,
+         more=['--pointer-button', '0x10080,45,45.5'], has=[r'quake3: pad down 10080']),
+    case('pad-classicube', 'games classicube', CC + 'CLASSICUBE_PAD_LOG=1 CLASSICUBE_SEED=7 classicube', True, until='pad key', wall=300,
+         more=['--pointer-sweep', '0', '--pointer-circle', '300,250,0', '--expect', 'classicube: steady', '--send', '\\n',
+               '--scroll', '30,ly,1', '--pointer-button', '0x10080,32,32.5'],
+         has=[r'classicube: pad walks W']),
+    # ClassiCube's pause menu: a click on "Host on the LAN" (left column, a row under "Hotkeys...") hosts (docs/games/classicube.md, "Played together")
+    case('classicube-lan-menu', 'games classicube', CC + 'CLASSICUBE_SEAT=1 CLASSICUBE_LAN_LOG=1 CLASSICUBE_SEED=7 classicube', True, until='Hosting on',
+         wall=300, more=['--expect', 'classicube: steady', '--send', 'down Escape\\nup Escape\\n', '--expect', 'seat:',
+                         '--send', 'point 160 340\\ndown LeftMouse\\nup LeftMouse\\n'],
+         has=[r'lan: Hosting on the LAN at [\d.]+:25565']),
+    case('pad-pinball', 'desktop games', X + 'NXPINBALL_PRINT=1 nxpinball & sleep 4; nxkey space; sleep 8; killall nxpinball', wall=120,
+         more=['--pointer-button', '0x80,5,20', '--pointer-button', '0x100,8,8.5', '--pointer-button', '0x400,9,9.5', '--pointer-button', '0x10000,10,11'],
+         has=[r'^nxpinball: left flipper held', r'^nxpinball: left flipper let go', r'^nxpinball: right flipper held', r'^nxpinball: plunger held',
+              r'^nxpinball: plunger let go']),
+    case('pad-mines', 'desktop games', X + 'NXMINE_PRINT=1 NXMINE_SEED=5 nxmine & sleep 11; killall nxmine', wall=120,
+         more=['--pointer-sweep', '0', '--pointer-circle', '120,150,0', '--pointer-button', '0x80,5,20', '--scroll', '8,lx,2', '--scroll', '8.3,ly,-1',
+               '--pointer-button', '0x10000,9,9.3'],
+         has=[r'^nxmine: open: 9x9 10 mines, 18 opened']),
+    case('pad-chess', 'desktop games', X + 'NXCHESS_PRINT=1 NXCHESS_WORKERS=0 NXCHESS_MS=200 nxchess & sleep 14; killall nxchess', wall=120,
+         more=['--pointer-sweep', '0', '--pointer-circle', '200,200,0', '--pointer-button', '0x80,5,20', '--pointer-button', '0x10000,6,6.3',
+               '--pointer-button', '0x10000,7,7.3', '--scroll', '8,ly,2', '--pointer-button', '0x10000,9,9.3', '--pointer-button', '0x8000,13,13.3'],
+         has=[r'^nxchess: played: 1 moves, last e4 e2e4', r'^nxchess: undo: 0 moves']),
     # a pointer that has no edge (a beam: docs/system/nanox.md, "A drag that leaves the screen"): its moves stop short of the edge and the button comes up there,
     # after a step that would have reached it. A mouse's slow last steps to the same place, or a wait there, do not snap
     case('wm-snap-beam', 'desktop wm', WM + "nxwintest plain a & sleep 2; nxkey hold:150,32 to:400,100 to:690,100 to:750,100 drop:750,100 1000; nxwintest list", wall=120,

@@ -7,6 +7,7 @@
  * its player's name (nxmine.time.LEVEL, nxmine.name.LEVEL).
  */
 #include "ui.h"
+#include "ui_pad.h"
 #include "ui_icons.h"
 #include "ui_menu.h"
 #include "ui_ask.h"
@@ -59,6 +60,7 @@ static struct timespec started;
 static int holding, hold_r = -1, hold_c, face_down;
 static int kx, ky, kshown;	/* the keyboard's square, shown once an arrow is pressed */
 static GR_WINDOW_ID window, sheet;
+static struct ui_pad pad;		/* a controller: docs/machine/input.md, "Game controls" */
 static int width, height;
 static int printing;		/* NXMINE_PRINT: what happens, on standard output, for a test */
 static uint32_t seed;
@@ -1216,6 +1218,7 @@ main(int argc, char **argv)
 	make_sheet();
 	window = GrNewWindowEx(UI_FIXED, "Minesweeper", GR_ROOT_WINDOW_ID, -1, -1, width, height, UI_FACE);
 	GrSelectEvents(window, EVENTS);
+	ui_pad_ask(window);
 	GrMapWindow(window);
 	GrSetFocus(window);
 	if (printing) {
@@ -1223,10 +1226,15 @@ main(int argc, char **argv)
 		fflush(stdout);
 	}
 	for (;;) {
-		int wait = 1000 - elapsed_ms() % 1000;
+		int wait = 1000 - elapsed_ms() % 1000, k;
 
-		if (state == PLAYING && seconds < 999)	/* (the clock ticks only while it counts) */
-			GrGetNextEventTimeout(&event, (GR_TIMEOUT)(wait < 1 ? 1 : wait));
+		/* a controller (docs/machine/input.md, "Game controls"): the left stick moves the cell, A opens it, B flags it */
+		ui_pad_poll(&pad);
+		if ((k = ui_pad_key(&pad, ' ', 'f', 0)) != 0)
+			key(k);
+		wait = ui_pad_wait(&pad, state == PLAYING && seconds < 999 ? (wait < 1 ? 1 : wait) : -1);
+		if (wait >= 0)	/* (the clock ticks only while it counts) */
+			GrGetNextEventTimeout(&event, (GR_TIMEOUT)wait);
 		else
 			GrGetNextEvent(&event);
 		ui_origin_note(&event);
@@ -1264,7 +1272,9 @@ main(int argc, char **argv)
 				draw_all();
 			break;
 		case GR_EVENT_TYPE_BUTTON_DOWN:
-			if (event.button.wid == window && !ui_wheel(&event))
+			if (event.button.wid == window && (k = ui_pad_arrow(&event)) != 0)
+				key(k);
+			else if (event.button.wid == window && !ui_wheel(&event))
 				button_down(&event.button);
 			break;
 		case GR_EVENT_TYPE_MOUSE_MOTION:

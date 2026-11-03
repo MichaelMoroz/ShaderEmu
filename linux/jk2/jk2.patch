@@ -60,7 +60,7 @@ index 7cf2db8c..e8dc8ba1 100644
  			{
  				// failed, so go back to english
 diff --git a/code/client/cl_input.cpp b/code/client/cl_input.cpp
-index 94051760..12c752d9 100644
+index 94051760..57e8ac87 100644
 --- a/code/client/cl_input.cpp
 +++ b/code/client/cl_input.cpp
 @@ -239,6 +239,18 @@ float CL_KeyState( kbutton_t *key ) {
@@ -82,6 +82,19 @@ index 94051760..12c752d9 100644
  	msec = key->msec;
  	key->msec = 0;
  
+@@ -696,6 +708,12 @@ usercmd_t CL_CreateCmd( void ) {
+ 	// get basic movement from joystick
+ 	CL_JoystickMove( &cmd );
+ 
++#ifdef SHADEREMU
++	// ShaderEmu: from a holodeck's seat, the host's sticks, triggers and turns (linux/jk2/sys_shaderemu.cpp)
++	extern void SE_SeatMove( usercmd_t *cmd );
++	SE_SeatMove( &cmd );
++#endif
++
+ 	// check to make sure the angles haven't wrapped
+ 	if ( cl.viewangles[PITCH] - oldAngles[PITCH] > 90 ) {
+ 		cl.viewangles[PITCH] = oldAngles[PITCH] + 90;
 diff --git a/code/client/cl_main.cpp b/code/client/cl_main.cpp
 index 1a5c2446..c449bdea 100644
 --- a/code/client/cl_main.cpp
@@ -3427,7 +3440,7 @@ index c9dd4880..5de92c38 100644
  
  
 diff --git a/code/ui/ui_main.cpp b/code/ui/ui_main.cpp
-index 4a20f0ee..bc231fa6 100644
+index 4a20f0ee..27bb06df 100644
 --- a/code/ui/ui_main.cpp
 +++ b/code/ui/ui_main.cpp
 @@ -1061,7 +1061,7 @@ static qboolean UI_RunMenuScript ( const char **args )
@@ -3439,6 +3452,20 @@ index 4a20f0ee..bc231fa6 100644
  #else
  			ui.Cmd_ExecuteText( EXEC_APPEND, "map yavin1\n");
  #endif
+@@ -4037,6 +4037,13 @@ void _UI_MouseEvent( int dx, int dy )
+ 
+ }
+ 
++// ShaderEmu: the menus' cursor put where the desktop's pointer is, in 640 x 480 (linux/jk2/sys_shaderemu.cpp,
++// se_menu_pointer): told how far it went, it stopped at the menu's edges and the pointer did not
++void _UI_MouseTo( int x, int y )
++{
++	_UI_MouseEvent( x - uiInfo.uiDC.cursorx, y - uiInfo.uiDC.cursory );
++}
++
+ /*
+ =================
+ UI_KeyEvent
 diff --git a/codeJK2/cgame/FxPrimitives.cpp b/codeJK2/cgame/FxPrimitives.cpp
 index 0b83bc19..6b3b6d7c 100644
 --- a/codeJK2/cgame/FxPrimitives.cpp

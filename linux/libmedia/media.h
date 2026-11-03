@@ -106,6 +106,10 @@ const char *media_inflate_one(const void *in, uint32_t in_size, void *out, uint3
 uint32_t media_mszip_room(uint32_t count);
 const char *media_mszip(const uint8_t *const *in, const uint32_t *in_size, const uint32_t *plain, uint32_t count, uint8_t *out,
 			uint32_t wlen, void *room, int workers);
+/* bytes[0..n) as a gzip file, deflated in pieces of 64 KB on up to `workers` more cores (each piece a stream that refers
+ * to nothing before it and ends on a byte: one deflate stream all the same), at `level` as media_png_encode's. A file the
+ * library maps (free with media_free), its length in *size; NULL when there is no memory. */
+uint8_t *media_gzip(const void *bytes, uint32_t n, int level, uint32_t *size, int workers);
 /* CRC-32 (gzip's and zip's) of more bytes after crc (0 at first); of two pieces joined. */
 uint32_t media_crc32(uint32_t crc, const void *data, uint32_t bytes);
 uint32_t media_crc32_join(uint32_t crc1, uint32_t crc2, uint32_t bytes2);

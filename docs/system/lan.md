@@ -318,6 +318,8 @@ machine with its own `--uart-log`. Start them from PowerShell.
   first` must say `Connection accepted`. The client must not start before the server has its
   level: its search lasts a second and a half. Two shader machines at once run at half speed each: put
   the server on `rvc_cpu` and the client on `rvc_harness`.
+- **ClassiCube** (`docs/games/classicube.md`, "Played together"): `python tools/classicube_lan.py --joiners 2` runs a host and two
+  joiners at the world's rate; each joiner gets the level, takes a block away and sees it come back.
 - **Doom** (two `rvc_harness`; it wants the sound card): both must print `player N of 2 (2 nodes)` and
   then `doomstat:` lines.
 - **Two real clients**: set the hub's `lanTest` and the gate's `testOpen` (`EmuGate`: a test

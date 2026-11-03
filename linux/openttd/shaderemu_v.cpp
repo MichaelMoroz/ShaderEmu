@@ -15,6 +15,7 @@
 #include "../window_func.h"
 #include "../timer/timer_game_tick.h"
 #include "../network/network.h"
+#include "../network/network_func.h"
 #include "../window_gui.h"
 #include "../viewport_func.h"
 #include "../tilehighlight_func.h"
@@ -80,6 +81,10 @@ static int _paints;                ///< pictures painted, for the play lines
 static bool _drawn;                ///< a list is with the GPU: settle before writing the picture
 static int _pointer_x, _pointer_y; ///< where the pointer was last, for moves while OpenTTD holds it
 static unsigned _keys_down;        ///< bit 0-3 the arrows (as _dirkeys), 4 Tab
+/* A controller (docs/machine/input.md, "Game controls"): a notch of the left hand's stick (the second wheel) holds
+ * its arrow for PAD_HOLD_MS, so the main view scrolls the way the stick is pushed; the right stick is the wheel (zoom). */
+static std::chrono::steady_clock::time_point _pad_until[4];  ///< left, up, right, down: held until then
+static constexpr int PAD_HOLD_MS = 120;
 static GR_KEYMOD _modifiers;
 
 #define EVENTS (GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_KEY_UP | GR_EVENT_MASK_BUTTON_DOWN | GR_EVENT_MASK_BUTTON_UP | \
@@ -107,6 +112,11 @@ std::optional<std::string_view> VideoDriver_ShaderEmu::Start(const StringList &)
 	_window = GrNewWindowEx(GR_WM_PROPS_APPWINDOW, "OpenTTD", GR_ROOT_WINDOW_ID, -1, -1, _cur_resolution.width,
 			_cur_resolution.height, 0);
 	GrSelectEvents(_window, EVENTS);
+	{
+		GR_WM_PROPERTIES props;   // the extra buttons: the second wheel pans (InputLoop)
+		props.flags = GR_WM_FLAGS_COMMAND, props.props = GR_WMC_BUTTONS, props.background = 1;
+		GrSetWMProperties(_window, &props);
+	}
 	/* OpenTTD draws its own pointer, the tool's picture: the window system's is hidden over it */
 	static const GR_BITMAP none[16] = {};
 	GrSetCursor(_window, 16, 16, 0, 0, 0, 0, const_cast<GR_BITMAP *>(none), const_cast<GR_BITMAP *>(none));
@@ -209,10 +219,16 @@ void VideoDriver_ShaderEmu::UnlockVideoBuffer() {}
 /* OPENTTD_CHECK=1: every picture is drawn again whole and the pixels where the two differ are
  * counted (a scroll or a band left wrong). OPENTTD_HOLD=N|bad|big: the program stops at picture N
  * of the play script, or at the first that differs (by over 1,000 pixels), and says where both
- * pictures are in memory. */
+ * pictures are in memory. OPENTTD_CHECK=last: only the play part's last picture, and light pictures
+ * stay on before it. Chat lines shown are drawn again over the picture drawn whole, as they were. */
 bool VehViewsOut();
 static int _play_frame = -1;     ///< pictures of OPENTTD_PLAY's script so far, -1 before it
 static int _checked, _check_bad, _check_line, _check_part_line;
+static bool _check_now;          ///< (OPENTTD_CHECK=last) this picture is the part's last
+bool SeChatShown();              /* network_chat_gui.cpp */
+void SeChatDrawAgain();
+bool SeChatExpireOldest();
+int SeChatLines();
 static long long _check_pixels;
 
 static int Number(const char *s)
@@ -246,9 +262,10 @@ static void CheckPicture()
 	static const char *check_how = getenv("OPENTTD_CHECK");
 	static const bool check = check_how != nullptr;
 	static const bool keep = check && std::string_view(check_how) == "keep"; /* the picture as drawn is shown on, its errors kept */
+	static const bool last_only = check && std::string_view(check_how) == "last";
 	static const char *hold = getenv("OPENTTD_HOLD");
 	int w = _screen.width, h = _screen.height;
-	if (!check || _game_mode != GM_NORMAL) {
+	if (!check || _game_mode != GM_NORMAL || (last_only && !std::exchange(_check_now, false))) {
 		if (hold != nullptr && _play_frame == Number(hold)) {
 			if (SeGpuOn()) {
 				/* (the GPU's picture, in the bytes the 8-bit blitter would have drawn) */
@@ -281,6 +298,7 @@ static void CheckPicture()
 	/* (every vehicle's copy made anew: one the tick changed and did not say so differs) */
 	VehiclesChangedAll();
 	VehiclesSync(worker);
+	const bool chat = SeChatShown(); /* (the chat's lines, drawn again over the picture drawn whole) */
 	if (SeGpuOn()) {
 		/* the GPU's picture as drawn, then drawn again whole */
 		SeGpuSubmit();
@@ -288,6 +306,7 @@ static void CheckPicture()
 		SeGpuPicture(shown);
 		MarkWholeScreenDirty();
 		DrawDirtyBlocks();
+		if (chat) SeChatDrawAgain();
 		SeGpuSubmit();
 		SeGpuSettle();
 		static std::vector<uint8_t> whole;
@@ -297,6 +316,7 @@ static void CheckPicture()
 		shown.assign(_picture, _picture + w * h);
 		MarkWholeScreenDirty();
 		DrawDirtyBlocks();
+		if (chat) SeChatDrawAgain();
 	}
 	int bad = 0, l = w, t = h, r = -1, b = -1, line = 0;
 	static std::vector<int> down; /* differing pixels in a column so far, ending at this row */
@@ -514,6 +534,14 @@ bool VideoDriver_ShaderEmu::PollEvent()
 				_cursor.wheel_moved = true;
 				break;
 			}
+			if (e.button.changebuttons & (GR_BUTTON_SCROLL2LEFT | GR_BUTTON_SCROLL2UP | GR_BUTTON_SCROLL2RIGHT | GR_BUTTON_SCROLL2DN)) {
+				GR_BUTTON b = e.button.changebuttons;
+				int dir = (b & GR_BUTTON_SCROLL2LEFT) ? 0 : (b & GR_BUTTON_SCROLL2UP) ? 1 : (b & GR_BUTTON_SCROLL2RIGHT) ? 2 : 3;
+				_pad_until[dir] = std::chrono::steady_clock::now() + std::chrono::milliseconds(PAD_HOLD_MS);
+				if (getenv("OPENTTD_PAD_LOG") != nullptr) fmt::print(stderr, "openttd: pad pans {}\n", dir == 0 ? "left" : dir == 1 ? "up" : dir == 2 ? "right" : "down");
+				break;
+			}
+			if (e.button.changebuttons & GR_BUTTON_EXTRA) break;   // (the wheel tilted, the side buttons: nothing of OpenTTD's)
 			if (e.button.changebuttons & GR_BUTTON_L) {
 				if (_rightclick_emulate && (e.button.modifiers & MWKMOD_CTRL)) {
 					_right_button_down = true;
@@ -532,7 +560,7 @@ bool VideoDriver_ShaderEmu::PollEvent()
 		case GR_EVENT_TYPE_BUTTON_UP:
 			_modifiers = e.button.modifiers;
 			PointerAt(e.button.x, e.button.y);
-			if (e.button.changebuttons & (GR_BUTTON_SCROLLUP | GR_BUTTON_SCROLLDN)) break;
+			if (e.button.changebuttons & (GR_BUTTON_SCROLLUP | GR_BUTTON_SCROLLDN | GR_BUTTON_EXTRA)) break;
 			if (_rightclick_emulate) {
 				_right_button_down = false;
 				_left_button_down = false;
@@ -1175,6 +1203,32 @@ static void PlayBuild(int n)
 	if (n == 59) PlayLine(fmt::format("openttd: play built {} of {} so far\n", made, placed));
 }
 
+/* OPENTTD_PLAY_CHAT=1, over the scroll (pictures 0 to 59; docs/games/openttd.md, "Chat lines"): a chat line added at pictures 2 to 17,
+ * every third, of lengths that wrap and colours that differ, and from picture 20 the oldest ended every sixth, the last at 50, as the
+ * timer ends a line whose time is up. Upstream takes the lines away before drawing only in a network game: OPENTTD_HOST=1. */
+static void PlayChat(int f)
+{
+	static int added, ended, up;
+	static const char *const words[] = { "the", "train", "to", "Fort", "Gondhattan", "is", "late", "again,", "send", "buses", "please", "and",
+			"build", "a", "second", "platform", "before", "1951" };
+	static const TextColour colours[] = { TC_WHITE, TC_YELLOW, TC_LIGHT_BLUE, TC_ORANGE };
+	if (f == 0 && !_networking) PlayLine("openttd: play chat: not a network game (OPENTTD_HOST=1): upstream leaves the lines on the screen\n");
+	if (f >= 2 && f <= 17 && (f - 2) % 3 == 0) {
+		std::string line = fmt::format("Player {}:", added + 1);
+		for (int i = 0; i < 3 + added * 5 % 13; i++) line += fmt::format(" {}", words[(added * 7 + i) % std::size(words)]);
+		NetworkAddChatMessage(colours[added % std::size(colours)], 600, line);
+		added++;
+	}
+	if (f >= 20 && f <= 50 && (f - 20) % 6 == 0 && SeChatExpireOldest()) ended++;
+	if (SeChatLines() > 0) up++;
+	if (f == 59) {
+		uint32_t sets = 0, lists = 0;
+		if (SeGpuOn()) SeGpuChatCounts(sets, lists);
+		PlayLine(fmt::format("openttd: play chat: {} lines added, {} ended, {} pictures with lines, {} up at the end; {} sets of lines made, {} lists drew them\n",
+				added, ended, up, SeChatLines(), sets, lists));
+	}
+}
+
 static void PlayStep()
 {
 	static const char *play = getenv("OPENTTD_PLAY");
@@ -1235,6 +1289,9 @@ static void PlayStep()
 	if (PlayDriveStep()) return;
 	const int at = _play_frame++ % len;
 	const int f = list != nullptr ? list[at] : at;
+	_check_now = at == len - 2; /* (OPENTTD_CHECK=last: the picture this step makes, the last before the round's end) */
+	static const bool play_chat = getenv("OPENTTD_PLAY_CHAT") != nullptr;
+	if (play_chat && f < 60) PlayChat(f);
 	/* (what the script does next but for scrolling wants the tick held) */
 	if (f == 60 || f == 80 || f == 100 || f == 110 || f == 170 || f == 199 || f == 200 || f >= 300 && (f == 300 || f == 305 || f == 320 || f == 340)) TwHold(false);
 	/* OPENTTD_PLAY_TIMES=1: each picture's time, to see where a part's time goes */
@@ -1452,6 +1509,9 @@ void VideoDriver_ShaderEmu::InputLoop()
 	/* Tab held runs the game fast, as on other systems */
 	this->fast_forward_key_pressed = (_keys_down & 16) && !(_modifiers & MWKMOD_ALT);
 	_dirkeys = _keys_down & 15;
+	for (int d = 0; d < 4; d++) {   // a controller's stick, a notch held a moment (_pad_until)
+		if (_pad_until[d] > std::chrono::steady_clock::now()) _dirkeys |= 1 << d;
+	}
 	/* OPENTTD_SCROLL=1, for measuring: the arrows held down and right, then up and left, two seconds each */
 	static const bool scroll_test = getenv("OPENTTD_SCROLL") != nullptr;
 	if (scroll_test && _game_mode == GM_NORMAL) {

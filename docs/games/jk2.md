@@ -337,9 +337,25 @@ buffer on core 0 whatever the GL under it.
 - **Keys and the pointer** (`se_input` in `sys_shaderemu.cpp`, once a frame from `WIN_Present`), Quake III's way: the
   window's keys as the game's (`A_*`; a printable key is its character, F5 to F12 are not after F4 in OpenJK's table), the
   machine's input words for the pointer, the window system asked when they moved and four times a second. In a menu
-  the pointer's move is the menu's cursor's; in play the left button held turns the view by the pointer's travel and
+  the menu's cursor (the saber) is put where the pointer is in the window (`se_menu_pointer`, `_UI_MouseTo` in
+  `jk2.patch`'s `ui_main.cpp`), stretched with the picture to 640 x 480, and a click lands where it was pressed. Until
+  3 November 2026 a menu was told the pointer's travel instead: the cursor stopped at the menu's edges while the
+  pointer went on, a move outside the window was lost and a moved window kept the old offset, so the saber and the
+  desktop's pointer went apart and clicks missed (the owner's photo of the main menu in the world). `JK2_POINTER_LOG=1`
+  prints each place given; `test_all.py jk2-pointer` (on an image with the demo) moves the pointer round over the
+  menu: on a window at 43,46 the display's 303,326 is the menu's 260,280. In play the left button held turns the view by the pointer's travel and
   the right button fires (`A_MOUSE1`, the demo's `+attack`). Ctrl fires too (the starter's `+bind CTRL "+attack"`; the
   demo binds Ctrl to use, which E is as well).
+- **The window's size**: a second after the window's size last changed, the renderer is restarted at that size
+  (`r_mode -1`, `r_customwidth` and `r_customheight`, `vid_restart`; 320 x 240 to 1,024 x 768 in whole 8s), so a larger window
+  is drawn at its own pixels, not 640 x 480 stretched; the menus stay the game's 640 x 480, stretched, and the pointer is mapped
+  through it. `JK2_RESIZE=stretch` is the way before. `test_all.py jk2-resize` (an image with the demo) maximises the window at
+  the main menu: "the window is 794x545: the renderer restarted at 792x544", then New and a click where the stretched menu has
+  Begin Game (the display's 623,542 to the menu's 499,454) loads the level. A restart reloads what the renderer holds: tens of
+  seconds of the guest's at this machine's speed. Until 3 November 2026 the restart kept 640 x 480 ("MODE: -1, 640 x 480"), drawn in
+  the window's corner with old pixels round it: rd-vanilla calls `WIN_Init` only while `glConfig.vidWidth` is 0 and its shutdown
+  leaves it, so `WIN_Shutdown` now clears it ("MODE: -1, 792 x 544"). The log lines alone had passed; a capture showed it
+  (`rvc_harness --cpu`, `--save-state`, `tools/snapshot_screen.py`).
 - **Sound**: the engine's own mixer, into a stream voice's ring of 8,192 stereo frames on the sound card
   (`se_card_init`): the card plays what the mix has written (`SNDDMA_Submit` tells it `s_paintedtime`) and its place
   is the DMA position. The CPU still mixes (about 1.2 million instructions a frame) and decodes the MP3s; voices of the

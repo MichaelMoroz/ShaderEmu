@@ -3,11 +3,15 @@
  * turns with their wall kicks, a held piece, five to come, a ghost, soft and hard drops, a lock
  * delay, levels that speed it up, T-spins, combos and back-to-back. The best five scores are
  * the registry's (nxtetris.best). NXTETRIS_AUTO=N plays N pieces itself and says what it took.
+ * A controller plays it too (docs/machine/input.md, "Game controls"; ui_pad.h): the left stick moves and
+ * drops a row a notch (up holds), the right stick or the wheel turns, a click on the well turns, the
+ * right button or the jump button (A) drops, B holds, Y pauses. NXTETRIS_PRINT=1 says each move.
  */
 #include "ui.h"
 #include "ui_icons.h"
 #include "ui_menu.h"
 #include "ui_ask.h"
+#include "ui_pad.h"
 #include <sys/select.h>
 #include <sys/time.h>
 #include <time.h>
@@ -1143,6 +1147,87 @@ command(int id, long long now)
 
 enum { K_LEFT, K_RIGHT, K_DOWN, K_CW, K_CCW, K_DROP, K_HOLD };
 
+static struct ui_pad pad;
+static int pad_print;
+
+/* A row down now (a notch of the left stick down): a soft drop's step. */
+static void
+step_down(long long now)
+{
+	if (fits(kind, turn, px, py + 1)) {
+		py++;
+		score++;
+		last_turned = 0;
+		moved(now);
+		fall_next = now + fall_us();
+	}
+}
+
+/* A controller's move (docs/machine/input.md, "Game controls"): what a key would do, once. */
+static void
+pad_move(int k, long long now)
+{
+	if (state != PLAYING)
+		return;
+	switch (k) {
+	case K_LEFT: case K_RIGHT:
+		shift(k == K_LEFT ? -1 : 1, now);
+		break;
+	case K_DOWN:
+		step_down(now);
+		break;
+	case K_CW: case K_CCW:
+		rotate(k == K_CCW, now);
+		break;
+	case K_DROP:
+		hard_drop(now);
+		break;
+	case K_HOLD:
+		hold(now);
+		break;
+	}
+	if (pad_print) {
+		printf("nxtetris: pad %s: piece %d at %d,%d turned %d, score %d\n",
+		       (const char *[]){ "left", "right", "down", "cw", "ccw", "drop", "hold" }[k], kind, px, py, turn, score);
+		fflush(stdout);
+	}
+}
+
+/* The wheels: the left stick (the second wheel) moves, the right one (or a mouse's wheel) turns. */
+static int
+pad_scroll(const GR_EVENT *event, long long now)
+{
+	int x, y, which;
+
+	if (!ui_pad_scroll(event, &x, &y, &which))
+		return 0;
+	if (which)
+		pad_move(x < 0 ? K_LEFT : x > 0 ? K_RIGHT : y < 0 ? K_DOWN : K_HOLD, now);
+	else
+		pad_move(y > 0 || x > 0 ? K_CW : K_CCW, now);
+	return 1;
+}
+
+/* The hands' buttons, read from the machine's word where the loop wakes: A drops (or plays), B holds, Y pauses. */
+static void
+pad_buttons(long long now)
+{
+	ui_pad_poll(&pad);
+	if (!pad.down)
+		return;
+	if (state != PLAYING && state != CLEARING) {
+		if (pad.down & (INPUT_JUMP | INPUT_LEFT_UPPER))
+			go(now);
+		return;
+	}
+	if (pad.down & INPUT_LEFT_UPPER)
+		pause_game();
+	else if (pad.down & INPUT_JUMP)
+		pad_move(K_DROP, now);
+	else if (pad.down & INPUT_RIGHT_UPPER)
+		pad_move(K_HOLD, now);
+}
+
 static int
 key_of(int ch)
 {
@@ -1265,6 +1350,8 @@ main(void)
 	layout();
 	window = GrNewWindowEx(UI_FIXED, "Tetris", GR_ROOT_WINDOW_ID, -1, -1, width, height, UI_FACE);
 	GrSelectEvents(window, EVENTS);
+	ui_pad_ask(window);
+	pad_print = getenv("NXTETRIS_PRINT") != NULL;
 	GrMapWindow(window);
 	GrSetFocus(window);
 	if ((a = getenv("NXTETRIS_AUTO")) && atoi(a) > 0) {
@@ -1276,10 +1363,14 @@ main(void)
 	for (;;) {
 		long long now = now_us();
 
+		pad_buttons(now);
 		advance(now);
 		auto_step(now);
 		draw_changes();
-		next_event(&event, wake_ms(now_us()));
+		i = wake_ms(now_us());
+		if (pad.held & INPUT_HANDS && (i < 0 || i > 100))
+			i = 100;	/* (a headset's buttons are no event: looked at ten times a second) */
+		next_event(&event, i);
 		now = now_us();
 		if (event.type != GR_EVENT_TYPE_TIMEOUT) {
 			if (ui_restyle()) {	/* (Settings changed the look) */
@@ -1318,7 +1409,7 @@ main(void)
 				pause_game();
 			break;
 		case GR_EVENT_TYPE_BUTTON_DOWN:
-			if (event.button.wid != window || ui_wheel(&event))
+			if (event.button.wid != window || pad_scroll(&event, now) || ui_wheel(&event))
 				break;
 			if (event.button.y < MENU_H) {
 				for (i = 0; i < 2; i++)
@@ -1326,6 +1417,10 @@ main(void)
 						open_menu(i, 0);
 			} else if (overlay_shown >= 0 && ui_inside(event.button.x, event.button.y, button_x, button_y, button_w, button_h))
 				go(now);
+			else if (state == PLAYING && (event.button.changebuttons & GR_BUTTON_L))
+				pad_move(K_CW, now);	/* (a click on the well turns: a trigger, with the beam on it) */
+			else if (state == PLAYING && (event.button.changebuttons & GR_BUTTON_R))
+				pad_move(K_DROP, now);	/* (and the right button, a grip, drops) */
 			break;
 		case GR_EVENT_TYPE_CLOSE_REQ:
 			GrClose();

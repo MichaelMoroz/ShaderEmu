@@ -164,6 +164,36 @@ constexpr uint32_t OVERLAY_RECORDS = 64, OVERLAY_SIDE = 32768;
 
 inline uint32_t Address(const void *p) { return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(p)); }
 
+/* The chat's lines (docs/games/openttd.md, "Chat lines"): upstream copies the screen under them aside and puts the copy back to
+ * take them away, which a picture the GPU draws has no way to do: its shaded box went into the picture and stayed, darker at every
+ * drawing, and moved with every scroll. So the lines are records of their own, their pixels copied, never in the picture: a list
+ * of their own draws them over the rectangle of the picture they lie on, into words of their own, whenever either has changed,
+ * and the list that shows the picture puts those words over it. Taken away, they are simply not shown. Two sets: a set's list
+ * may still be read by the GPU while the next lines are made. OPENTTD_CHAT=picture: as before (into the picture). */
+struct ChatSet {
+	Rec *recs;
+	uint8_t *side;              ///< the records' pixels and tables
+	uint32_t n, side_n;
+	const uint8_t *from_a, *from_b; ///< the shades' tables as drawn (to tell them), and their copies
+	uint32_t ta, tb;
+	const uint8_t *remap_from, *remap_copy; ///< the last colour remap copied (a line's glyphs share one)
+	int x, y, w, h;             ///< the rectangle of the picture the lines lie on: records from its corner
+	bool over;                  ///< a record did not fit
+	uint32_t asked;             ///< _lists_asked when a list that reads it was given
+};
+constexpr uint32_t CHAT_RECORDS = 4096, CHAT_SIDE = 131072;
+ChatSet _chat[2];
+int _chat_shown = -1;           ///< the set shown, -1 none
+int _chat_making = -1;          ///< the set the first core's drawing goes to, -1 the picture
+uint32_t *_chat_words;          ///< the lines over their rectangle of the picture, as their list drew them
+uint32_t _chat_words_cap;
+uint32_t _picture_lists;        ///< lists drawn into the picture so far
+uint32_t _chat_made_for = ~0u;  ///< _picture_lists when _chat_words were made of the set shown (~0: not made)
+struct ChatList { uint32_t *cmds; Rec *bg; uint32_t asked; };
+ChatList _chat_lists[2];
+int _chat_list_next;
+uint32_t _chat_stat_sets, _chat_stat_lists; ///< (OPENTTD_PLAY_CHAT's line) sets of lines made, lists that drew them
+
 void Rest()
 {
 	mcw_rest();
@@ -200,6 +230,7 @@ void Submit(const uint32_t *cmds, int n, uint32_t passes, uint32_t into, int w, 
 	_owed_off = off;
 	_se_gpu_counts.lists++;
 	_lists_asked++;
+	if (into == Address(_words)) _picture_lists++;
 	PostOwed();
 	while (_owed_n == static_cast<int>(std::size(_owed))) {
 		Rest();
@@ -528,11 +559,17 @@ inline const uint8_t *Snapshot(Stream &s, int k, const uint8_t *remap)
 	return copy;
 }
 
+void ChatPixel(int x, int y, uint8_t c);
+
 /** A pixel of colour c at (x, y) of the screen: joined to the row of pixels before it when it can be. */
 void PutPixel(int x, int y, uint8_t c)
 {
 	if (x < 0 || y < 0 || x >= _width || y >= _height) return;
 	int k = VpCore();
+	if (k == 0 && _chat_making >= 0) {
+		ChatPixel(x, y, c);
+		return;
+	}
 	if (k == 0) EnsureFrame();
 	Stream &s = _streams[k];
 	uint32_t first = s.run; /* (a pixel joins only a record of this piece, or of core 0's run: not one at another's order) */
@@ -562,6 +599,171 @@ void PutPixel(int x, int y, uint8_t c)
 	Rec *r = NewRec(s, k);
 	if (r == nullptr) return;
 	*r = MakeRec(Address(b), 0, x, y, 1, 1, K_RAW, 1);
+}
+
+/** OPENTTD_CHAT=picture: the chat's lines drawn into the picture as before (their box stays, darker at each drawing). */
+bool ChatInPicture()
+{
+	static const bool picture = SeGpuEnv("OPENTTD_CHAT") != nullptr && std::string_view(SeGpuEnv("OPENTTD_CHAT")) == "picture";
+	return picture;
+}
+
+/** Room for a record of the chat's lines; nullptr when their set is full (they are then not shown). */
+Rec *ChatRec()
+{
+	ChatSet &c = _chat[_chat_making];
+	if (c.n == CHAT_RECORDS) {
+		c.over = true;
+		return nullptr;
+	}
+	return &c.recs[c.n++];
+}
+
+/** Bytes beside the chat's records (16-aligned). */
+uint8_t *ChatSide(uint32_t bytes)
+{
+	ChatSet &c = _chat[_chat_making];
+	uint32_t at = (c.side_n + 15) & ~15u;
+	if (at + bytes > CHAT_SIDE) {
+		c.over = true;
+		return nullptr;
+	}
+	c.side_n = at + bytes;
+	return c.side + at;
+}
+
+/** What a shade by `table` adds to green in the lines' list, the table copied; 0 for a third table (not drawn). */
+uint32_t ChatShade(const uint8_t *table)
+{
+	ChatSet &c = _chat[_chat_making];
+	if (table == c.from_a) return 1;
+	if (table == c.from_b) return 16;
+	if (c.from_b != nullptr) return 0;
+	uint8_t *copy = ChatSide(256);
+	if (copy == nullptr) return 0;
+	std::copy_n(table, 256, copy);
+	if (c.from_a == nullptr) {
+		c.from_a = table;
+		c.ta = Address(copy);
+		return 1;
+	}
+	c.from_b = table;
+	c.tb = Address(copy);
+	return 16;
+}
+
+/** A rectangle of the screen cut to the lines' rectangle and from its corner, and how much of its left and top was cut. */
+bool ChatClip(int &x, int &y, int &w, int &h, int &cut_x, int &cut_y)
+{
+	const ChatSet &c = _chat[_chat_making];
+	cut_x = std::max(c.x - x, 0);
+	cut_y = std::max(c.y - y, 0);
+	x += cut_x;
+	y += cut_y;
+	w = std::min(w - cut_x, c.x + c.w - x);
+	h = std::min(h - cut_y, c.y + c.h - y);
+	x -= c.x;
+	y -= c.y;
+	return w > 0 && h > 0;
+}
+
+/** A sprite of the lines (rows `stride` apart from src) at (x, y) of the screen: its pixels and its table copied. */
+void ChatSprite(const uint8_t *src, uint32_t stride, int x, int y, int w, int h, BlitterMode mode, const uint8_t *remap)
+{
+	int cut_x, cut_y;
+	if (!ChatClip(x, y, w, h, cut_x, cut_y)) return;
+	Kind kind = K_COPY;
+	uint32_t code = 0;
+	switch (mode) {
+		case BlitterMode::ColourRemap:
+		case BlitterMode::CrashRemap: {
+			ChatSet &c = _chat[_chat_making];
+			if (c.remap_copy == nullptr || remap != c.remap_from || !std::equal(remap, remap + 256, c.remap_copy)) {
+				uint8_t *table = ChatSide(256);
+				if (table == nullptr) return;
+				std::copy_n(remap, 256, table);
+				c.remap_from = remap;
+				c.remap_copy = table;
+			}
+			kind = K_REMAP;
+			code = Address(c.remap_copy);
+			break;
+		}
+		case BlitterMode::BlackRemap: kind = K_BLACK; break;
+		case BlitterMode::Transparent:
+		case BlitterMode::TransparentRemap:
+			kind = K_SHADE;
+			code = ChatShade(remap);
+			if (code == 0) return;
+			break;
+		default: break;
+	}
+	uint8_t *pixels = ChatSide(static_cast<uint32_t>(w) * h);
+	if (pixels == nullptr) return;
+	for (int r = 0; r < h; r++) std::copy_n(src + (cut_y + r) * stride + cut_x, w, pixels + r * w);
+	if (Rec *r = ChatRec(); r != nullptr) *r = MakeRec(Address(pixels), code, x, y, w, h, kind, w);
+}
+
+/** A rectangle of the lines: a colour (K_FILL) or a shade (K_FILL_SHADE, code its table's). */
+void ChatFill(uint32_t at, uint32_t code, int x, int y, int w, int h, Kind kind)
+{
+	int cut_x, cut_y;
+	if (!ChatClip(x, y, w, h, cut_x, cut_y)) return;
+	if (Rec *r = ChatRec(); r != nullptr) *r = MakeRec(at, code, x, y, w, h, kind, 0);
+}
+
+/** A pixel of the lines. */
+void ChatPixel(int x, int y, uint8_t c)
+{
+	int w = 1, h = 1, cut_x, cut_y;
+	if (!ChatClip(x, y, w, h, cut_x, cut_y)) return;
+	uint8_t *b = ChatSide(1);
+	if (b == nullptr) return;
+	*b = c;
+	if (Rec *r = ChatRec(); r != nullptr) *r = MakeRec(Address(b), 0, x, y, 1, 1, K_RAW, 1);
+}
+
+/** The lines' list, if the set shown or the picture under it changed since it was made: the lines over their rectangle of the
+ * picture into _chat_words. After the picture's last list, whose remaps it makes. */
+void ChatMake()
+{
+	if (_chat_shown < 0 || _chat_made_for == _picture_lists) return;
+	ChatSet &c = _chat[_chat_shown];
+	const uint32_t need = static_cast<uint32_t>(c.w) * c.h;
+	if (need > _chat_words_cap) {
+		uint32_t *words = static_cast<uint32_t *>(seglMemory(need * 4)); /* (the one before may still be read: it stays) */
+		if (words == nullptr) {
+			_chat_shown = -1;
+			return;
+		}
+		_chat_words = words;
+		_chat_words_cap = need;
+	}
+	ChatList &cl = _chat_lists[_chat_list_next];
+	_chat_list_next ^= 1;
+	WaitLists(cl.asked);
+	if (cl.cmds == nullptr) {
+		cl.cmds = AlignedNew<uint32_t>(2 * 16);
+		cl.bg = AlignedNew<Rec>(1);
+	}
+	List l{};
+	l.cmds = cl.cmds;
+	l.passes = 1;
+	*cl.bg = MakeRec(Address(_words + c.y * _row + c.x), 0, 0, 0, c.w, c.h, K_WORDS, _row * 4);
+	Command(l, cl.bg, 1, 0, false, 0, LastA(), LastB());
+	bool shades = false;
+	for (uint32_t i = 0; i < c.n; i++) shades |= Shades(RecKind(c.recs[i]));
+	Command(l, c.recs, c.n, 1, shades, 0);
+	Submit(l.cmds, l.n, l.passes, Address(_chat_words), c.w, c.h, c.w);
+	cl.asked = c.asked = _lists_asked;
+	_chat_made_for = _picture_lists;
+	_chat_stat_lists++;
+}
+
+/** Whether the lines' words are made over the picture as it is, to be shown. */
+inline bool ChatReady()
+{
+	return _chat_shown >= 0 && _chat_made_for == _picture_lists;
 }
 
 /** Records not in the picture: a buffer of the game's own (a screenshot, a sprite made into RGBA). */
@@ -611,6 +813,10 @@ public:
 		x += bp->left;
 		y += bp->top;
 		int k = VpCore();
+		if (k == 0 && _chat_making >= 0) {
+			ChatSprite(src, stride, x, y, bp->width, bp->height, mode, bp->remap);
+			return;
+		}
 		if (k == 0 && _capturing) {
 			/* the pointer's sprites, copied: they are shown for as long as it stands there */
 			uint32_t bytes = static_cast<uint32_t>(bp->width) * bp->height;
@@ -702,6 +908,11 @@ public:
 			return;
 		}
 		int k = VpCore();
+		if (k == 0 && _chat_making >= 0) {
+			/* (the box behind the chat's lines) */
+			if (uint32_t code = ChatShade(table); code != 0) ChatFill(0, code, x, y, width, height, K_FILL_SHADE);
+			return;
+		}
 		if (k == 0) EnsureFrame();
 		uint32_t code = ShadeCode(table, k);
 		if (code == 0 || width <= 0 || height <= 0) return;
@@ -715,7 +926,7 @@ public:
 	bool DrawCheckerRows(void *video, int width, int height, int odd, PixelColour colour) override
 	{
 		int vx, vy;
-		if (!Where(video, vx, vy) || vx < 0 || vy < 0 || vx + width > _width || vy + height > _height || VpCore() != 0) return false;
+		if (!Where(video, vx, vy) || vx < 0 || vy < 0 || vx + width > _width || vy + height > _height || VpCore() != 0 || _chat_making >= 0) return false;
 		EnsureFrame();
 		Stream &s = _streams[0];
 		for (int y = 0; y < height; y++) {
@@ -764,13 +975,18 @@ public:
 		}
 		if (width <= 0 || height <= 0) return;
 		int k = VpCore();
+		if (k == 0 && _chat_making >= 0) {
+			ChatFill(colour.p, 0, x, y, width, height, K_FILL);
+			return;
+		}
 		if (k == 0) EnsureFrame();
 		Rec *r = NewRec(_streams[k], k);
 		if (r == nullptr) return;
 		*r = MakeRec(colour.p, 0, x, y, width, height, K_FILL, 0);
 	}
 
-	/** The pointer is put back (or a chat message taken away): the GPU never drew it into the picture. */
+	/** The pointer is put back: the GPU never drew it into the picture. (The chat's lines are not copied, SeGpuChatBegin: with
+	 * OPENTTD_CHAT=picture they come here too, and their box stays in the picture.) */
 	void CopyFromBuffer(void *, const void *, int, int) override
 	{
 		_overlay_n = 0;
@@ -875,8 +1091,8 @@ bool SeGpuStart(int max_w, int max_h)
 		l.bg = AlignedNew<Rec>(1);
 	}
 	for (List &l : _shows) {
-		l.cmds = AlignedNew<uint32_t>(2 * 16);
-		l.bg = AlignedNew<Rec>(1);
+		l.cmds = AlignedNew<uint32_t>(3 * 16);
+		l.bg = AlignedNew<Rec>(2); /* (the picture, and the chat's lines over their rectangle of it) */
 	}
 	_overlay = AlignedNew<Rec>(OVERLAY_RECORDS);
 	_overlay_side = AlignedNew<uint8_t>(OVERLAY_SIDE);
@@ -894,11 +1110,60 @@ void SeGpuResize(int w, int h)
 	_height = h;
 	_row = w;
 	_last = -1; /* (the picture's rows moved: the next list draws everything, GameSizeChanged marks it all dirty) */
+	_chat_shown = -1;
 }
 
 void SeGpuPointerDrawn()
 {
 	_capturing = false;
+}
+
+bool SeGpuChatBegin(int x, int y, int w, int h)
+{
+	if (!_on || ChatInPicture() || _chat_making >= 0) return false;
+	static int last = 1;
+	const int k = last ^ 1; /* (the set before the last: a list that reads it is two pictures old) */
+	last = k;
+	ChatSet &c = _chat[k];
+	WaitLists(c.asked);
+	if (c.recs == nullptr) { /* (at the first lines: most games have none) */
+		c.recs = AlignedNew<Rec>(CHAT_RECORDS);
+		c.side = AlignedNew<uint8_t>(CHAT_SIDE);
+	}
+	c.n = c.side_n = 0;
+	c.remap_from = c.remap_copy = nullptr;
+	c.from_a = c.from_b = nullptr;
+	c.ta = c.tb = 0;
+	c.over = false;
+	c.x = std::max(x, 0);
+	c.y = std::max(y, 0);
+	c.w = std::min(x + w, _width) - c.x;
+	c.h = std::min(y + h, _height) - c.y;
+	_chat_making = k;
+	return true;
+}
+
+void SeGpuChatEnd()
+{
+	if (_chat_making < 0) return;
+	const ChatSet &c = _chat[_chat_making];
+	_chat_shown = c.n != 0 && !c.over && c.w > 0 && c.h > 0 ? _chat_making : -1;
+	_chat_making = -1;
+	_chat_made_for = ~0u;
+	_chat_stat_sets++;
+}
+
+bool SeGpuChatDrop()
+{
+	if (!_on || ChatInPicture()) return false;
+	_chat_shown = -1;
+	return true;
+}
+
+void SeGpuChatCounts(uint32_t &sets, uint32_t &lists)
+{
+	sets = _chat_stat_sets;
+	lists = _chat_stat_lists;
 }
 
 void SeGpuPaint(const uint32_t *palette, unsigned window)
@@ -908,6 +1173,7 @@ void SeGpuPaint(const uint32_t *palette, unsigned window)
 		if (_lists[_cur].content) SubmitList();
 		else _cur = -1;
 	}
+	ChatMake();
 	/* where the window's pixels are, asked again when the window system gives it another buffer */
 	if (!_window_known || _regs[REG_BUFFERS] != _buffers_seen) {
 		_buffers_seen = _regs[REG_BUFFERS];
@@ -926,7 +1192,13 @@ void SeGpuPaint(const uint32_t *palette, unsigned window)
 	int w = std::min<int>(_width, _window_info.width), h = std::min<int>(_height, _window_info.height);
 	*l.bg = MakeRec(Address(_words), 0, 0, 0, w, h, K_WORDS, _row * 4);
 	Command(l, l.bg, 1, 0, false, Address(pal), LastA(), LastB());
-	if (_overlay_n != 0 && !_capturing) Command(l, _overlay, _overlay_n, 1, false, Address(pal), 0);
+	if (ChatReady()) {
+		/* the chat's lines over their rectangle of the picture, their own shades' remaps made */
+		const ChatSet &c = _chat[_chat_shown];
+		l.bg[1] = MakeRec(Address(_chat_words), 0, c.x, c.y, c.w, c.h, K_WORDS, c.w * 4);
+		Command(l, l.bg + 1, 1, 1, false, Address(pal), c.ta, c.tb);
+	}
+	if (_overlay_n != 0 && !_capturing) Command(l, _overlay, _overlay_n, 2, false, Address(pal), 0);
 	Submit(l.cmds, l.n, l.passes, _window_info.surface_address, _window_info.width, _window_info.height, _window_info.surface_row);
 	l.asked = _lists_asked;
 	if (!_capturing) se_fps_caption(&_window_info, _regs[REG_CLOCK]);   /* (the frames shown, as the machine's OpenGL counts its own) */
@@ -939,10 +1211,12 @@ void SeGpuPoll()
 
 void SeGpuSubmit()
 {
-	if (_cur < 0) return;
-	EmitRun();
-	if (_lists[_cur].content) SubmitList();
-	else _cur = -1;
+	if (_cur >= 0) {
+		EmitRun();
+		if (_lists[_cur].content) SubmitList();
+		else _cur = -1;
+	}
+	ChatMake();
 }
 
 void SeGpuSettle()
@@ -966,6 +1240,21 @@ void SeGpuPicture(std::vector<uint8_t> &out)
 			for (uint32_t n = 0; n < (later & 15) && ta != nullptr; n++) index = ta[index];
 			for (uint32_t n = 0; n < (later >> 4) && tb != nullptr; n++) index = tb[index];
 			out[y * _width + x] = static_cast<uint8_t>(index);
+		}
+	}
+	/* the chat's lines over it, as the show list puts them */
+	if (ChatReady()) {
+		const ChatSet &c = _chat[_chat_shown];
+		const uint8_t *ca = reinterpret_cast<const uint8_t *>(static_cast<uintptr_t>(c.ta));
+		const uint8_t *cb = reinterpret_cast<const uint8_t *>(static_cast<uintptr_t>(c.tb));
+		for (int y = 0; y < c.h; y++) {
+			for (int x = 0; x < c.w; x++) {
+				uint32_t w = _chat_words[y * c.w + x];
+				uint32_t index = (w >> 16) & 0xff, later = (w >> 8) & 0xff;
+				for (uint32_t n = 0; n < (later & 15) && ca != nullptr; n++) index = ca[index];
+				for (uint32_t n = 0; n < (later >> 4) && cb != nullptr; n++) index = cb[index];
+				out[(c.y + y) * _width + c.x + x] = static_cast<uint8_t>(index);
+			}
 		}
 	}
 	/* the pointer over it, as the 8-bit blitter has it in its picture */

@@ -15,6 +15,8 @@ void aoe_win_origin(int *x, int *y);
 void aoe_win_map(int *x, int *y);
 void aoe_win_size(int *w, int *h);   /* the window's size now */   /* a point of the window now as a pixel of the picture, which is stretched over it */
 void aoe_win_close(void);
+int aoe_win_layout(void);   /* the layout's width the window's size now wants, when it should change (a second after a resize), else 0 */
+enum { AOE_WM_LAYOUT = 0x400 + 0x4c0 };   /* (WM_USER + 0x4c0, posted with that width: the switch is made where messages are handled) */
 int aoe_win_event(struct aoe_event *e);
 void aoe_win_rest(void);
 unsigned aoe_win_clock(void);

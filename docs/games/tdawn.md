@@ -485,6 +485,28 @@ Tiberian Dawn's movies are 320 x 200 in 4x2 blocks (`UnVQ_4x2`; Red Alert's are 
 - The demo has no movies. To run one in the game under `rvc_cpu`, link a VQA under every movie name into `/tmp/tdawn`: `TDAWN_AUTO=1 TDAWN_MOVIE_CHECK=1` plays the demo's briefing and action movies (`GDI1.VQA`, `LANDING.VQA`), and must say 0 differ, `RVC_RACES` 0 undone. (The demo looks for those two; the intro's `LOGO` and `INTRO2` it does not play with its default settings.) `linux/libmedia/test/check_vqa.py` checks the decoder against ffmpeg (`docs/system/media.md`, "VQA").
 - The profile line settles the scene first (`host_scene_settle()`, both games' `conquer.cpp`): it zeroes `gl.cpp`'s counters, which the worker drawing the objects adds to.
 
+## The window's size
+
+Since 4 November 2026 the game is laid out again at the window's size (`TDAWN_LAYOUT=stretch` is the way before: the 320 x 200
+screen stretched over any window). A second after the window's last change of size the screen is made the window's size at the
+first window's whole scale (2 on the 800 x 600 desktop), in whole 8s across, from 320 x 200 up to 640 x 400 (the game's view port):
+maximised, 392 x 272. The demo's art is the 320 kind and stays so (`ShaderEmu_Low_Res`, set with the first video mode, where the game
+tested the screen's width being 320 in 30 places). What is done, between two turns of `Main_Loop` (`ShaderEmu_Relayout` in `conquer.cpp`):
+
+- the two pages made again at the new size (`ShaderEmu_Pages` in `shaderemu.cpp`, `host_relayout` in `host.c`: more GPU memory only
+  when the pages have less), the view ports attached again, `ScreenWidth`, `WindowList`;
+- the radar, the power bar and the sidebar placed from the new right edge as `One_Time` places them (`SidebarClass::ShaderEmu_Layout`,
+  `ShaderEmu_Places`), the view as large as is left (with the sidebar open, all but its 80 columns), the buttons placed again by
+  `Map.Init_IO()` (the sidebar's Repair, Sell and Map go by the sidebar's place, not by fixed numbers), and everything drawn again.
+
+The map on the GPU needs nothing: every place `host.c` gives the GPU is a fraction of the first screen's size, and the window's matrix
+scales that to the screen's size now, so the kept cells, rectangles and page parts stay as they are. The game's state is untouched but for
+the view's place, which `Set_View_Dimensions` keeps inside the map. `test_all.py tdawn-window`: Tab opens the sidebar, the window
+maximised is laid out at 392 x 272 (the view 312 x 264), a click on a unit selects it, a click where Repair now is presses it
+(`TDAWN_INPUT_LOG=1` says both), and put back it is 320 x 200 again (the view 240 x 192) with Repair where it always was. The
+default size's sums are as before (`tdawn-*`), and `tdawn-window` under `RVC_RACES` is 0 undone. Captures (`rvc_harness --cpu`,
+`--save-state`, `tools/snapshot_screen.py`) show the maximised screen with the sidebar at its right edge and more of the map, and the
+put-back one as before. Not measured: the speed at the larger screen (the counts, `tdawn.profile`, were made at 320 x 200 and not again).
 ## A mission won
 
 `TDAWN_WIN=N` wins the mission at frame N (once) and prints a line at each step, as Red Alert's `RALERT_WIN` (`docs/games/ralert.md`, "A mission won"). Tiberian Dawn's demo goes from mission 1 to 10 by its own code, and its score screen makes no table of colours: mission 10 is then played with its state at frame 300 `325b1830` (`tdawn-won` in `tools/test_all.py`). Half of that screen's instructions are `Linear_Blit_To_Linear`, the page copied whole at each of its steps; not changed. The table and the doubled rows (`common/interpal.cpp`, `host_for`) are shared, for the screens that use them.

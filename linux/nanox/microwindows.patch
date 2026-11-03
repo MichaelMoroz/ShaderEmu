@@ -1399,10 +1399,30 @@ index abd632c..4f04acc 100644
  int  	GdOpenKeyboard(void);
  void 	GdCloseKeyboard(void);
 diff --git a/src/include/nano-X.h b/src/include/nano-X.h
-index 409290c..2b77668 100644
+index 409290c..16a7c61 100644
 --- a/src/include/nano-X.h
 +++ b/src/include/nano-X.h
-@@ -198,6 +198,26 @@ typedef struct {
+@@ -161,6 +161,19 @@ typedef struct {
+ #define	GR_BUTTON_SCROLLUP	MWBUTTON_SCROLLUP
+ #define	GR_BUTTON_SCROLLDN	MWBUTTON_SCROLLDN
+ #define	GR_BUTTON_ANY		(MWBUTTON_R|MWBUTTON_M|MWBUTTON_L|MWBUTTON_SCROLLUP|MWBUTTON_SCROLLDN) /* any*/
++/* ShaderEmu's more of a mouse and the hands (docs/machine/input.md, "More of a mouse and the hands"):
++ * only a window that asked with GR_WMC_BUTTONS (or one inside it) is told of these, in button events
++ * of their own; the other buttons' events are as they were and their buttons word has none of them. */
++#define	GR_BUTTON_SCROLLLEFT	0x0100	/* the wheel tilted, or the right hand's stick pushed across */
++#define	GR_BUTTON_SCROLLRIGHT	0x0200
++#define	GR_BUTTON_BACK		0x0400	/* a mouse's side buttons */
++#define	GR_BUTTON_FORWARD	0x0800
++#define	GR_BUTTON_SCROLL2UP	0x1000	/* the second wheel: the left hand's stick */
++#define	GR_BUTTON_SCROLL2DN	0x2000
++#define	GR_BUTTON_SCROLL2LEFT	0x4000
++#define	GR_BUTTON_SCROLL2RIGHT	0x8000
++#define	GR_BUTTON_EXTRA		0xff00
++#define	GR_BUTTON_SCROLLS	(GR_BUTTON_SCROLLLEFT|GR_BUTTON_SCROLLRIGHT|GR_BUTTON_SCROLL2UP|GR_BUTTON_SCROLL2DN|GR_BUTTON_SCROLL2LEFT|GR_BUTTON_SCROLL2RIGHT)
+ 
+ /* GrSetBackgroundPixmap flags */
+ #define GR_BACKGROUND_TILE	0	/* Tile across the window */
+@@ -198,6 +211,26 @@ typedef struct {
  #define GR_WM_PROPS_BUFFER_BGRA	 0x00000400L /* Set window buffer pixtype to MWIF_BGRA8888*/
  #define GR_WM_PROPS_BUFFER_MWPF	 0x00000800L /* Set window buffer pixtype to MWPF_ config value*/
  #define GR_WM_PROPS_DRAWING_DONE 0x00001000L /* Buffer valid for output (internal flag)*/
@@ -1429,7 +1449,7 @@ index 409290c..2b77668 100644
  
  /* default decoration style*/
  #define GR_WM_PROPS_APPWINDOW	0x00000000L /* Leave appearance to WM*/
-@@ -214,6 +234,28 @@ typedef struct {
+@@ -214,6 +247,29 @@ typedef struct {
  #define GR_WM_FLAGS_BACKGROUND	0x0004	/* Background color*/
  #define GR_WM_FLAGS_BORDERSIZE	0x0008	/* Border size*/
  #define GR_WM_FLAGS_BORDERCOLOR	0x0010	/* Border color*/
@@ -1442,6 +1462,7 @@ index 409290c..2b77668 100644
 +#define GR_WMC_GOTO		5	/* desktop N shown (any window) */
 +#define GR_WMC_ACTIVATE		6	/* to the front, its desktop shown, with the keyboard */
 +#define GR_WMC_STARTING		7	/* process N is starting (any window): the bar is told */
++#define GR_WMC_BUTTONS		8	/* this window (and those in it) is told of GR_BUTTON_EXTRA's buttons (1), or not (0) */
 +/* what the window manager tells the bar: a key event of its hot key, with one of these for the
 + * key, subwid the frame, rootx and rooty what it says */
 +#define GR_WM_TELL(what)	(0xFE00 + (what))
@@ -1458,7 +1479,7 @@ index 409290c..2b77668 100644
  
  /* NOTE: this struct must be hand-packed to a DWORD boundary for nxproto.h*/
  /**
-@@ -251,6 +293,8 @@ typedef struct {
+@@ -251,6 +307,8 @@ typedef struct {
    GR_CURSOR_ID cursor;		/**< cursor id*/
    int processid;		/**< process id of owner*/
    GR_LENGTH bufsize;		/**< mmaped buffer size if GR_WM_PROPS_BUFFER_MMAP*/
@@ -1468,7 +1489,7 @@ index 409290c..2b77668 100644
  
  /**
 diff --git a/src/include/nanowm.h b/src/include/nanowm.h
-index 5f31f08..90caf84 100644
+index 5f31f08..1a54457 100644
 --- a/src/include/nanowm.h
 +++ b/src/include/nanowm.h
 @@ -44,9 +44,9 @@
@@ -1534,7 +1555,7 @@ index 5f31f08..90caf84 100644
  /*
   * Used to record the offset position when performing a move.
   */
-@@ -139,6 +172,25 @@ void wm_client_window_destroy(win *window);
+@@ -139,6 +172,26 @@ void wm_client_window_destroy(win *window);
  void wm_client_window_remap(win *window);
  void wm_client_window_unmap(win *window);
  void wm_redraw_ncarea(win *window);
@@ -1543,6 +1564,7 @@ index 5f31f08..90caf84 100644
 +void wm_nudge(win *window, int dx, int dy);
 +void wm_shade(win *window);
 +void wm_ontop(win *window);
++void GsExtraButtons(GR_WINDOW_ID wid, int on);	/* srvevent.c: GR_WMC_BUTTONS */
 +void wm_command(GR_WINDOW_ID wid, int command, unsigned arg);
 +void wm_raise_ontop(void);
 +void wm_drag_pointer(int x, int y);
@@ -2329,7 +2351,7 @@ index 3cc7679..1d570f8 100644
 +
 +#define GrTotalNumCalls         130
 diff --git a/src/nanox/serv.h b/src/nanox/serv.h
-index 4a9efee..58c93d5 100644
+index 4a9efee..c3c9a47 100644
 --- a/src/nanox/serv.h
 +++ b/src/nanox/serv.h
 @@ -212,6 +212,10 @@ struct gr_client {
@@ -2343,7 +2365,7 @@ index 4a9efee..58c93d5 100644
  	char		*shm_cmds;
  	int		shm_cmds_size;
  	int		shm_cmds_shmid;
-@@ -368,10 +372,12 @@ struct gr_window {
+@@ -368,10 +372,13 @@ struct gr_window {
  	GR_BOOL		mapped;		/* TRUE means requested to be mapped */
  	GR_BOOL		realized;	/* TRUE means window is visible */
  	GR_BOOL		output;		/* TRUE if window can do output */
@@ -2353,10 +2375,11 @@ index 4a9efee..58c93d5 100644
  	MWCLIPREGION*clipregion;/* window clipping region */
  	GR_PIXMAP	*buffer;	/* window buffer pixmap*/
 +	GR_SIZE		shade_h;	/* a top-level window rolled up: the rows of it shown and pressed in, else 0 */
++	GR_BOOL		extrabuttons;	/* it asked for GR_BUTTON_EXTRA's buttons (GR_WMC_BUTTONS) */
  };
  
  /*
-@@ -418,6 +424,11 @@ int		GsInitialize(void);
+@@ -418,6 +425,11 @@ int		GsInitialize(void);
  void		GsClose(int fd);
  int		GsPumpEvents(void);
  void		GsSelect(GR_TIMEOUT timeout);
@@ -2368,7 +2391,7 @@ index 4a9efee..58c93d5 100644
  void		GsTerminate(void);
  GR_TIMEOUT	GsGetTickCount(void);
  void		GsRedrawScreen(void);
-@@ -451,6 +462,14 @@ void		GsDestroyPixmap(GR_PIXMAP *pp);
+@@ -451,6 +463,14 @@ void		GsDestroyPixmap(GR_PIXMAP *pp);
  void		GsSetPortraitMode(int mode);
  void		GsSetPortraitModeFromXY(GR_COORD rootx, GR_COORD rooty);
  void		GsSetClipWindow(GR_WINDOW *wp, MWCLIPREGION *userregion, int flags);
@@ -2383,7 +2406,7 @@ index 4a9efee..58c93d5 100644
  void		GsHandleMouseStatus(GR_COORD newx, GR_COORD newy, int newbuttons);
  void		GsFreePositionEvent(GR_CLIENT *client, GR_WINDOW_ID wid, GR_WINDOW_ID subwid);
  void		GsDeliverButtonEvent(GR_EVENT_TYPE type, int buttons, int changebuttons, int modifiers);
-@@ -477,6 +496,8 @@ void		GsDeliverTimerEvent(GR_CLIENT *client, GR_WINDOW_ID wid, GR_TIMER_ID tid);
+@@ -477,6 +497,8 @@ void		GsDeliverTimerEvent(GR_CLIENT *client, GR_WINDOW_ID wid, GR_TIMER_ID tid);
  
  void		GsCheckMouseWindow(void);
  void		GsCheckFocusWindow(void);
@@ -2438,7 +2461,7 @@ index 0679f9f..29d2087 100644
  		for (; sibwp != wp; sibwp = sibwp->siblings) {
  			if (!sibwp->realized || !sibwp->output)
 diff --git a/src/nanox/srvevent.c b/src/nanox/srvevent.c
-index bc31c08..44df14f 100644
+index bc31c08..3a36052 100644
 --- a/src/nanox/srvevent.c
 +++ b/src/nanox/srvevent.c
 @@ -7,8 +7,247 @@
@@ -2715,15 +2738,84 @@ index bc31c08..44df14f 100644
  	/* Deliver events as appropriate*/
  	GsDeliverKeyboardEvent(0, (keystatus == KBD_KEYPRESS?
  		GR_EVENT_TYPE_KEY_DOWN: GR_EVENT_TYPE_KEY_UP),
-@@ -201,6 +459,7 @@ GR_BOOL GsCheckKeyboardEvent(void)
+@@ -199,10 +457,76 @@ GR_BOOL GsCheckKeyboardEvent(void)
+  * motion, mouse position, button down, and button up.  This also moves
+  * the cursor to the new mouse position and changes it shape if needed.
   */
++/*
++ * The buttons past the usual ones (GR_BUTTON_EXTRA: the wheel tilted, a second wheel, a mouse's
++ * side buttons) go to the window under the pointer, or the one that has it grabbed, or the first
++ * window round it, that asked for them with GR_WMC_BUTTONS: most programs take any button that
++ * goes down for a click. No grab is taken or let go by them.
++ */
++static int curextra;		/* those of them down now */
++
++/* A window asks for them, or no longer (GR_WMC_BUTTONS). */
++void GsExtraButtons(GR_WINDOW_ID wid, int on)
++{
++	GR_WINDOW *wp = GsFindWindow(wid);
++
++	if (wp)
++		wp->extrabuttons = on;
++}
++
++static void
++GsDeliverExtraButtonEvent(GR_EVENT_TYPE type, int buttons, int changebuttons, int modifiers)
++{
++	GR_EVENT_MASK eventmask = GR_EVENTMASK(type);
++	GR_WINDOW *wp, *asked;
++	GR_EVENT_CLIENT *ecp;
++	GR_EVENT_BUTTON *ep;
++	GR_WINDOW_ID subwid;
++
++	if (eventmask == 0)
++		return;
++	wp = grabbuttonwp ? grabbuttonwp : mousewp;
++	subwid = mousewp->id;
++	for (asked = wp; asked && asked != rootwp && !asked->extrabuttons; asked = asked->parent)
++		;
++	if (!asked || asked == rootwp)
++		return;
++	for (;;) {
++		int told = 0;
++
++		for (ecp = wp->eventclients; ecp; ecp = ecp->next) {
++			if ((ecp->eventmask & eventmask) == 0)
++				continue;
++			ep = (GR_EVENT_BUTTON *) GsAllocEvent(ecp->client);
++			if (ep == NULL)
++				continue;
++			ep->type = type;
++			ep->wid = wp->id;
++			ep->subwid = subwid;
++			ep->rootx = cursorx;
++			ep->rooty = cursory;
++			ep->x = cursorx - wp->x;
++			ep->y = cursory - wp->y;
++			ep->buttons = buttons;
++			ep->changebuttons = changebuttons;
++			ep->modifiers = modifiers;
++			ep->time = GdGetTickCount();
++			told = 1;
++		}
++		if (told || wp == asked || (wp->nopropmask & eventmask))
++			return;
++		wp = wp->parent;
++	}
++}
++
  void GsHandleMouseStatus(GR_COORD newx, GR_COORD newy, int newbuttons)
  {
 +	gd_scene_gen++;
  	int	 changebuttons;	/* buttons that have changed */
  	MWKEYMOD modifiers;	/* latest modifiers */
++	int	 extra = newbuttons & GR_BUTTON_EXTRA;
++
++	newbuttons &= ~GR_BUTTON_EXTRA;
  	
-@@ -224,6 +483,7 @@ void GsHandleMouseStatus(GR_COORD newx, GR_COORD newy, int newbuttons)
+ 	GdGetModifierInfo(NULL, &modifiers); /* Read kbd modifiers */
+ 
+@@ -224,6 +548,7 @@ void GsHandleMouseStatus(GR_COORD newx, GR_COORD newy, int newbuttons)
  	if (newx != cursorx || newy != cursory) {
  		GsResetScreenSaver();
  		GrMoveCursor(newx, newy);
@@ -2731,7 +2823,7 @@ index bc31c08..44df14f 100644
  		GsDeliverMotionEvent(GR_EVENT_TYPE_MOUSE_MOTION, newbuttons, modifiers);
  		GsDeliverMotionEvent(GR_EVENT_TYPE_MOUSE_POSITION, newbuttons, modifiers);
  	}
-@@ -245,6 +505,17 @@ void GsHandleMouseStatus(GR_COORD newx, GR_COORD newy, int newbuttons)
+@@ -245,6 +570,17 @@ void GsHandleMouseStatus(GR_COORD newx, GR_COORD newy, int newbuttons)
  	if (changebuttons) {
  		GsResetScreenSaver();
  		GsCheckMouseWindow();	/* fixes occasional lost window move when mousewp=root*/
@@ -2749,7 +2841,25 @@ index bc31c08..44df14f 100644
  		GsDeliverButtonEvent(GR_EVENT_TYPE_BUTTON_DOWN, newbuttons,
  			changebuttons, modifiers);
  	}
-@@ -704,6 +975,10 @@ GsDeliverUpdateEvent(GR_WINDOW *wp, GR_UPDATE_TYPE utype, GR_COORD x,
+@@ -259,6 +595,17 @@ void GsHandleMouseStatus(GR_COORD newx, GR_COORD newy, int newbuttons)
+ 	}
+ 
+ 	curbuttons = newbuttons;
++
++	/* the buttons past the usual ones, to a window that asked for them */
++	if (extra != curextra) {
++		if (curextra & ~extra)
++			GsDeliverExtraButtonEvent(GR_EVENT_TYPE_BUTTON_UP, newbuttons | extra,
++				curextra & ~extra, modifiers);
++		if (extra & ~curextra)
++			GsDeliverExtraButtonEvent(GR_EVENT_TYPE_BUTTON_DOWN, newbuttons | extra,
++				extra & ~curextra, modifiers);
++		curextra = extra;
++	}
+ }
+ 
+ /*
+@@ -704,6 +1051,10 @@ GsDeliverUpdateEvent(GR_WINDOW *wp, GR_UPDATE_TYPE utype, GR_COORD x,
  	}
  
  update_again:
@@ -2761,7 +2871,7 @@ index bc31c08..44df14f 100644
  		if ((ecp->eventmask & cmask) == 0)
  			continue;
 diff --git a/src/nanox/srvfunc.c b/src/nanox/srvfunc.c
-index 3455994..46d4a36 100644
+index 3455994..76d64d4 100644
 --- a/src/nanox/srvfunc.c
 +++ b/src/nanox/srvfunc.c
 @@ -9,11 +9,24 @@
@@ -3042,7 +3152,7 @@ index 3455994..46d4a36 100644
  	wp->parent = pwp;
  	wp->children = NULL;
  	wp->siblings = pwp->children;
-@@ -1782,9 +1868,12 @@ NewWindow(GR_WINDOW *pwp, GR_COORD x, GR_COORD y, GR_SIZE width, GR_SIZE height,
+@@ -1782,9 +1868,13 @@ NewWindow(GR_WINDOW *pwp, GR_COORD x, GR_COORD y, GR_SIZE width, GR_SIZE height,
  	wp->nopropmask = 0;
  	wp->eventclients = NULL;
  	wp->owner = curclient;
@@ -3053,10 +3163,11 @@ index 3455994..46d4a36 100644
  	wp->realized = GR_FALSE;
 +	wp->kept = GR_FALSE;
 +	wp->shade_h = 0;
++	wp->extrabuttons = GR_FALSE;
  	wp->output = GR_TRUE;
  	wp->props = 0;
  	wp->title = NULL;
-@@ -2228,9 +2317,13 @@ GrSetGCForeground(GR_GC_ID gc, GR_COLOR foreground)
+@@ -2228,9 +2318,13 @@ GrSetGCForeground(GR_GC_ID gc, GR_COLOR foreground)
  
  	gcp = GsFindGC(gc);
  	if (gcp && ((gcp->foreground != foreground) || gcp->fgispixelval)) {
@@ -3071,7 +3182,7 @@ index 3455994..46d4a36 100644
  	}
  
  	SERVER_UNLOCK();
-@@ -3421,6 +3514,11 @@ GrSetWMProperties(GR_WINDOW_ID wid, GR_WM_PROPERTIES *props)
+@@ -3421,6 +3515,11 @@ GrSetWMProperties(GR_WINDOW_ID wid, GR_WM_PROPERTIES *props)
  	GR_WM_PROPS oldprops;
  	int tl = 0;    /* Initialized to avoid warning */
  
@@ -3083,7 +3194,7 @@ index 3455994..46d4a36 100644
  	SERVER_LOCK();
  
  	/* Find the window structure (generate an error if it doesn't exist) */
-@@ -3453,6 +3551,10 @@ GrSetWMProperties(GR_WINDOW_ID wid, GR_WM_PROPERTIES *props)
+@@ -3453,6 +3552,10 @@ GrSetWMProperties(GR_WINDOW_ID wid, GR_WM_PROPERTIES *props)
  
  	/* Set window title*/
  	if (props->flags & GR_WM_FLAGS_TITLE) {
@@ -3094,7 +3205,7 @@ index 3455994..46d4a36 100644
  		/* Remove the old title if it exists */
  		if(wp->title)
  			free(wp->title);
-@@ -3493,6 +3595,7 @@ GrSetWMProperties(GR_WINDOW_ID wid, GR_WM_PROPERTIES *props)
+@@ -3493,6 +3596,7 @@ GrSetWMProperties(GR_WINDOW_ID wid, GR_WM_PROPERTIES *props)
  			/* FIXME: check if this works if not already realized*/
  			GsUnrealizeWindow(wp, GR_TRUE);
  			wp->bordersize = props->bordersize;
@@ -3102,7 +3213,7 @@ index 3455994..46d4a36 100644
  			GsRealizeWindow(wp, GR_TRUE);
  		}
  	}
-@@ -3607,6 +3710,7 @@ GrGetSysColor(int index)
+@@ -3607,6 +3711,7 @@ GrGetSysColor(int index)
  void
  GrSetScreenSaverTimeout(GR_TIMEOUT timeout)
  {
@@ -3110,7 +3221,7 @@ index 3455994..46d4a36 100644
  #if MW_FEATURE_TIMERS
  	MWTIMER *timer;
  
-@@ -4074,6 +4178,7 @@ GrNewBitmapRegion(GR_BITMAP *bitmap, GR_SIZE width, GR_SIZE height)
+@@ -4074,6 +4179,7 @@ GrNewBitmapRegion(GR_BITMAP *bitmap, GR_SIZE width, GR_SIZE height)
  void
  GrSetWindowRegion(GR_WINDOW_ID wid, GR_REGION_ID rid, int type)
  {
@@ -3119,7 +3230,7 @@ index 3455994..46d4a36 100644
  	GR_WINDOW *wp;
  	GR_REGION *region;
 diff --git a/src/nanox/srvmain.c b/src/nanox/srvmain.c
-index 47260c5..168005f 100644
+index 47260c5..cb3376f 100644
 --- a/src/nanox/srvmain.c
 +++ b/src/nanox/srvmain.c
 @@ -18,6 +18,7 @@
@@ -3328,6 +3439,15 @@ index 47260c5..168005f 100644
  	else if (e == 0)		/* timeout*/
  	{
  		updatecount = 0;
+@@ -889,7 +873,7 @@ GsInitialize(void)
+ 	/* If needed, initialize the server mutex. */
+ 	SERVER_LOCK_INIT();
+ 
+-	wp = (GR_WINDOW *) malloc(sizeof(GR_WINDOW));
++	wp = (GR_WINDOW *) calloc(1, sizeof(GR_WINDOW));
+ 	if (wp == NULL) {
+ 		EPRINTF("Cannot allocate root window\n");
+ 		return -1;
 @@ -1032,6 +1016,8 @@ GsInitialize(void)
  	GdMoveMouse(psd->xvirtres / 2, psd->yvirtres / 2);
  
@@ -4317,7 +4437,7 @@ index fae5bfa..cfe3a3f 100644
  
  /*
 diff --git a/src/nanox/wmaction.c b/src/nanox/wmaction.c
-index 27dcbe8..b715918 100644
+index 27dcbe8..b39463c 100644
 --- a/src/nanox/wmaction.c
 +++ b/src/nanox/wmaction.c
 @@ -4,6 +4,7 @@
@@ -4475,7 +4595,7 @@ index 27dcbe8..b715918 100644
  
  	if(!window->data)
  		if(!(window->data = malloc(sizeof(struct pos_size))))
-@@ -252,9 +328,292 @@ void wm_container_buttondown(win *window, GR_EVENT_BUTTON *event)
+@@ -252,9 +328,295 @@ void wm_container_buttondown(win *window, GR_EVENT_BUTTON *event)
  	GrRect(GR_ROOT_WINDOW_ID, gc,info.x, info.y, info.width, info.height);
  	GrDestroyGC(gc);
  #endif	
@@ -4649,6 +4769,9 @@ index 27dcbe8..b715918 100644
 +	case GR_WMC_STARTING:
 +		wm_tell_bar(GR_WM_TELL_STARTING, 0, arg, 0);
 +		return;
++	case GR_WMC_BUTTONS:
++		GsExtraButtons(wid, arg != 0);
++		return;
 +	}
 +	if (!window)
 +		return;
@@ -4768,7 +4891,7 @@ index 27dcbe8..b715918 100644
  void wm_container_buttonup(win *window, GR_EVENT_BUTTON *event)
  {
  	GR_RECT		r;
-@@ -295,12 +654,30 @@ void wm_container_buttonup(win *window, GR_EVENT_BUTTON *event)
+@@ -295,12 +657,30 @@ void wm_container_buttonup(win *window, GR_EVENT_BUTTON *event)
  				 * atom, causing the window to close.
  				 */
  				GrCloseWindow(window->clientid);
@@ -4799,7 +4922,7 @@ index 27dcbe8..b715918 100644
  
  	if(window->active) {
  #if OUTLINE_MOVE
-@@ -312,6 +689,38 @@ void wm_container_buttonup(win *window, GR_EVENT_BUTTON *event)
+@@ -312,6 +692,38 @@ void wm_container_buttonup(win *window, GR_EVENT_BUTTON *event)
  	  GrMoveWindow(window->wid, pos->xorig, pos->yorig);
  	  GrDestroyGC(gc);
  #endif
@@ -4838,7 +4961,7 @@ index 27dcbe8..b715918 100644
  	  free(window->data);
  	  window->active = GR_FALSE;
  	  window->data = 0;
-@@ -330,8 +739,18 @@ void wm_container_buttonup(win *window, GR_EVENT_BUTTON *event)
+@@ -330,8 +742,18 @@ void wm_container_buttonup(win *window, GR_EVENT_BUTTON *event)
  
  	  w = info.width + (event->x - pos->xorig);
  	  h = info.height + (event->y - pos->yorig);
@@ -4857,7 +4980,7 @@ index 27dcbe8..b715918 100644
  
  	  free(window->data);
  	  window->sizing = GR_FALSE;
-@@ -397,7 +816,13 @@ void wm_container_mousemoved(win *window, GR_EVENT_MOUSE *event)
+@@ -397,7 +819,13 @@ void wm_container_mousemoved(win *window, GR_EVENT_MOUSE *event)
  	
  	GrDestroyGC(gc);
  #else	

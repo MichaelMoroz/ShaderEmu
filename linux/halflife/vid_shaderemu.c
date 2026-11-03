@@ -92,6 +92,12 @@ static qboolean open_window( void )
 	GrSelectEvents( window, GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_KEY_UP | GR_EVENT_MASK_BUTTON_DOWN |
 		GR_EVENT_MASK_BUTTON_UP | GR_EVENT_MASK_MOUSE_ENTER | GR_EVENT_MASK_MOUSE_EXIT |
 		GR_EVENT_MASK_CLOSE_REQ | GR_EVENT_MASK_UPDATE );
+	{
+		GR_WM_PROPERTIES props;	// the wheel tilted too (Platform_RunEvents: the weapons)
+
+		props.flags = GR_WM_FLAGS_COMMAND, props.props = GR_WMC_BUTTONS, props.background = 1;
+		GrSetWMProperties( window, &props );
+	}
 	if( hlglOpen( window ) < 0 )
 	{
 		Con_Printf( S_ERROR "this machine has no GPU\n" );
@@ -187,6 +193,24 @@ static qboolean playing( void )
  * a few calls after, and a few times a second: every move of the pointer was an event, two system
  * calls and two task switches. Its place is read from the input words themselves.
  */
+/*
+ * A controller (docs/machine/input.md, "Game controls"; the bits are linux/apps/input_words.h's): the jump
+ * button (A) jumps, B uses, the left stick pressed ducks, Y is Escape; the wheel (the right stick) is the
+ * weapons' as a mouse's wheel is (invprev, invnext), tilted too. Not while seated: the holodeck's then.
+ */
+static void pad_buttons( unsigned buttons )
+{
+	static unsigned held;
+	unsigned down = buttons & ~held, up = held & ~buttons;
+
+	held = buttons;
+	if(( down | up ) && getenv( "HL_PAD_LOG" )) Con_Printf( "halflife: pad down %x up %x\n", down, up );
+	if(( down | up ) & 0x10000 ) Key_Event( K_SPACE, ( down & 0x10000 ) != 0 );
+	if(( down | up ) & 0x8000 ) Key_Event( 'e', ( down & 0x8000 ) != 0 );
+	if(( down | up ) & 0x1000 ) Key_Event( K_CTRL, ( down & 0x1000 ) != 0 );
+	if( down & 0x4000 ) Key_Event( K_ESCAPE, true ), Key_Event( K_ESCAPE, false );
+}
+
 void Platform_RunEvents( void )
 {
 	static unsigned seen[4];
@@ -213,7 +237,11 @@ void Platform_RunEvents( void )
 	}
 	for( i = 2; input && i < 4; i++ )	// the buttons, and the count of keys
 		if( seen[i] != input[i] )
+		{
 			seen[i] = input[i], ask = 8;
+			if( i == 2 && !seated )
+				pad_buttons( seen[2] );
+		}
 	if( !ask && Sys_DoubleTime() - asked >= 0.25 )
 		ask = 1;
 	while( ask )
@@ -237,6 +265,15 @@ void Platform_RunEvents( void )
 			down = e.type == GR_EVENT_TYPE_BUTTON_DOWN;
 			origin_x = e.button.rootx - e.button.x, origin_y = e.button.rooty - e.button.y, origin_known = 1;
 			mouse_x = e.button.x, mouse_y = e.button.y;
+			if( e.button.changebuttons & ( GR_BUTTON_SCROLLUP | GR_BUTTON_SCROLLDN | GR_BUTTON_SCROLLLEFT | GR_BUTTON_SCROLLRIGHT ))
+			{
+				// the wheel, and tilted: the weapons in the game (its own binds), the menus' wheel otherwise
+				if( !seated || !playing( ))
+					Key_Event( e.button.changebuttons & ( GR_BUTTON_SCROLLUP | GR_BUTTON_SCROLLRIGHT ) ? K_MWHEELUP : K_MWHEELDOWN, down );
+				break;
+			}
+			if( e.button.changebuttons & GR_BUTTON_EXTRA )
+				break;
 			/* In the game the left button drags the view round, as a finger on glass does, the right
 			   one is what the left was (fire) and the middle one the secondary fire. */
 			if( playing( ) && !seated )

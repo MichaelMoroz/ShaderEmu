@@ -711,14 +711,28 @@ public class EmuMachine : UdonSharpBehaviour
     // Notches of the wheel, up positive: events of their own in the keyboard's ring.
     public void Wheel(int notches)
     {
+        Scroll(WheelOfPointer, false, notches);
+    }
+
+    // Whose wheel a notch is (docs/machine/input.md, "More of a mouse and the hands"): bits 12-13 of its event.
+    public const int WheelOfPointer = 0, WheelOfLeftHand = 1, WheelOfRightHand = 2;
+
+    // Notches of a wheel, up or right positive: 0x3fe up, 0x3ff down, 0x3fc left, 0x3fd right, with whose it is.
+    public void Scroll(int from, bool across, int notches)
+    {
         if (gpuKeyboard == null) return;
+        int code = (across ? (notches > 0 ? 0x3fd : 0x3fc) : (notches > 0 ? 0x3fe : 0x3ff)) | (from & 3) << 12 | 65536;
         for (int i = 0; i < Mathf.Min(Mathf.Abs(notches), 8); i++)
         {
             // (over this visitor's own tube or holodeck screen it is their machine's, as the pointer is)
-            if (inputAway && pointerOwn) RemoteKey((notches > 0 ? 0x3fe : 0x3ff) | 65536);
-            else gpuKeyboard.PushEvent((notches > 0 ? 0x3fe : 0x3ff) | 65536);
+            if (inputAway && pointerOwn) RemoteKey(code);
+            else gpuKeyboard.PushEvent(code);
         }
     }
+
+    // The buttons word's bits past the pointer's three (bits 3 and up: a mouse's side buttons, the
+    // hands' own buttons), set by EmuPointer every frame; told with the pointer's buttons.
+    [HideInInspector] public int moreButtons;
 
     // ---- pages for the guest (docs/system/fetch.md) ----
 
@@ -1474,7 +1488,7 @@ public class EmuMachine : UdonSharpBehaviour
         bool theirs = UseRemote();
         machineMaterial.SetVector("_InputPointer", new Vector4((theirs ? remoteX : pointerX) + 8, (theirs ? remoteY : pointerY) + 8,
                                                                displayWidth + 16, displayHeight + 16));
-        machineMaterial.SetInt("_InputButtons", theirs ? remoteButtons : inputAway && !pointerOwn ? 0 : pointerButtons);
+        machineMaterial.SetInt("_InputButtons", theirs ? remoteButtons : inputAway && !pointerOwn ? 0 : pointerButtons | moreButtons);
 
         frameMs = Time.timeSinceLevelLoad * 1000f;
         frameLength += (Mathf.Min(Time.unscaledDeltaTime, 0.1f) * 1000f - frameLength) * 0.2f;

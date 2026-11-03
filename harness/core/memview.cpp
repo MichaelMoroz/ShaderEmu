@@ -284,12 +284,23 @@ LRESULT CALLBACK wndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         SetWindowPos(h, nullptr, r->left, r->top, r->right - r->left, r->bottom - r->top, SWP_NOZORDER | SWP_NOACTIVATE);
         return 0;
     }
-    if (m == WM_MOUSEMOVE || (m >= WM_LBUTTONDOWN && m <= WM_MBUTTONDBLCLK)) {
+    if (m == WM_MOUSEMOVE || (m >= WM_LBUTTONDOWN && m <= WM_MBUTTONDBLCLK) || (m >= WM_XBUTTONDOWN && m <= WM_XBUTTONDBLCLK)) {
         g_pointerX = (short)LOWORD(l);
         g_pointerY = (short)HIWORD(l);
-        g_buttons = ((w & MK_LBUTTON) ? 1 : 0) | ((w & MK_RBUTTON) ? 2 : 0) | ((w & MK_MBUTTON) ? 4 : 0);
-        if (m == WM_LBUTTONDOWN || m == WM_RBUTTONDOWN || m == WM_MBUTTONDOWN) SetCapture(h);   // keep a drag that leaves the window
+        // (bits 3 and 4: the side buttons, back and forward; docs/machine/input.md, "More of a mouse and the hands")
+        WORD keys = GET_KEYSTATE_WPARAM(w);
+        g_buttons = ((keys & MK_LBUTTON) ? 1 : 0) | ((keys & MK_RBUTTON) ? 2 : 0) | ((keys & MK_MBUTTON) ? 4 : 0) |
+                    ((keys & MK_XBUTTON1) ? 8 : 0) | ((keys & MK_XBUTTON2) ? 16 : 0);
+        if (m == WM_LBUTTONDOWN || m == WM_RBUTTONDOWN || m == WM_MBUTTONDOWN || m == WM_XBUTTONDOWN) SetCapture(h);   // keep a drag that leaves the window
         else if (g_buttons == 0 && m != WM_MOUSEMOVE) ReleaseCapture();
+        return m >= WM_XBUTTONDOWN ? TRUE : 0;
+    }
+    if (m == WM_MOUSEHWHEEL) {
+        // the wheel tilted: 0x3fc left, 0x3fd right
+        static int tilted = 0;
+        tilted += GET_WHEEL_DELTA_WPARAM(w);
+        for (; tilted >= WHEEL_DELTA; tilted -= WHEEL_DELTA) g_keyEvents.push_back(0x800003fdu);
+        for (; tilted <= -WHEEL_DELTA; tilted += WHEEL_DELTA) g_keyEvents.push_back(0x800003fcu);
         return 0;
     }
     if (m == WM_MOUSEWHEEL) {

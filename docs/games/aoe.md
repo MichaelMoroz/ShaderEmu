@@ -65,6 +65,7 @@ The program alone:
 | `AOE_MUSIC=0`, `AOE_MUSIC_LOG=1` or `2`, `AOE_MUSIC_CUT=S` | no music (`AOE_SOUND=0` has none either); `aoemus:` each song and what the card's words say, with 2 every note and instrument for `tools/aoe_music_check.py`; each song ends after S s ("Music") |
 | `AOE_SEED=N` | every seeding of the game's random numbers takes N, not the clock: the same map and start in a run on the real clock (`game_par.py`'s window scenes) |
 | `AOE_SCROLL_COPY=words`, `AOE_BLT=bytes` | a scroll moves the view by words on 8 pixels across, and a keyed copy goes a byte at a time: the ways before ("Speed in play") |
+| `AOE_LAYOUT=fixed` | the layout stays the one it started with whatever the window's size: the way before ("Two layouts") |
 | `AOE_MENU_PICTURE=middle` | a menu's picture for 800 x 600 cut to its middle in the window, the way before ("Windowed") |
 | `AOE_INPUT_LOG=1` | `aoeinput:` an order, a box and a drag, each with its places; the script's `view` step prints `aoeview:` where the view stands and how many are selected |
 
@@ -403,6 +404,35 @@ the machine's pointer words read while a button is held (`held_by_words`), which
 they did not, so in a rescaled window (in the world) a click landed elsewhere and the menus seemed stuck. `test_all.py aoe-resize`
 maximizes the window (794 x 545) and clicks Single Player where it is drawn, then tiles it to the right half (394 x 545) and clicks Random
 Map: both menus come. The script's `ready` makes the game write `/tmp/aoe-size` (`X Y W H`) at each change of the window's size after it.
+
+### Two layouts
+
+Since 3 November 2026 the game's layout follows the window in play: a second after the window's last change of size, a window of at
+least 760 x 540 has the layout of 800 x 600 and a smaller one that of 640 x 480 (`aoe_win_layout` in `port/window.c`), stretched over the
+window as before. The change is the game's own: what its options dialog did when a player chose another screen size
+(`RGE_Base_Game::set_screen_size`: the surfaces at the new size, a `WM_SIZE` that lays the game screen out again, and the screen's
+bands taken again for that width), made where a message is handled (`AOE_WM_LAYOUT`, `port/aoe_layout.cpp`) with the world's update
+and the view's job finished first. The window's page is kept for each size (`aoe_win_open`), so switching back and forth takes no
+more GPU memory. `test_all.py aoe-layout` plays to the game, maximises the window (794 x 545: 800 x 600 at the game screen), clicks its
+middle (400, 299 of the picture), puts it back (640 x 480) and clicks again (320, 240): 41 to 43 world updates every 5 s throughout.
+
+The menus (4 November 2026). A menu is laid out once, when it is made (`TEasy_Panel` scales its places from 640 x 480 to the size
+then), and given another size it kept its places on the larger page, so a click went to the button below. So a menu that holds nothing
+chosen is made again at the new size, as the game makes it when it goes there from another menu: the main menu, the single player menu
+and the multiplayer start (`remake_menu`; the new one shown, then the old one, renamed meanwhile, destroyed). Another menu (one with
+settings, a list or a scenario chosen in it) keeps its layout, and the change waits, through the menus after it, until one of those or
+the game screen comes. Making a menu at 800 x 600 draws its 800-pixel picture three times (`setCurrentPanel`'s focus, redraw and
+`UpdateWindow`), about 41 million instructions each, half a minute of the guest's on `rvc_cpu`'s clock: what was taken for a stop
+on 3 November was this (`RVC_PROF`: `setCurrentPanel` 48.9% of core 0, then the menu's idle loop). `/tmp/aoe-layout` says the
+layout a menu now has, for a test: `aoe-resize` maximises at the main menu (made again at 800 x 600), clicks Single Player, tiles the
+window at the right half (the single player menu made again at 640 x 480) and clicks Random Map. Captures (`rvc_harness --cpu`,
+`--save-state`, `tools/snapshot_screen.py`): the main menu at 800 x 600 maximised and at 640 x 480 put back.
+
+The view on its worker draws through copies of the page's area and of its save area (`aoe_view_post`), and those kept the old size: the
+view was drawn at 640 x 354 in the corner of the larger page. Before the change the view is given back the real areas
+(`aoe_view_unhook`), its clip list is made again at the page's new size, and it draws every tile once (`aoe_view_whole`). Pictures by the
+script's `shot` on `rvc_cpu` (`tools/aoe_shots.py`): at 800 x 600 the view as `AOE_VIEW=whole` draws it, back at 640 x 480 as before.
+`aoe-layout` under `--races`: 0 undone.
 
 The smaller view is faster. `game_par.py aoe-play` and `aoe-play-800` calibrated, on a model fitted to an older tick so only the comparison counts, six timings each, alternating, frames a second over the acts: 12.3 at 800 x 600 before this work, 12.1 at 800 x 600 now, 15.5 in the window (14.7 to 17.0). The acts are not quite the same: the window's two scroll acts are drags, the 800's rest at the edges.
 

@@ -9,7 +9,7 @@ is separate.
 |---|---|
 | `0x81000020` | pointer x, in display pixels |
 | `0x81000024` | pointer y |
-| `0x81000028` | buttons: bit 0 left, bit 1 right, bit 2 middle |
+| `0x81000028` | buttons: bit 0 left, bit 1 right, bit 2 middle; 3 and up below ("More of a mouse and the hands") |
 | `0x8100002c` | number of key events written so far |
 | `0x81000030` | keyboard owner: a program that takes its keys from this device writes `0x6b657973` here, and 0 when it stops |
 | `0x81000080` | ring of the last 32 key events, one word each |
@@ -24,11 +24,107 @@ is separate.
   reader has lost some and should restart from the current count.
 - At most four key events arrive per frame; the host queues the rest.
 - A notch of the pointer's wheel travels in the same ring, as a "press" of a code that is no
-  key: `0x3fe` up, `0x3ff` down. It needs no release.
+  key: `0x3fe` up, `0x3ff` down, `0x3fc` left, `0x3fd` right (the wheel tilted). It needs no
+  release. Bits 12-13 say whose wheel it is: 0 the pointer's own (a mouse's), 1 the left
+  hand's stick, 2 the right hand's (below).
 - The four state words share one RAM texel, so a reader sees one consistent set.
 - A host that also feeds typed keys to the console (the harness window does) does so only
   while no display is up (control word 0, the display's mode, is 0) and the keyboard has no
   owner. Otherwise a key typed into a window would also be typed at the console's shell.
+
+## More of a mouse and the hands
+
+A game can use more than three buttons and a wheel: a mouse's side buttons, a wheel tilted, and in
+a headset two hands, each with a stick, a trigger, a grip and buttons. They come in the same words,
+the same evdev device and the same window system, without a new request or a change to Nano-X's
+client library (3 November 2026; `linux/apps/input_words.h` names them for C).
+
+The buttons word at `0x81000028`:
+
+| Bit | |
+|---|---|
+| 0, 1, 2 | the pointer's left, right, middle (a trigger or a click; a grip or the right click) |
+| 3, 4 | a mouse's side buttons: back, forward |
+| 7 | the bits below are told (a headset) |
+| 8, 9 | the left hand's trigger, grip |
+| 10, 11 | the right hand's trigger, grip |
+| 12, 13 | the left stick pressed in, the right one |
+| 14, 15 | the upper face button of the left hand (Y), of the right (B) |
+| 16 | the jump button (A) |
+
+The hands' bits are whichever hand has the pointer or not: a game tells the hands apart by them,
+while bits 0 and 1 stay the pointer's. The world tells them while a beam is on the display or the
+sitter holds the controller (`EmuPointer.MoreButtons`, `EmuMachine.moreButtons`), and 0 otherwise.
+
+The wheels, in the key ring (above): the pointer's own (a mouse's, `0x3fc` to `0x3ff`), and in a
+headset each hand's stick while that hand's beam is on the display, at up to 12 notches a second
+in each axis: the right stick was always the wheel, and is now across too; the left stick is a
+second wheel. The player stands still (`Immobilize`) while a stick scrolls, or the left stick would
+walk and the right one turn them. On a desktop, the mouse's wheel with Shift held is the wheel
+tilted (Unity has no axis for a tilt), and the side buttons are bits 3 and 4.
+
+**From Linux** (`linux/kernel/shaderemu_input.c`), on `/dev/input/event1`:
+
+| What | evdev |
+|---|---|
+| the pointer's wheel and the right hand's, up | `REL_WHEEL` |
+| the same, across | `REL_HWHEEL` |
+| the left hand's stick, up | `REL_DIAL` |
+| and across | `REL_MISC` |
+| bits 3, 4 | `BTN_SIDE`, `BTN_EXTRA` |
+| bits 8 to 16 | `BTN_TRIGGER_HAPPY1` to `BTN_TRIGGER_HAPPY9` (`0x2c0` + bit - 8) |
+
+**In Nano-X** a window asks for them with `GrSetWMProperties(window, flags GR_WM_FLAGS_COMMAND,
+props GR_WMC_BUTTONS, background 1)`; then it and the windows in it get button events of their own
+for `GR_BUTTON_SCROLLLEFT`, `_SCROLLRIGHT` (the wheel tilted, the right stick across), `GR_BUTTON_BACK`,
+`_FORWARD`, and `GR_BUTTON_SCROLL2UP`, `_2DN`, `_2LEFT`, `_2RIGHT` (the second wheel: the left hand's
+stick), down in one report and up in the next as the wheel's are (`nano-X.h`, `GR_BUTTON_EXTRA`). They
+go to the window under the pointer (or the one that has it grabbed) and up to the window that asked.
+A window that did not ask is told nothing of them: most programs take any button that goes down for a
+click. The usual buttons' events are as they were, their buttons word without these. The hands' own
+buttons are no Nano-X event: a program reads the word, which costs a load.
+
+**To test without the world**: `rvc_cpu` and `rvc_harness` take `--scroll S,W,N` (at second S, N notches
+of wheel W: `y`, `x` the pointer's, `ly`, `lx` the left hand's, `ry`, `rx` the right hand's),
+`--input-event S,HEX` (any ring event), and `--pointer-button B,S,T` in hex (`0x419`: left, back,
+forward and the right hand's trigger). The harness's window gives the side buttons and a tilted wheel
+(`WM_XBUTTON*`, `WM_MOUSEHWHEEL`). `nxinput [SECONDS [plain]]` prints what each of the three ways
+gives, and `test_all.py input-more`, `input-plain` hold them. What only Unity can show: the hands' bits
+(`Oculus_CrossPlatform_*` axes read with `Input.GetAxis`), the sticks as wheels and `Immobilize`
+stopping VRChat's own turn; none was run there (compiled against the world's assemblies).
+
+## Game controls
+
+What each game does with them (3 November 2026). A desktop game asks for the extra buttons and reads
+the hands' buttons from the word where its loop wakes, through `linux/apps/ui_pad.h` (`ui_pad_ask`,
+`ui_pad_poll`, `ui_pad_scroll`, `ui_pad_arrow`, `ui_pad_key`); while a headset's hands are told
+(bit 7) it wakes at least ten times a second for them, since they are no event. A beam on the
+display is still the pointer: the trigger is the left button and the grip the right one, as before.
+"Left stick" and "right stick" below are each hand's stick with that hand's beam on the display, or
+a mouse's wheel tilted (Shift) and turned on a desktop.
+
+| Game | Left stick (second wheel) | Right stick (wheel) | Pointer's buttons | A / B / Y |
+|---|---|---|---|---|
+| Tetris (`nxtetris`) | across moves a cell a notch, down a row, up holds | turns (up or right clockwise) | a click on the well turns, the right button drops | A drops (or starts), B holds, Y pauses |
+| Pinball (`nxpinball`) | | | with a mouse: left and right buttons on the table are the flippers, middle or a side button the plunger | each hand's trigger is its flipper, a grip or A the plunger, Y pauses |
+| Mines (`nxmine`) | moves the keyboard's cell | | as before: open, flag | A opens the cell, B flags it |
+| Solitaire (`nxsolitaire`) | | | as before: drag, click | A turns the stock, B takes back, Y finishes |
+| Chess (`nxchess`) | moves the keyboard's square | | as before | A picks and drops, B takes back |
+| Micropolis (`nxmicropolis`) | pans the map 64 pixels a notch (over the map) | scrolls the map up and down (its wheel) | as before | A pauses and goes on |
+| Tiberian Dawn, Red Alert (`linux/tdawn/host.c`) | pans the map: an arrow key pressed and let go a notch | | as before (the right button dragged scrolls) | Y is Escape |
+| OpenTTD (`shaderemu_v.cpp`) | pans the main view: an arrow held 120 ms a notch | zooms (its wheel) | as before | |
+| Age of Empires (`port/window.c`) | pans the map: an arrow held 120 ms a notch | | as before | |
+| Quake, Quake III, Half-Life, Jedi Outcast | | the next weapon up or right, the one before down or left (Half-Life: its own wheel binds) | as before | A jumps, B uses (not Quake), the left stick pressed crouches (not Quake), Y is Escape |
+| Doom | | | as before | A or B uses |
+| ClassiCube, not seated (`Window_ShaderEmu.c`) | walks: a notch holds W, S, A or D 0.2 s | as before (the held block) | as before | A is Space (jump), B the inventory, Y is Escape |
+| NES (osd_shaderemu.c) | the d-pad: a notch holds its way 9 frames (0.15 s) | | | A and B the pad's, Y Select, the right stick pressed Start |
+
+A sitter in a holodeck's seat keeps the controller's own mapping (`EmuGamepad`): the 3D games take none of
+these while seated. Groups of units in the C&C games and AoE are not mapped: the game says nothing of which
+groups exist, so a button that cycles them would select empty ones.
+
+`NXTETRIS_PRINT=1` and `NXPINBALL_PRINT=1` say each move a controller made, and `test_all.py
+pad-tetris`, `pad-pinball`, `pad-mines`, `pad-chess`, `pad-tdawn`, `pad-openttd`, `pad-quake` and `pad-nes` play them with `--scroll` and `--pointer-button`.
 
 ## A beam as the pointer, steadied (the VRChat world)
 
@@ -49,6 +145,27 @@ kept in their PlayerData as `pointer.steady`), in a headset only:
 The guest's own thresholds (the window system's double click, a game's drag box) are unchanged.
 Not yet tried in a headset.
 
+## The screen's edge (the VRChat world)
+
+A mouse rests on the screen's edge; a beam has nothing to rest on, and the sample after the last on
+the picture used to be off it, the pointer gone. So the room's display and a holodeck's screen have a
+margin round the picture, `EmuPointer.edgeMargin` (0.04: 4% of the picture's width at its sides, 4% of
+its height above and below), where the beam is still the pointer, held on the nearest pixel of the
+edge, buttons as they are (a press there is a press on the edge). Edge scrolling, a button in a corner
+and a drag that rests on the edge work with a hand that wavers by a few centimetres. The margin is the
+display's plane, not its collider: a beam past the quad's side misses the collider, so `OnPlane` meets
+the plane itself, and anything of the room 10 cm or more before it (not the display's own frame)
+stops the beam as before. Beyond the margin a button pressed on the picture still holds the pointer
+on the edge until it is let go (`EdgeOf`, "A drag that leaves the screen" in `docs/system/nanox.md`).
+On the edge the steady pointer does not smooth: a lag there would stop short of it. The desktop's
+mouse is the middle of the view, the same beam, and has the margin too. A classroom tube has none (its
+glass is curved).
+
+`EdgeOf` had a fault of its own (3 November 2026): it took the beam's way into the quad's frame
+unscaled and its origin scaled, so on the room's display (a unit quad scaled to 16:9) the place along
+the edge where a beam ran off was wrong by the quad's shape. Both now meet the plane in the world.
+Compiled against the world's assemblies; not run in Unity or a headset.
+
 ## From Linux
 
 This project's kernel (`linux/kernel/shaderemu_input.c`) presents the block as two evdev
@@ -63,7 +180,7 @@ its own"). The cursor does not wait for it where the display is drawn under the 
 | Device | Events |
 |---|---|
 | `/dev/input/event0` "ShaderEmu keyboard" | `EV_KEY` for the key codes, with the kernel's auto-repeat |
-| `/dev/input/event1` "ShaderEmu pointer" | `EV_ABS` `ABS_X`, `ABS_Y` in display pixels; `EV_KEY` `BTN_LEFT`, `BTN_RIGHT`, `BTN_MIDDLE`; `EV_REL` `REL_WHEEL` |
+| `/dev/input/event1` "ShaderEmu pointer" | `EV_ABS` `ABS_X`, `ABS_Y` in display pixels; `EV_KEY` `BTN_LEFT`, `BTN_RIGHT`, `BTN_MIDDLE`; `EV_REL` `REL_WHEEL`; and those of "More of a mouse and the hands" |
 
 Nano-X's keyboard driver (`kbd_shaderemu.c`) reports a key's release as the key its press
 was, whatever Ctrl or Shift have done meanwhile: another key's release is one a game drops.

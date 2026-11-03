@@ -19,8 +19,16 @@
 #define INPUT_STATE	0x20
 #define INPUT_KEYS	0x80
 #define INPUT_RING	32
-#define INPUT_WHEEL_UP	0x3fe	/* not keys: a notch of the pointer's wheel */
+/* Not keys: a notch of a wheel. Bits 12-13 say whose (0 the pointer's own, 1 the left hand's
+ * stick, 2 the right hand's), docs/machine/input.md "More of a mouse and the hands". */
+#define INPUT_WHEEL_LEFT	0x3fc
+#define INPUT_WHEEL_RIGHT	0x3fd
+#define INPUT_WHEEL_UP	0x3fe
 #define INPUT_WHEEL_DOWN	0x3ff
+#define INPUT_FROM_LEFT_HAND	1
+/* The buttons word: bits 0-2 left, right, middle; 3 and 4 back and forward; 8 to 16 the
+ * hands' own buttons, each a BTN_TRIGGER_HAPPY key from the first. */
+#define INPUT_HAND_BITS	9
 /* The window system's words for us, which shaderemu_gpu.c has mapped (scr_shaderemu.c,
  * WM_QUIET_OFFSET): left | top << 16, right | bottom << 16, its worker core, WM_MAGIC. */
 #define WM_MAGIC	0x31514d57
@@ -42,6 +50,7 @@ static u32 input_tail;
 static bool input_started, input_ready;	/* polled once; both devices are registered */
 static bool input_ticked;	/* the tick calls the poll (a kernel without the hook: the timer does, always) */
 static u32 pointer_x = ~0u, pointer_y, pointer_buttons;
+static bool pointer_extra;	/* a button past the middle one was down at the last report */
 static bool pointer_owed;	/* it is not where it was last reported: a move too soon to report, or a quiet one */
 static unsigned long pointer_at;
 
@@ -85,7 +94,7 @@ static void shaderemu_input_poll(void)
 	u32 y = readl(input_regs + INPUT_STATE + 4);
 	u32 buttons = readl(input_regs + INPUT_STATE + 8);
 	u32 head = readl(input_regs + INPUT_STATE + 12), keys;
-	int wheel = 0;
+	int wheel = 0, across = 0, wheel2 = 0, across2 = 0;	/* the second: the left hand's */
 
 	/* most ticks: nothing new, and nothing of the pointer still to be said (one at rest in the
 	 * quiet rectangle is asked about four times a second: the rectangle may change under it) */
@@ -106,16 +115,31 @@ static void shaderemu_input_poll(void)
 	}
 	for (; input_tail != head; input_tail++) {
 		u32 event = readl(input_regs + INPUT_KEYS + 4 * (input_tail % INPUT_RING));
+		u32 code = event & 0x3ff;
 
-		if ((event & 0x3ff) >= INPUT_WHEEL_UP)
-			wheel += (event & 0x3ff) == INPUT_WHEEL_UP ? 1 : -1;
-		else
-			input_report_key(keyboard_dev, event & 0x3ff, event >> 31);
+		if (code >= INPUT_WHEEL_LEFT) {
+			bool left_hand = ((event >> 12) & 3) == INPUT_FROM_LEFT_HAND;
+			int step = code == INPUT_WHEEL_UP || code == INPUT_WHEEL_RIGHT ? 1 : -1;
+
+			if (code >= INPUT_WHEEL_UP)
+				*(left_hand ? &wheel2 : &wheel) += step;
+			else
+				*(left_hand ? &across2 : &across) += step;
+		} else
+			input_report_key(keyboard_dev, code, event >> 31);
 	}
 	if (keys != head)
 		input_sync(keyboard_dev);
-	if (wheel) {
-		input_report_rel(pointer_dev, REL_WHEEL, wheel);
+	if (wheel | across | wheel2 | across2) {
+		/* the left hand's stick is a second wheel: REL_DIAL up and down, REL_MISC across */
+		if (wheel)
+			input_report_rel(pointer_dev, REL_WHEEL, wheel);
+		if (across)
+			input_report_rel(pointer_dev, REL_HWHEEL, across);
+		if (wheel2)
+			input_report_rel(pointer_dev, REL_DIAL, wheel2);
+		if (across2)
+			input_report_rel(pointer_dev, REL_MISC, across2);
 		input_sync(pointer_dev);
 	}
 	/*
@@ -141,6 +165,22 @@ static void shaderemu_input_poll(void)
 		input_report_key(pointer_dev, BTN_LEFT, buttons & 1);
 		input_report_key(pointer_dev, BTN_RIGHT, (buttons >> 1) & 1);
 		input_report_key(pointer_dev, BTN_MIDDLE, (buttons >> 2) & 1);
+		if (buttons >> 3) {	/* (the rest are rare: a word with none of them reports none) */
+			int b;
+
+			input_report_key(pointer_dev, BTN_SIDE, (buttons >> 3) & 1);
+			input_report_key(pointer_dev, BTN_EXTRA, (buttons >> 4) & 1);
+			for (b = 0; b < INPUT_HAND_BITS; b++)
+				input_report_key(pointer_dev, BTN_TRIGGER_HAPPY1 + b, (buttons >> (8 + b)) & 1);
+		} else if (pointer_extra) {
+			int b;
+
+			input_report_key(pointer_dev, BTN_SIDE, 0);
+			input_report_key(pointer_dev, BTN_EXTRA, 0);
+			for (b = 0; b < INPUT_HAND_BITS; b++)
+				input_report_key(pointer_dev, BTN_TRIGGER_HAPPY1 + b, 0);
+		}
+		pointer_extra = buttons >> 3 != 0;
 		input_sync(pointer_dev);
 	}
 	pointer_owed = x != pointer_x || y != pointer_y;
@@ -212,9 +252,16 @@ static int __init shaderemu_input_init(void)
 	__set_bit(EV_ABS, pointer_dev->evbit);
 	__set_bit(EV_REL, pointer_dev->evbit);
 	__set_bit(REL_WHEEL, pointer_dev->relbit);
+	__set_bit(REL_HWHEEL, pointer_dev->relbit);
+	__set_bit(REL_DIAL, pointer_dev->relbit);
+	__set_bit(REL_MISC, pointer_dev->relbit);
 	__set_bit(BTN_LEFT, pointer_dev->keybit);
 	__set_bit(BTN_RIGHT, pointer_dev->keybit);
 	__set_bit(BTN_MIDDLE, pointer_dev->keybit);
+	__set_bit(BTN_SIDE, pointer_dev->keybit);
+	__set_bit(BTN_EXTRA, pointer_dev->keybit);
+	for (key = 0; key < INPUT_HAND_BITS; key++)
+		__set_bit(BTN_TRIGGER_HAPPY1 + key, pointer_dev->keybit);
 	input_set_abs_params(pointer_dev, ABS_X, 0, 2047, 0, 0);
 	input_set_abs_params(pointer_dev, ABS_Y, 0, 2047, 0, 0);
 	ret = input_register_device(pointer_dev);

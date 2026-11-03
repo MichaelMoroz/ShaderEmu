@@ -19,6 +19,11 @@ struct host_event {
 int host_open(int width, int height);
 /* The two 8-bit pages the GPU can show (0 and 1): the game draws straight into them. */
 unsigned char *host_page(int page);
+/* The window's size a second after it last changed, as the screen's size to lay the game out at: 1 when that is not the
+ * screen's size now (docs/games/tdawn.md, "The window's size"). */
+int host_relayout_wanted(int *width, int *height);
+/* The pages at that size, cleared (host_page's pointers change): 0, or -1 with no GPU memory for them. */
+int host_relayout(int width, int height);
 /* 256 words of 0x00RRGGBB the screen and the cursor are looked up in. */
 void host_palette_set(int index, unsigned int word); /* a colour, stored when the list in flight is drawn */
 unsigned int *host_palette(void);

@@ -169,7 +169,10 @@ void seglSize( int *width, int *height );
 struct se_asks_t { unsigned fn[64], n, unused[3]; } se_asks;   // (what gl_shaderemu.c reads of Half-Life's server: never written here)
 static GR_WINDOW_ID se_window;
 static void se_input( void );
+static void se_world_tell( void );
 static int se_win_w = 640, se_win_h = 480;
+static int se_vid_w = 640, se_vid_h = 480;     // what the renderer draws (glConfig's size)
+static unsigned se_resized_ms;                 // when the window's size last changed (0: settled)
 
 // A window when there is a window system (else none, and the picture is nullgl's: a run for the sums)
 static void se_window_open( int w, int h )
@@ -188,6 +191,9 @@ static void se_window_open( int w, int h )
 	GrSelectEvents( se_window, GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_KEY_UP | GR_EVENT_MASK_BUTTON_DOWN |
 		GR_EVENT_MASK_BUTTON_UP | GR_EVENT_MASK_MOUSE_ENTER | GR_EVENT_MASK_MOUSE_EXIT | GR_EVENT_MASK_CLOSE_REQ |
 		GR_EVENT_MASK_UPDATE );
+	GR_WM_PROPERTIES props;     // the wheel tilted too (se_input: the weapons)
+	props.flags = GR_WM_FLAGS_COMMAND, props.props = GR_WMC_BUTTONS, props.background = 1;
+	GrSetWMProperties( se_window, &props );
 	GrMapWindow( se_window );
 	GrSetFocus( se_window );
 	if ( jk2glOpen( se_window ) < 0 ) {
@@ -197,6 +203,8 @@ static void se_window_open( int w, int h )
 	seglSize( &se_win_w, &se_win_h );
 }
 #endif
+
+static glconfig_t *se_glconfig;     // (WIN_Init's: the renderer's own, WIN_Shutdown)
 
 window_t WIN_Init( const windowDesc_t *desc, glconfig_t *glConfig )
 {
@@ -208,8 +216,10 @@ window_t WIN_Init( const windowDesc_t *desc, glconfig_t *glConfig )
 	int w = 640, h = 480;
 	if ( !R_GetModeInfo( &w, &h, r_mode->integer ) )
 		w = 640, h = 480;
+	se_glconfig = glConfig;
 	glConfig->vidWidth = w;
 	glConfig->vidHeight = h;
+	se_vid_w = w, se_vid_h = h;
 	glConfig->colorBits = 32;
 	glConfig->depthBits = 24;
 	glConfig->stencilBits = 0;
@@ -251,6 +261,7 @@ void WIN_Present( window_t *window )
 	(void)window;
 #ifdef SE_WINDOW
 	jk2glSwap();
+	se_world_tell();
 	se_input();
 #endif
 	if ( se_stop_at == -2 ) {
@@ -386,6 +397,109 @@ extern "C" int SE_InPlay( void )
 	return cls.state == CA_ACTIVE && !( Key_GetCatcher() & ( KEYCATCH_UI | KEYCATCH_CONSOLE ) );
 }
 
+// ---- the holodeck's seat (docs/world/holodeck.md; game 10 of linux/apps/gameid.h) ----
+// GLES/segl.h's words of the host, here without the header (this file is the engine's, built without the GL headers)
+extern "C" {
+const volatile unsigned int *seglHostState( void );
+void seglWorldUp( int axis );
+void seglWorldFlat( int flat );
+}
+#define SE_HOST_HOLODECK( s )   ( ( ( s )[0] >> 4 ) & 1 )
+#define SE_HOST_HANDS( s )      ( ( ( s )[0] >> 5 ) & 1 )
+#define SE_HOST_KIND( s )       ( ( s )[0] & 15 )
+#define SE_HOST_JUMP( s )       ( ( ( s )[0] >> 6 ) & 1 )
+#define SE_HOST_HEAD_PITCH( s ) ( (short)( ( s )[1] >> 16 ) )
+#define SE_HOST_HAND_PITCH( s, h ) ( (short)( ( s )[5 + 2 * ( h ) - ( h )] >> 16 ) )
+#define SE_HOST_TRIGGER( s, h ) ( ( ( s )[4 + 2 * ( h )] >> 30 ) & 1 )
+#define SE_HOST_GRIP( s, h )    ( ( ( s )[4 + 2 * ( h )] >> 31 ) & 1 )
+#define SE_HOST_STICK( s, n )   ( (signed char)( ( s )[5] >> ( 8 * ( n ) ) ) )
+#define SE_HOST_MOUSE_X( s )    ( ( s )[4] & 0xffff )
+static int se_seated;           // 0, 1 with tracked hands, 2 a desktop's sitter
+
+// segl.h's seglWorldEye: the player's eye over its floor in the game's units, its near and far planes and its projection's scales
+static void se_world_eye( int game, float eye, float znear, float zfar, float fx, float fy )
+{
+	volatile unsigned int *word = (volatile unsigned int *)seglHostState();
+	float x = 1.28f * fx, y = 0.8f * fy, unit = 2 * znear / ( x < y ? x : y ), spread = logf( zfar / znear );
+	int a = (int)( logf( eye / unit ) / spread * 4096 ), b = (int)( 4096 / spread );
+	unsigned said;
+	if ( !word || spread <= 0 )
+		return;
+	a = a < -32768 ? -32768 : a > 32767 ? 32767 : a;
+	b = b > 4095 ? 4095 : b;
+	said = (unsigned)( a & 0xffff ) | (unsigned)b << 16 | 10u << 28;
+	word += ( 0x6c - 0x360 ) / 4;
+	if ( *word != said )
+		*word = said;
+}
+
+// What the room is told each frame: a menu, the console or a load is a flat screen; the world's up is z; the eye 48 units
+// over the feet (the game's own view height), its planes 4 to 4,096 and an 80-degree picture of 4:3
+static void se_world_tell( void )
+{
+	static int told_up;
+	if ( !seglHostState() )
+		return;
+	if ( !told_up ) {
+		seglWorldUp( 3 );
+		told_up = 1;
+	}
+	seglWorldFlat( !SE_InPlay() );
+	se_world_eye( 10, 48, 4, 4096, 1 / tanf( 40 * ( M_PI / 180 ) ), 1 / ( tanf( 40 * ( M_PI / 180 ) ) * 0.75f ) );
+}
+#endif
+
+// A move as it is made (jk2.patch's CL_CreateCmd): from a holodeck's seat the sticks walk and turn the body, the right
+// trigger fires, the left the other fire, the right grip uses and the jump button jumps; a desktop's sitter turns by their
+// mouse's counts and the head's tilt is the aim's rise. JK2_SEAT=1 says how it is seated every 20 moves.
+void SE_SeatMove( usercmd_t *cmd )
+{
+#ifdef SE_WINDOW
+	static unsigned mouse_count;
+	static int said = -1;
+	const volatile unsigned *host = seglHostState();
+	int now = !host || !SE_HOST_HOLODECK( host ) ? 0 : SE_HOST_HANDS( host ) ? 1 : SE_HOST_KIND( host ) == 2 ? 2 : 0;
+	if ( said < 0 )
+		said = getenv( "JK2_SEAT" ) != NULL;
+	if ( now != se_seated ) {
+		se_seated = now;
+		mouse_count = host ? SE_HOST_MOUSE_X( host ) : 0;
+	}
+	if ( !se_seated || Key_GetCatcher() || cls.state != CA_ACTIVE ) {
+		mouse_count = host ? SE_HOST_MOUSE_X( host ) : 0;
+		return;
+	}
+	if ( se_seated == 1 ) {
+		float look = SE_HOST_STICK( host, 2 ) / 127.0f;
+		cl.viewangles[YAW] -= ( fabsf( look ) < 0.15f ? 0 : look * fabsf( look ) ) * 140 * cls.frametime * 0.001f;
+		cl.viewangles[PITCH] = -( (short)( host[7] >> 16 ) ) * ( 360.0f / 65536.0f );   // the right hand's rise
+	} else {
+		unsigned count = SE_HOST_MOUSE_X( host );
+		cl.viewangles[YAW] -= 0.066f * (short)( count - mouse_count );
+		mouse_count = count;
+		cl.viewangles[PITCH] = -SE_HOST_HEAD_PITCH( host ) * ( 360.0f / 65536.0f );
+	}
+	int forward = cmd->forwardmove + SE_HOST_STICK( host, 1 ), right = cmd->rightmove + SE_HOST_STICK( host, 0 );
+	cmd->forwardmove = forward > 127 ? 127 : forward < -127 ? -127 : forward;
+	cmd->rightmove = right > 127 ? 127 : right < -127 ? -127 : right;
+	if ( SE_HOST_TRIGGER( host, 1 ) )
+		cmd->buttons |= BUTTON_ATTACK;
+	if ( SE_HOST_TRIGGER( host, 0 ) )
+		cmd->buttons |= BUTTON_ALT_ATTACK;
+	if ( SE_HOST_GRIP( host, 1 ) )
+		cmd->buttons |= BUTTON_USE;
+	if ( SE_HOST_JUMP( host ) )
+		cmd->upmove = 127;
+	if ( said && ++said % 20 == 0 )
+		Com_Printf( "seat: %d aim %.1f %.1f move %d %d %d buttons %x\n", se_seated, cl.viewangles[YAW], cl.viewangles[PITCH], cmd->forwardmove,
+			cmd->rightmove, cmd->upmove, cmd->buttons );
+#else
+	(void)cmd;
+#endif
+}
+
+#ifdef SE_WINDOW
+
 // A frame given to the drawing's worker (gl_jk2.c): the window's part of the swap, its list shown when the job is done
 extern "C" void SE_WindowFrame( void )
 {
@@ -400,6 +514,10 @@ void WIN_SetGamma( glconfig_t *glConfig, byte red[256], byte green[256], byte bl
 void WIN_Shutdown( void )
 {
 	IN_Shutdown();
+	// rd-vanilla calls WIN_Init again only while glConfig's width is 0 (R_Init), and its RE_Shutdown leaves it as it was: a
+	// vid_restart at the window's size kept 640 x 480, drawn in the corner of the larger window (seen in a capture, 3 November)
+	if ( se_glconfig )
+		se_glconfig->vidWidth = 0;
 }
 
 void *WIN_GL_GetProcAddress( const char *proc )
@@ -445,10 +563,56 @@ static int se_key( int ch )
 	return ch > 32 && ch < 127 ? ch : ch == ' ' ? A_SPACE : 0;   // (the printable keys' codes are their characters)
 }
 
-// The window's keys and buttons as the game's events, and the pointer's travel as its mouse: in a menu its move, in
-// the game while the left button is held (the view dragged round, a finger on glass), the right button the fire
-// (Quake III's way, linux/quake3/tr_shaderemu.c). The window system is asked when the machine's input words moved
-// and a few times a second.
+// The window's keys and buttons as the game's events, and the pointer as its mouse: in a menu the menus' cursor is
+// put where the pointer is, in the game the pointer's travel while the left button is held (the view dragged round, a
+// finger on glass), the right button the fire (Quake III's way, linux/quake3/tr_shaderemu.c). The window system is
+// asked when the machine's input words moved and a few times a second.
+void _UI_MouseTo( int x, int y );     // (jk2.patch, ui_main.cpp)
+static int se_origin_x, se_origin_y, se_origin_known;   // the window's first pixel on the display
+static int se_menu_x = -1, se_menu_y = -1;              // where the menus' cursor was put last (640 x 480)
+
+// The pointer's place in the menus' 640 x 480: the window's picture is the whole window, stretched (seglPicturePoint).
+// Until 3 November 2026 a menu was told how far the pointer went, a pixel of the window for 640 / its width of the
+// menu's; the menu's cursor stops at its edges and the pointer does not, a move outside the window was not told, and a
+// window that had been moved or resized went on from the cursor's old place: the saber and the desktop's pointer
+// went apart and a click landed where the saber was, not where the pointer was (the owner's photo of the main menu
+// in the world). Now the cursor is put where the pointer is, at any size of the window.
+static void se_menu_pointer( int x, int y )
+{
+	if ( !se_origin_known )
+		gpuWindowOrigin( &se_origin_x, &se_origin_y ), se_origin_known = 1;
+	int mx = ( x - se_origin_x ) * 640 / se_win_w, my = ( y - se_origin_y ) * 480 / se_win_h;
+	mx = mx < 0 ? 0 : mx > 640 ? 640 : mx;
+	my = my < 0 ? 0 : my > 480 ? 480 : my;
+	if ( mx == se_menu_x && my == se_menu_y )
+		return;
+	se_menu_x = mx, se_menu_y = my;
+	_UI_MouseTo( mx, my );
+	if ( getenv( "JK2_POINTER_LOG" ) )
+		Com_Printf( "jk2pointer: %d,%d of the display to %d,%d of the menu (window at %d,%d, %dx%d)\n", x, y, mx, my,
+			se_origin_x, se_origin_y, se_win_w, se_win_h );
+}
+
+// A controller (docs/machine/input.md, "Game controls"; the bits are linux/apps/input_words.h's): the jump button
+// (A) jumps, B uses, the left stick pressed crouches, Y is Escape; the wheel (the right stick, tilted too) is the next
+// weapon up or right, the one before down or left, and the menus' own wheel in a menu.
+static void se_pad_buttons( unsigned buttons )
+{
+	static unsigned held;
+	unsigned down = buttons & ~held, up = held & ~buttons;
+	held = buttons;
+	if ( ( down | up ) & 0x10000 )
+		Sys_QueEvent( 0, SE_KEY, A_SPACE, ( down & 0x10000 ) != 0, 0, NULL );
+	if ( ( down | up ) & 0x8000 )
+		Sys_QueEvent( 0, SE_KEY, 'e', ( down & 0x8000 ) != 0, 0, NULL );
+	if ( ( down | up ) & 0x1000 )
+		Sys_QueEvent( 0, SE_KEY, 'c', ( down & 0x1000 ) != 0, 0, NULL );
+	if ( down & 0x4000 ) {
+		Sys_QueEvent( 0, SE_KEY, A_ESCAPE, qtrue, 0, NULL );
+		Sys_QueEvent( 0, SE_KEY, A_ESCAPE, qfalse, 0, NULL );
+	}
+}
+
 static void se_input( void )
 {
 	static unsigned seen[4], asked_ms;
@@ -457,19 +621,41 @@ static void se_input( void )
 		return;
 	const volatile unsigned *input = gpuControl( REG_INPUT ), *clock = gpuControl( REG_CLOCK );
 	int menu = ( Key_GetCatcher() & ( KEYCATCH_UI | KEYCATCH_CONSOLE ) ) != 0 || cls.state != CA_ACTIVE;
+	int ui = ( Key_GetCatcher() & KEYCATCH_UI ) != 0;
 	if ( mouse_inside || dragging ) {
 		int x = (int)input[0], y = (int)input[1];
-		if ( mouse_known && ( x != mouse_x || y != mouse_y ) ) {
-			if ( menu )
-				Sys_QueEvent( 0, SE_MOUSE, ( x - mouse_x ) * 640 / se_win_w, ( y - mouse_y ) * 480 / se_win_h, 0, NULL );
-			else if ( dragging )
-				Sys_QueEvent( 0, SE_MOUSE, ( x - mouse_x ) * 2, ( y - mouse_y ) * 2, 0, NULL );
-		}
+		if ( ui )
+			se_menu_pointer( x, y );
+		else if ( !menu && dragging && mouse_known && ( x != mouse_x || y != mouse_y ) )
+			Sys_QueEvent( 0, SE_MOUSE, ( x - mouse_x ) * 2, ( y - mouse_y ) * 2, 0, NULL );
 		mouse_x = x, mouse_y = y, mouse_known = 1;
 	}
+	if ( !ui )
+		se_menu_x = -1;     // (a menu that comes is told where the pointer is at once)
+	// The renderer at the window's size (docs/games/jk2.md, "The window's size"): a second after the last change of it, a
+	// restart of the renderer at that size, of 320 x 240 to 1024 x 768 in whole 8s; JK2_RESIZE=stretch draws 640 x 480 stretched
+	static int resize_stretch = -1;
+	if ( resize_stretch < 0 ) {
+		const char *how = getenv( "JK2_RESIZE" );
+		resize_stretch = how && !strcmp( how, "stretch" );
+	}
+	if ( se_resized_ms && *clock - se_resized_ms >= 1000 ) {
+		int w = se_win_w > 1024 ? 1024 : se_win_w < 320 ? 320 : se_win_w & ~7, h = se_win_h > 768 ? 768 : se_win_h < 240 ? 240 : se_win_h & ~7;
+		se_resized_ms = 0;
+		if ( !resize_stretch && ( w != se_vid_w || h != se_vid_h ) ) {
+			Com_Printf( "jk2: the window is %dx%d: the renderer restarted at %dx%d\n", se_win_w, se_win_h, w, h );
+			Cvar_Set( "r_mode", "-1" );
+			Cvar_SetValue( "r_customwidth", w );
+			Cvar_SetValue( "r_customheight", h );
+			Cbuf_AddText( "vid_restart\n" );
+		}
+	}
 	for ( int i = 2; i < 4; i++ )
-		if ( seen[i] != input[i] )
+		if ( seen[i] != input[i] ) {
 			seen[i] = input[i], ask = 8;
+			if ( i == 2 )
+				se_pad_buttons( seen[2] );
+		}
 	if ( !ask && *clock - asked_ms >= 250 )
 		ask = 1;
 	while ( ask ) {
@@ -494,11 +680,28 @@ static void se_input( void )
 				seglSize( &se_win_w, &se_win_h );
 				if ( se_win_w < 1 || se_win_h < 1 )
 					se_win_w = 640, se_win_h = 480;
+				se_resized_ms = *clock | 1;
 			}
+			se_origin_known = 0, se_menu_x = -1;   // (moved or resized: asked again)
 			break;
 		case GR_EVENT_TYPE_BUTTON_DOWN:
 		case GR_EVENT_TYPE_BUTTON_UP:
 			down = e.type == GR_EVENT_TYPE_BUTTON_DOWN;
+			if ( e.button.changebuttons & ( GR_BUTTON_SCROLLUP | GR_BUTTON_SCROLLDN | GR_BUTTON_SCROLLLEFT | GR_BUTTON_SCROLLRIGHT ) ) {
+				int ahead = ( e.button.changebuttons & ( GR_BUTTON_SCROLLUP | GR_BUTTON_SCROLLRIGHT ) ) != 0;
+				if ( !menu && down )
+					Cbuf_AddText( ahead ? "weapnext\n" : "weapprev\n" );
+				else if ( menu )
+					Sys_QueEvent( 0, SE_KEY, ahead ? A_MWHEELUP : A_MWHEELDOWN, down, 0, NULL );
+				break;
+			}
+			if ( e.button.changebuttons & GR_BUTTON_EXTRA )
+				break;
+			// (where the window is, for nothing: the press's place in it and on the display)
+			se_origin_x = e.button.rootx - e.button.x, se_origin_y = e.button.rooty - e.button.y, se_origin_known = 1;
+			// a click in a menu lands where it was pressed, whatever the words said meanwhile (nxkey's presses are not in them)
+			if ( ui )
+				se_menu_pointer( e.button.rootx, e.button.rooty );
 			if ( !menu ) {
 				if ( e.button.changebuttons & GR_BUTTON_L )
 					dragging = down, mouse_known = 0;

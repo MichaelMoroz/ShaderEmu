@@ -595,7 +595,9 @@ static uint32_t _tw_light_run; ///< the first core's: pictures since it last hel
  */
 static bool TwLightOff()
 {
-	static const bool off = getenv("OPENTTD_CHECK") != nullptr || (getenv("OPENTTD_LIGHT") != nullptr && getenv("OPENTTD_LIGHT")[0] == '0');
+	/* (OPENTTD_CHECK=last checks the play part's last picture only, held: the pictures before it go as they would) */
+	static const bool off = (getenv("OPENTTD_CHECK") != nullptr && std::string_view(getenv("OPENTTD_CHECK")) != "last") ||
+			(getenv("OPENTTD_LIGHT") != nullptr && getenv("OPENTTD_LIGHT")[0] == '0');
 	return off;
 }
 

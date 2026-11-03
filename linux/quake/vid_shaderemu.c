@@ -375,6 +375,12 @@ void VID_Init (unsigned char *palette)
 	GrSelectEvents (window, GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_KEY_UP | GR_EVENT_MASK_BUTTON_DOWN |
 		GR_EVENT_MASK_BUTTON_UP | GR_EVENT_MASK_MOUSE_ENTER | GR_EVENT_MASK_MOUSE_EXIT | GR_EVENT_MASK_CLOSE_REQ |
 		GR_EVENT_MASK_UPDATE);
+	{
+		GR_WM_PROPERTIES props;		/* the wheel tilted too (Sys_SendKeyEvents: the weapons) */
+
+		props.flags = GR_WM_FLAGS_COMMAND, props.props = GR_WMC_BUTTONS, props.background = 1;
+		GrSetWMProperties (window, &props);
+	}
 	GrMapWindow (window);
 	GrSetFocus (window);
 	if (qglOpen (window, palette) < 0)
@@ -450,6 +456,26 @@ static int quake_key (int ch)
  * each, in every frame the view was turned in. The server says when the pointer comes over
  * the window and leaves it.
  */
+
+/*
+ * A controller (docs/machine/input.md, "Game controls"; the bits are linux/apps/input_words.h's): the jump
+ * button (A) jumps, Y is Escape, and a notch of the right stick (the wheel, up or tilted right) is the next
+ * weapon, down or left the one before. Not while seated: the controller is the holodeck's then.
+ */
+static void se_pad_buttons (unsigned buttons)
+{
+	static unsigned held;
+	unsigned down = buttons & ~held, up = held & ~buttons;
+
+	held = buttons;
+	if (down & 0x10000)
+		Key_Event (K_SPACE, true);
+	if (up & 0x10000)
+		Key_Event (K_SPACE, false);
+	if (down & 0x4000)
+		Key_Event (K_ESCAPE, true), Key_Event (K_ESCAPE, false);
+}
+
 void Sys_SendKeyEvents (void)
 {
 	static unsigned seen[4], asked_ms;
@@ -472,6 +498,8 @@ void Sys_SendKeyEvents (void)
 		if (seen[i] != input[i]) {
 			seen[i] = input[i];
 			ask = 8;
+			if (i == 2 && !seated)
+				se_pad_buttons (seen[2]);
 		}
 	if (!ask && VID_Milliseconds () - asked_ms >= 250)
 		ask = 1;
@@ -498,6 +526,14 @@ void Sys_SendKeyEvents (void)
 			break;
 		case GR_EVENT_TYPE_BUTTON_DOWN:
 		case GR_EVENT_TYPE_BUTTON_UP:
+			/* the wheel (the right stick) changes the weapon */
+			if (e.button.changebuttons & (GR_BUTTON_SCROLLUP | GR_BUTTON_SCROLLDN | GR_BUTTON_SCROLLLEFT | GR_BUTTON_SCROLLRIGHT)) {
+				if (e.type == GR_EVENT_TYPE_BUTTON_DOWN && key_dest == key_game && !seated)
+					Cbuf_AddText (e.button.changebuttons & (GR_BUTTON_SCROLLUP | GR_BUTTON_SCROLLRIGHT) ? "impulse 10\n" : "impulse 12\n");
+				break;
+			}
+			if (e.button.changebuttons & GR_BUTTON_EXTRA)
+				break;
 			/* In the game the left button drags the view round, as a finger on glass does, and
 			   the right one is what the left was (fire). A sitter's buttons are the game's own. */
 			if (key_dest == key_game && !seated) {

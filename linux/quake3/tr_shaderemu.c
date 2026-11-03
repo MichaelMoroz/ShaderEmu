@@ -194,6 +194,29 @@ static int game_key (int ch)
  * window as its mouse. Asking the window system costs system calls: asked when the machine's
  * own input counters have moved, and a few times a second (linux/quake/vid_shaderemu.c).
  */
+/*
+ * A controller (docs/machine/input.md, "Game controls"; the bits are linux/apps/input_words.h's): the jump
+ * button (A) jumps, Y is Escape, the left stick pressed crouches, and a notch of the right stick (the wheel, up
+ * or tilted right) is the next weapon, down or left the one before. Not while seated: the holodeck's then.
+ */
+static void SE_PadButtons (unsigned buttons)
+{
+	static unsigned held;
+	unsigned down = buttons & ~held, up = held & ~buttons;
+
+	held = buttons;
+	if ((down | up) && getenv ("QUAKE3_PAD_LOG"))
+		Com_Printf ("quake3: pad down %x up %x\n", down, up);
+	if ((down | up) & 0x10000)
+		Com_QueueEvent (0, SE_KEY, K_SPACE, (down & 0x10000) != 0, 0, NULL);
+	if ((down | up) & 0x1000)
+		Com_QueueEvent (0, SE_KEY, 'c', (down & 0x1000) != 0, 0, NULL);
+	if (down & 0x4000) {
+		Com_QueueEvent (0, SE_KEY, K_ESCAPE, qtrue, 0, NULL);
+		Com_QueueEvent (0, SE_KEY, K_ESCAPE, qfalse, 0, NULL);
+	}
+}
+
 void SE_Input (void)
 {
 	static unsigned	seen[4], asked_ms;
@@ -229,6 +252,8 @@ void SE_Input (void)
 		if (seen[i] != input[i]) {
 			seen[i] = input[i];
 			ask = 8;
+			if (i == 2 && !seated)
+				SE_PadButtons (seen[2]);
 		}
 	if (!ask && SE_WindowClock () - asked_ms >= 250)
 		ask = 1;
@@ -260,6 +285,18 @@ void SE_Input (void)
 		case GR_EVENT_TYPE_BUTTON_UP:
 			down = e.type == GR_EVENT_TYPE_BUTTON_DOWN;
 			origin_x = e.button.rootx - e.button.x, origin_y = e.button.rooty - e.button.y, origin_known = 1;
+			/* the wheel (the right stick) changes the weapon in the game, and is the menus' own wheel */
+			if (e.button.changebuttons & (GR_BUTTON_SCROLLUP | GR_BUTTON_SCROLLDN | GR_BUTTON_SCROLLLEFT | GR_BUTTON_SCROLLRIGHT)) {
+				int ahead = (e.button.changebuttons & (GR_BUTTON_SCROLLUP | GR_BUTTON_SCROLLRIGHT)) != 0;
+
+				if (down && !Key_GetCatcher () && !seated)
+					Cbuf_AddText (ahead ? "weapnext\n" : "weapprev\n");
+				else if (Key_GetCatcher ())
+					Com_QueueEvent (0, SE_KEY, ahead ? K_MWHEELUP : K_MWHEELDOWN, down, 0, NULL);
+				break;
+			}
+			if (e.button.changebuttons & GR_BUTTON_EXTRA)
+				break;
 			/* In the game the left button drags the view round, as a finger on glass does, and
 			   the right one is what the left was (fire). A sitter's buttons are the game's own. */
 			if (!Key_GetCatcher () && !seated) {
@@ -407,6 +444,12 @@ static void window_open (void)
 	GrSelectEvents (window, GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_KEY_UP | GR_EVENT_MASK_BUTTON_DOWN |
 		GR_EVENT_MASK_BUTTON_UP | GR_EVENT_MASK_MOUSE_ENTER | GR_EVENT_MASK_MOUSE_EXIT | GR_EVENT_MASK_CLOSE_REQ |
 		GR_EVENT_MASK_UPDATE);
+	{
+		GR_WM_PROPERTIES props;		/* the wheel tilted too (SE_Input: the weapons) */
+
+		props.flags = GR_WM_FLAGS_COMMAND, props.props = GR_WMC_BUTTONS, props.background = 1;
+		GrSetWMProperties (window, &props);
+	}
 	GrMapWindow (window);
 	GrSetFocus (window);
 	if (seglInit (window) < 0)

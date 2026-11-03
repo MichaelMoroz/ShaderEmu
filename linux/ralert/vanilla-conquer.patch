@@ -98,10 +98,10 @@ index 690e0d1..5873763 100644
      }
  
 diff --git a/common/mixfile.h b/common/mixfile.h
-index ba5543f..1d29b2d 100644
+index 109c35f..29e2ec5 100644
 --- a/common/mixfile.h
 +++ b/common/mixfile.h
-@@ -650,7 +650,12 @@ template <class T, class TCRC> bool MixFileClass<T, TCRC>::Cache(Buffer const* b
+@@ -620,7 +620,12 @@ template <class T, class TCRC> bool MixFileClass<T, TCRC>::Cache(Buffer const* b
          **	stream so that the actual SHA can be compared with the attached one.
          */
          SHAStraw sha;
@@ -115,7 +115,7 @@ index ba5543f..1d29b2d 100644
              sha.Get_From(fstraw);
              straw = &sha;
          }
-@@ -681,7 +686,7 @@ template <class T, class TCRC> bool MixFileClass<T, TCRC>::Cache(Buffer const* b
+@@ -651,7 +656,7 @@ template <class T, class TCRC> bool MixFileClass<T, TCRC>::Cache(Buffer const* b
          **	compare it to the generated digest. If they don't match, then
          **	return with the "failure to cache" error code.
          */
@@ -145,7 +145,7 @@ index cd86400..1a64467 100644
      void Set(void);
  
 diff --git a/common/vqadrawer.cpp b/common/vqadrawer.cpp
-index f0d1108..684871c 100644
+index cd3b404..37e96ad 100644
 --- a/common/vqadrawer.cpp
 +++ b/common/vqadrawer.cpp
 @@ -9,6 +9,12 @@
@@ -230,7 +230,7 @@ index f0d1108..684871c 100644
  
      vqabuf->Drawer.LastFrameNum = curframe->FrameNum;
      vqabuf->Flipper.CurFrame = curframe;
-@@ -376,6 +425,12 @@ int VQA_SelectFrame(VQAHandle* handle)
+@@ -304,6 +353,12 @@ int VQA_SelectFrame(VQAHandle* handle)
                      config->DrawerCallback(nullptr, curframe->FrameNum);
                  }
  
@@ -243,7 +243,7 @@ index f0d1108..684871c 100644
                  curframe->Flags = 0;
                  curframe = curframe->Next;
                  vqabuf->Drawer.CurFrame = curframe;
-@@ -414,4 +469,10 @@ void VQA_PrepareFrame(VQAData* vqabuf)
+@@ -342,4 +397,10 @@ void VQA_PrepareFrame(VQAData* vqabuf)
          LCW_Uncompress(&curframe->Pointers[curframe->PtrOffset], curframe->Pointers, vqabuf->MaxPtrSize);
          curframe->Flags &= ~0x10;
      }
@@ -890,7 +890,7 @@ index a29eb2b..a3a94a5 100644
  #endif
 \ No newline at end of file
 diff --git a/redalert/conquer.cpp b/redalert/conquer.cpp
-index 4825ba4..cd2bf65 100644
+index 4825ba4..09eadc5 100644
 --- a/redalert/conquer.cpp
 +++ b/redalert/conquer.cpp
 @@ -125,6 +125,569 @@ bool Map_Edit_Loop(void);
@@ -1463,7 +1463,73 @@ index 4825ba4..cd2bf65 100644
  #ifdef CHEAT_KEYS
  void Dump_Heap_Pointers(void);
  void Error_In_Heap_Pointers(char* string);
-@@ -1759,7 +2322,12 @@ bool Main_Loop()
+@@ -1705,6 +2268,42 @@ static void Sync_Delay(void)
+ extern void Check_For_Focus_Loss(void);
+ void Reallocate_Big_Shape_Buffer(void);
+ 
++/*
++** ShaderEmu: the screen laid out again at the window's size (docs/games/ralert.md, "The window's size"): between two of the
++** main loop's turns, the pages made again at the size the window asks for, the radar, power bar and sidebar at the new right
++** edge (SIDE_X, POWER_X), the view as large as is left, the buttons where those say and everything drawn again. The game's
++** state is not touched but for the view's place, which stays inside the map.
++*/
++extern bool ShaderEmu_Pages(int w, int h);
++extern "C" int host_relayout_wanted(int* width, int* height);
++static void ShaderEmu_Relayout(int w, int h)
++{
++    int old_w = SeenBuff.Get_Width(), old_h = SeenBuff.Get_Height();
++
++    Hide_Mouse();
++    VisiblePage.Un_Init();
++    HiddenPage.Un_Init();
++    if (!ShaderEmu_Pages(w, h)) {
++        fprintf(stderr, "ralert: the screen stays %dx%d (no GPU memory for %dx%d)\n", old_w, old_h, w, h);
++        w = old_w, h = old_h;
++    }
++    VisiblePage.Init(w, h, NULL, 0, (GBC_Enum)(GBC_VISIBLE | GBC_VIDEOMEM));
++    HiddenPage.Init(w, h, NULL, 0, (GBC_Enum)GBC_VIDEOMEM);
++    VisiblePage.Attach_DD_Surface(&HiddenPage);
++    SeenBuff.Attach(&VisiblePage, 0, 0, w, h);
++    HidPage.Attach(&HiddenPage, 0, 0, w, h);
++    ScreenWidth = w;
++    ScreenHeight = h;
++    WindowList[0][WINDOWWIDTH] = SeenBuff.Get_Width();
++    WindowList[0][WINDOWHEIGHT] = SeenBuff.Get_Height();
++    Map.ShaderEmu_Layout();
++    Map.Init_IO();
++    Map.Flag_To_Redraw(true);
++    Show_Mouse();
++    fprintf(stderr, "ralert: the screen laid out at %dx%d (the view %dx%d)\n", w, h, WindowList[WINDOW_TACTICAL][WINDOWWIDTH],
++            WindowList[WINDOW_TACTICAL][WINDOWHEIGHT]);
++}
++
+ bool Main_Loop()
+ {
+     KeyNumType input; // Player input.
+@@ -1712,6 +2311,22 @@ bool Main_Loop()
+     int y;
+     int framedelay;
+ 
++    {
++        int w, h;
++        if (host_relayout_wanted(&w, &h)) {
++            ShaderEmu_Relayout(w, h);
++        }
++        // (TDAWN_INPUT_LOG: how many of the player's things are selected, when that changes: a click on the map seen)
++        static int selected = -1, said = -1;
++        if (said < 0) {
++            said = getenv("TDAWN_INPUT_LOG") != NULL;
++        }
++        if (said && CurrentObject.Count() != selected) {
++            selected = CurrentObject.Count();
++            fprintf(stderr, "ralert: %d selected at frame %d\n", selected, (int)Frame);
++        }
++    }
++
+     Mono_Set_Cursor(0, 0);
+ 
+     if (!GameActive)
+@@ -1759,7 +2374,12 @@ bool Main_Loop()
      **	If there is no theme playing, but it looks like one is required, then start one
      **	playing. This is usually the symptom of there being no transition score.
      */
@@ -1476,7 +1542,7 @@ index 4825ba4..cd2bf65 100644
          Theme.Queue_Song(THEME_PICK_ANOTHER);
      }
  
-@@ -1790,18 +2358,42 @@ bool Main_Loop()
+@@ -1790,18 +2410,42 @@ bool Main_Loop()
              FrameTimer = Options.GameSpeed + (PlayerPtr->Difficulty == DIFF_EASY ? 1 : 0);
          }
      }
@@ -1520,7 +1586,7 @@ index 4825ba4..cd2bf65 100644
          }
      }
  
-@@ -1826,7 +2418,19 @@ bool Main_Loop()
+@@ -1826,7 +2470,19 @@ bool Main_Loop()
      /*
      **	AI logic operations are performed here.
      */
@@ -1541,7 +1607,7 @@ index 4825ba4..cd2bf65 100644
      TimeQuake = false;
  #ifdef FIXIT_CSII //	checked - ajw 9/28/98
      if (!PendingTimeQuake) {
-@@ -1839,8 +2443,24 @@ bool Main_Loop()
+@@ -1839,8 +2495,24 @@ bool Main_Loop()
      **	a message has expired & been removed, and the entire map must be updated.
      */
      if (Session.Messages.Manage()) {
@@ -1568,7 +1634,7 @@ index 4825ba4..cd2bf65 100644
      }
  
      //
-@@ -1893,6 +2513,9 @@ bool Main_Loop()
+@@ -1893,6 +2565,9 @@ bool Main_Loop()
          PlayerRestarts = false;
          Map.Help_Text(TXT_NONE);
          Set_Video_Cursor_Clip(false);
@@ -1578,7 +1644,7 @@ index 4825ba4..cd2bf65 100644
          Do_Restart();
          Set_Video_Cursor_Clip(true);
          return (!GameActive);
-@@ -2442,6 +3065,25 @@ void Play_Movie(char const* name, ThemeType theme, bool clrscrn, bool immediate)
+@@ -2442,6 +3117,25 @@ void Play_Movie(char const* name, ThemeType theme, bool clrscrn, bool immediate)
              AnimControl.ImageBuf = (unsigned char*)SysMemPage.Get_Offset();
          }
  #endif
@@ -1604,7 +1670,7 @@ index 4825ba4..cd2bf65 100644
  
          if (!Debug_Quiet && Get_Digi_Handle() != -1) {
              AnimControl.OptionFlags |= VQAOPTF_AUDIO;
-@@ -2465,8 +3107,30 @@ void Play_Movie(char const* name, ThemeType theme, bool clrscrn, bool immediate)
+@@ -2465,8 +3159,30 @@ void Play_Movie(char const* name, ThemeType theme, bool clrscrn, bool immediate)
                  // Set_Palette(BlackPalette);
                  SysMemPage.Clear();
                  InMovie = true;
@@ -1635,7 +1701,7 @@ index 4825ba4..cd2bf65 100644
                  // Resume_Audio_Thread();
                  InMovie = false;
  #ifdef MOVIE640
-@@ -2863,6 +3527,70 @@ void CC_Draw_Pip(const ObjectClass* object,
+@@ -2863,6 +3579,70 @@ void CC_Draw_Pip(const ObjectClass* object,
   * HISTORY:                                                                                    *
   *   02/21/1995 JLB : Created.                                                                 *
   *=============================================================================================*/
@@ -1706,7 +1772,7 @@ index 4825ba4..cd2bf65 100644
  void CC_Draw_Shape(void const* shapefile,
                     int shapenum,
                     int x,
-@@ -2885,6 +3613,22 @@ void CC_Draw_Shape(void const* shapefile,
+@@ -2885,6 +3665,22 @@ void CC_Draw_Shape(void const* shapefile,
      if ((flags & SHAPE_FADING) && (!fadingdata)) {
          fadingdata = DisplayClass::FadingShade;
      }
@@ -1729,7 +1795,7 @@ index 4825ba4..cd2bf65 100644
  
      static unsigned char* _xbuffer = 0;
  
-@@ -3044,6 +3788,38 @@ Rect const Shape_Dimensions(void const* shapedata, int shapenum)
+@@ -3044,6 +3840,38 @@ Rect const Shape_Dimensions(void const* shapedata, int shapenum)
      int width = Get_Build_Frame_Width(shapedata);
      int height = Get_Build_Frame_Height(shapedata);
  
@@ -1768,7 +1834,7 @@ index 4825ba4..cd2bf65 100644
      rect.X = 0;
      rect.Y = 0;
      int xlimit = width - 1;
-@@ -3185,6 +3961,9 @@ extern GraphicBufferClass VQ640;
+@@ -3185,6 +4013,9 @@ extern GraphicBufferClass VQ640;
  extern bool IsVQ640;
  int VQ_Call_Back(unsigned char*, int)
  {
@@ -1778,7 +1844,7 @@ index 4825ba4..cd2bf65 100644
  #ifdef REMASTER_BUILD
      return 0;
  #else
-@@ -3194,6 +3973,11 @@ int VQ_Call_Back(unsigned char*, int)
+@@ -3194,6 +4025,11 @@ int VQ_Call_Back(unsigned char*, int)
          Keyboard->Clear();
      }
      Check_VQ_Palette_Set();
@@ -1790,7 +1856,7 @@ index 4825ba4..cd2bf65 100644
  #ifdef MOVIE640
      if (IsVQ640) {
          VQ640.Blit(SeenBuff);
-@@ -3204,6 +3988,9 @@ int VQ_Call_Back(unsigned char*, int)
+@@ -3204,6 +4040,9 @@ int VQ_Call_Back(unsigned char*, int)
      Interpolate_2X_Scale(&SysMemPage, &SeenBuff, NULL);
  #endif
      Frame_Limiter();
@@ -1800,7 +1866,7 @@ index 4825ba4..cd2bf65 100644
  
      if ((BreakoutAllowed || Debug_Flag) && key == KN_ESC) {
          Keyboard->Clear();
-@@ -4501,6 +5288,21 @@ void Shake_The_Screen(int shakes, HousesType house)
+@@ -4501,6 +5340,21 @@ void Shake_The_Screen(int shakes, HousesType house)
      }
  #else
      shakes += shakes;
@@ -4352,10 +4418,18 @@ index 399ddfb..7a6fddf 100644
      ** Some additional padding in case we need to add data to the class and maintain backwards compatibility for
      *save/load
 diff --git a/redalert/power.cpp b/redalert/power.cpp
-index 3a9fada..a42b5bd 100644
+index 3a9fada..ce2d633 100644
 --- a/redalert/power.cpp
 +++ b/redalert/power.cpp
-@@ -143,6 +143,11 @@ void PowerClass::One_Time(void)
+@@ -49,6 +49,7 @@
+ void const* PowerClass::PowerShape;
+ void const* PowerClass::PowerBarShape;
+ int PowerClass::POWER_Y;
++int PowerClass::POWER_X = 10 * ICON_PIXEL_W;
+ int PowerClass::POWER_HEIGHT;
+ 
+ PowerClass::PowerButtonClass PowerClass::PowerButton;
+@@ -143,6 +144,11 @@ void PowerClass::One_Time(void)
      PowerButton.Height = POWER_HEIGHT * RESFACTOR;
      PowerShape = MFCD::Retrieve("POWER.SHP");
      PowerBarShape = MFCD::Retrieve("POWERBAR.SHP");
@@ -4367,6 +4441,28 @@ index 3a9fada..a42b5bd 100644
  }
  
  /***********************************************************************************************
+diff --git a/redalert/power.h b/redalert/power.h
+index 4304e8e..e2e9753 100644
+--- a/redalert/power.h
++++ b/redalert/power.h
+@@ -84,7 +84,6 @@ protected:
+ 
+     enum PowerEnums
+     {
+-        POWER_X = 10 * ICON_PIXEL_W,
+     // Can't be constant because of DOSMode. Check One_Time.
+ #if 0
+         POWER_Y = (7 + 70 + 13),
+@@ -97,6 +96,9 @@ protected:
+         POWER_STEP_FACTOR = 5
+     };
+ 
++public:
++    static int POWER_X; // ShaderEmu: the power bar's left edge, the sidebar's (10 * ICON_PIXEL_W at 320 units)
++
+ private:
+     static int POWER_Y;
+     static int POWER_HEIGHT;
 diff --git a/redalert/radar.cpp b/redalert/radar.cpp
 index 6211ff4..892472c 100644
 --- a/redalert/radar.cpp
@@ -4598,7 +4694,7 @@ index 6357462..adec18b 100644
      VisiblePage.Clear();
      Show_Mouse();
 diff --git a/redalert/scroll.cpp b/redalert/scroll.cpp
-index 5c063b8..0dc3396 100644
+index 5c063b8..23f27da 100644
 --- a/redalert/scroll.cpp
 +++ b/redalert/scroll.cpp
 @@ -36,6 +36,25 @@
@@ -4681,11 +4777,72 @@ index 5c063b8..0dc3396 100644
          if (!noscroll) {
              bool at_screen_edge = (y == 0 || x == 0 || x >= SeenBuff.Get_Width() - 1 || y >= SeenBuff.Get_Height() - 1);
  
+@@ -125,11 +191,11 @@ void ScrollClass::AI(KeyNumType& input, int x, int y)
+                     if (altx < 50 * RESFACTOR)
+                         altx -= ((50 * RESFACTOR) - altx);
+                     altx = max(altx, 0);
+-                    if (altx > ((320 - 50) * RESFACTOR))
+-                        altx += altx - ((320 - 50) * RESFACTOR);
+-                    altx = min(altx, (320 * RESFACTOR));
+-                    if (altx > (50 * RESFACTOR) && altx < ((320 - 50) * RESFACTOR)) {
+-                        altx += (((320 / 2) * RESFACTOR) - altx) / 2;
++                    if (altx > (((SeenBuff.Get_Width() / RESFACTOR) - 50) * RESFACTOR))
++                        altx += altx - (((SeenBuff.Get_Width() / RESFACTOR) - 50) * RESFACTOR);
++                    altx = min(altx, ((SeenBuff.Get_Width() / RESFACTOR) * RESFACTOR));
++                    if (altx > (50 * RESFACTOR) && altx < (((SeenBuff.Get_Width() / RESFACTOR) - 50) * RESFACTOR)) {
++                        altx += ((((SeenBuff.Get_Width() / RESFACTOR) / 2) * RESFACTOR) - altx) / 2;
+                     }
+ 
+                     int alty = y;
+@@ -140,7 +206,7 @@ void ScrollClass::AI(KeyNumType& input, int x, int y)
+                         alty += alty - (150 * RESFACTOR);
+                     alty = min(alty, 200 * RESFACTOR);
+ 
+-                    direction = (DirType)Desired_Facing256((320 / 2) * RESFACTOR, (200 / 2) * RESFACTOR, altx, alty);
++                    direction = (DirType)Desired_Facing256(((SeenBuff.Get_Width() / RESFACTOR) / 2) * RESFACTOR, (SeenBuff.Get_Height() / RESFACTOR / 2) * RESFACTOR, altx, alty);
+                 }
+ 
+                 int control = Dir_Facing(direction);
 diff --git a/redalert/sidebar.cpp b/redalert/sidebar.cpp
-index 928dc0e..f133efa 100644
+index 928dc0e..193cb25 100644
 --- a/redalert/sidebar.cpp
 +++ b/redalert/sidebar.cpp
-@@ -324,6 +324,16 @@ void SidebarClass::Init_IO(void)
+@@ -237,9 +237,9 @@ void SidebarClass::One_Time(void)
+     **	Set up the coordinates for the sidebar strips. These coordinates are for
+     **	the upper left corner.
+     */
+-    Column[0].X = COLUMN_ONE_X * RESFACTOR;
++    Column[0].X = (SIDE_X + COLUMN_ONE_X_FROM_SIDE) * RESFACTOR;
+     Column[0].Y = COLUMN_ONE_Y * RESFACTOR;
+-    Column[1].X = COLUMN_TWO_X * RESFACTOR;
++    Column[1].X = (SIDE_X + COLUMN_TWO_X_FROM_SIDE) * RESFACTOR;
+     Column[1].Y = COLUMN_TWO_Y * RESFACTOR;
+     Column[0].One_Time(0);
+     Column[1].One_Time(1);
+@@ -302,7 +302,7 @@ void SidebarClass::Init_IO(void)
+ 
+         Repair.IsSticky = true;
+         Repair.ID = BUTTON_REPAIR;
+-        Repair.X = (0x1f2 / 2) * RESFACTOR;
++        Repair.X = (SIDE_X + 9) * RESFACTOR; // (0x1f2 / 2 at 320 units: by the sidebar's place, ShaderEmu)
+         Repair.Y = (0x96 / 2) * RESFACTOR;
+         Repair.IsPressed = false;
+         Repair.IsToggleType = true;
+@@ -311,7 +311,7 @@ void SidebarClass::Init_IO(void)
+ 
+         Upgrade.IsSticky = true;
+         Upgrade.ID = BUTTON_UPGRADE;
+-        Upgrade.X = (RESFACTOR == 1) ? 271 : 0x21f;
++        Upgrade.X = (RESFACTOR == 1) ? SIDE_X + 31 : SIDE_X * RESFACTOR + 63; // (271 or 0x21f at 320 units)
+         Upgrade.Y = (0x96 / 2) * RESFACTOR;
+         Upgrade.IsPressed = false;
+         Upgrade.IsToggleType = true;
+@@ -320,10 +320,20 @@ void SidebarClass::Init_IO(void)
+ 
+         Zoom.IsSticky = true;
+         Zoom.ID = BUTTON_ZOOM;
+-        Zoom.X = (0x24c / 2) * RESFACTOR;
++        Zoom.X = (SIDE_X + 54) * RESFACTOR; // (0x24c / 2 at 320 units)
          Zoom.Y = (0x96 / 2) * RESFACTOR;
          Zoom.IsPressed = false;
          Zoom.Set_Shape(MFCD::Retrieve("MAP.SHP"));
@@ -4750,7 +4907,26 @@ index 928dc0e..f133efa 100644
  
          if (LogicPage->Lock()) {
              /*
-@@ -1272,6 +1301,10 @@ void SidebarClass::StripClass::Reload_LogoShapes(void)
+@@ -852,6 +881,9 @@ void SidebarClass::AI(KeyNumType& input, int x, int y)
+         }
+ 
+         if (input == (BUTTON_REPAIR | KN_BUTTON)) {
++            if (getenv("TDAWN_INPUT_LOG")) { // (ShaderEmu: a click on the sidebar's button seen)
++                fprintf(stderr, "ralert: the sidebar's repair button pressed\n");
++            }
+             Repair_Mode_Control(-1);
+         }
+ 
+@@ -984,7 +1016,7 @@ bool SidebarClass::Activate(int control)
+         **	activate it on the left side of the screen.
+         */
+         if (IsSidebarActive /*&& X*/) {
+-            Set_View_Dimensions(0, 8 * RESFACTOR, ((320 - SIDE_WIDTH) / ICON_PIXEL_W) * RESFACTOR);
++            Set_View_Dimensions(0, 8 * RESFACTOR, (((SeenBuff.Get_Width() / RESFACTOR) - SIDE_WIDTH) / ICON_PIXEL_W) * RESFACTOR);
+             IsToRedraw = true;
+             Help_Text(TXT_NONE);
+             Repair.Zap();
+@@ -1272,6 +1304,10 @@ void SidebarClass::StripClass::Reload_LogoShapes(void)
          houseloaded = PlayerPtr->ActLike;
      }
      LogoShapes = (void*)MFCD::Retrieve(stripnames[houseloaded]);
@@ -4761,7 +4937,7 @@ index 928dc0e..f133efa 100644
  }
  
  /***********************************************************************************************
-@@ -1360,6 +1393,13 @@ bool SidebarClass::StripClass::Add(RTTIType type, int id, bool via_capture)
+@@ -1360,6 +1396,13 @@ bool SidebarClass::StripClass::Add(RTTIType type, int id, bool via_capture)
          Buildables[BuildableCount].BuildableID = id;
          Buildables[BuildableCount].BuildableViaCapture = via_capture;
          BuildableCount++;
@@ -4775,10 +4951,146 @@ index 928dc0e..f133efa 100644
          IsToRedraw = true;
          return (true);
      }
+@@ -2392,3 +2435,28 @@ void SidebarClass::Zoom_Mode_Control(void)
+         }
+     }
+ }
++
++/*
++** ShaderEmu: the screen laid out again at another size (conquer.cpp's ShaderEmu_Relayout): the radar, the power bar and the
++** sidebar placed from the screen's right edge as One_Time placed them at 320 units, and the view as large as is left. The
++** buttons go where these say at the next Init_IO.
++*/
++int SidebarClass::SIDE_X = SidebarClass::SIDE_X_FIRST;
++
++void SidebarClass::ShaderEmu_Layout(void)
++{
++    RadX = SeenBuff.Get_Width() - RadWidth;
++    RadarButton.X = RadX;
++    SIDE_X = SeenBuff.Get_Width() / RESFACTOR - 80;
++    POWER_X = SIDE_X;
++    PowerButton.X = POWER_X * RESFACTOR;
++    SidebarClass::Background.X = (int)((int)SIDE_X + 8) * RESFACTOR;
++    WindowList[WINDOW_SIDEBAR][WINDOWX] = ((SIDE_X + 8)) * RESFACTOR;
++    Column[0].X = (SIDE_X + COLUMN_ONE_X_FROM_SIDE) * RESFACTOR;
++    Column[1].X = (SIDE_X + COLUMN_TWO_X_FROM_SIDE) * RESFACTOR;
++    if (IsSidebarActive) {
++        Set_View_Dimensions(0, 8 * RESFACTOR, ((SeenBuff.Get_Width() / RESFACTOR - SIDE_WIDTH) / ICON_PIXEL_W) * RESFACTOR);
++    } else {
++        Set_View_Dimensions(0, 8 * RESFACTOR);
++    }
++}
+diff --git a/redalert/sidebar.h b/redalert/sidebar.h
+index a420456..0f507ed 100644
+--- a/redalert/sidebar.h
++++ b/redalert/sidebar.h
+@@ -59,14 +59,14 @@ public:
+     enum SideBarClassEnums
+     {
+         BUTTON_ACTIVATOR = 100,        // Button ID for the activator.
+-        SIDE_X = 320 - 80,             // The X position of sidebar upper left corner.
++        SIDE_X_FIRST = 320 - 80,       // ShaderEmu: the sidebar's left edge at 320 units (SIDE_X is the screen's now)
+         SIDE_Y = 7 + 70,               // The Y position of sidebar upper left corner.
+         SIDE_WIDTH = SIDEBAR_WID,      // Width of the entire sidebar (in pixels).
+         SIDE_HEIGHT = 200 - (7 + 70),  // Height of the entire sidebar (in pixels).
+         TOP_HEIGHT = 13,               // Height of top section (with repair/sell buttons).
+-        COLUMN_ONE_X = (320 - 80) + 8, // Sidestrip upper left coordinates...
++        COLUMN_ONE_X_FROM_SIDE = 8, // Sidestrip upper left coordinates (from SIDE_X)...
+         COLUMN_ONE_Y = int(SIDE_Y) + int(TOP_HEIGHT),
+-        COLUMN_TWO_X = (320 - 80) + 8 + ((80 - 16) / 2) + 3,
++        COLUMN_TWO_X_FROM_SIDE = 8 + ((80 - 16) / 2) + 3,
+         COLUMN_TWO_Y = 7 + 70 + 13,
+ 
+ // BGA: changes to all buttons
+@@ -75,28 +75,31 @@ public:
+         BUTTON_TWO_WIDTH = 27,        // Button width.
+         BUTTON_THREE_WIDTH = 26,      // Button width.
+         BUTTON_HEIGHT = 9,            // Button height.
+-        BUTTON_ONE_X = SIDE_X + 2,    // Left button X coordinate.
++        BUTTON_ONE_X = SIDE_X_FIRST + 2, // Left button X coordinate.
+         BUTTON_ONE_Y = SIDE_Y + 2,    // Left button Y coordinate.
+-        BUTTON_TWO_X = SIDE_X + 24,   // Right button X coordinate.
++        BUTTON_TWO_X = SIDE_X_FIRST + 24, // Right button X coordinate.
+         BUTTON_TWO_Y = SIDE_Y + 2,    // Right button Y coordinate.
+-        BUTTON_THREE_X = SIDE_X + 53, // Right button X coordinate.
++        BUTTON_THREE_X = SIDE_X_FIRST + 53, // Right button X coordinate.
+         BUTTON_THREE_Y = SIDE_Y + 2,  // Right button Y coordinate.
+ #else
+         BUTTON_ONE_WIDTH = 32,             // Button width.
+         BUTTON_TWO_WIDTH = 20,             // Button width.
+         BUTTON_THREE_WIDTH = 20,           // Button width.
+         BUTTON_HEIGHT = 9,                 // Button height.
+-        BUTTON_ONE_X = (int)SIDE_X + 2,    // Left button X coordinate.
++        BUTTON_ONE_X = (int)SIDE_X_FIRST + 2, // Left button X coordinate.
+         BUTTON_ONE_Y = (int)SIDE_Y + 2,    // Left button Y coordinate.
+-        BUTTON_TWO_X = (int)SIDE_X + 36,   // Right button X coordinate.
++        BUTTON_TWO_X = (int)SIDE_X_FIRST + 36, // Right button X coordinate.
+         BUTTON_TWO_Y = (int)SIDE_Y + 2,    // Right button Y coordinate.
+-        BUTTON_THREE_X = (int)SIDE_X + 58, // Right button X coordinate.
++        BUTTON_THREE_X = (int)SIDE_X_FIRST + 58, // Right button X coordinate.
+         BUTTON_THREE_Y = (int)SIDE_Y + 2,  // Right button Y coordinate.
+ #endif
+ 
+         COLUMNS = 2 // Number of side strips on sidebar.
+     };
+ 
++    static int SIDE_X; // ShaderEmu: the sidebar's left edge in 320 units, 80 from the screen's right edge (ShaderEmu_Layout)
++    void ShaderEmu_Layout(void);
++
+     static void* SidebarShape;
+     static void* SidebarMiddleShape; // Only used in Win95 version
+     static void* SidebarBottomShape; // Only used in Win95 version
 diff --git a/redalert/tab.cpp b/redalert/tab.cpp
-index 732eb24..5bcd802 100644
+index 732eb24..bc1c6ab 100644
 --- a/redalert/tab.cpp
 +++ b/redalert/tab.cpp
+@@ -142,21 +142,21 @@ void TabClass::Draw_Credits_Tab(void)
+     if (Options.ToggleSidebar) {
+         CC_Draw_Shape(TabShape,
+                       Map.MoneyFlashTimer > 1 ? 5 : 2,
+-                      (320 - (EVA_WIDTH * 2)) * RESFACTOR,
++                      ((SeenBuff.Get_Width() / RESFACTOR) - (EVA_WIDTH * 2)) * RESFACTOR,
+                       0,
+                       WINDOW_MAIN,
+                       SHAPE_NORMAL);
+     } else {
+         CC_Draw_Shape(
+-            TabShape, Map.MoneyFlashTimer > 1 ? 8 : 6, (320 - EVA_WIDTH) * RESFACTOR, 0, WINDOW_MAIN, SHAPE_NORMAL);
++            TabShape, Map.MoneyFlashTimer > 1 ? 8 : 6, ((SeenBuff.Get_Width() / RESFACTOR) - EVA_WIDTH) * RESFACTOR, 0, WINDOW_MAIN, SHAPE_NORMAL);
+     }
+ 
+     if (Scen.MissionTimer.Is_Active()) {
+         bool light = ((int)Scen.MissionTimer < TICKS_PER_MINUTE * Rule.TimerWarning) || Map.FlasherTimer > 0;
+         if (Options.ToggleSidebar) {
+-            CC_Draw_Shape(TabShape, light ? 4 : 2, (320 - (EVA_WIDTH * 3)) * RESFACTOR, 0, WINDOW_MAIN, SHAPE_NORMAL);
++            CC_Draw_Shape(TabShape, light ? 4 : 2, ((SeenBuff.Get_Width() / RESFACTOR) - (EVA_WIDTH * 3)) * RESFACTOR, 0, WINDOW_MAIN, SHAPE_NORMAL);
+         } else {
+-            CC_Draw_Shape(TabShape, light ? 4 : 2, (320 - (EVA_WIDTH * 2)) * RESFACTOR, 0, WINDOW_MAIN, SHAPE_NORMAL);
++            CC_Draw_Shape(TabShape, light ? 4 : 2, ((SeenBuff.Get_Width() / RESFACTOR) - (EVA_WIDTH * 2)) * RESFACTOR, 0, WINDOW_MAIN, SHAPE_NORMAL);
+         }
+     }
+ }
+@@ -168,9 +168,9 @@ void TabClass::Hilite_Tab(int tab)
+     int textx = (EVA_WIDTH / 2) * RESFACTOR;
+ 
+     if (tab) {
+-        xpos = (320 - EVA_WIDTH) * RESFACTOR;
++        xpos = ((SeenBuff.Get_Width() / RESFACTOR) - EVA_WIDTH) * RESFACTOR;
+         text = TXT_TAB_SIDEBAR;
+-        textx = (320 - (EVA_WIDTH / 2)) * RESFACTOR;
++        textx = ((SeenBuff.Get_Width() / RESFACTOR) - (EVA_WIDTH / 2)) * RESFACTOR;
+     }
+ 
+     /*
+@@ -229,7 +229,7 @@ void TabClass::AI(KeyNumType& input, int x, int y)
+                 if (x < EVA_WIDTH * RESFACTOR)
+                     sel = 0;
+                 if (Options.ToggleSidebar) {
+-                    if (x > (320 - 80) * RESFACTOR)
++                    if (x > ((SeenBuff.Get_Width() / RESFACTOR) - 80) * RESFACTOR)
+                         sel = 1;
+                 }
+                 if (sel >= 0) {
 @@ -303,6 +303,10 @@ void TabClass::One_Time(void)
      SidebarClass::One_Time();
      RawFileClass file("tabs.shp");

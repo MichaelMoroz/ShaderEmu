@@ -16,6 +16,7 @@
  *   NXSOLITAIRE_DRAW=1|3        the draw without the registry; NXSOLITAIRE_DEAL=nearly a deal Finish ends
  */
 #include "ui.h"
+#include "ui_pad.h"
 #include "ui_icons.h"
 #include "ui_menu.h"
 #include "ui_ask.h"
@@ -82,6 +83,7 @@ static int pressed_button = -1;	/* a button of the bar held down */
 static struct { int played, won, streak, best_streak, best_seconds, best_moves, open; } stats;
 
 static GR_WINDOW_ID window, back, sheet;
+static struct ui_pad pad;	/* a controller: docs/machine/input.md, "Game controls" */
 static int menu_x[3];
 static const char *const menu_names[] = { "Game", "Help" };
 enum { C_NEW = 1, C_RESTART, C_UNDO, C_FINISH, C_DRAW1, C_DRAW3, C_STATS, C_EXIT, C_HELP, C_ABOUT };
@@ -1322,6 +1324,7 @@ main(int argc, char **argv)
 	measure_menus();
 	window = GrNewWindowEx(UI_FIXED, "Solitaire", GR_ROOT_WINDOW_ID, -1, -1, WIN_W, WIN_H, TABLE);
 	GrSelectEvents(window, EVENTS);
+	ui_pad_ask(window);
 	GrMapWindow(window);
 	GrSetFocus(window);
 	ui_framed();
@@ -1340,12 +1343,25 @@ main(int argc, char **argv)
 	render_all();
 	say(resumed ? "resumed" : "deal");
 	for (;;) {
-		if (finishing)
-			GrGetNextEventTimeout(&event, FINISH_MS);
-		else if (clock_from >= 0 && !won)	/* (the clock is drawn each second while it runs) */
-			GrGetNextEventTimeout(&event, (GR_TIMEOUT)(1000 - (now_ms() - clock_from + played_ms) % 1000 + 1));
+		int wait;
+
+		/* a controller (docs/machine/input.md, "Game controls"): A turns the stock, B takes a move back, Y finishes */
+		ui_pad_poll(&pad);
+		if ((wait = ui_pad_key(&pad, ' ', 'u', 'f')) != 0) {
+			GR_EVENT_KEYSTROKE k = { 0 };
+
+			k.ch = wait;
+			key(&k);
+		}
+		wait = finishing ? FINISH_MS : clock_from >= 0 && !won ? (int)(1000 - (now_ms() - clock_from + played_ms) % 1000 + 1) : -1;
+		if (!finishing)
+			wait = ui_pad_wait(&pad, wait);
+		if (wait >= 0)	/* (the clock is drawn each second while it runs) */
+			GrGetNextEventTimeout(&event, (GR_TIMEOUT)wait);
 		else
 			GrGetNextEvent(&event);
+		if (event.type == GR_EVENT_TYPE_TIMEOUT && !finishing && !(clock_from >= 0 && !won))
+			continue;	/* (a look at the controller's buttons only) */
 		ui_origin_note(&event);
 		if (event.type == GR_EVENT_TYPE_TIMEOUT) {
 			if (finishing) {	/* a card up, until none can go or all are home */

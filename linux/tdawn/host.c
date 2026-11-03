@@ -24,6 +24,15 @@
 
 static GR_WINDOW_ID window;
 static int screen_w, screen_h;
+/*
+ * The screen laid out again at the window's size (docs/games/tdawn.md, "The window's size"): every place given to the GPU
+ * is a fraction of the first screen's size (unit_w, unit_h), and the window's matrix scales that to the screen's size now,
+ * so the map's kept rectangles stay as they are. The window's whole scale is the first one's.
+ */
+static int unit_w, unit_h, open_scale;
+static unsigned screen_bytes;		/* GPU memory the pages have */
+static int sized_w, sized_h;		/* the window's size last told, and when (host_ms; 0: taken) */
+static unsigned sized_at;
 static unsigned char *screen, *cursor;	/* screen: two pages, one after the other */
 static GLuint page_texture[2], cursor_texture;
 static int cursor_w, cursor_h, cursor_hot_x, cursor_hot_y;
@@ -267,19 +276,28 @@ host_open(int width, int height)
 	for (scale = 4; scale > 1 && (width * scale > info.cols || height * scale > info.rows); scale--)
 		;
 	window = GrNewWindowEx(GR_WM_PROPS_APPWINDOW, TITLE, GR_ROOT_WINDOW_ID, -1, -1, width * scale, height * scale, 0);
+	open_scale = scale;
 	/* (not the pointer's moves: pointer_read()) */
 	GrSelectEvents(window, GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_KEY_UP | GR_EVENT_MASK_BUTTON_DOWN |
 		GR_EVENT_MASK_BUTTON_UP | GR_EVENT_MASK_MOUSE_ENTER | GR_EVENT_MASK_MOUSE_EXIT | GR_EVENT_MASK_CLOSE_REQ |
 		GR_EVENT_MASK_UPDATE);
+	{
+		/* the extra buttons: the left hand's stick pans the map (docs/machine/input.md, "Game controls") */
+		GR_WM_PROPERTIES props;
+
+		props.flags = GR_WM_FLAGS_COMMAND, props.props = GR_WMC_BUTTONS, props.background = 1;
+		GrSetWMProperties(window, &props);
+	}
 	GrMapWindow(window);
 	GrSetFocus(window);
 	if (seglInit(window) < 0) {
 		fprintf(stderr, "tdawn: this machine has no GPU\n");
 		return -1;
 	}
-	screen_w = width;
-	screen_h = height;
-	screen = big_memory(2 * width * height);
+	screen_w = unit_w = width;
+	screen_h = unit_h = height;
+	screen_bytes = 2 * width * height;
+	screen = big_memory(screen_bytes);
 	cursor = seglMemory(CURSOR_MAX * CURSOR_MAX);
 	hw_image = seglMemory(HW_SIDE * HW_SIDE * 4);
 	if (!screen || !cursor) {
@@ -306,6 +324,69 @@ unsigned char *
 host_page(int page)
 {
 	return screen ? screen + page * screen_w * screen_h : NULL;
+}
+
+/*
+ * The size the window asks the screen to be laid out at (docs/games/tdawn.md, "The window's size"): a second after its last
+ * change of size, the window's size at the first scale, in whole 8s across and 2s down, from the first screen's size up to
+ * twice it (Tiberian Dawn's 320 x 200 to its largest view port, 640 x 400; Red Alert's 640 x 400 to 1,280 x 800). 1 and the size when that is not the screen's now; TDAWN_LAYOUT=stretch: never (the picture
+ * stretched over the window, the way before).
+ */
+int
+host_relayout_wanted(int *width, int *height)
+{
+	static int stretch = -1;
+	int w, h;
+
+	if (stretch < 0) {
+		const char *how = getenv("TDAWN_LAYOUT");
+
+		stretch = how && !strcmp(how, "stretch");
+	}
+	if (stretch || !sized_at || (int)(host_ms() - sized_at) < 1000)
+		return 0;
+	sized_at = 0;
+	w = (sized_w / (open_scale ? open_scale : 1)) & ~7;
+	h = (sized_h / (open_scale ? open_scale : 1)) & ~1;
+	w = w < unit_w ? unit_w : w > 2 * unit_w ? 2 * unit_w : w;
+	h = h < unit_h ? unit_h : h > 2 * unit_h ? 2 * unit_h : h;
+	*width = w, *height = h;
+	return w != screen_w || h != screen_h;
+}
+
+/* The pages at another size, cleared (the game draws them again whole): GPU memory for them when the pages have less. */
+int
+host_relayout(int width, int height)
+{
+	unsigned bytes = 2u * width * height;
+	int page;
+
+	if (!screen || width <= 0 || height <= 0)
+		return -1;
+	host_scene_drop();
+	if (bytes > screen_bytes) {
+		unsigned char *more = big_memory(bytes);
+
+		if (!more)
+			return -1;
+		screen = more;
+		screen_bytes = bytes;
+	}
+	screen_w = width;
+	screen_h = height;
+	memset(screen, 0, bytes);
+	for (page_rows = 256; page_rows < height; page_rows *= 2)
+		;
+	for (page = 0; page < 2; page++) {
+		glBindTexture(GL_TEXTURE_2D, page_texture[page]);
+		seglTexturePointer(screen + page * width * height, width, page_rows, GL_COLOR_INDEX8_EXT);
+	}
+	if (pointer_x >= width)
+		pointer_x = width - 1;
+	if (pointer_y >= height)
+		pointer_y = height - 1;
+	pointer_publish();
+	return 0;
 }
 
 unsigned int *
@@ -448,8 +529,8 @@ quad(GLuint texture, int x, int y, int width, int height, int keyed)
 {
 	static const GLfixed uv[8] = {0, 0, ONE, 0, ONE, ONE, 0, ONE};
 	/* in units of the whole window: a matrix of 16.16 numbers cannot hold 2/640 exactly */
-	GLfixed x0 = (GLfixed)(((long long)x << 16) / screen_w), x1 = (GLfixed)(((long long)(x + width) << 16) / screen_w);
-	GLfixed y0 = (GLfixed)(((long long)y << 16) / screen_h), y1 = (GLfixed)(((long long)(y + height) << 16) / screen_h);
+	GLfixed x0 = (GLfixed)(((long long)x << 16) / unit_w), x1 = (GLfixed)(((long long)(x + width) << 16) / unit_w);
+	GLfixed y0 = (GLfixed)(((long long)y << 16) / unit_h), y1 = (GLfixed)(((long long)(y + height) << 16) / unit_h);
 	GLfixed xyz[12] = {x0, y0, 0, x1, y0, 0, x1, y1, 0, x0, y1, 0};
 
 	seglQuad(xyz, uv, texture, 255, 255, keyed);
@@ -467,11 +548,13 @@ resize_for_test(void)
 	GrResizeWindow(window, atoi(size), atoi(x + 1));
 }
 
-/* The window's matrices: glOrthox(0, 1, 1, 0, -1, 1), and a place for the map's corner. */
+/* The window's matrices: glOrthox(0, 1, 1, 0, -1, 1) at the first screen's size (scaled to the screen's now), and a place
+ * for the map's corner. */
 static void
 whole_window(int origin_x, int origin_y)
 {
-	static const GLfixed whole[16] = {2 * ONE, 0, 0, 0, 0, -2 * ONE, 0, 0, 0, 0, -ONE, 0, -ONE, ONE, 0, ONE};
+	GLfixed whole[16] = {(GLfixed)(2LL * ONE * unit_w / screen_w), 0, 0, 0, 0, (GLfixed)(-2LL * ONE * unit_h / screen_h), 0, 0,
+		0, 0, -ONE, 0, -ONE, ONE, 0, ONE};
 	int width, height;
 
 	seglSize(&width, &height);
@@ -481,7 +564,7 @@ whole_window(int origin_x, int origin_y)
 	glMatrixMode(GL_MODELVIEW);
 	glLoadIdentity();
 	if (origin_x || origin_y)
-		glTranslatex(origin_x * ONE / screen_w, origin_y * ONE / screen_h, 0);
+		glTranslatex(origin_x * ONE / unit_w, origin_y * ONE / unit_h, 0);
 	glDisable(GL_DEPTH_TEST);
 }
 
@@ -577,8 +660,8 @@ host_tile(int index, int map_x, int map_y, int atlas_x, int atlas_y)
 		memset(to, 0, 64);
 		return;
 	}
-	x0 = map_x * ONE / screen_w, x1 = (map_x + 24) * ONE / screen_w;
-	y0 = map_y * ONE / screen_h, y1 = (map_y + 24) * ONE / screen_h;
+	x0 = map_x * ONE / unit_w, x1 = (map_x + 24) * ONE / unit_w;
+	y0 = map_y * ONE / unit_h, y1 = (map_y + 24) * ONE / unit_h;
 	to[0] = x0, to[1] = y0, to[2] = 0, to[3] = u0 | v0;
 	to[4] = x1, to[5] = y0, to[6] = 0, to[7] = u1 | v0;
 	to[8] = x1, to[9] = y1, to[10] = 0, to[11] = u1 | v1;
@@ -1197,8 +1280,8 @@ put_sprite(GLuint name, unsigned int colour, int keyed, int x, int y, int width,
 	SEGLsprite *s = &batch[batched];
 
 	run_quads++;
-	s->box[0] = x * ONE / screen_w, s->box[1] = y * ONE / screen_h;
-	s->box[2] = (x + width) * ONE / screen_w, s->box[3] = (y + height) * ONE / screen_h;
+	s->box[0] = x * ONE / unit_w, s->box[1] = y * ONE / unit_h;
+	s->box[2] = (x + width) * ONE / unit_w, s->box[3] = (y + height) * ONE / unit_h;
 	s->texels[0] = texels[0], s->texels[1] = texels[1], s->texels[2] = texels[2], s->texels[3] = texels[3];
 	s->name = name, s->colour = colour, s->keyed = keyed;
 	if (run_single)
@@ -1352,8 +1435,8 @@ host_scene_picture(unsigned char *index, unsigned int *dark)
 		const unsigned int *t = tiles + 16 * i;
 
 		if (t[8] | t[9])
-			picture_rect(index, dark, -1, (int)((t[0] * screen_w + ONE - 1) >> 16) + scene_at[0],
-				(int)((t[1] * screen_h + ONE - 1) >> 16) + scene_at[1], 24, 24, (int)(t[3] & 0xffff), (int)(t[3] >> 16), 0);
+			picture_rect(index, dark, -1, (int)((t[0] * unit_w + ONE - 1) >> 16) + scene_at[0],
+				(int)((t[1] * unit_h + ONE - 1) >> 16) + scene_at[1], 24, 24, (int)(t[3] & 0xffff), (int)(t[3] >> 16), 0);
 	}
 	for (part = 0; part < SCENE_PARTS; part++) {
 		const struct scene_note *n = scene_notes[part];
@@ -1611,7 +1694,7 @@ host_scene_drop(void)
 static void
 page_part(int page, int x, int y, int width, int height, int keyed)
 {
-	GLfixed box[4] = {x * ONE / screen_w, y * ONE / screen_h, (x + width) * ONE / screen_w, (y + height) * ONE / screen_h};
+	GLfixed box[4] = {x * ONE / unit_w, y * ONE / unit_h, (x + width) * ONE / unit_w, (y + height) * ONE / unit_h};
 	int texels[4] = {x * 1024 / screen_w, y * 1024 / page_rows, (x + width) * 1024 / screen_w, (y + height) * 1024 / page_rows};
 
 	if (width > 0 && height > 0)
@@ -1663,8 +1746,8 @@ static void
 cursor_corners(unsigned int *to, int shown)
 {
 	int x = pointer_x - cursor_hot_x, y = pointer_y - cursor_hot_y;
-	unsigned int x0 = x * ONE / screen_w, y0 = y * ONE / screen_h;
-	unsigned int x1 = (x + cursor_w) * ONE / screen_w, y1 = (y + cursor_h) * ONE / screen_h;
+	unsigned int x0 = x * ONE / unit_w, y0 = y * ONE / unit_h;
+	unsigned int x1 = (x + cursor_w) * ONE / unit_w, y1 = (y + cursor_h) * ONE / unit_h;
 
 	if (!shown || !cursor_w || hw_on)
 		x0 = x1 = y0 = y1 = 0;
@@ -1889,6 +1972,34 @@ idle_poll(void)
 		mcw_rest();
 }
 
+/*
+ * A controller's moves as keys (docs/machine/input.md, "Game controls"): a notch of the left hand's stick
+ * (the second wheel) is an arrow key pressed and let go, which scrolls the map a step, and the Y button
+ * is Escape (the menu). They wait here and are given before anything else is asked.
+ */
+static int pad_queue[16], pad_head, pad_tail;	/* a key, + 0x1000 for its press */
+static uint32_t pad_held;
+
+static void
+pad_tap(int key)
+{
+	if (((pad_tail + 2) & 15) == pad_head || ((pad_tail + 1) & 15) == pad_head)
+		return;
+	pad_queue[pad_tail] = key | 0x1000, pad_tail = (pad_tail + 1) & 15;
+	pad_queue[pad_tail] = key, pad_tail = (pad_tail + 1) & 15;
+}
+
+static int
+pad_scroll(GR_BUTTON b)
+{
+	int key = b & GR_BUTTON_SCROLL2LEFT ? 0x25 : b & GR_BUTTON_SCROLL2RIGHT ? 0x27 : b & GR_BUTTON_SCROLL2UP ? 0x26 :
+		  b & GR_BUTTON_SCROLL2DN ? 0x28 : 0;
+
+	if (key)
+		pad_tap(key);
+	return key;
+}
+
 int
 host_event(struct host_event *event)
 {
@@ -1900,6 +2011,22 @@ host_event(struct host_event *event)
 
 	if (!screen)
 		return 0;
+	if (pad_head != pad_tail) {
+		event->type = HOST_KEY;
+		event->key = pad_queue[pad_head] & 0xfff;
+		event->down = pad_queue[pad_head] >> 12;
+		pad_head = (pad_head + 1) & 15;
+		if (log > 0)
+			fprintf(stderr, "tdinput: pad key %d %s\n", event->key, event->down ? "down" : "up");
+		return 1;
+	}
+	{
+		uint32_t buttons = control(REG_INPUT)[2], down = buttons & ~pad_held;
+
+		pad_held = buttons;
+		if (down & 0x4000)	/* (Y: input_words.h's INPUT_LEFT_UPPER) */
+			pad_tap(0x1b);
+	}
 	if (scene_out && mcw_ready(scene_handle))
 		scene_finish();		/* the worker has made the scene: its frame is shown */
 	frames_pump(1);
@@ -1954,6 +2081,8 @@ host_event(struct host_event *event)
 		case GR_EVENT_TYPE_UPDATE:
 			/* the picture is stretched over the window, whatever size it is given */
 			if (e.update.utype == GR_UPDATE_SIZE) {
+				sized_w = e.update.width, sized_h = e.update.height, sized_at = host_ms();
+				sized_at += !sized_at;	/* (0 is none) */
 				seglWindowChanged();
 				pointer_publish();
 				if (log)
@@ -1965,6 +2094,16 @@ host_event(struct host_event *event)
 		case GR_EVENT_TYPE_BUTTON_UP:
 			owed -= owed > 0;
 			seglPicturePoint(e.button.x, e.button.y, screen_w, screen_h, &pointer_x, &pointer_y);
+			if (e.type == GR_EVENT_TYPE_BUTTON_DOWN && pad_scroll(e.button.changebuttons) && pad_head != pad_tail) {
+				/* (the key's press now, its release at the next call) */
+				event->type = HOST_KEY;
+				event->key = pad_queue[pad_head] & 0xfff;
+				event->down = 1;
+				pad_head = (pad_head + 1) & 15;
+				if (log)
+					fprintf(stderr, "tdinput: pad key %d down\n", event->key);
+				return 1;
+			}
 			if (!(e.button.changebuttons & (GR_BUTTON_L | GR_BUTTON_R)))
 				break;
 			event->type = HOST_BUTTON;
