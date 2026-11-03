@@ -141,7 +141,8 @@ freed once the renderer has the world (`tr_bsp.cpp`: 9.5 MB); the `.nav` file's 
     JK2_MARK=F0,F1      a measured window: jk2mark: lines at frames F0 and F1 (its frames and milliseconds), then the end
     JK2_MUSIC=engine    the music decoded and mixed by this core, as before ("Music on the card"); JK2_MUSIC_LOG=1 says
                         each stream of the card's; JK2_WORKERS=N the workers asked for (16)
-    JK2_GL=plain        rd-vanilla's triangles through Half-Life's shim as before ("Fewer instructions")
+    JK2_GL=plain        rd-vanilla's triangles through Half-Life's shim as before ("Speed"); =passes the GPU's passes as
+                        before ("What the menu was missing"); =nomemo no large draw kept; JK2_GL_LOG=F frame F's draws
     JK2_SHADOWS=made    every blob shadow made anew each frame ("Fewer instructions")
     HL_POOL_MB=N        the GPU's texture memory, MB of RAM (36); HLGL_LOG=1 every texture uploaded
     jk2gpu:             with JK2_STATS, the textures in GPU memory, how many found no room, vertices drawn a frame
@@ -430,13 +431,15 @@ a slow frame):
 
 | | before (650f94c3) | after | |
 |---|---|---|---|
-| The main menu (frames 100 to 300, `game_par.py jk2-menu`) | 1.16 frames a second, 4.62 million instructions of core 0 a frame | 6.7 frames a second, 0.68 million (with the logo, the title and the saber it was missing drawn) | |
+| The main menu (frames 100 to 300, `game_par.py jk2-menu`) | 1.16 frames a second, 4.62 million instructions of core 0 a frame | 7.1 frames a second, 0.63 million (with the logo, the title and the saber it was missing drawn) | |
 | The walk (frames 1,500 to 1,700) | 0.31 frames a second, 3.27 s a frame, about 17 million | 0.64 to 0.66 frames a second, 1.51 to 1.56 s a frame, 8.1 to 8.3 million | |
 | The opening scene's march, the busiest stretch of the start (1,250 to 1,450) | 0.28, 3.61 s a frame | 0.53, 1.90 s a frame | |
 | The walk on after the turn (1,750 to 1,900) | 0.48, 2.09 s | 0.96, 1.04 s | |
 
 The test's shot at frame 1,900 kills the player and the autosave loads from 1,950: the start has no fight to measure
 past that; the march is its most crowded stretch (14 Stormtroopers in view).
+
+### Fewer instructions
 
 What each step gave (the walk's instructions of core 0 a frame, from `tools/prof.py` over frames 1,500 to 1,650):
 
@@ -451,6 +454,7 @@ What each step gave (the walk's instructions of core 0 a frame, from `tools/prof
 | A blob shadow from the same place, turning and size kept (`cg_players.cpp`: its trace and mark are of the world) | 0.5 to 1.1 million (standing people) | |
 | A patch tested against its bounds before its facets (`cm_patch.cpp`: Quake III 1.32's test, which Raven's code lacked) | about 0.4 million | |
 | A model's frame not between two frames kept (`tr_surface.cpp`), the mix's transfer from locals (`snd_mix.cpp`) | small | 0.76 to 0.68 million, the menu's whole picture now drawn |
+| A large draw as it was drawn from its words kept in GPU memory (`gl_jk2.c`'s memo: the logo's first stage) | | 0.68 to 0.63 million |
 
 Every one of these leaves the game as it was: `host_sum.sh`'s nine lines and `test_all.py jk2`, `jk2-sums` and
 `jk2-install` the same; captures of the level at frame 900 (`+map demo`) and of the walk at frame 1,650 of the keys'
@@ -521,7 +525,7 @@ second). 15 frames a second is 44 passes, about 366 thousand instructions of cor
 - **The level kept in GPU memory** (Half-Life's `gl_kept.c`) or a renderer of our own: the world's 200 draws a frame
   through the shim are about 1 million.
 
-So the menu at about 6.7 frames a second and play at 1 to 2 s a frame is where this stands; 15 frames a second in
+So the menu at about 7.1 frames a second and play at 1 to 2 s a frame is where this stands; 15 frames a second in
 play would need the game's frame itself several times cheaper and the client and renderer off core 0.
 
 ## What is left, in order

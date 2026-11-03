@@ -200,6 +200,12 @@ GAMES = {
         wall=6000, more=['--expect', 'Type yes', '--send', 'yes\\n'],
         mark='jk2mark: begins', frames=lambda log: int(re.search(r'jk2mark: ends, (\d+) frames', log)[1]),
         rate=lambda log: tuple(int(x) for x in re.search(r'jk2mark: ends, (\d+) frames in (\d+) ms', log).groups())),
+    'jk2-level': dict(
+        what='the level started at once (+map demo, no input), the opening scene at frames 900 to 1,000 (fixedtime 50): shorter on the card',
+        cmd='jk2 --unpack; nano-X -p & sleep 2; JK2_MARK=900,1000 JK2_SEED=7 jk2 +set fixedtime 50 +set com_maxfps 0 +map demo',
+        wall=6000, more=['--expect', 'Type yes', '--send', 'yes\\n'],
+        mark='jk2mark: begins', frames=lambda log: int(re.search(r'jk2mark: ends, (\d+) frames', log)[1]),
+        rate=lambda log: tuple(int(x) for x in re.search(r'jk2mark: ends, (\d+) frames in (\d+) ms', log).groups())),
     'jk2-march': dict(
         what='the same game, the opening scene: Stormtroopers marching, the busiest stretch of the start, frames 1,250 to 1,450 (fixedtime 50)',
         cmd='jk2 --unpack; nano-X -p & sleep 2; JK2_KEYS="250:enter 330:at500,455 340:mouse1 1500:w+ 1700:w- 1700:right+ 1730:right- '

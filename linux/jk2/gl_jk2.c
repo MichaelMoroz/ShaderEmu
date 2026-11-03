@@ -100,6 +100,61 @@ static int fast_ok(void) {
     return !fast_off && va_pos.on && va_pos.type == GL_FLOAT && va_pos.size >= 3 && va_coord.on && va_coord.type == GL_FLOAT &&
         va_coord.size >= 2 && va_colour.on && va_colour.type == GL_UNSIGNED_BYTE && va_colour.size == 4 && !(offsetting && offset_pull != 0);
 }
+// A large draw that is as it was (docs/games/jk2.md, "Fewer instructions"): the menu's turning logo is 4,320 indices of
+// 1,399 vertices whose first stage (its colour, its own coordinates) is the same every frame, the model turning by the
+// matrix. Its GPU words are kept in GPU memory of their own (hlglKeptMemory), with what they were made of, and a draw of
+// the same state, indices, vertices, coordinates and colours is drawn from there: a comparison of its inputs, about a
+// third of making it again, and none of its 69 KB stored. Draws of 600 indices and more, the last 8. JK2_GL=nomemo: not.
+#define MEMO_SLOTS 8
+#define MEMO_LEAST 600
+typedef struct { int count, n, far, frame; uint32_t keep, colour; unsigned used; gpu_state s; uint32_t *in, *idx; } memo_t;
+static memo_t memo[MEMO_SLOTS];
+static uint8_t* memo_gpu;
+static int memo_state = -1;   // -1 not yet asked, 0 off, 1 on
+static unsigned memo_clock;
+// (*shape: a kept draw of the same state and size whose words differ: one that changes every frame, as the logo's
+// second stage, which takes its coordinates from the eye)
+static memo_t* memo_find(const gpu_state* s, int count, int n, int far, uint32_t keep, const uint8_t* pos, int ps,
+                         const uint8_t* tc, int ts, const uint8_t* col, int cs, const uint32_t* idx, uint32_t lo, memo_t** shape) {
+    *shape = 0;
+    for (int e = 0; e < MEMO_SLOTS; e++) {
+        memo_t* m = &memo[e];
+        if (!m->used || m->count != count || m->n != n || m->far != far || m->keep != keep || memcmp(&m->s, s, sizeof *s)) continue;
+        *shape = m;
+        const uint32_t* in = m->in;
+        int k = 0;
+        for (; k < n; k++, in += 6) {
+            const uint32_t* p = (const uint32_t*)(pos + (size_t)k * ps);
+            const uint32_t* t = (const uint32_t*)(tc + (size_t)k * ts);
+            if (p[0] != in[0] || p[1] != in[1] || p[2] != in[2] || t[0] != in[3] || t[1] != in[4] ||
+                *(const uint32_t*)(col + (size_t)k * cs) != in[5]) break;
+        }
+        if (k < n) continue;
+        int i = 0;
+        for (; i < count && idx[i] - lo == m->idx[i]; i++) {
+        }
+        if (i == count) return m;
+    }
+    return 0;
+}
+// The slot a new large draw is kept in: the one used longest ago
+static memo_t* memo_slot(void) {
+    if (memo_state < 0) {
+        const char* g = getenv("JK2_GL");
+        memo_state = 0;
+        if (!(g && !strcmp(g, "nomemo")) && (memo_gpu = hlglKeptMemory(MEMO_SLOTS * MAX_PRIMITIVE * 16))) {
+            memo_state = 1;
+            for (int e = 0; e < MEMO_SLOTS && memo_state; e++)
+                if (!(memo[e].in = malloc(MAX_PRIMITIVE * 6 * 4)) || !(memo[e].idx = malloc(MAX_PRIMITIVE * 4))) memo_state = 0;
+        }
+    }
+    if (!memo_state) return 0;
+    memo_t* best = &memo[0];
+    for (int e = 1; e < MEMO_SLOTS; e++)
+        if (memo[e].used < best->used) best = &memo[e];
+    return best;
+}
+
 // (the colour as the plain way makes it of four bytes: alpha's complement on top)
 #define WORD_OF(c) ((255u - ((c) >> 24)) << 24 | ((c) & 0xff) << 16 | ((c) & 0xff00) | ((c) >> 16 & 0xff))
 static int fast_triangles(int count, const uint32_t* idx) {
@@ -155,6 +210,27 @@ static int fast_triangles(int count, const uint32_t* idx) {
     const uint8_t *pos = va_pos.p + (size_t)lo * va_pos.stride, *tc = va_coord.p + (size_t)lo * va_coord.stride,
                   *col = va_colour.p + (size_t)lo * va_colour.stride;
     int ps = va_pos.stride, ts = va_coord.stride, cs = va_colour.stride;
+    memo_t *kept = 0, *shape;
+    if (count >= MEMO_LEAST && memo_state != 0 && !replace) {
+        if ((kept = memo_find(&s, count, n, far, keep, pos, ps, tc, ts, col, cs, idx, lo, &shape))) {
+            gpu_state ks = s;
+            ks.colour = kept->colour;
+            gpuDrawAt(&ks, gpuAddress(memo_gpu + (size_t)(kept - memo) * MAX_PRIMITIVE * 16), count);
+            kept->used = ++memo_clock, kept->frame = gl_frames;
+            drawn_vertices += (uint32_t)count;
+            if (gl_log_at > 0 && gl_log_at == gl_frames) printf("jk2gl: draw %d indices %d vertices kept, slot %d\n", count, n, (int)(kept - memo));
+            return 1;
+        }
+        if (shape && shape->frame >= gl_frames - 1 && (gl_frames & 15)) {
+            shape->frame = gl_frames;   // (it changes from frame to frame: kept as it is, and tried again every 16th frame)
+            kept = 0;
+        } else {
+            kept = shape ? shape : memo_slot();
+            if (kept && kept->used && kept->frame >= gl_frames - 1) seglSettle();   // (the list being drawn may read it)
+        }
+        if (gl_log_at > 0 && gl_log_at == gl_frames) printf("jk2gl: draw %d indices %d vertices not kept (memo %d), slot %d\n", count, n, memo_state, kept ? (int)(kept - memo) : -1);
+    }
+    gpu_state s0 = s;   // (the state as the memo compares it, before its colour)
     int textured = (s.fragment & 0xff) != GPU_COLOUR;
     float low_s = 0, low_t = 0, high_s = 0, high_t = 0;
     uint32_t first = *(const uint32_t*)col;
@@ -224,8 +300,22 @@ static int fast_triangles(int count, const uint32_t* idx) {
         drawn_vertices += (uint32_t)count;
         return 1;
     }
-    uint32_t* to = gpuDrawRoom(&s, count, count);
-    if (!to) return 1;
+    uint32_t* to;
+    if (kept && !table) {
+        to = (uint32_t*)(memo_gpu + (size_t)(kept - memo) * MAX_PRIMITIVE * 16);
+        uint32_t* in = kept->in;
+        for (int k = 0; k < n; k++, in += 6) {
+            const uint32_t* p = (const uint32_t*)(pos + (size_t)k * ps);
+            const uint32_t* t = (const uint32_t*)(tc + (size_t)k * ts);
+            in[0] = p[0], in[1] = p[1], in[2] = p[2], in[3] = t[0], in[4] = t[1], in[5] = *(const uint32_t*)(col + (size_t)k * cs);
+        }
+        for (int i = 0; i < count; i++) kept->idx[i] = idx[i] - lo;
+        kept->s = s0, kept->count = count, kept->n = n, kept->far = far, kept->keep = keep, kept->colour = s.colour;
+        kept->used = ++memo_clock, kept->frame = gl_frames;
+        gpuDrawAt(&s, gpuAddress(to), count);
+    } else if (!(to = gpuDrawRoom(&s, count, count))) {
+        return 1;
+    }
     for (int i = 0; i < count; i++, to += 4) {
         const uint32_t* m = &made[(idx[i] - lo) * 4];
         uint32_t a = m[0], b = m[1], c = m[2], d = m[3];
