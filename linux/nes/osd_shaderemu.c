@@ -250,6 +250,29 @@ video_show(bitmap_t *bmp, int num_dirties, rect_t *dirty_rects)
 	frame_counted(frames_emulated, skip + 1, picture);
 }
 
+/* The picture in the window at the console's shape, as large as fits, centred, the rest black (docs/games/nes.md,
+ * "The window"): a window made wider or taller shows more black, not a picture pulled out of shape. NES_STRETCH=1 fills
+ * it as before. The console's 256 x 240 is shown at 8:7 pixels, a television's 4:3 less its overscan: 292 x 240. */
+static void
+nes_viewport(int width, int height)
+{
+	static int stretch = -1;
+	int w = width, h = height;
+
+	if (stretch < 0)
+		stretch = getenv("NES_STRETCH") != NULL;
+	glViewport(0, 0, width, height);
+	if (stretch)
+		return;
+	glClearColor(0, 0, 0, 1);
+	glClear(GL_COLOR_BUFFER_BIT);
+	if (w * 240 > h * 292)
+		w = h * 292 / 240;
+	else
+		h = w * 240 / 292;
+	glViewport((width - w) / 2, (height - h) / 2, w, h);
+}
+
 /* The GPU draws a picture over the whole window. Without `wait` the list is only submitted:
  * for a picture that nobody writes while it is the one on show. */
 static void
@@ -260,7 +283,7 @@ window_draw(GLuint of, int wait)
 	int width, height;
 
 	seglSize(&width, &height);
-	glViewport(0, 0, width, height);
+	nes_viewport(width, height);
 	glMatrixMode(GL_PROJECTION);
 	glLoadMatrixx(whole);
 	glMatrixMode(GL_MODELVIEW);
@@ -1111,7 +1134,7 @@ gd_draw(uint32_t written, uint32_t record)
 	if (width != gd.set_w || height != gd.set_h) {
 		gd.set_w = width;
 		gd.set_h = height;
-		glViewport(0, 0, width, height);
+		nes_viewport(width, height);
 		glMatrixMode(GL_PROJECTION);
 		glLoadMatrixx(whole);
 		glMatrixMode(GL_MODELVIEW);

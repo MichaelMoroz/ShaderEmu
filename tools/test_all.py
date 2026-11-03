@@ -768,6 +768,10 @@ CASES = [
                '--scroll', '13.3,x,-1', '--pointer-button', '0x80,7,16', '--pointer-button', '0x10000,14,14.3'],
          has=[r'^nxtetris: pad left: piece \d at 2,', r'^nxtetris: pad left: piece \d at 1,', r'^nxtetris: pad down: .* score 1$',
               r'^nxtetris: pad cw: .* turned 1,', r'^nxtetris: pad ccw: .* turned 0,', r'^nxtetris: pad drop: ']),
+    # the C&C games: a notch of the left hand's stick is an arrow pressed and let go (the map scrolls a step) over Tiberian Dawn's window
+    case('pad-tdawn', 'games tdawn', X + 'TDAWN_INPUT_LOG=1 ' + TD + 'TDAWN_SCEN=10 TDAWN_FRAMES=2000 tdawn FROMINSTALL', True, until='pad key 38 up', wall=300,
+         more=['--pointer-sweep', '0', '--pointer-circle', '300,250,0', '--scroll', '14,lx,-2', '--scroll', '15,ly,1'],
+         count=[(r'tdinput: pad key 37 down', 2)], has=[r'tdinput: pad key 38 down']),
     case('pad-pinball', 'desktop games', X + 'NXPINBALL_PRINT=1 nxpinball & sleep 4; nxkey space; sleep 8; killall nxpinball', wall=120,
          more=['--pointer-button', '0x80,5,20', '--pointer-button', '0x100,8,8.5', '--pointer-button', '0x400,9,9.5', '--pointer-button', '0x10000,10,11'],
          has=[r'^nxpinball: left flipper held', r'^nxpinball: left flipper let go', r'^nxpinball: right flipper held', r'^nxpinball: plunger held',
