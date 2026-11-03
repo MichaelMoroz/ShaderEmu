@@ -2127,8 +2127,21 @@ index f9c20ea..7ba7870 100644
 +
  #endif
 \ No newline at end of file
+diff --git a/tiberiandawn/confdlg.cpp b/tiberiandawn/confdlg.cpp
+index 44e1c18..e1ad2c7 100644
+--- a/tiberiandawn/confdlg.cpp
++++ b/tiberiandawn/confdlg.cpp
+@@ -55,7 +55,7 @@ bool ConfirmationClass::Process(int text)
+  *=============================================================================================*/
+ bool ConfirmationClass::Process(char const* string)
+ {
+-    int factor = (SeenBuff.Get_Width() == 320) ? 1 : 2;
++    int factor = (ShaderEmu_Low_Res) ? 1 : 2;
+ 
+     enum
+     {
 diff --git a/tiberiandawn/conquer.cpp b/tiberiandawn/conquer.cpp
-index a8aebd8..a70b926 100644
+index a8aebd8..70ed241 100644
 --- a/tiberiandawn/conquer.cpp
 +++ b/tiberiandawn/conquer.cpp
 @@ -98,6 +98,663 @@ extern void Send_Statistics_Packet(void);
@@ -2795,6 +2808,15 @@ index a8aebd8..a70b926 100644
  #ifndef ARRAY_SIZE
  #define ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
  #endif
+@@ -842,7 +1499,7 @@ static void Message_Input(KeyNumType& input)
+     unsigned short magic_number;
+     unsigned short crc;
+ #endif
+-    int factor = (SeenBuff.Get_Width() == 320) ? 1 : 2;
++    int factor = (ShaderEmu_Low_Res) ? 1 : 2;
+ 
+     /*
+     **	Check keyboard input for a request to send a message.
 @@ -1126,12 +1783,31 @@ bool Color_Cycle(void)
      static CountDownTimerClass _ftimer(BT_SYSTEM, 0);
      static bool _up = false;
@@ -3107,6 +3129,24 @@ index a8aebd8..a70b926 100644
      if (shapefile && shapenum != -1) {
  
          /*
+@@ -3919,7 +4758,7 @@ void const* Hires_Retrieve(const char* name)
+ {
+     char filename[30];
+ 
+-    if (SeenBuff.Get_Width() != 320) {
++    if (!ShaderEmu_Low_Res) {
+         sprintf(filename, "H%s", name);
+     } else {
+         strcpy(filename, name);
+@@ -3928,7 +4767,7 @@ void const* Hires_Retrieve(const char* name)
+ }
+ int Get_Resolution_Factor(void)
+ {
+-    return ((SeenBuff.Get_Width() == 320) ? 0 : 1);
++    return ((ShaderEmu_Low_Res) ? 0 : 1);
+ }
+ 
+ /**************************************************************************************************
 @@ -3976,6 +4815,21 @@ void Shake_The_Screen(int shakes, HousesType house)
      }
  #else
@@ -3325,11 +3365,66 @@ index 42d052d..d43bdc2 100644
  
      //
      // We need a way to bypass visible view checks when we are running in the context of GlyphX without using the
+diff --git a/tiberiandawn/drop.cpp b/tiberiandawn/drop.cpp
+index ddb1dac..daff4f6 100644
+--- a/tiberiandawn/drop.cpp
++++ b/tiberiandawn/drop.cpp
+@@ -45,7 +45,7 @@ DropListClass::DropListClass(int id,
+                              int h,
+                              void const* up,
+                              void const* down)
+-    : EditClass(id, text, max_len, flags, x, y, w, 9 * ((SeenBuff.Get_Width() == 320) ? 1 : 2), ALPHANUMERIC)
++    : EditClass(id, text, max_len, flags, x, y, w, 9 * ((ShaderEmu_Low_Res) ? 1 : 2), ALPHANUMERIC)
+     , IsDropped(false)
+     , ListHeight(h)
+     , DropButton(0, down, x + w, y)
+@@ -146,7 +146,7 @@ void DropListClass::Peer_To_Peer(unsigned flags, KeyNumType& key, ControlClass&
+ 
+ void DropListClass::Expand(void)
+ {
+-    int factor = (SeenBuff.Get_Width() == 320) ? 1 : 2;
++    int factor = (ShaderEmu_Low_Res) ? 1 : 2;
+ 
+     if (!IsDropped) {
+         List.X = X;
+diff --git a/tiberiandawn/expand.cpp b/tiberiandawn/expand.cpp
+index 9ca55a1..e0262c8 100644
+--- a/tiberiandawn/expand.cpp
++++ b/tiberiandawn/expand.cpp
+@@ -79,7 +79,7 @@ void EListClass::Draw_Entry(int index, int x, int y, int width, int selected)
+ 
+ bool Expansion_Dialog(void)
+ {
+-    int factor = (SeenBuff.Get_Width() == 320) ? 1 : 2;
++    int factor = (ShaderEmu_Low_Res) ? 1 : 2;
+ 
+     int option_width = 236 * factor;
+     int option_height = 162 * factor;
+@@ -263,7 +263,7 @@ bool Expansion_Dialog(void)
+  *=============================================================================================*/
+ bool Bonus_Dialog(void)
+ {
+-    int factor = (SeenBuff.Get_Width() == 320) ? 1 : 2;
++    int factor = (ShaderEmu_Low_Res) ? 1 : 2;
+ 
+     int option_width = 236 * factor;
+     int option_height = 162 * factor;
 diff --git a/tiberiandawn/externs.h b/tiberiandawn/externs.h
-index ff588bf..db7de79 100644
+index ff588bf..5682309 100644
 --- a/tiberiandawn/externs.h
 +++ b/tiberiandawn/externs.h
-@@ -418,6 +418,13 @@ extern int ShowCommand;
+@@ -67,6 +67,10 @@
+ #define GBUFF_INIT_HEIGHT 400
+ #endif
+ 
++// ShaderEmu: the art is the 320 x 200 kind (DOS mode, the demo): set with the first video mode and kept when the
++// screen is laid out again at another size (shaderemu.cpp, ShaderEmu_Relayout); it was the screen's width being 320
++extern bool ShaderEmu_Low_Res;
++
+ #ifdef JAPANESE
+ extern bool ForceEnglish;
+ #endif
+@@ -418,6 +422,13 @@ extern int ShowCommand;
  extern void* PacketLater;
  
  extern unsigned int IsTheaterShape;
@@ -4125,6 +4220,50 @@ index d5df069..3361820 100644
  {
      return (CELL)(cell + AdjacentCell[dir]);
  }
+diff --git a/tiberiandawn/gamedlg.cpp b/tiberiandawn/gamedlg.cpp
+index bc6441a..dd7c4c5 100644
+--- a/tiberiandawn/gamedlg.cpp
++++ b/tiberiandawn/gamedlg.cpp
+@@ -53,7 +53,7 @@
+  *=============================================================================================*/
+ void GameControlsClass::Process(void)
+ {
+-    int factor = (SeenBuff.Get_Width() == 320) ? 1 : 2;
++    int factor = (ShaderEmu_Low_Res) ? 1 : 2;
+ 
+     /*
+     **	Dialog & button dimensions
+diff --git a/tiberiandawn/goptions.cpp b/tiberiandawn/goptions.cpp
+index 447943e..ccb1568 100644
+--- a/tiberiandawn/goptions.cpp
++++ b/tiberiandawn/goptions.cpp
+@@ -47,7 +47,7 @@
+ 
+ void GameOptionsClass::Adjust_Variables_For_Resolution(void)
+ {
+-    int factor = (SeenBuff.Get_Width() == 320) ? 1 : 2;
++    int factor = (ShaderEmu_Low_Res) ? 1 : 2;
+ 
+     OptionWidth = (216 + 8) * factor;
+     OptionHeight = 100 * factor;
+@@ -111,7 +111,7 @@ void GameOptionsClass::Process(void)
+     **	Build the button list for all of the buttons for this dialog.
+     */
+     int maxwidth = 0;
+-    int resfactor = (SeenBuff.Get_Width() == 320) ? 1 : 2;
++    int resfactor = (ShaderEmu_Low_Res) ? 1 : 2;
+ 
+     for (int index = 0; index < sizeof(_constants) / sizeof(_constants[0]); index++) {
+         int text = _constants[index].Text;
+@@ -507,7 +507,7 @@ void GameOptionsClass::Process(void)
+ void Draw_Caption(int text, int x, int y, int w)
+ {
+     OptionControlType option = OPTION_NONE;
+-    int factor = (SeenBuff.Get_Width() == 320) ? 1 : 2;
++    int factor = (ShaderEmu_Low_Res) ? 1 : 2;
+ 
+     /*
+     **	Determine the filigree to use depending on the text of the caption.
 diff --git a/tiberiandawn/gscreen.cpp b/tiberiandawn/gscreen.cpp
 index 4efa828..9b98877 100644
 --- a/tiberiandawn/gscreen.cpp
@@ -4347,7 +4486,7 @@ index 9b527ac..4f4b797 100644
  
          Set_Occupy_Bit(coord);
 diff --git a/tiberiandawn/init.cpp b/tiberiandawn/init.cpp
-index 8ae9955..6bc924f 100644
+index 8ae9955..993832a 100644
 --- a/tiberiandawn/init.cpp
 +++ b/tiberiandawn/init.cpp
 @@ -42,6 +42,9 @@
@@ -4405,6 +4544,15 @@ index 8ae9955..6bc924f 100644
  
                      ScenPlayer = SCEN_PLAYER_GDI;
                      ScenDir = SCEN_DIR_EAST;
+@@ -1404,7 +1422,7 @@ bool Select_Game(bool fade)
+     **	properly set.
+     */
+     CCDebugString("C&C95 - Initialising message system.\n");
+-    int factor = (SeenBuff.Get_Width() == 320) ? 1 : 2;
++    int factor = (ShaderEmu_Low_Res) ? 1 : 2;
+     Messages.Init(Map.TacPixelX, Map.TacPixelY, 6, MAX_MESSAGE_LENGTH, 6 * factor + 1);
+ 
+     /*
 @@ -2533,6 +2551,12 @@ void Init_Random(void)
          /*
          ** Set the optional user-specified seed
@@ -4616,6 +4764,19 @@ index bb688bc..1711aa9 100644
  
      /*
      **	Make room if the insertion spot is not at the end of the vector.
+diff --git a/tiberiandawn/loaddlg.cpp b/tiberiandawn/loaddlg.cpp
+index f205eb1..e7fa17f 100644
+--- a/tiberiandawn/loaddlg.cpp
++++ b/tiberiandawn/loaddlg.cpp
+@@ -109,7 +109,7 @@ int LoadOptionsClass::Process(void)
+     /*
+     ** Dialog & button dimensions
+     */
+-    int factor = (SeenBuff.Get_Width() == 320) ? 1 : 2;
++    int factor = (ShaderEmu_Low_Res) ? 1 : 2;
+     int d_dialog_w = 250 * factor;
+     int d_dialog_h = 156 * factor;
+     int d_dialog_x = (SeenBuff.Get_Width() - d_dialog_w) >> 1;
 diff --git a/tiberiandawn/logic.cpp b/tiberiandawn/logic.cpp
 index 3b894e4..2dd16a0 100644
 --- a/tiberiandawn/logic.cpp
@@ -5007,6 +5168,41 @@ index ec90a58..838f708 100644
  void Fat_Put_Pixel(int x, int y, int color, int siz, GraphicViewPortClass& gpage);
  
  #endif
+diff --git a/tiberiandawn/mplayer.cpp b/tiberiandawn/mplayer.cpp
+index 693f63f..b4b529e 100644
+--- a/tiberiandawn/mplayer.cpp
++++ b/tiberiandawn/mplayer.cpp
+@@ -74,7 +74,7 @@ GameType Select_MPlayer_Game(void)
+     return GAME_NORMAL;
+ #else
+     static const char TXT_SKIRMISH[] = "Skirmish";
+-    int factor = (SeenBuff.Get_Width() == 320) ? 1 : 2;
++    int factor = (ShaderEmu_Low_Res) ? 1 : 2;
+     bool ipx_avail = false;
+     int number_of_buttons;
+     /*........................................................................
+@@ -885,7 +885,7 @@ static void Garble_Message(char* buf)
+  *=========================================================================*/
+ int Surrender_Dialog(void)
+ {
+-    int factor = (SeenBuff.Get_Width() == 320) ? 1 : 2;
++    int factor = (ShaderEmu_Low_Res) ? 1 : 2;
+     /*........................................................................
+     Dialog & button dimensions
+     ........................................................................*/
+diff --git a/tiberiandawn/msgbox.cpp b/tiberiandawn/msgbox.cpp
+index fb74f87..7dd9823 100644
+--- a/tiberiandawn/msgbox.cpp
++++ b/tiberiandawn/msgbox.cpp
+@@ -93,7 +93,7 @@ int WWMessageBox::Process(const char* msg, const char* b1txt, const char* b2txt,
+ 
+     GraphicBufferClass seen_buff_save(VisiblePage.Get_Width(), VisiblePage.Get_Height(), (void*)NULL);
+ 
+-    int factor = (SeenBuff.Get_Width() == 320) ? 1 : 2;
++    int factor = (ShaderEmu_Low_Res) ? 1 : 2;
+ 
+     if (b1txt != NULL && *b1txt == '\0')
+         b1txt = NULL;
 diff --git a/tiberiandawn/msglist.cpp b/tiberiandawn/msglist.cpp
 index 01b705d..0a29bdd 100644
 --- a/tiberiandawn/msglist.cpp
@@ -5056,7 +5252,7 @@ index 86ef937..153a1c9 100644
  
  private:
 diff --git a/tiberiandawn/netdlg.cpp b/tiberiandawn/netdlg.cpp
-index 3c74ae4..5956467 100644
+index 3c74ae4..7bedfc7 100644
 --- a/tiberiandawn/netdlg.cpp
 +++ b/tiberiandawn/netdlg.cpp
 @@ -388,7 +388,7 @@ void Destroy_Connection(int id, int error)
@@ -5068,6 +5264,64 @@ index 3c74ae4..5956467 100644
              housep->IsStarted = true;
  
              /*..................................................................
+@@ -716,7 +716,7 @@ bool Client_Remote_Connect(void)
+  *=============================================================================================*/
+ static int Net_Join_Dialog(void)
+ {
+-    int factor = (SeenBuff.Get_Width() == 320) ? 1 : 2;
++    int factor = (ShaderEmu_Low_Res) ? 1 : 2;
+     /*........................................................................
+     Dialog & button dimensions
+     ........................................................................*/
+@@ -2654,7 +2654,7 @@ Get_Join_Responses(JoinStateType* joinstate, ListClass* gamelist, ColorListClass
+ static int Net_New_Dialog(void)
+ {
+     /* ###Change collision detected! C:\PROJECTS\CODE\NETDLG.CPP... */
+-    int factor = (SeenBuff.Get_Width() == 320) ? 1 : 2;
++    int factor = (ShaderEmu_Low_Res) ? 1 : 2;
+     /*........................................................................
+     Dialog & button dimensions
+     ........................................................................*/
+@@ -4062,7 +4062,7 @@ void Net_Reconnect_Dialog(int reconn, int fresh, int oldest_index, unsigned int
+     char buf2[40] = {0};
+     char const* buf3 = "";
+ 
+-    int factor = (SeenBuff.Get_Width() == 320) ? 1 : 2;
++    int factor = (ShaderEmu_Low_Res) ? 1 : 2;
+ 
+     int d_txt6_h = 6 * factor + 1;
+     int d_margin = 5 * factor;
+@@ -4202,7 +4202,7 @@ void Wait_For_Focus(void)
+  *=============================================================================================*/
+ static int Net_Fake_New_Dialog(void)
+ {
+-    int factor = (SeenBuff.Get_Width() == 320) ? 1 : 2;
++    int factor = (ShaderEmu_Low_Res) ? 1 : 2;
+ 
+     int d_dialog_w = 120 * factor;                      // dialog width
+     int d_dialog_h = 80 * factor;                       // dialog height
+@@ -4793,7 +4793,7 @@ static int Net_Fake_New_Dialog(void)
+ 
+ static int Net_Fake_Join_Dialog(void)
+ {
+-    int factor = (SeenBuff.Get_Width() == 320) ? 1 : 2;
++    int factor = (ShaderEmu_Low_Res) ? 1 : 2;
+     /*........................................................................
+     Dialog & button dimensions
+     ........................................................................*/
+diff --git a/tiberiandawn/nulldlg.cpp b/tiberiandawn/nulldlg.cpp
+index 9ac012d..9a63fe9 100644
+--- a/tiberiandawn/nulldlg.cpp
++++ b/tiberiandawn/nulldlg.cpp
+@@ -83,7 +83,7 @@
+ #define TXT_JOIN_INTERNET_GAME 4567 + 2
+ int Com_Scenario_Dialog(void)
+ {
+-    int factor = (SeenBuff.Get_Width() == 320) ? 1 : 2;
++    int factor = (ShaderEmu_Low_Res) ? 1 : 2;
+     /*........................................................................
+     Dialog & button dimensions
+     ........................................................................*/
 diff --git a/tiberiandawn/object.cpp b/tiberiandawn/object.cpp
 index 72ed3e5..08c996c 100644
 --- a/tiberiandawn/object.cpp
@@ -5198,6 +5452,19 @@ index c4206a0..0a6f5a4 100644
      ScrollRate = ini.Get_Int(OPTIONS, "ScrollRate", 4);
      Set_Brightness(ini.Get_Int(OPTIONS, "Brightness", 0x80));
      Set_Sound_Volume(ini.Get_Int(OPTIONS, "Volume", 0xA0), false);
+diff --git a/tiberiandawn/radar.cpp b/tiberiandawn/radar.cpp
+index b0f40db..1d29523 100644
+--- a/tiberiandawn/radar.cpp
++++ b/tiberiandawn/radar.cpp
+@@ -1859,7 +1859,7 @@ void RadarClass::Draw_Names(void)
+     int kills;
+     int color;
+     TextPrintType style;
+-    int factor = (SeenBuff.Get_Width() == 320) ? 1 : 2;
++    int factor = (ShaderEmu_Low_Res) ? 1 : 2;
+ 
+     /*
+     ** Do nothing if the sidebar isn't there
 diff --git a/tiberiandawn/reinf.cpp b/tiberiandawn/reinf.cpp
 index 9d14c89..f3f9f89 100644
 --- a/tiberiandawn/reinf.cpp
@@ -5480,6 +5747,67 @@ index 596a8f7..cb485b6 100644
          if (!noscroll) {
  
              /*
+diff --git a/tiberiandawn/sidebar.cpp b/tiberiandawn/sidebar.cpp
+index f76e29c..1e6c92b 100644
+--- a/tiberiandawn/sidebar.cpp
++++ b/tiberiandawn/sidebar.cpp
+@@ -176,7 +176,7 @@ void SidebarClass::One_Time(void)
+     ** sidebar.  They are now variables because we need to change them for
+     ** variable resolutions.
+     */
+-    int factor = (SeenBuff.Get_Width() == 320) ? 1 : 2;
++    int factor = (ShaderEmu_Low_Res) ? 1 : 2;
+     SideBarWidth = SIDEBARWIDTH * factor;
+     SideX = SeenBuff.Get_Width() - SideBarWidth;
+     SideY = Map.RadY + Map.RadHeight + 1;
+diff --git a/tiberiandawn/sounddlg.cpp b/tiberiandawn/sounddlg.cpp
+index 65c12fd..d8b8087 100644
+--- a/tiberiandawn/sounddlg.cpp
++++ b/tiberiandawn/sounddlg.cpp
+@@ -58,7 +58,7 @@ protected:
+ 
+ int SoundControlsClass::Init(void)
+ {
+-    int factor = (SeenBuff.Get_Width() == 320) ? 1 : 2;
++    int factor = (ShaderEmu_Low_Res) ? 1 : 2;
+     Option_Width = 292 * factor;
+     Option_Height = 146 * factor;
+ 
+@@ -122,7 +122,7 @@ void SoundControlsClass::Process(void)
+ {
+     //	ThemeType theme;
+ 
+-    int factor = (SeenBuff.Get_Width() == 320) ? 1 : 2;
++    int factor = (ShaderEmu_Low_Res) ? 1 : 2;
+ 
+     Init();
+     /*
+diff --git a/tiberiandawn/special.cpp b/tiberiandawn/special.cpp
+index b38943f..4b3969b 100644
+--- a/tiberiandawn/special.cpp
++++ b/tiberiandawn/special.cpp
+@@ -280,7 +280,7 @@ int Fetch_Difficulty(void)
+     static const char TXT_HARD[] = "Hard";
+     static const char TXT_DIFFICULTY[] = "Difficulty";
+ 
+-    int factor = (SeenBuff.Get_Width() == 320) ? 1 : 2;
++    int factor = (ShaderEmu_Low_Res) ? 1 : 2;
+     int const w = 250 * factor;
+     int const h = 70 * factor;
+     int const x = ((320 * factor) / 2) - w / 2;
+diff --git a/tiberiandawn/tab.cpp b/tiberiandawn/tab.cpp
+index d8d8a53..bf9f20a 100644
+--- a/tiberiandawn/tab.cpp
++++ b/tiberiandawn/tab.cpp
+@@ -254,7 +254,7 @@ void TabClass::Set_Active(int select)
+ 
+ void TabClass::One_Time(void)
+ {
+-    int factor = (SeenBuff.Get_Width() == 320) ? 1 : 2;
++    int factor = (ShaderEmu_Low_Res) ? 1 : 2;
+     Eva_Width = 80 * factor;
+ 
+ #ifdef REMASTER_BUILD
 diff --git a/tiberiandawn/tdata.cpp b/tiberiandawn/tdata.cpp
 index b8bb9a7..ff78941 100644
 --- a/tiberiandawn/tdata.cpp
@@ -5933,3 +6261,16 @@ index 972a6dc..022ad31 100644
 +    ShaderEmu_Theme_Scanning = false;
 +#endif
  }
+diff --git a/tiberiandawn/visudlg.cpp b/tiberiandawn/visudlg.cpp
+index d114861..49d9583 100644
+--- a/tiberiandawn/visudlg.cpp
++++ b/tiberiandawn/visudlg.cpp
+@@ -40,7 +40,7 @@
+ 
+ int VisualControlsClass::Init(void)
+ {
+-    int factor = (SeenBuff.Get_Width() == 320) ? 1 : 2;
++    int factor = (ShaderEmu_Low_Res) ? 1 : 2;
+     Option_Width = 216 * factor;
+     Option_Height = 122 * factor;
+     Option_X = (((SeenBuff.Get_Width() - Option_Width) / 2));

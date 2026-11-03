@@ -38,8 +38,17 @@ SurfaceMonitorClass::SurfaceMonitorClass()
 
 static int game_w, game_h;
 
+// The art's kind, 320 x 200 or 640 x 400, by the first mode's width: a screen laid out again at another size keeps it
+// (Tiberian Dawn's externs.h; docs/games/tdawn.md, "The window's size")
+bool ShaderEmu_Low_Res;
+
 bool Set_Video_Mode(int w, int h, int bits_per_pixel)
 {
+    static bool set;
+    if (!set) {
+        set = true;
+        ShaderEmu_Low_Res = w == 320;
+    }
     game_w = w;
     game_h = h;
     return host_open(w, h) == 0;
