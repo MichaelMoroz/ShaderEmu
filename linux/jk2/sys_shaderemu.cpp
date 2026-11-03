@@ -204,6 +204,8 @@ static void se_window_open( int w, int h )
 }
 #endif
 
+static glconfig_t *se_glconfig;     // (WIN_Init's: the renderer's own, WIN_Shutdown)
+
 window_t WIN_Init( const windowDesc_t *desc, glconfig_t *glConfig )
 {
 	r_mode = Cvar_Get( "r_mode", "3", CVAR_ARCHIVE | CVAR_LATCH );
@@ -214,6 +216,7 @@ window_t WIN_Init( const windowDesc_t *desc, glconfig_t *glConfig )
 	int w = 640, h = 480;
 	if ( !R_GetModeInfo( &w, &h, r_mode->integer ) )
 		w = 640, h = 480;
+	se_glconfig = glConfig;
 	glConfig->vidWidth = w;
 	glConfig->vidHeight = h;
 	se_vid_w = w, se_vid_h = h;
@@ -510,6 +513,10 @@ void WIN_SetGamma( glconfig_t *glConfig, byte red[256], byte green[256], byte bl
 void WIN_Shutdown( void )
 {
 	IN_Shutdown();
+	// rd-vanilla calls WIN_Init again only while glConfig's width is 0 (R_Init), and its RE_Shutdown leaves it as it was: a
+	// vid_restart at the window's size kept 640 x 480, drawn in the corner of the larger window (seen in a capture, 3 November)
+	if ( se_glconfig )
+		se_glconfig->vidWidth = 0;
 }
 
 void *WIN_GL_GetProcAddress( const char *proc )
