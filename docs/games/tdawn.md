@@ -506,7 +506,7 @@ maximised is laid out at 392 x 272 (the view 312 x 264), a click on a unit selec
 (`TDAWN_INPUT_LOG=1` says both), and put back it is 320 x 200 again (the view 240 x 192) with Repair where it always was. The
 default size's sums are as before (`tdawn-*`), and `tdawn-window` under `RVC_RACES` is 0 undone. Captures (`rvc_harness --cpu`,
 `--save-state`, `tools/snapshot_screen.py`) show the maximised screen with the sidebar at its right edge and more of the map, and the
-put-back one as before. Not measured: the speed at the larger screen (the counts, `tdawn.profile`, were made at 320 x 200 and not again).
+put-back one as before. The counts were made again after the change (`tdawn.profile`: missions 1, 3 and 5, 1,200 frames, the recipe of "What the compiler is told"); at the default size `game_par.py tdawn --calibrated --runs 3` gives 71.5 guest frames a second (9.01 passes a frame) against 71.5 (9.00) for the tree before the layout work built here and 71.6 (8.99) for `linux/prebuilt`'s program. The larger screen's speed is not measured.
 ## A mission won
 
 `TDAWN_WIN=N` wins the mission at frame N (once) and prints a line at each step, as Red Alert's `RALERT_WIN` (`docs/games/ralert.md`, "A mission won"). Tiberian Dawn's demo goes from mission 1 to 10 by its own code, and its score screen makes no table of colours: mission 10 is then played with its state at frame 300 `325b1830` (`tdawn-won` in `tools/test_all.py`). Half of that screen's instructions are `Linear_Blit_To_Linear`, the page copied whole at each of its steps; not changed. The table and the doubled rows (`common/interpal.cpp`, `host_for`) are shared, for the screens that use them.
