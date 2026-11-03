@@ -38,7 +38,13 @@ static inline void aoe_world_may_give_way(void) {
 void aoe_world_finish(void);       // an update out is run to its end (before input that changes the game)
 void aoe_world_picture(void);      // a picture begins
 int aoe_world_slices(void);
-int aoe_path_dist(int d2);         // (int) (sqrt(d2) * 16.0) of the path finder, by a table (port/aoe_path.c)
+// (int) (sqrt(d2) * 16.0) of the path finder, by a table (port/aoe_path.c)
+extern unsigned short aoe_path_table[];
+extern int aoe_path_made;
+int aoe_path_dist_slow(int d2);
+static inline int aoe_path_dist(int d2) {
+    return aoe_path_made == 1 && (unsigned) d2 < 2 * 256 * 256 + 1 ? aoe_path_table[d2] : aoe_path_dist_slow(d2);
+}
 // Whether this runs on the view's worker: its stack, which the job notes at its start (mcw_on_worker is a call, at every
 // sprite: 6% of the view's worker). Core 0 and the world's own stack are never in it.
 struct AoeViewStack { unsigned lo, hi; char pad[8]; } __attribute__((aligned(16)));

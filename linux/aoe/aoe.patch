@@ -713,7 +713,7 @@ index 10cb1784..4c950c4d 100644
  }
  
 diff --git a/src/pathsys.cpp b/src/pathsys.cpp
-index 6dab12a1..f658a20b 100644
+index 6dab12a1..735b27ca 100644
 --- a/src/pathsys.cpp
 +++ b/src/pathsys.cpp
 @@ -1,3 +1,4 @@
@@ -748,6 +748,35 @@ index 6dab12a1..f658a20b 100644
              parentCost = this->MGP_costValue[bestPathPoint.x][bestPathPoint.y];
              oldHeuristic = estimateDistanceOrdered(goalX, goalY, bestPathPoint.x, bestPathPoint.y);
              newHeuristic = estimateDistanceOrdered(goalX, goalY, temp.x, temp.y);
+@@ -736,10 +737,10 @@ int PathingSystem::findTilePath(
+                                 // The original loads cost even for a terrain exception.
+                                 float terrainValue = terrainTable[terrain];
+                                 if (terrain != this->currentTerrainException1 && terrain != this->currentTerrainException2
+-                                    && terrainValue <= g_path_zero_terrain_value) {
++                                    && terrainValue <= 0.0f /* the port: g_path_zero_terrain_value, 0.0, as a float: no soft doubles (port/aoe_path.c) */) {
+                                     tmp = tile->border_type & 0x0f;
+                                     if (tmp == 0
+-                                        || terrainTable[map->border_types[tmp].underlay_terrain] <= g_path_zero_terrain_value) {
++                                        || terrainTable[map->border_types[tmp].underlay_terrain] <= 0.0f /* the port: g_path_zero_terrain_value, 0.0, as a float: no soft doubles (port/aoe_path.c) */) {
+                                         terrainStatus = 0xfe;
+                                         break;
+                                     }
+@@ -1078,13 +1079,13 @@ int PathingSystem::passable(RGE_Moving_Object* obj, float newX, float newY, int
+                             int terrain = tile->terrain_type & 0x1f;
+                             float terrainPassability = this->currentTerrainTable[terrain];
+                             if (terrain != this->currentTerrainException1 && terrain != this->currentTerrainException2
+-                                && !(terrainPassability > g_path_zero_terrain_value)) {
++                                && !(terrainPassability > 0.0f /* the port: as above */)) {
+                                 int border = tile->border_type & 0x0f;
+                                 if (border == 0) {
+                                     return 0;
+                                 }
+                                 int underlay = this->mapValue->border_types[border].underlay_terrain;
+-                                if (!(this->currentTerrainTable[underlay] > g_path_zero_terrain_value)) {
++                                if (!(this->currentTerrainTable[underlay] > 0.0f /* the port: as above */)) {
+                                     return 0;
+                                 }
+                             }
 diff --git a/src/rmm_dbct.cpp b/src/rmm_dbct.cpp
 index f3e0cf3a..212817f2 100644
 --- a/src/rmm_dbct.cpp
