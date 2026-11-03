@@ -144,6 +144,7 @@ freed once the renderer has the world (`tr_bsp.cpp`: 9.5 MB); the `.nav` file's 
     JK2_GL=plain        rd-vanilla's triangles through Half-Life's shim as before ("Speed"); =passes the GPU's passes as
                         before ("What the menu was missing"); =nomemo no large draw kept; JK2_GL_LOG=F frame F's draws
     JK2_SHADOWS=made    every blob shadow made anew each frame ("Fewer instructions")
+    JK2_RENDER=core     the drawing on core 0 ("The drawing on a worker"); JK2_SKIN=drawing Ghoul2 skinned by the drawing alone
     HL_POOL_MB=N        the GPU's texture memory, MB of RAM (36); HLGL_LOG=1 every texture uploaded
     jk2gpu:             with JK2_STATS, the textures in GPU memory, how many found no room, vertices drawn a frame
     +set com_demo 1     the demo (the starter's)
@@ -432,9 +433,9 @@ a slow frame):
 | | before (650f94c3) | after | |
 |---|---|---|---|
 | The main menu (frames 100 to 300, `game_par.py jk2-menu`) | 1.16 frames a second, 4.62 million instructions of core 0 a frame | 7.1 frames a second, 0.63 million (with the logo, the title and the saber it was missing drawn) | |
-| The walk (frames 1,500 to 1,700) | 0.31 frames a second, 3.27 s a frame, about 17 million | 0.64 to 0.66 frames a second, 1.51 to 1.56 s a frame, 8.1 to 8.3 million | |
-| The opening scene's march, the busiest stretch of the start (1,250 to 1,450) | 0.28, 3.61 s a frame | 0.53, 1.90 s a frame | |
-| The walk on after the turn (1,750 to 1,900) | 0.48, 2.09 s | 0.96, 1.04 s | |
+| The walk (frames 1,500 to 1,700, `jk2-walk`) | 0.31 frames a second, 3.27 s a frame (about 2,200 passes), about 17 million | 1.0 frames a second, 704 passes a frame; core 0 5.2 million, the drawing's worker 2.6 (0.64 and 1,046 passes with the drawing on core 0) | |
+| The opening scene's march, the busiest stretch of the start (1,250 to 1,450, `jk2-march`) | 0.28, 3.61 s a frame | 0.7, 1,008 passes a frame; core 0 5.9 million, the drawing's worker 3.6 (0.53 with the drawing on core 0) | |
+| The walk on after the turn (1,750 to 1,900) | 0.48, 2.09 s | 0.96, 1.04 s (with the drawing on core 0) | |
 
 The test's shot at frame 1,900 kills the player and the autosave loads from 1,950: the start has no fight to measure
 past that; the march is its most crowded stretch (14 Stormtroopers in view).
@@ -501,6 +502,32 @@ the buttons and nothing else. `JK2_GL_LOG=F` prints frame F's draws (`gl_jk2.c`)
 - The GPU's added pass scales by alpha, which `GL_ONE, GL_ONE` does not: the saber halos' alpha is a wave from -1 to 1
   (`alphaGen wave sin`), so they were dim or gone. Their alpha is made 1.
 
+### The drawing on a worker
+
+Since 3 November 2026 (`JK2_RENDER=core` is the way before). At a frame's end (`R_IssueRenderCommands` from
+`RE_EndFrame`, in play: `SE_InPlay`) rd-vanilla's commands go to a worker of their own (`gl_jk2.c`, `jk2RenderGive`: one
+of the first 16 cores, whose write caches are the larger, on a stack of 256 KB of its own), which runs
+`RB_ExecuteRenderCommands` while core 0 makes the next frame into a second `backEndData`. The picture is a frame later;
+a key still reaches the frame of the game it did (the window's part of the swap, `SE_WindowFrame`, is core 0's at the
+give; the GPU's list is swapped when the job is done, at the next give or any settle).
+
+- **Ghoul2's bones** were evaluated lazily by the drawing into the model's bone cache, which the game's and the client's
+  bolts set up anew meanwhile: at the give core 0 evaluates the bones each of the frame's surfaces names into a set of
+  its own (`SE_RSBones`, two sets) and the drawing reads those.
+- **Ghoul2's skinning** (`se_skin`, `RB_SurfaceGhoul`'s own loop) is shared out at the give by vertices to up to eight
+  helper jobs (`SE_SkinGive`, `mcw_try_call`); the drawing copies a surface's vertices once its helper is done (it is
+  posted first and waits for `jk2RenderGo`, so that no helper takes its worker). `JK2_SKIN=drawing`: without helpers.
+- **Settles**: any GL call core 0 makes while the job is out (a texture uploaded, a sync of the renderer's, a resize)
+  waits for it first (`SETTLE()` in `gl_jk2.c`); `jk2render:` lines (with `JK2_STATS`) count gives, settles and the passes
+  waited.
+- **Apart**: `R_RotateForEntity`'s scratch matrix is one for each side and `glState.finishCalled` the drawing's, which
+  `RVC_RACES` found stored by both cores; every variable's section starts a texel (`build.sh`'s objcopy); no malloc and
+  no clock on the worker (the kept model frames and the memo's memory are made on core 0).
+
+Checked: captures (`rvc_harness --cpu`) drawn on the worker and on core 0 a frame earlier are the same pixels (the level
+at frame 900, the march at 1,400, the walk at 1,650 with Kyle in view: 0 of 307,680 differ); `RVC_RACES` with
+`RVC_RACES_NEAR=4` 0 undone on the walk, the march and the menu; with no window (the sums' runs) nothing changes.
+
 ### What bounds it
 
 After all of the above a frame of the walk is still about 8 million instructions of core 0 (prof.py, frames 1,500 to
@@ -517,16 +544,15 @@ second). 15 frames a second is 44 passes, about 366 thousand instructions of cor
   the client's frame would race every one of those; a copy of the entities and the Ghoul2 instances each frame is the
   size of the state itself. At 1.5 million a 50 ms game frame the game wants 30 million instructions a second for real
   time, five or six calibrated cores.
-- **The back end a frame behind on a worker** (Half-Life's `rnd_shaderemu.c`) would take about 3.3 million off core 0
-  (play then about 1 frame a second, the menu about 9 to 10: its back end, 0.6 million, would bound it on the worker).
-  It needs `backEndData` twice (OpenJK took out Quake III's two), the frame's Ghoul2 bone matrices evaluated and copied
-  on core 0 before the job (the lazy evaluation above), every other renderer call settling the job first (texture
-  uploads, registrations), and the swap and the window's input back on core 0: not done.
+- **The back end is on a worker now** ("The drawing on a worker"): core 0 keeps the game (1.5 million), the client's
+  game and the renderer's front end (about 3 million) and the mix (0.6). The drawing's worker runs about 3,500
+  instructions a pass where core 0 runs 7,500: a worker's write cache is smaller, and the drawing stores every vertex
+  several times (tess, the shim's words); in the march it, not core 0, bounds the frame.
 - **The level kept in GPU memory** (Half-Life's `gl_kept.c`) or a renderer of our own: the world's 200 draws a frame
   through the shim are about 1 million.
 
-So the menu at about 7.1 frames a second and play at 1 to 2 s a frame is where this stands; 15 frames a second in
-play would need the game's frame itself several times cheaper and the client and renderer off core 0.
+So the menu at about 7.1 frames a second and play at 0.7 to 1.0 frames a second is where this stands; 15 frames a
+second in play would need the game's frame itself several times cheaper and the client's game off core 0 too.
 
 ## What is left, in order
 
@@ -534,7 +560,7 @@ The owner chose on 2 November 2026 to go on past step 1's gate. Steps 2 and 4 ha
 
 1. **A renderer of our own** (step 2's real form): `tr_shaderemu`'s method behind `refexport_t`, the level kept in GPU
    memory as kept draws, keeping rd-vanilla's Ghoul2 (`G2_*.cpp`, `tr_ghoul2.cpp`'s bones: the game traces against
-   them), models, skins and fonts; or rd-vanilla's back end a frame behind on a worker ("What bounds it").
+   them), models, skins and fonts (the back end is on a worker since 3 November, "The drawing on a worker").
 2. **Ghoul2 skinned by the GPU's vertex shader** ("Ghoul2"): a draw kind of four weights a vertex and a bone table, in
    `gpu.shader` and Unity's copy, measured on the card.
 3. **The game's own 30 million instructions a second** ("What bounds it"): NPCs' behaviours, traces and Ghoul2 bolts
