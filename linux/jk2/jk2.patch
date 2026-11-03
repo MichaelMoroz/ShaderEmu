@@ -35,7 +35,7 @@ diff --git a/code/client/cl_input.cpp b/code/client/cl_input.cpp
 index 94051760..12c752d9 100644
 --- a/code/client/cl_input.cpp
 +++ b/code/client/cl_input.cpp
-@@ -239,6 +239,18 @@
+@@ -239,6 +239,18 @@ float CL_KeyState( kbutton_t *key ) {
  	float		val;
  	int			msec;
  
@@ -58,7 +58,7 @@ diff --git a/code/client/cl_main.cpp b/code/client/cl_main.cpp
 index 1a5c2446..aa845ee0 100644
 --- a/code/client/cl_main.cpp
 +++ b/code/client/cl_main.cpp
-@@ -1127,6 +1127,9 @@
+@@ -1127,6 +1127,9 @@ void CL_InitRef( void ) {
  	RIT(CM_DeleteCachedMap);
  	RIT(CM_DrawDebugSurface);
  	RIT(CM_PointContents);
@@ -68,11 +68,191 @@ index 1a5c2446..aa845ee0 100644
  	RIT(Cvar_Get);
  	RIT(Cvar_Set);
  	RIT(Cvar_SetValue);
+diff --git a/code/client/snd_dma.cpp b/code/client/snd_dma.cpp
+index bb539e4c..76f33461 100644
+--- a/code/client/snd_dma.cpp
++++ b/code/client/snd_dma.cpp
+@@ -54,6 +54,15 @@ static int SND_FreeSFXMem(sfx_t *sfx);
+ 
+ extern qboolean Sys_LowPhysicalMemory();
+ 
++#ifdef SHADEREMU
++// the music on the card, decoded by the worker cores (linux/jk2/sys_shaderemu.cpp; docs/games/jk2.md, "Music on the card")
++int SE_MusicOn( void );
++int SE_MusicGive( const void *track, int bytes, int pos, int want, float volume, int raw_time );
++void SE_MusicForget( const void *track );
++void SE_MusicRound( int sound_time, int muted );
++static int se_music_end;	// the card's music as far as the engine has given it (as s_rawend is the mixer's)
++#endif
++
+ //////////////////////////
+ //
+ // vars for bgrnd music track...
+@@ -106,15 +115,31 @@ typedef struct
+ 	fileHandle_t s_backgroundFile;	// valid handle, else -1 if an MP3 (so that NZ compares still work)
+ 	wavinfo_t	s_backgroundInfo;
+ 	int			s_backgroundSamples;
++#ifdef SHADEREMU
++	int			se_pos;		// the frame of the track the engine gives next, when the card plays it (SE_MusicGive)
++#endif
+ 
+ 	void Rewind()
+ 	{
+ 		MP3Stream_Rewind( &chMP3_Bgrnd );
+ 		s_backgroundSamples = sfxMP3_Bgrnd.iSoundLengthInSamples;
++#ifdef SHADEREMU
++		se_pos = 0;
++#endif
+ 	}
+ 
+ 	void SeekTo(float fTime)
+ 	{
++#ifdef SHADEREMU
++		if ( SE_MusicOn() )
++		{	// (the card's music: no decoding up to there, only the place)
++			MP3Stream_Rewind( &chMP3_Bgrnd );
++			se_pos = (int)( fTime * dma.speed );
++			chMP3_Bgrnd.MP3StreamHeader.iBytesDecodedTotal = se_pos * 4;
++			s_backgroundSamples = sfxMP3_Bgrnd.iSoundLengthInSamples;
++			return;
++		}
++#endif
+ 		chMP3_Bgrnd.iMP3SlidingDecodeWindowPos = 0;
+ 		chMP3_Bgrnd.iMP3SlidingDecodeWritePos = 0;
+ 		MP3Stream_SeekTo( &chMP3_Bgrnd, fTime );
+@@ -2696,6 +2721,9 @@ void S_Update( void ) {
+ 	int			i;
+ 	channel_t	*ch;
+ 
++#ifdef SHADEREMU
++	SE_MusicRound( s_soundtime, !s_soundStarted || s_soundMuted );
++#endif
+ 	if ( !s_soundStarted || s_soundMuted ) {
+ 		return;
+ 	}
+@@ -4062,6 +4090,9 @@ static void FreeMusic( MusicInfo_t *pMusicInfo )
+ {
+ 	if (pMusicInfo->pLoadedData)
+ 	{
++#ifdef SHADEREMU
++		SE_MusicForget( pMusicInfo->pLoadedData );
++#endif
+ 		Z_Free(pMusicInfo->pLoadedData);
+ 		pMusicInfo->pLoadedData		= NULL;		// these two MUST be kept as valid/invalid together
+ 		pMusicInfo->sLoadedDataName[0]= '\0';	//
+@@ -4134,7 +4165,13 @@ static qboolean S_StartBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolean
+ 											// scan up to halfway of it to find floating headers, so don't make it
+ 											// too small. 8k works fine.
+ 		qboolean bMusicSucceeded = qfalse;
+-		if (qbDynamic)
++#ifdef SHADEREMU
++		pMusicInfo->se_pos = 0;
++		const qboolean qbInMemory = (qboolean)( qbDynamic || SE_MusicOn() );	// (the card's music decodes the file where it lies)
++#else
++		const qboolean qbInMemory = qbDynamic;
++#endif
++		if (qbInMemory)
+ 		{
+ 			if (!pMusicInfo->pLoadedData)
+ 			{
+@@ -4177,7 +4214,7 @@ static qboolean S_StartBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolean
+ 							pMusicInfo->sfxMP3_Bgrnd.pMP3StreamHeader		= &pMusicInfo->streamMP3_Bgrnd;
+ 				Q_strncpyz( pMusicInfo->sfxMP3_Bgrnd.sSoundName, name, sizeof(pMusicInfo->sfxMP3_Bgrnd.sSoundName) );
+ 
+-				if (qbDynamic)
++				if (qbInMemory)
+ 				{
+ 					MP3Stream_InitPlayingTimeFields ( &pMusicInfo->streamMP3_Bgrnd, name, pbMP3DataSegment, pMusicInfo->iLoadedDataLen, qtrue);
+ 				}
+@@ -4193,7 +4230,7 @@ static qboolean S_StartBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolean
+ 						pMusicInfo->chMP3_Bgrnd.thesfx = &pMusicInfo->sfxMP3_Bgrnd;
+ 				memcpy(&pMusicInfo->chMP3_Bgrnd.MP3StreamHeader, pMusicInfo->sfxMP3_Bgrnd.pMP3StreamHeader, sizeof(*pMusicInfo->sfxMP3_Bgrnd.pMP3StreamHeader));
+ 
+-				if (qbDynamic)
++				if (qbInMemory)
+ 				{
+ 					if (pMusicInfo->s_backgroundFile != -1)
+ 					{
+@@ -4711,6 +4748,54 @@ static qboolean S_UpdateBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolea
+ 		return qfalse;
+ 	}
+ 
++#ifdef SHADEREMU
++	// The card's music: the track's frames given to SE_MusicGive as they were to the mixer, as far ahead, with the same
++	// ends; decoded on the workers into a stream voice of their own, nothing decoded or mixed here
++	if ( pMusicInfo->bIsMP3 && pMusicInfo->s_backgroundFile == -1 && pMusicInfo->pLoadedData && SE_MusicOn() )
++	{
++		if ( se_music_end < s_soundtime ) {
++			se_music_end = s_soundtime;
++		}
++		do	// (once at least: a give of nothing says the track is still wanted)
++		{
++			int want = s_soundtime + MAX_RAW_SAMPLES - se_music_end;
++			if ( want < 0 ) {
++				want = 0;
++			}
++			int got = SE_MusicGive( pMusicInfo->pLoadedData, pMusicInfo->iLoadedDataLen, pMusicInfo->se_pos, want,
++									pMusicInfo->fSmoothedOutVolume, se_music_end );
++			if ( got < 0 || ( got == 0 && pMusicInfo->se_pos == 0 ) ) {
++				return qfalse;		// (a track the card cannot play: said, not heard; or an empty one)
++			}
++			pMusicInfo->se_pos += got;
++			se_music_end += got;
++			pMusicInfo->chMP3_Bgrnd.MP3StreamHeader.iBytesDecodedTotal = pMusicInfo->se_pos * 4;
++			if ( got < want )
++			{	// the track's end: as below
++				if (bMusic_IsDynamic)
++				{
++					pMusicInfo->Rewind();
++				}
++				else
++				{
++					char sTestName[MAX_QPATH*2];
++					Q_strncpyz( sTestName, sMusic_BackgroundLoop, sizeof(sTestName));
++					COM_DefaultExtension(sTestName, sizeof(sTestName), ".mp3");
++					if (!S_FileExists( sTestName ))
++					{
++						return qtrue;
++					}
++					S_StartBackgroundTrack_Actual( pMusicInfo, qfalse, sMusic_BackgroundLoop, sMusic_BackgroundLoop );
++				}
++				if ( !pMusicInfo->s_backgroundFile || !pMusicInfo->bIsMP3 || !pMusicInfo->pLoadedData )
++				{
++					return qfalse;
++				}
++			}
++		} while ( se_music_end < s_soundtime + MAX_RAW_SAMPLES );
++		return qfalse;
++	}
++#endif
+ 	// see how many samples should be copied into the raw buffer
+ 	if ( s_rawend < s_soundtime ) {
+ 		s_rawend = s_soundtime;
+@@ -4935,6 +5020,9 @@ static void S_UpdateBackgroundTrack( void )
+ 			if ( pMusicInfoCurrent->s_backgroundFile == -1)
+ 			{
+ 				int iRawEnd = s_rawend;
++#ifdef SHADEREMU
++				int iMusicEnd = se_music_end;
++#endif
+ 				S_UpdateBackgroundTrack_Actual( pMusicInfoCurrent, qtrue, s_musicVolume->value );
+ 
+ 	/*			static int iPrevFrontVol = 0;
+@@ -4947,6 +5035,9 @@ static void S_UpdateBackgroundTrack( void )
+ 				if (pMusicInfoFadeOut->bActive)
+ 				{
+ 					s_rawend = iRawEnd;
++#ifdef SHADEREMU
++					se_music_end = iMusicEnd;
++#endif
+ 					S_UpdateBackgroundTrack_Actual( pMusicInfoFadeOut, qfalse, s_musicVolume->value );	// inactive-checked internally
+ 	/*
+ 					static int iPrevFadeVol = 0;
 diff --git a/code/qcommon/cm_public.h b/code/qcommon/cm_public.h
 index efb97b53..83ee931a 100644
 --- a/code/qcommon/cm_public.h
 +++ b/code/qcommon/cm_public.h
-@@ -45,6 +45,10 @@
+@@ -45,6 +45,10 @@ int			CM_FindSubBSP(int modelIndex);
  
  // returns an ORed contents mask
  int			CM_PointContents( const vec3_t p, clipHandle_t model );
@@ -87,11 +267,10 @@ diff --git a/code/qcommon/cm_test.cpp b/code/qcommon/cm_test.cpp
 index 77a2265f..6735e0ae 100644
 --- a/code/qcommon/cm_test.cpp
 +++ b/code/qcommon/cm_test.cpp
-@@ -680,4 +680,145 @@
+@@ -680,4 +680,145 @@ void CM_SnapPVS(vec3_t origin,byte *buffer)
  
  }
  
--
 +#ifdef SHADEREMU
 +/*
 +==================
@@ -221,7 +400,7 @@ index 77a2265f..6735e0ae 100644
 +	CM_SE_Grid_r( g, num, lo, hi1 );
 +	CM_SE_Grid_r( g, num, lo2, hi );
 +}
-+
+ 
 +void CM_PointContentsGrid( const vec3_t origin, float step, int nx, int ny, int nz, int mask,
 +	void ( *mark )( void *ctx, int x, int y, int z, int contents ), void *ctx )
 +{
@@ -278,7 +457,7 @@ diff --git a/code/rd-common/tr_image_jpg.cpp b/code/rd-common/tr_image_jpg.cpp
 index a3ddb84a..fe42c2cf 100644
 --- a/code/rd-common/tr_image_jpg.cpp
 +++ b/code/rd-common/tr_image_jpg.cpp
-@@ -59,6 +59,9 @@
+@@ -59,6 +59,9 @@ static void R_JPGOutputMessage(j_common_ptr cinfo)
  	Com_Printf("%s\n", buffer);
  }
  
@@ -288,7 +467,7 @@ index a3ddb84a..fe42c2cf 100644
  void LoadJPG( const char *filename, unsigned char **pic, int *width, int *height ) {
  	/* This struct contains the JPEG decompression parameters and pointers to
  	* working space (which is allocated as needed by the JPEG library).
-@@ -132,6 +135,15 @@
+@@ -132,6 +135,15 @@ void LoadJPG( const char *filename, unsigned char **pic, int *width, int *height
  	/* Make sure it always converts images to RGB color space. This will
  	* automatically convert 8-bit greyscale images to RGB as well.	*/
  	cinfo.out_color_space = JCS_RGB;
@@ -308,7 +487,7 @@ diff --git a/code/rd-common/tr_public.h b/code/rd-common/tr_public.h
 index a0f0ace4..e1a2ddd9 100644
 --- a/code/rd-common/tr_public.h
 +++ b/code/rd-common/tr_public.h
-@@ -84,6 +84,10 @@
+@@ -84,6 +84,10 @@ typedef struct {
  	bool				(*CM_CullWorldBox)					( const cplane_t *frustrum, const vec3pair_t bounds );
  	byte*				(*CM_ClusterPVS)					( int cluster );
  	int					(*CM_PointContents)					( const vec3_t p, clipHandle_t model );
@@ -319,11 +498,29 @@ index a0f0ace4..e1a2ddd9 100644
  	void				(*S_RestartMusic)					( void );
  	qboolean			(*SND_RegisterAudio_LevelLoadEnd)	( qboolean bDeleteEverythingNotUsedThisLevel );
  
+diff --git a/code/rd-vanilla/G2_API.cpp b/code/rd-vanilla/G2_API.cpp
+index 09bc27ed..e46a01eb 100644
+--- a/code/rd-vanilla/G2_API.cpp
++++ b/code/rd-vanilla/G2_API.cpp
+@@ -2277,6 +2277,13 @@ bool G2_SetupModelPointers(CGhoul2Info *ghlInfo) // returns true if the model is
+ 	if (ghlInfo->mModelindex != -1)
+ 	{
+ 		G2ERROR(ghlInfo->mFileName[0],"empty ghlInfo->mFileName");
++#ifdef SHADEREMU
++		// (docs/games/jk2.md, "Fewer instructions": the model looked for by its name only when the handle held does not
++		// name it already, as a loaded model is found by RE_RegisterModel with nothing else done: 317 lookups a frame of
++		// play, 0.38 million instructions)
++		if (ghlInfo->mModel <= 0 || ghlInfo->mModel >= tr.numModels || !tr.models[ghlInfo->mModel] ||
++			tr.models[ghlInfo->mModel]->type == MOD_BAD || strcmp(tr.models[ghlInfo->mModel]->name, ghlInfo->mFileName))
++#endif
+ 		ghlInfo->mModel = RE_RegisterModel(ghlInfo->mFileName);
+ 		ghlInfo->currentModel = R_GetModelByHandle(ghlInfo->mModel);
+ 		G2ERROR(ghlInfo->currentModel,va("NULL Model (glm) %s",ghlInfo->mFileName));
 diff --git a/code/rd-vanilla/tr_WorldEffects.cpp b/code/rd-vanilla/tr_WorldEffects.cpp
 index 5464b70b..6e6d897a 100644
 --- a/code/rd-vanilla/tr_WorldEffects.cpp
 +++ b/code/rd-vanilla/tr_WorldEffects.cpp
-@@ -428,8 +428,21 @@
+@@ -428,8 +428,21 @@ bool R_GetWindGusting(vec3_t atpoint)
  ////////////////////////////////////////////////////////////////////////////////////////
  // Outside Point Cache
  ////////////////////////////////////////////////////////////////////////////////////////
@@ -345,7 +542,7 @@ index 5464b70b..6e6d897a 100644
  #define COUTSIDE_STRUCT_VERSION 1	// you MUST increase this any time you change any binary (fields) inside this class, or cahced files will fuck up
  public:
  	////////////////////////////////////////////////////////////////////////////////////
-@@ -707,8 +720,15 @@
+@@ -707,8 +720,15 @@ public:
  
  		// all this piece of code does really is fill in the bool "SWeatherZone::mMarkedOutside", plus the mPointCache[] for each zone,
  		//	so we can diskload those. Maybe.
@@ -361,7 +558,7 @@ index 5464b70b..6e6d897a 100644
  		{
  			for (int iZone=0; iZone<mWeatherZones.size(); iZone++)
  			{
-@@ -728,7 +748,9 @@
+@@ -728,7 +748,9 @@ public:
  			uint32_t		contents;
  			uint32_t		bit;
  
@@ -371,7 +568,7 @@ index 5464b70b..6e6d897a 100644
  
  			// Iterate Over All Weather Zones
  			//--------------------------------
-@@ -744,6 +766,56 @@
+@@ -744,6 +766,56 @@ public:
  					Mins[x] += (POINTCACHE_CELL_SIZE/2);
  				}
  
@@ -428,7 +625,7 @@ index 5464b70b..6e6d897a 100644
  
  				// Start Scanning
  				//----------------
-@@ -879,6 +951,19 @@
+@@ -879,6 +951,19 @@ public:
  	}
  };
  COutside			mOutside;
@@ -448,7 +645,7 @@ index 5464b70b..6e6d897a 100644
  bool				COutside::SWeatherZone::mMarkedOutside = false;
  
  
-@@ -1035,7 +1120,13 @@
+@@ -1035,7 +1120,13 @@ public:
  		mImage = R_FindImageFile(texturePath, qfalse, qfalse, qfalse, GL_CLAMP);
  		if (!mImage)
  		{
@@ -482,7 +679,7 @@ diff --git a/code/rd-vanilla/tr_image.cpp b/code/rd-vanilla/tr_image.cpp
 index a13badd4..73f86498 100644
 --- a/code/rd-vanilla/tr_image.cpp
 +++ b/code/rd-vanilla/tr_image.cpp
-@@ -554,6 +554,9 @@
+@@ -554,6 +554,9 @@ Upload32
  
  ===============
  */
@@ -492,7 +689,7 @@ index a13badd4..73f86498 100644
  static void Upload32( unsigned *data,
  						  GLenum format,
  						  qboolean mipmap,
-@@ -576,7 +579,11 @@
+@@ -576,7 +579,11 @@ static void Upload32( unsigned *data,
  	    // perform optional picmip operation
  	    //
  	    if ( picmip ) {
@@ -504,7 +701,7 @@ index a13badd4..73f86498 100644
  			    R_MipMap( (byte *)data, width, height );
  			    width >>= 1;
  			    height >>= 1;
-@@ -703,7 +710,11 @@
+@@ -703,7 +710,11 @@ static void Upload32( unsigned *data,
  
  	    qglTexImage2D (GL_TEXTURE_2D, 0, *pformat, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, data );
  
@@ -516,7 +713,7 @@ index a13badd4..73f86498 100644
  	    {
  		    int		miplevel;
  
-@@ -1087,12 +1098,25 @@
+@@ -1087,12 +1098,25 @@ image_t	*R_FindImageFile( const char *name, qboolean mipmap, qboolean allowPicmi
  	//
  	// load the pic from disk
  	//
@@ -542,6 +739,25 @@ index a13badd4..73f86498 100644
  	R_Free( pic );
  	return image;
  }
+diff --git a/code/rd-vanilla/tr_marks.cpp b/code/rd-vanilla/tr_marks.cpp
+index 2da2512a..97658329 100644
+--- a/code/rd-vanilla/tr_marks.cpp
++++ b/code/rd-vanilla/tr_marks.cpp
+@@ -45,8 +45,14 @@ Out must have space for two more vertexes than in
+ static void R_ChopPolyBehindPlane( int numInPoints, vec3_t inPoints[MAX_VERTS_ON_POLY],
+ 								   int *numOutPoints, vec3_t outPoints[MAX_VERTS_ON_POLY],
+ 							vec3_t normal, vec_t dist, vec_t epsilon) {
++#ifdef SHADEREMU
++	// (not cleared: only the first numInPoints + 1 are read, all written below; clearing both was 4% of a frame of play)
++	float		dists[MAX_VERTS_ON_POLY+4];
++	int			sides[MAX_VERTS_ON_POLY+4];
++#else
+ 	float		dists[MAX_VERTS_ON_POLY+4] = { 0 };
+ 	int			sides[MAX_VERTS_ON_POLY+4] = { 0 };
++#endif
+ 	int			counts[3];
+ 	float		dot;
+ 	int			i, j;
 diff --git a/code/server/sv_game.cpp b/code/server/sv_game.cpp
 index 8cd596fb..b8e4be48 100644
 --- a/code/server/sv_game.cpp
@@ -646,11 +862,119 @@ index bdb72696..0919f611 100644
  	{
  		char	text[1024]={0};
  		cgi_SP_GetStringTextString( "INGAME_ALONGTIME", text, sizeof(text) );
+diff --git a/codeJK2/cgame/cg_marks.cpp b/codeJK2/cgame/cg_marks.cpp
+index f4bcfa8d..ba92f91b 100644
+--- a/codeJK2/cgame/cg_marks.cpp
++++ b/codeJK2/cgame/cg_marks.cpp
+@@ -128,6 +128,10 @@ passed to the renderer.
+ #define	MAX_MARK_FRAGMENTS	128
+ #define	MAX_MARK_POINTS		384
+ 
++#ifdef SHADEREMU
++void ( *se_mark_kept )( int numPoints, const polyVert_t *verts );	// a temporary mark's polygons, told as they are added
++#endif
++
+ void CG_ImpactMark( qhandle_t markShader, const vec3_t origin, const vec3_t dir,
+ 				   float orientation, float red, float green, float blue, float alpha,
+ 				   qboolean alphaFade, float radius, qboolean temporary ) {
+@@ -202,6 +206,11 @@ void CG_ImpactMark( qhandle_t markShader, const vec3_t origin, const vec3_t dir,
+ 		// if it is a temporary (shadow) mark, add it immediately and forget about it
+ 		if ( temporary ) {
+ 			cgi_R_AddPolyToScene( markShader, mf->numPoints, verts );
++#ifdef SHADEREMU
++			if ( se_mark_kept ) {	// (cg_players.cpp's shadows keep what they add: docs/games/jk2.md, "Fewer instructions")
++				se_mark_kept( mf->numPoints, verts );
++			}
++#endif
+ 			continue;
+ 		}
+ 
 diff --git a/codeJK2/cgame/cg_players.cpp b/codeJK2/cgame/cg_players.cpp
-index ef21d32f..c274c77d 100644
+index ef21d32f..ccd51a90 100644
 --- a/codeJK2/cgame/cg_players.cpp
 +++ b/codeJK2/cgame/cg_players.cpp
-@@ -3007,11 +3007,13 @@ void _PlayerSplash( const vec3_t origin, const vec3_t velocity, const float radi
+@@ -2861,7 +2861,80 @@ void CG_PlayerPowerups( centity_t *cent )
+ }
+ 
+ #define	SHADOW_DISTANCE		128
++#ifdef SHADEREMU
++// A blob shadow kept (docs/games/jk2.md, "Fewer instructions"): its trace down and its mark's polygons are of the world
++// alone, so a shadow from the same place, turned the same way, of the same size is the one made before: kept and given
++// to the renderer again (9 shadows a frame of play were 1.6 million instructions; standing people's are the same each
++// frame). JK2_SHADOWS=made: always made.
++#define SE_SHADOWS			32
++#define SE_SHADOW_POLYS		12
++#define SE_SHADOW_POINTS	10
++typedef struct {
++	vec3_t		origin;
++	float		orientation, radius, plane;
++	int			used, polys, points[SE_SHADOW_POLYS];
++	qboolean	result, whole;
++	polyVert_t	verts[SE_SHADOW_POLYS][SE_SHADOW_POINTS];
++} seShadow_t;
++static seShadow_t se_shadows[SE_SHADOWS], *se_shadow_now;
++static int se_shadow_clock, se_shadow_off = -1;
++extern void ( *se_mark_kept )( int numPoints, const polyVert_t *verts );
++static void se_shadow_keep( int numPoints, const polyVert_t *verts ) {
++	seShadow_t *e = se_shadow_now;
++	if ( !e || e->polys >= SE_SHADOW_POLYS || numPoints > SE_SHADOW_POINTS ) {
++		if ( e ) {
++			e->whole = qfalse;
++		}
++		return;
++	}
++	e->points[e->polys] = numPoints;
++	memcpy( e->verts[e->polys], verts, numPoints * sizeof( polyVert_t ) );
++	e->polys++;
++}
++static qboolean _PlayerShadowMade( const vec3_t origin, const float orientation, float *const shadowPlane, const float radius );
+ static qboolean _PlayerShadow( const vec3_t origin, const float orientation, float *const shadowPlane, const float radius ) {
++	if ( se_shadow_off < 0 ) {
++		const char *s = getenv( "JK2_SHADOWS" );
++		se_shadow_off = s && !strcmp( s, "made" );
++	}
++	if ( se_shadow_off || cg_shadows.integer != 1 || !cg_addMarks.integer ) {
++		return _PlayerShadowMade( origin, orientation, shadowPlane, radius );
++	}
++	seShadow_t *e, *oldest = &se_shadows[0];
++	for ( e = se_shadows ; e < se_shadows + SE_SHADOWS ; e++ ) {
++		if ( e->used && e->origin[0] == origin[0] && e->origin[1] == origin[1] && e->origin[2] == origin[2] &&
++			 e->orientation == orientation && e->radius == radius ) {
++			e->used = ++se_shadow_clock;
++			for ( int i = 0 ; i < e->polys ; i++ ) {
++				cgi_R_AddPolyToScene( cgs.media.shadowMarkShader, e->points[i], e->verts[i] );
++			}
++			if ( e->result ) {
++				*shadowPlane = e->plane;
++			}
++			return e->result;
++		}
++		if ( e->used < oldest->used ) {
++			oldest = e;
++		}
++	}
++	e = oldest;
++	VectorCopy( origin, e->origin );
++	e->orientation = orientation, e->radius = radius, e->polys = 0, e->whole = qtrue, e->plane = *shadowPlane;
++	se_shadow_now = e;
++	se_mark_kept = se_shadow_keep;
++	e->result = _PlayerShadowMade( origin, orientation, &e->plane, radius );
++	se_mark_kept = NULL;
++	se_shadow_now = NULL;
++	e->used = e->whole ? ++se_shadow_clock : 0;
++	if ( e->result ) {
++		*shadowPlane = e->plane;
++	}
++	return e->result;
++}
++static qboolean _PlayerShadowMade( const vec3_t origin, const float orientation, float *const shadowPlane, const float radius ) {
++#else
++static qboolean _PlayerShadow( const vec3_t origin, const float orientation, float *const shadowPlane, const float radius ) {
++#endif
+ 	vec3_t		end, mins = {-7, -7, 0}, maxs = {7, 7, 2};
+ 	trace_t		trace;
+ 	float		alpha;
+@@ -3007,11 +3080,13 @@ void _PlayerSplash( const vec3_t origin, const vec3_t velocity, const float radi
  
  	float alpha = ( t / 8192.0f ) * 0.6f + 0.2f;
  
@@ -665,7 +989,7 @@ index ef21d32f..c274c77d 100644
  								cgs.media.wakeMarkShader, FX_ALPHA_LINEAR | FX_SIZE_LINEAR );
  }
  
-@@ -3349,7 +3351,9 @@ static void CG_ForceElectrocution( centity_t *cent, const vec3_t origin, vec3_t
+@@ -3349,7 +3424,9 @@ static void CG_ForceElectrocution( centity_t *cent, const vec3_t origin, vec3_t
  	{
  		// Just use the lerp Origin and a random direction
  		VectorCopy( cent->lerpOrigin, fxOrg );
@@ -676,6 +1000,35 @@ index ef21d32f..c274c77d 100644
  		if ( cent->gent && cent->gent->client )
  		{
  			switch ( cent->gent->client->NPC_class )
+diff --git a/codeJK2/cgame/cg_predict.cpp b/codeJK2/cgame/cg_predict.cpp
+index 8c73e521..10b2627e 100644
+--- a/codeJK2/cgame/cg_predict.cpp
++++ b/codeJK2/cgame/cg_predict.cpp
+@@ -122,6 +122,24 @@ void CG_ClipMoveToEntities ( const vec3_t start, const vec3_t mins, const vec3_t
+ 			bmins[2] = -zd;
+ 			bmaxs[2] = zu;
+ 
++#ifdef SHADEREMU
++			// (docs/games/jk2.md, "Fewer instructions": a box apart from the move's whole extent, with a unit to spare,
++			// is not traced: the trace would find nothing, and leave tr as it is. The effects' traces were 2 million
++			// instructions a frame of play, nearly all of them here.)
++			{
++				int k;
++				for ( k = 0 ; k < 3 ; k++ ) {
++					float lo = ( start[k] < end[k] ? start[k] : end[k] ) + ( mins ? mins[k] : 0 ) - 1;
++					float hi = ( start[k] > end[k] ? start[k] : end[k] ) + ( maxs ? maxs[k] : 0 ) + 1;
++					if ( cent->lerpOrigin[k] + bmins[k] > hi || cent->lerpOrigin[k] + bmaxs[k] < lo ) {
++						break;
++					}
++				}
++				if ( k < 3 ) {
++					continue;
++				}
++			}
++#endif
+ 			cmodel = cgi_CM_TempBoxModel( bmins, bmaxs );//, cent->gent->contents );
+ 			VectorCopy( vec3_origin, angles );
+ 			VectorCopy( cent->lerpOrigin, origin );
 diff --git a/codeJK2/game/NPC.cpp b/codeJK2/game/NPC.cpp
 index b57d6347..52e98d9e 100644
 --- a/codeJK2/game/NPC.cpp
@@ -920,10 +1273,18 @@ index 04c5aa25..c80c7579 100644
  			break;
  		case CLASS_ATST://much too big to grip!
 diff --git a/shared/qcommon/q_math.c b/shared/qcommon/q_math.c
-index b15b3dba..c04d7a55 100644
+index b15b3dba..c1d43b55 100644
 --- a/shared/qcommon/q_math.c
 +++ b/shared/qcommon/q_math.c
-@@ -221,6 +221,9 @@ float Q_crandom( int *seed )
+@@ -21,6 +21,7 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
+ ===========================================================================
+ */
+ 
++#define SE_Q_MATH_C	// (the functions q_math.h makes inline on the machine are defined here as well)
+ #include "q_math.h"
+ #include <assert.h>
+ #include <float.h>
+@@ -221,6 +222,9 @@ float Q_crandom( int *seed )
  // eg the typical tint = (rand() * 255) / 32768
  // becomes tint = irand(0, 255)
  static uint32_t	holdrand = 0x89abcdef;
@@ -933,6 +1294,78 @@ index b15b3dba..c04d7a55 100644
  
  void Rand_Init( int seed )
  {
+diff --git a/shared/qcommon/q_math.h b/shared/qcommon/q_math.h
+index f52e45dd..ad496db1 100644
+--- a/shared/qcommon/q_math.h
++++ b/shared/qcommon/q_math.h
+@@ -243,13 +243,55 @@ extern vec3_t vec3_origin;
+ #define VectorClearM(dst) \
+ 	memset((dst), 0, sizeof((dst)[0]) * 3)
+ 
++#if defined(SHADEREMU) && !defined(SE_Q_MATH_C)
++// The machine (docs/games/jk2.md, "Fewer instructions"): the small vector functions inline, as q_math.c has them (an
++// out-of-line DotProduct was 7% of a frame of play, VectorCopy and the rest 3%)
++static inline void VectorAdd( const vec3_t vec1, const vec3_t vec2, vec3_t vecOut ) {
++	vecOut[0] = vec1[0]+vec2[0];
++	vecOut[1] = vec1[1]+vec2[1];
++	vecOut[2] = vec1[2]+vec2[2];
++}
++static inline void VectorSubtract( const vec3_t vec1, const vec3_t vec2, vec3_t vecOut ) {
++	vecOut[0] = vec1[0]-vec2[0];
++	vecOut[1] = vec1[1]-vec2[1];
++	vecOut[2] = vec1[2]-vec2[2];
++}
++static inline void VectorScale( const vec3_t vecIn, float scale, vec3_t vecOut ) {
++	vecOut[0] = vecIn[0]*scale;
++	vecOut[1] = vecIn[1]*scale;
++	vecOut[2] = vecIn[2]*scale;
++}
++static inline void VectorMA( const vec3_t vec1, float scale, const vec3_t vec2, vec3_t vecOut ) {
++	vecOut[0] = vec1[0] + scale*vec2[0];
++	vecOut[1] = vec1[1] + scale*vec2[1];
++	vecOut[2] = vec1[2] + scale*vec2[2];
++}
++static inline void VectorClear( vec3_t vec ) {
++	vec[0] = vec[1] = vec[2] = 0.0f;
++}
++static inline void VectorCopy( const vec3_t vecIn, vec3_t vecOut ) {
++	vecOut[0] = vecIn[0];
++	vecOut[1] = vecIn[1];
++	vecOut[2] = vecIn[2];
++}
++static inline void CrossProduct( const vec3_t vec1, const vec3_t vec2, vec3_t vecOut ) {
++	vecOut[0] = vec1[1]*vec2[2] - vec1[2]*vec2[1];
++	vecOut[1] = vec1[2]*vec2[0] - vec1[0]*vec2[2];
++	vecOut[2] = vec1[0]*vec2[1] - vec1[1]*vec2[0];
++}
++static inline float DotProduct( const vec3_t vec1, const vec3_t vec2 ) {
++	return vec1[0]*vec2[0] + vec1[1]*vec2[1] + vec1[2]*vec2[2];
++}
++#define SE_VECTOR_INLINE
++#else
+ void VectorAdd( const vec3_t vec1, const vec3_t vec2, vec3_t vecOut );
+ void VectorSubtract( const vec3_t vec1, const vec3_t vec2, vec3_t vecOut );
+ void VectorScale( const vec3_t vecIn, float scale, vec3_t vecOut );
+ void VectorMA( const vec3_t vec1, float scale, const vec3_t vec2, vec3_t vecOut );
+-void VectorSet( vec3_t vec, float x, float y, float z );
+ void VectorClear( vec3_t vec );
+ void VectorCopy( const vec3_t vecIn, vec3_t vecOut );
++#endif
++void VectorSet( vec3_t vec, float x, float y, float z );
+ float VectorLength( const vec3_t vec );
+ float VectorLengthSquared( const vec3_t vec );
+ void VectorNormalizeFast( vec3_t vec );
+@@ -259,8 +301,10 @@ void VectorAdvance( const vec3_t veca, const float scale, const vec3_t vecb, vec
+ void VectorInc( vec3_t vec );
+ void VectorDec( vec3_t vec );
+ void VectorInverse( vec3_t vec );
++#ifndef SE_VECTOR_INLINE
+ void CrossProduct( const vec3_t vec1, const vec3_t vec2, vec3_t vecOut );
+ float DotProduct( const vec3_t vec1, const vec3_t vec2 );
++#endif
+ qboolean VectorCompare( const vec3_t vec1, const vec3_t vec2 );
+ qboolean VectorCompare2( const vec3_t v1, const vec3_t v2 );
+ 
 diff --git a/shared/sys/sys_loadlib.h b/shared/sys/sys_loadlib.h
 index 97d2ef4f..1588a702 100644
 --- a/shared/sys/sys_loadlib.h

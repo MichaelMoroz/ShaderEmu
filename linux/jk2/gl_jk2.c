@@ -77,8 +77,130 @@ void jk2_glEnableClientState(GLenum a) { ON_THEN(s_glEnableClientState(a)); }
 void jk2_glDrawArrays(GLenum m, GLint first, GLsizei count) { ON_THEN(s_glDrawArrays(m, first, count)); }
 void jk2_glDrawBuffer(GLenum m) { (void)m; }
 // (gl_shaderemu.c's primitive holds MAX_PRIMITIVE vertices: the renderer's triangles in pieces of whole triangles)
+// rd-vanilla's triangles (docs/games/jk2.md, "Fewer instructions"): its arrays as it always sets them (positions of
+// floats, two float coordinates, colours of four bytes) and 32-bit indices, drawn as draw_vertices() draws them (the
+// same words), but each vertex made once, over the range of vertices the indices name, and an index then a copy of
+// its vertex's four words: about 20 instructions an index of a model against 165, where every index copied a vertex
+// twice on the way. The coordinates' least and most and whether all have one colour are over that range (rd-vanilla's
+// arrays hold the surfaces' vertices, all of them named). Anything else, and a pulled offset, goes the plain way.
+// JK2_GL=plain: always.
+static int fast_off = -1;
+static uint32_t made[MAX_PRIMITIVE * 4] __attribute__((aligned(16)));   // a vertex's words, from the range's first
+static int fast_ok(void) {
+    if (fast_off < 0) fast_off = getenv("JK2_GL") && !strcmp(getenv("JK2_GL"), "plain");
+    return !fast_off && va_pos.on && va_pos.type == GL_FLOAT && va_pos.size >= 3 && va_coord.on && va_coord.type == GL_FLOAT &&
+        va_coord.size >= 2 && va_colour.on && va_colour.type == GL_UNSIGNED_BYTE && va_colour.size == 4 && !(offsetting && offset_pull != 0);
+}
+// (the colour as the plain way makes it of four bytes: alpha's complement on top)
+#define WORD_OF(c) ((255u - ((c) >> 24)) << 24 | ((c) & 0xff) << 16 | ((c) & 0xff00) | ((c) >> 16 & 0xff))
+static int fast_triangles(int count, const uint32_t* idx) {
+    count -= count % 3;
+    if (count < 3) return 1;
+    uint32_t lo = idx[0], hi = idx[0];
+    for (int i = 1; i < count; i++) {
+        uint32_t k = idx[i];
+        if (k < lo) lo = k;
+        if (k > hi) hi = k;
+    }
+    int n = (int)(hi - lo) + 1;
+    if (n > MAX_PRIMITIVE) return 0;
+    gpu_state s;
+    if (!draw_state(&s)) return 1;
+    const uint8_t *pos = va_pos.p + (size_t)lo * va_pos.stride, *tc = va_coord.p + (size_t)lo * va_coord.stride,
+                  *col = va_colour.p + (size_t)lo * va_colour.stride;
+    int ps = va_pos.stride, ts = va_coord.stride, cs = va_colour.stride;
+    int textured = (s.fragment & 0xff) != GPU_COLOUR;
+    float low_s = 0, low_t = 0, high_s = 0, high_t = 0;
+    uint32_t first = *(const uint32_t*)col;
+    int one = 1;
+    if (textured) {
+        const float* t0 = (const float*)tc;
+        low_s = high_s = t0[0], low_t = high_t = t0[1];
+        for (int k = 1; k < n; k++) {
+            const float* t = (const float*)(tc + (size_t)k * ts);
+            float ss = t[0], tt = t[1];
+            if (ss < low_s) low_s = ss;
+            if (ss > high_s) high_s = ss;
+            if (tt < low_t) low_t = tt;
+            if (tt > high_t) high_t = tt;
+            one &= *(const uint32_t*)(col + (size_t)k * cs) == first;
+        }
+        if (!(s.fragment & GPU_CLAMPED)) low_s = floor_of(low_s), low_t = floor_of(low_t);
+        else low_s = low_t = 0;
+    } else {
+        for (int k = 1; k < n && one; k++) one = *(const uint32_t*)(col + (size_t)k * cs) == first;
+    }
+    first = WORD_OF(first);
+    if (replace && textured) one = 1, first = 0x00ffffff;
+    uint32_t* table = 0;
+    if (one || high_s - low_s >= 4 || high_t - low_t >= 4) {
+        s.colour = first;
+        for (int k = 0; k < n; k++) {
+            const float* p = (const float*)(pos + (size_t)k * ps);
+            const float* t = (const float*)(tc + (size_t)k * ts);
+            uint32_t* m = &made[k * 4];
+            m[0] = bits(p[0]), m[1] = bits(p[1]), m[2] = bits(p[2]);
+            m[3] = ((uint32_t)(int32_t)((t[0] - low_s) * 1024.0f) & 0xffff) | (uint32_t)(int32_t)((t[1] - low_t) * 1024.0f) << 16;
+        }
+    } else if (n <= 256) {
+        // a vertex's colour is the table's word for its tag, which is its place in the range
+        s.vertex = GPU_TAGGED | GPU_TABLE;
+        if (!(table = gpuFrameMemory(256 * 4))) return 1;
+        s.colour = gpuAddress(table);
+        for (int k = 0; k < n; k++) {
+            uint32_t c = *(const uint32_t*)(col + (size_t)k * cs);
+            const float* p = (const float*)(pos + (size_t)k * ps);
+            const float* t = (const float*)(tc + (size_t)k * ts);
+            uint32_t* m = &made[k * 4];
+            table[k] = WORD_OF(c);
+            m[0] = bits(p[0]), m[1] = bits(p[1]), m[2] = bits(p[2]);
+            m[3] = ((uint32_t)((t[0] - low_s) * 1024.0f) & 0xfff) | ((uint32_t)((t[1] - low_t) * 1024.0f) & 0xfff) << 12 | (uint32_t)k << 24;
+        }
+    } else {
+        // more vertices than a table has colours: a table each 255 indices, as the plain way
+        s.vertex = GPU_TAGGED | GPU_TABLE;
+        for (int done = 0; done < count;) {
+            int c = count - done > 255 ? 255 : count - done;
+            if (!(table = gpuFrameMemory(256 * 4))) return 1;
+            s.colour = gpuAddress(table);
+            uint32_t* to = gpuDrawRoom(&s, c, c);
+            if (!to) return 1;
+            for (int i = 0; i < c; i++, to += 4) {
+                uint32_t k = idx[done + i] - lo, w = *(const uint32_t*)(col + (size_t)k * cs);
+                const float* p = (const float*)(pos + (size_t)k * ps);
+                const float* t = (const float*)(tc + (size_t)k * ts);
+                table[i] = WORD_OF(w);
+                to[0] = bits(p[0]), to[1] = bits(p[1]), to[2] = bits(p[2]);
+                to[3] = ((uint32_t)((t[0] - low_s) * 1024.0f) & 0xfff) | ((uint32_t)((t[1] - low_t) * 1024.0f) & 0xfff) << 12 | (uint32_t)i << 24;
+            }
+            done += c;
+        }
+        drawn_vertices += (uint32_t)count;
+        return 1;
+    }
+    uint32_t* to = gpuDrawRoom(&s, count, count);
+    if (!to) return 1;
+    for (int i = 0; i < count; i++, to += 4) {
+        const uint32_t* m = &made[(idx[i] - lo) * 4];
+        uint32_t a = m[0], b = m[1], c = m[2], d = m[3];
+        to[0] = a, to[1] = b, to[2] = c, to[3] = d;
+    }
+    drawn_vertices += (uint32_t)count;
+    return 1;
+}
+#undef WORD_OF
+
 void jk2_glDrawElements(GLenum m, GLsizei count, GLenum type, const void* indices) {
     if (!on) return;
+    if (m == GL_TRIANGLES && type == GL_UNSIGNED_INT && fast_ok()) {
+        int piece = MAX_PRIMITIVE / 3 * 3;
+        int done = 0;
+        for (; done < count; done += piece)
+            if (!fast_triangles(count - done < piece ? count - done : piece, (const uint32_t*)indices + done)) break;
+        if (done >= count) return;
+        // (a range of vertices longer than a primitive: the rest the plain way)
+        indices = (const uint32_t*)indices + done, count -= done;
+    }
     if (m != GL_TRIANGLES || count <= MAX_PRIMITIVE) {
         s_glDrawElements(m, count, type, indices);
         return;

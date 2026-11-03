@@ -217,11 +217,14 @@ if [ "${JK2_HOST:-}" != 1 ]; then
     [ -f "$MW/src/lib/libnano-X.a" ] || { echo "run linux/nanox/build.sh first"; exit 1; }
     WF="$OPT -fno-pie -Wall -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable"
     compile window \
-        "$(lines window "$CXX $CXXSTD $EF -DSE_WINDOW -I$MW/src/include" "$HERE/sys_shaderemu.cpp")" \
+        "$(lines window "$CXX $CXXSTD $EF -DSE_WINDOW -I$MW/src/include -I$PROGRAMS/mc -I$REPO/linux/libmedia" "$HERE/sys_shaderemu.cpp")" \
         "$(lines window "$CC $WF -DSEGL_FLOAT -DMAX_TEXTURES=64 -idirafter $PROGRAMS/linux/include -I$MW/src/include -I$PROGRAMS/linux -I$REPO/linux/quake3" "$REPO/linux/quake3/gpu_shaderemu.c")" \
         "$(lines window "$CC $WF -I$REPO/linux/quake3 -I$PROGRAMS/mc" "$HERE/gl_jk2.c")" \
         "$(lines window "$CC -O2 -fno-common -fdata-sections -w -I$PROGRAMS/mc" "$PROGRAMS/mc/mcw.c" "$PROGRAMS/mc/mcwx.c")"
-    MACHINE="$BUILD/window/*.o $MW/src/lib/libnano-X.a"
+    # libmedia (docs/system/media.md): the music decoded on the worker cores (sys_shaderemu.cpp, "Music on the card")
+    MEDIA=${MEDIA_LIB:-$WORK/src/libmedia/libmedia.a}
+    [ -f "$MEDIA" ] || { echo "run linux/libmedia/build.sh first"; exit 1; }
+    MACHINE="$BUILD/window/*.o $MW/src/lib/libnano-X.a $MEDIA"
 fi
 
 step "the program"
