@@ -24,6 +24,25 @@ void aoe_win_pointer(int *x, int *y) { *x = control_words[0x20 / 4]; *y = contro
 
 uint8_t *aoe_win_open(int w, int h, const char *title)
 {
+    if (window) {
+        /* the game's layout changed (aoe_win_layout): the window keeps its size and the picture is stretched over it; a page of
+         * each size is kept, so switching back and forth takes no more GPU memory (docs/games/aoe.md, "Two layouts") */
+        static uint8_t *kept[2];
+        static int kept_w[2], kept_h[2];
+        int i;
+        aoe_win_settle();
+        for (i = 0; i < 2 && kept[i] && (kept_w[i] != page_w || kept_h[i] != page_h); i++)
+            ;
+        if (i < 2 && !kept[i]) kept[i] = page, kept_w[i] = page_w, kept_h[i] = page_h;
+        for (i = 0; i < 2 && kept[i] && (kept_w[i] != w || kept_h[i] != h); i++)
+            ;
+        page = i < 2 && kept[i] ? kept[i] : seglMemory(w * h);
+        page_w = w; page_h = h;
+        memset(page, 0, w * h);
+        glBindTexture(GL_TEXTURE_2D, texture);
+        seglTexturePointer(page, w, h, GL_COLOR_INDEX8_EXT);
+        return page;
+    }
     if (GrOpen() < 0) { fprintf(stderr, "aoe: no Nano-X server (start one: nano-X -p &)\n"); exit(1); }
     if (ui_single_instance()) { GrClose(); _exit(0); }   /* a game takes all the memory one needs: the one that is up comes forward */
     /* A window like any program's, under other windows and the bar. Only on a screen with no room for its frame and the bar (the frame's
@@ -160,6 +179,21 @@ static long long pad_ms(void)
     return t.tv_sec * 1000LL + t.tv_nsec / 1000000;
 }
 
+/* The layout for the window's size (docs/games/aoe.md, "Two layouts"): 800 x 600 once the window has room for most of it, else 640 x
+ * 480. A size is taken a second after the last change (a drag gives many). The width wanted when it should change, else 0. */
+static int sized_w, sized_h;
+static long long sized_at;
+int aoe_win_layout(void)
+{
+    static int fixed = -1;
+    int want;
+    if (fixed < 0) { const char *e = getenv("AOE_LAYOUT"); fixed = e && !strcmp(e, "fixed"); }
+    if (fixed || !sized_at || pad_ms() - sized_at < 1000) return 0;
+    sized_at = 0;
+    want = sized_w >= 760 && sized_h >= 540 ? 800 : 640;
+    return want != page_w ? want : 0;
+}
+
 /* One event, or 0. */
 int aoe_win_event(struct aoe_event *e)
 {
@@ -212,6 +246,8 @@ int aoe_win_event(struct aoe_event *e)
                 continue;
             }
             hidden = 0;
+            if (g.update.utype == GR_UPDATE_SIZE && g.update.wid == window)
+                sized_w = g.update.width, sized_h = g.update.height, sized_at = pad_ms();
             /* A frame or a move gives the window other memory, and a game at its menu draws nothing more: the page
              * is still the picture, so it is shown again (docs/games/aoe.md, "A window made again"). */
             seglWindowChanged();

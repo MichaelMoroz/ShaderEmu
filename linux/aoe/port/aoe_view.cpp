@@ -158,7 +158,14 @@ void aoe_view_post(RGE_View* view) {
     if (!real->Lock("aoe_view", 1)) { walked.v = 1; view->TPanel::render_area = real; view->RGE_View::draw(); return; }
     memcpy(area_copy, real, sizeof(TDrawArea));
     real->Unlock("aoe_view");
-    if (!own) { own = new TSpan_List_Manager(real->Width, real->Height); made[4] = 0; }
+    // (made again when the page's size changes: a change of layout, port/aoe_layout.cpp; the old one's clips kept the view to its size)
+    static long own_w, own_h;
+    if (own && (own_w != real->Width || own_h != real->Height)) {
+        if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: the view's area %ld x %ld now, the view %ld x %ld\n", (long) real->Width, (long) real->Height,
+                                         (long) view->pnl_wid, (long) view->pnl_hgt);
+        delete own; own = 0; memset(made, 0, sizeof made);
+    }
+    if (!own) { own = new TSpan_List_Manager(real->Width, real->Height); made[4] = 0; own_w = real->Width; own_h = real->Height; }
     area_copy->SpanList = own;
     area_copy->CurSpanList = own;
     memcpy(area_copy->aoe_clip_made, made, sizeof made);
@@ -243,6 +250,32 @@ void aoe_view_check_draw(int whole) {
     aoe_draw_window_now();
     aoe_view_join();
     aoe_view_deferred();   // (the panels over the view, as the frame's end draws them)
+}
+
+// Before a change of layout (port/aoe_layout.cpp): the view given back the page's real area, so that the game's new layout sizes it
+// by the page's new size and not by the view's copy of the old one (which kept the view to 640 x 354 at 800 x 600), and the copies
+// made again at the next post
+void aoe_view_unhook(void) {
+    RGE_View* view = st.view;
+    if (view && area_real && view->TPanel::render_area == area_copy) {
+        view->TPanel::render_area = area_real;
+        view->cur_render_area = area_real;
+    }
+    // the save area too (the view's picture kept between draws): given back its own system, unlocked, so the layout sizes it anew;
+    // with the copy's system it kept the old picture, which the view then showed in the corner of the larger page
+    if (view && area_real && view->save_area1 && view->save_area1->DrawSystem == system_copy) {
+        view->save_area1->DrawSystem = area_real->DrawSystem;
+        view->save_area1->Unlock("aoe_view");
+    }
+    area_real = 0;
+}
+
+// After a change of layout (port/aoe_layout.cpp): the view draws every tile again at its new size, not only what a scroll uncovers
+void aoe_view_whole(void) {
+    RGE_View* view = st.view;
+    if (!view) return;
+    view->render_terrain_mode = 0;
+    view->set_redraw(TPanel::RedrawNormal);
 }
 
 // Panels over the view

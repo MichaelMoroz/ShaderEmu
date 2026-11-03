@@ -6,6 +6,8 @@
 #include <errno.h>
 #include <stdarg.h>
 #include "aoe_port.h"
+#include "aoe_window.h"
+extern "C" void aoe_layout_switch(int width);
 #undef open
 #undef fopen
 #undef time
@@ -643,6 +645,8 @@ LRESULT DispatchMessage(const MSG* m) {
     if (m->message == WM_PAINT) need_paint = 0;
     Wnd* w = (Wnd*) m->hwnd;
     if (!w) w = main_wnd;
+    // the window's new layout (port/aoe_view.cpp, aoe_layout_switch), as the game's own options would set it
+    if (m->message == AOE_WM_LAYOUT) { aoe_layout_switch((int) m->wParam); return 0; }
     // an input that changes the game waits for the world's update out to end (port/aoe_world.cpp); a move does not
     if (m->message != WM_MOUSEMOVE && m->message != WM_PAINT && m->message != WM_TIMER && aoe_world_busy()) aoe_world_finish();
     // the keys go to an edit control with the focus, as on Windows; the game subclasses its edits (TEditPanel::sub_wnd_proc,

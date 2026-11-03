@@ -312,6 +312,15 @@ CASES = [
          'nxkey $((OX+320*W/640)),$((OY+196*H/480));sleep 8;nxkey ctrl+alt+right;sleep 3;read OX OY W H </tmp/aoe-size;echo SIZE $W $H;'
          'nxkey $((OX+320*W/640)),$((OY+138*H/480));sleep 8;killall aoe.bin;else echo AOE-NO-DATA; fi', wall=300,
          has=[r'^(SIZE (?!640 480)\d+ \d+|AOE-NO-DATA)', r'^(aoe: panel Single Player Menu|AOE-NO-DATA)', r'^(aoe: panel MP Setup Screen|AOE-NO-DATA)']),
+    # the layout follows the window in play ("Two layouts"): maximised it is 800 x 600, put back 640 x 480, the game goes on and a click in
+    # the window's middle is the picture's middle in each; the menus before the game kept theirs
+    case('aoe-layout', 'games aoe desktop', AOE_UNPACK + 'nx; sleep 3; if [ -f /tmp/aoe/Empires.dat ]; then AOE_TICK_MS=33 AOE_INPUT_LOG=1 '
+         'AOE_STATS_MS=5000 AOE_SCRIPT="' + AOE_640.rsplit(';', 4)[0] + ';3000 ready" aoe & while [ ! -e /tmp/aoe-ready ];do sleep 1;done;sleep 2;'
+         'nxkey ctrl+f10;sleep 12;read OX OY W H </tmp/aoe-size;echo SIZE $W $H;nxkey $((OX+W/2)),$((OY+H/2));sleep 6;'
+         'nxkey ctrl+f10;sleep 12;read OX OY W H </tmp/aoe-size;echo SIZE $W $H;nxkey $((OX+W/2)),$((OY+H/2));sleep 6;killall aoe.bin;'
+         'else echo AOE-NO-DATA; fi', wall=600,
+         has=[r'^(aoe: layout 800 x 600 at Game Screen \(from 640 x 480\)|AOE-NO-DATA)', r'^(aoeinput: press 1 (39\d|40\d) (29\d|30\d)|AOE-NO-DATA)',
+              r'^(aoe: layout 640 x 480 at Game Screen \(from 800 x 600\)|AOE-NO-DATA)', r'^(aoeinput: press 1 (31\d|32\d) (23\d|24\d)|AOE-NO-DATA)']),
     # the trial's first start on the desktop (docs/system/install.md): its EULA read out of the installer in a window, Accept refused until
     # the text has been scrolled to its end, then accepted by Tab and Enter, the bar to the last of 105 files, and aoeprep's strings and faces
     case('aoe-install', 'games aoe desktop', X + 'if [ -f /usr/share/aoe/MSAoE.exe ]; then (sleep 6; nxkey a; sleep 1; nxkey pagedown; sleep 1; nxkey end; '
