@@ -352,7 +352,10 @@ buffer on core 0 whatever the GL under it.
   through it. `JK2_RESIZE=stretch` is the way before. `test_all.py jk2-resize` (an image with the demo) maximises the window at
   the main menu: "the window is 794x545: the renderer restarted at 792x544", then New and a click where the stretched menu has
   Begin Game (the display's 623,542 to the menu's 499,454) loads the level. A restart reloads what the renderer holds: tens of
-  seconds of the guest's at this machine's speed.
+  seconds of the guest's at this machine's speed. Until 3 November 2026 the restart kept 640 x 480 ("MODE: -1, 640 x 480"), drawn in
+  the window's corner with old pixels round it: rd-vanilla calls `WIN_Init` only while `glConfig.vidWidth` is 0 and its shutdown
+  leaves it, so `WIN_Shutdown` now clears it ("MODE: -1, 792 x 544"). The log lines alone had passed; a capture showed it
+  (`rvc_harness --cpu`, `--save-state`, `tools/snapshot_screen.py`).
 - **Sound**: the engine's own mixer, into a stream voice's ring of 8,192 stereo frames on the sound card
   (`se_card_init`): the card plays what the mix has written (`SNDDMA_Submit` tells it `s_paintedtime`) and its place
   is the DMA position. The CPU still mixes (about 1.2 million instructions a frame) and decodes the MP3s; voices of the
