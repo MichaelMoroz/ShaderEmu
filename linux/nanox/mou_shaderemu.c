@@ -6,6 +6,7 @@
 #include <fcntl.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <sys/ioctl.h>
 #include <unistd.h>
 #include "device.h"
 
@@ -48,8 +49,20 @@ Ptr_Open(MOUSEDEVICE *pmd)
 {
 	const char *dev = getenv("MOUSE_PORT");
 
+	/* the kernel's input_absinfo: value, minimum, maximum, fuzz, flat, resolution */
+	struct { int32_t value, minimum, maximum, fuzz, flat, resolution; } abs;
+
 	fd = open(dev ? dev : POINTER_DEV, O_RDONLY | O_NONBLOCK);
-	return fd < 0 ? MOUSE_FAIL : fd;
+	if (fd < 0)
+		return MOUSE_FAIL;
+	/* where the pointer is now (EVIOCGABS): one that has not moved since before the server
+	 * opened the device is reported with the next event, or the server holds it at 0, 0 and a
+	 * window under it is told of no wheel or stick there (pad-classicube in tools/test_all.py) */
+	if (ioctl(fd, _IOR('E', 0x40 + 0, abs), &abs) == 0)
+		cur_x = abs.value;
+	if (ioctl(fd, _IOR('E', 0x40 + 1, abs), &abs) == 0)
+		cur_y = abs.value;
+	return fd;
 }
 
 static void

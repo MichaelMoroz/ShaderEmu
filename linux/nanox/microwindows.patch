@@ -2461,7 +2461,7 @@ index 0679f9f..29d2087 100644
  		for (; sibwp != wp; sibwp = sibwp->siblings) {
  			if (!sibwp->realized || !sibwp->output)
 diff --git a/src/nanox/srvevent.c b/src/nanox/srvevent.c
-index bc31c08..3a36052 100644
+index bc31c08..c4d7bfc 100644
 --- a/src/nanox/srvevent.c
 +++ b/src/nanox/srvevent.c
 @@ -7,8 +7,247 @@
@@ -2841,7 +2841,7 @@ index bc31c08..3a36052 100644
  		GsDeliverButtonEvent(GR_EVENT_TYPE_BUTTON_DOWN, newbuttons,
  			changebuttons, modifiers);
  	}
-@@ -259,6 +595,17 @@ void GsHandleMouseStatus(GR_COORD newx, GR_COORD newy, int newbuttons)
+@@ -259,6 +595,21 @@ void GsHandleMouseStatus(GR_COORD newx, GR_COORD newy, int newbuttons)
  	}
  
  	curbuttons = newbuttons;
@@ -2851,15 +2851,19 @@ index bc31c08..3a36052 100644
 +		if (curextra & ~extra)
 +			GsDeliverExtraButtonEvent(GR_EVENT_TYPE_BUTTON_UP, newbuttons | extra,
 +				curextra & ~extra, modifiers);
-+		if (extra & ~curextra)
++		if (extra & ~curextra) {
++			/* the window under the pointer now, as for the usual buttons: one mapped under a
++			 * pointer that has not moved since was not mousewp, and its notches went to the root */
++			GsCheckMouseWindow();
 +			GsDeliverExtraButtonEvent(GR_EVENT_TYPE_BUTTON_DOWN, newbuttons | extra,
 +				extra & ~curextra, modifiers);
++		}
 +		curextra = extra;
 +	}
  }
  
  /*
-@@ -704,6 +1051,10 @@ GsDeliverUpdateEvent(GR_WINDOW *wp, GR_UPDATE_TYPE utype, GR_COORD x,
+@@ -704,6 +1055,10 @@ GsDeliverUpdateEvent(GR_WINDOW *wp, GR_UPDATE_TYPE utype, GR_COORD x,
  	}
  
  update_again:
