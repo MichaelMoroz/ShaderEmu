@@ -110,12 +110,13 @@ a mouse's wheel tilted (Shift) and turned on a desktop.
 | Mines (`nxmine`) | moves the keyboard's cell | | as before: open, flag | A opens the cell, B flags it |
 | Solitaire (`nxsolitaire`) | | | as before: drag, click | A turns the stock, B takes back, Y finishes |
 | Chess (`nxchess`) | moves the keyboard's square | | as before | A picks and drops, B takes back |
-
+| Micropolis (`nxmicropolis`) | pans the map 64 pixels a notch (over the map) | scrolls the map up and down (its wheel) | as before | A pauses and goes on |
 | Tiberian Dawn, Red Alert (`linux/tdawn/host.c`) | pans the map: an arrow key pressed and let go a notch | | as before (the right button dragged scrolls) | Y is Escape |
 | OpenTTD (`shaderemu_v.cpp`) | pans the main view: an arrow held 120 ms a notch | zooms (its wheel) | as before | |
 | Age of Empires (`port/window.c`) | pans the map: an arrow held 120 ms a notch | | as before | |
 | Quake, Quake III, Half-Life, Jedi Outcast | | the next weapon up or right, the one before down or left (Half-Life: its own wheel binds) | as before | A jumps, B uses (not Quake), the left stick pressed crouches (not Quake), Y is Escape |
 | Doom | | | as before | A or B uses |
+| ClassiCube, not seated (`Window_ShaderEmu.c`) | walks: a notch holds W, S, A or D 0.2 s | as before (the held block) | as before | A is Space (jump), B the inventory, Y is Escape |
 | NES (osd_shaderemu.c) | the d-pad: a notch holds its way 9 frames (0.15 s) | | | A and B the pad's, Y Select, the right stick pressed Start |
 
 A sitter in a holodeck's seat keeps the controller's own mapping (`EmuGamepad`): the 3D games take none of

@@ -351,9 +351,10 @@ summed by `tools/volume_frames.py`:
 | Doom | not in a level (the title, an intermission, the finale) or a menu up (`doom_video.c`) | its 4 flat draws (status bar, weapon, messages) left out | on the HUD layer | 42 s of a level: world and HUD in every one of 1,487 frames |
 | Quake | a menu or the console, not connected or not signed on, the loading plaque, a level's end (`vid_shaderemu.c`) | 5 to 7 flat draws (status bar, cross-hair, centre prints) left out | on the HUD layer | `kill` and `changelevel e1m2`: the last frame before each load is flat (the plaque on the large screen) and stays so while no frame comes (14 s and 18 s), then the world again; 0 frames of an empty world |
 | Quake III | any key catcher (menu, console, chat), not active, the scoreboard at a level's end (`tr_shaderemu.c`) | up to 19 flat draws (HUD, cross-hair, messages) left out | on the HUD layer | the load (21 s flat), then 4,005 frames of world and HUD, `kill` included |
-| Half-Life | not playing: not active or signed on, the menu or console, an intermission (`playing()`, `vid_shaderemu.c`) | its flat draws left out | on the HUD layer (not measured: this image had no Uplink data) | |
+| Half-Life | not playing: not active or signed on, the menu or console, an intermission (`playing()`, `vid_shaderemu.c`) | up to 17 flat draws left out | on the HUD layer | `hldemo1`'s load 69 s flat, then 2,341 frames of world and HUD; 0 empty |
 | ClassiCube | no world loaded, or a screen that takes the pointer while not seated, or typing (`SE_Flat`) | its 2D was already a sheet in space before the sitter (`SheetMatrix`): 0 flat draws | as before (nothing on the HUD layer) | the start: 7 frames flat, 1 frame of an empty world (0.1 s), then the world |
-| Jedi Outcast, the 2D games | not registered: always on the large screen, menus and all | | | |
+| Jedi Outcast (since 3 November 2026) | not in play: a menu, the console, a load (`SE_InPlay`, `se_world_tell` in `sys_shaderemu.cpp`); up is z, the eye 48 units | not a holodeck game: the large screen | on the HUD layer: up to 50 flat draws; its opening scene draws none | `+map demo`'s load flat (the large screen) for 39 minutes of the guest's at `rvc_cpu`'s speed, then 1,070 frames of the world, 2 single frames of an empty world |
+| the 2D games | not registered: always on the large screen, menus and all | | | |
 
 ## The HUD layer
 
@@ -374,8 +375,15 @@ runtime scripts with csc; not run in Unity or a headset.
 and text), and `python tools/volume_frames.py FILE` prints them as runs of a kind: a flat screen, a world with or without
 draws over it, or an empty world (not flat and nothing in space: the room would show nothing; over a second is an exit 1).
 
+Jedi Outcast is played from the seat as Quake III is (`SE_SeatMove`, called from `CL_CreateCmd` by `jk2.patch`): the left stick
+walks, a desktop sitter's mouse counts turn and the head's tilt is the aim's rise, a headset's right stick turns and the right
+hand's rise is the aim's; the right trigger fires, the left one the other fire, the right grip uses and the jump button jumps.
+`JK2_SEAT=1` says so every 20 moves: with `--host 00000112,0,0,0,0,00007f00,0,0` "seat: 2 ... move 127 0 0", and with the jump
+and the left trigger added "move 127 0 127 buttons 80". It is `ByWords`' too (game 10). The hand's aim (as Quake III's beam from
+the hand) is not made: the aim is the body's.
+
 Only the registered games have a world round the seat (`EmuHolodeck.Registered`: Doom, Quake,
-ClassiCube, Quake III, nxphys and Half-Life, by the number of the program whose window has the keyboard,
+ClassiCube, Quake III, nxphys, Half-Life and Jedi Outcast, by the number of the program whose window has the keyboard,
 `linux/apps/gameid.h`); any other program is on the large screen however it draws, as on a
 desktop. Tiberian Dawn and Red Alert draw their pages by a GPU list, which is no world to stand in. The
 console's 3D key, under Screen, gives every program's list a world for this visitor ("3D: every

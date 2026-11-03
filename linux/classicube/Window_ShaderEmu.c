@@ -134,6 +134,11 @@ static void DoCreateWindow(int width, int height) {
 	GrSelectEvents(window, GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_KEY_UP | GR_EVENT_MASK_BUTTON_DOWN |
 		GR_EVENT_MASK_BUTTON_UP | GR_EVENT_MASK_MOUSE_ENTER | GR_EVENT_MASK_MOUSE_EXIT | GR_EVENT_MASK_CLOSE_REQ |
 		GR_EVENT_MASK_UPDATE | GR_EVENT_MASK_FOCUS_IN | GR_EVENT_MASK_FOCUS_OUT);
+	{
+		GR_WM_PROPERTIES props;	/* the extra buttons: the left hand's stick walks (Pad) */
+		props.flags = GR_WM_FLAGS_COMMAND, props.props = GR_WMC_BUTTONS, props.background = 1;
+		GrSetWMProperties(window, &props);
+	}
 	GrMapWindow(window);
 	GrSetFocus(window);
 	GrGetWindowInfo(window, &window_info);
@@ -261,6 +266,38 @@ static void ReadPointer(const volatile uint32_t* input) {
 	Pointer_SetPosition(0, mouse_x, mouse_y);
 }
 
+/* A controller, not seated (docs/machine/input.md, "Game controls"): a notch of the left hand's stick holds W, S, A or D
+   0.2 s (a step), the jump button (A) is Space, B the inventory (B), Y Escape; the triggers and grips are the pointer's
+   buttons as before (dig, place). A sitter's controller is the seat's (Seat). CLASSICUBE_PAD_LOG=1 says each. */
+static uint32_t pad_until[4];	/* W, S, A, D: held until that millisecond, 0 not */
+static const int pad_keys[4] = { 'W', 'S', 'A', 'D' };
+static int pad_log = -1;
+
+static void PadNotch(GR_BUTTON b) {
+	int way = b & GR_BUTTON_SCROLL2UP ? 0 : b & GR_BUTTON_SCROLL2DN ? 1 : b & GR_BUTTON_SCROLL2LEFT ? 2 : b & GR_BUTTON_SCROLL2RIGHT ? 3 : -1;
+	if (way < 0 || seated) return;
+	if (!pad_until[way]) Input_Set(pad_keys[way], true);
+	pad_until[way] = SE_Milliseconds() + 200;
+	if (pad_log < 0) pad_log = getenv("CLASSICUBE_PAD_LOG") != NULL;
+	if (pad_log) { printf("classicube: pad walks %c\n", pad_keys[way]); fflush(stdout); }
+}
+
+static void Pad(const volatile uint32_t* input) {
+	static uint32_t held;
+	static const struct { uint32_t bit; int key; } map[] = { { 0x10000, CCKEY_SPACE }, { 0x8000, 'B' }, { 0x4000, CCKEY_ESCAPE } };
+	uint32_t now = seated ? 0 : input[2], changed = now ^ held, t = SE_Milliseconds();
+	int i;
+	held = now;
+	for (i = 0; changed && i < 3; i++)
+		if (changed & map[i].bit) {
+			Input_Set(map[i].key, (now & map[i].bit) != 0);
+			if (pad_log < 0) pad_log = getenv("CLASSICUBE_PAD_LOG") != NULL;
+			if (pad_log) { printf("classicube: pad key %d %s\n", map[i].key, now & map[i].bit ? "down" : "up"); fflush(stdout); }
+		}
+	for (i = 0; i < 4; i++)
+		if (pad_until[i] && (int32_t)(t - pad_until[i]) >= 0) { pad_until[i] = 0; Input_Set(pad_keys[i], false); }
+}
+
 static void HandleEvent(GR_EVENT* e) {
 	int key, down;
 	Gfx_SE_Own();
@@ -294,6 +331,7 @@ static void HandleEvent(GR_EVENT* e) {
 		}
 		if (e->button.changebuttons & GR_BUTTON_R) Input_Set(CCMOUSE_R, down);
 		if (e->button.changebuttons & GR_BUTTON_M) Input_Set(CCMOUSE_M, down);
+		if (down) PadNotch(e->button.changebuttons);
 		if (down && (e->button.buttons & GR_BUTTON_SCROLLUP)) Mouse_ScrollVWheel(1.0f);
 		if (down && (e->button.buttons & GR_BUTTON_SCROLLDN)) Mouse_ScrollVWheel(-1.0f);
 		break;
@@ -713,6 +751,7 @@ void Window_ProcessEvents(float delta) {
 	if (gpu) {
 		input =(const volatile uint32_t*)(gpu + REG_INPUT);
 		ReadPointer(input);
+		Pad(input);
 		for (i = 2; i < 4; i++) { /* the buttons, and the count of keys */
 			if (seen[i] != input[i]) { seen[i] = input[i]; ask = 8; }
 		}

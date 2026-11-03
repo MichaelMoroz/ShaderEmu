@@ -255,6 +255,12 @@ CASES = [
     case('micropolis', 'games', 'MICROPOLIS_SUM=/usr/share/micropolis/cities/haight.cty,1000 nxmicropolis; '
          'MICROPOLIS_SUM=1,500 nxmicropolis; MICROPOLIS_SUM=8,1500 nxmicropolis',
          sums=[(r'micropolis: .* ticks: .* sum ([0-9a-f]+)', ['909517ac', 'e14d1a50', '75e86f73'])]),
+    # its window made larger shows more of the map ("The window"), and a controller: the left stick's notches pan the map, A pauses
+    case('micropolis-window', 'games micropolis desktop', 'nx; sleep 3; MICROPOLIS_REPORT=1 nxmicropolis & sleep 50; nxkey ctrl+alt+up; sleep 40; killall nxmicropolis',
+         True, wall=400, more=['--pointer-sweep', '0', '--pointer-circle', '400,300,0', '--scroll', '60,lx,1', '--scroll', '62,ly,-1',
+                               '--pointer-button', '0x10080,64,64.5'],
+         has=[r'nxmicropolis: the window is \d+x\d+, the map (7[0-9][0-9]|8[0-9][0-9]|9[0-6]\d)x\d+', r'nxmicropolis: pad scrolls the map to',
+              r'nxmicropolis: pad pauses']),
     # OpenTTD (docs/games/openttd.md): two new games of test.cfg without a window, the sums of the native build's run
     case('openttd', 'games', 'cp /usr/share/openttd/test.cfg /tmp/t.cfg; OPENTTD_SUM=1 openttd.bin -v null:ticks=500 -s null -m null -g -G 1 -c /tmp/t.cfg; '
          'OPENTTD_SUM=1 openttd.bin -v null:ticks=2000 -s null -m null -g -G 2 -c /tmp/t.cfg',
@@ -286,6 +292,11 @@ CASES = [
          'nxkey drag:$((OX+220)),$((OY+40)):$((OX+420)),$((OY+240));sleep 4;killall aoe.bin;else echo AOE-NO-DATA; fi', wall=300,
          has=[r'^(aoeinput: order 425 110 1 0|AOE-NO-DATA)', r'^(aoeinput: drag -200 -100 0 625|AOE-NO-DATA)', r'^(aoeinput: order 380 150 1 0|AOE-NO-DATA)', r'^(aoeinput: box 220 40 420 240|AOE-NO-DATA)',
               r'^(aoeview: (\d+ \d+) selected 1\s+(?:aoe: step.*\s+)?aoeview: \2 selected 1|AOE-NO-DATA)']),
+    # a notch of the left hand's stick holds an arrow 120 ms over the window (docs/machine/input.md, "Game controls"), the pointer over it
+    case('aoe-pad', 'games aoe', AOE_UNPACK + X + 'if [ -f /tmp/aoe/Empires.dat ]; then AOE_TICK_MS=33 AOE_INPUT_LOG=1 AOE_SCRIPT="' + AOE_640.rsplit(';', 4)[0] + ';3000 ready" aoe & '
+         'while [ ! -e /tmp/aoe-ready ];do sleep 1;done;sleep 30;killall aoe.bin;else echo AOE-NO-DATA; fi', wall=400,
+         more=['--pointer-sweep', '0', '--pointer-circle', '300,250,0'] + [x for t in range(40, 400, 10) for x in ('--scroll', f'{t},lx,1')],
+         has=[r'^(aoe: pad holds key 39|AOE-NO-DATA)']),
     # the map dragged with the GPU's lists taken back late, as in a world (RVC_DEVICE_EVERY=6), the world in slices on the real clock
     # (docs/games/aoe.md, "Scrolls checked"): at each check the picture the view made by its scrolls against one drawn whole from the
     # same game, not a pixel apart; and the scroll's machine copy made by the first core
@@ -301,6 +312,15 @@ CASES = [
          'nxkey $((OX+320*W/640)),$((OY+196*H/480));sleep 8;nxkey ctrl+alt+right;sleep 3;read OX OY W H </tmp/aoe-size;echo SIZE $W $H;'
          'nxkey $((OX+320*W/640)),$((OY+138*H/480));sleep 8;killall aoe.bin;else echo AOE-NO-DATA; fi', wall=300,
          has=[r'^(SIZE (?!640 480)\d+ \d+|AOE-NO-DATA)', r'^(aoe: panel Single Player Menu|AOE-NO-DATA)', r'^(aoe: panel MP Setup Screen|AOE-NO-DATA)']),
+    # the layout follows the window in play ("Two layouts"): maximised it is 800 x 600, put back 640 x 480, the game goes on and a click in
+    # the window's middle is the picture's middle in each; the menus before the game kept theirs
+    case('aoe-layout', 'games aoe desktop', AOE_UNPACK + 'nx; sleep 3; if [ -f /tmp/aoe/Empires.dat ]; then AOE_TICK_MS=33 AOE_INPUT_LOG=1 '
+         'AOE_STATS_MS=5000 AOE_SCRIPT="' + AOE_640.rsplit(';', 4)[0] + ';3000 ready" aoe & while [ ! -e /tmp/aoe-ready ];do sleep 1;done;sleep 2;'
+         'nxkey ctrl+f10;sleep 12;read OX OY W H </tmp/aoe-size;echo SIZE $W $H;nxkey $((OX+W/2)),$((OY+H/2));sleep 6;'
+         'nxkey ctrl+f10;sleep 12;read OX OY W H </tmp/aoe-size;echo SIZE $W $H;nxkey $((OX+W/2)),$((OY+H/2));sleep 6;killall aoe.bin;'
+         'else echo AOE-NO-DATA; fi', wall=600,
+         has=[r'^(aoe: layout 800 x 600 at Game Screen \(from 640 x 480\)|AOE-NO-DATA)', r'^(aoeinput: press 1 (39\d|40\d) (29\d|30\d)|AOE-NO-DATA)',
+              r'^(aoe: layout 640 x 480 at Game Screen \(from 800 x 600\)|AOE-NO-DATA)', r'^(aoeinput: press 1 (31\d|32\d) (23\d|24\d)|AOE-NO-DATA)']),
     # the trial's first start on the desktop (docs/system/install.md): its EULA read out of the installer in a window, Accept refused until
     # the text has been scrolled to its end, then accepted by Tab and Enter, the bar to the last of 105 files, and aoeprep's strings and faces
     case('aoe-install', 'games aoe desktop', X + 'if [ -f /usr/share/aoe/MSAoE.exe ]; then (sleep 6; nxkey a; sleep 1; nxkey pagedown; sleep 1; nxkey end; '
@@ -793,6 +813,21 @@ CASES = [
          more=['--pointer-sweep', '0', '--pointer-circle', '300,250,0', '--scroll', '8,ly,-1', '--scroll', '9,lx,1',
                '--pointer-button', '0x10080,10,10.5'],
          has=[r'nes: pad holds down', r'nes: pad holds right']),
+    # Doom: A or B uses (DOOM_PAD_LOG says the first); Quake III: the hands' buttons as its keys (QUAKE3_PAD_LOG); ClassiCube unseated: a
+    # notch of the left hand's stick holds W, the jump button is Space
+    case('pad-doom', 'games doom', X + 'DOOM_PAD_LOG=1 doom -warp 1 1 & sleep 40; killall doom.bin', True, wall=300,
+         more=['--pointer-button', '0x10080,20,20.5'], has=[r'doom: pad uses']),
+    case('pad-quake3', 'games quake3', X + 'QUAKE3_PAD_LOG=1 ' + Q3, True, until='pad down 10080', wall=400,
+         more=['--pointer-button', '0x10080,45,45.5'], has=[r'quake3: pad down 10080']),
+    case('pad-classicube', 'games classicube', CC + 'CLASSICUBE_PAD_LOG=1 CLASSICUBE_SEED=7 classicube', True, until='pad key', wall=300,
+         more=['--pointer-sweep', '0', '--pointer-circle', '300,250,0', '--expect', 'classicube: steady', '--send', '\\n',
+               '--scroll', '30,ly,1', '--pointer-button', '0x10080,32,32.5'],
+         has=[r'classicube: pad walks W']),
+    # ClassiCube's pause menu: a click on "Host on the LAN" (left column, a row under "Hotkeys...") hosts (docs/games/classicube.md, "Played together")
+    case('classicube-lan-menu', 'games classicube', CC + 'CLASSICUBE_SEAT=1 CLASSICUBE_LAN_LOG=1 CLASSICUBE_SEED=7 classicube', True, until='Hosting on',
+         wall=300, more=['--expect', 'classicube: steady', '--send', 'down Escape\\nup Escape\\n', '--expect', 'seat:',
+                         '--send', 'point 160 340\\ndown LeftMouse\\nup LeftMouse\\n'],
+         has=[r'lan: Hosting on the LAN at [\d.]+:25565']),
     case('pad-pinball', 'desktop games', X + 'NXPINBALL_PRINT=1 nxpinball & sleep 4; nxkey space; sleep 8; killall nxpinball', wall=120,
          more=['--pointer-button', '0x80,5,20', '--pointer-button', '0x100,8,8.5', '--pointer-button', '0x400,9,9.5', '--pointer-button', '0x10000,10,11'],
          has=[r'^nxpinball: left flipper held', r'^nxpinball: left flipper let go', r'^nxpinball: right flipper held', r'^nxpinball: plunger held',

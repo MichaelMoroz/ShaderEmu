@@ -205,6 +205,8 @@ static void SE_PadButtons (unsigned buttons)
 	unsigned down = buttons & ~held, up = held & ~buttons;
 
 	held = buttons;
+	if ((down | up) && getenv ("QUAKE3_PAD_LOG"))
+		Com_Printf ("quake3: pad down %x up %x\n", down, up);
 	if ((down | up) & 0x10000)
 		Com_QueueEvent (0, SE_KEY, K_SPACE, (down & 0x10000) != 0, 0, NULL);
 	if ((down | up) & 0x1000)
