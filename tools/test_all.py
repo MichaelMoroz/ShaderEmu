@@ -362,6 +362,25 @@ CASES = [
          True, wall=600, has=[r'openttd: play PL-DONE', r'openttd: play scroll: .* [1-9]\d* made again by workers',
                               r'openttd: play round 1: .*checked \d+, 0 differ \(0 pixels'],
          sums=[(r'openttd: 1 ticks, map 256 x 256, .* sum ([0-9a-f]+)', ['e49e18e3'])]),
+    # chat lines over the scroll in a network game (docs/games/openttd.md, "Chat lines"): six lines added and ended one by one while it
+    # scrolls, every picture against one drawn whole with the lines drawn again over it, on workers and on the first core alone; then
+    # the GPU's blitter, whose lines are records of their own (rvc_cpu draws no list: its run counts the sets of lines and the lists that drew them)
+    case('openttd-chat', 'games openttd', X + ' ; '.join(
+        f'OPENTTD_HOST=1 OPENTTD_PLAY=1 OPENTTD_PLAY_PART=scroll OPENTTD_PLAY_CHAT=1 {e} openttd -g /usr/share/openttd/busy.sav' for e in (
+            'OPENTTD_DRAW=cpu OPENTTD_PLAY_ODD=1 OPENTTD_PAUSE=1 OPENTTD_CHECK=1', 'OPENTTD_DRAW=cpu OPENTTD_PAUSE=1 OPENTTD_CHECK=1 OPENTTD_WORKERS=0', '')),
+         True, wall=600, count=[(r'openttd: play chat: 6 lines added, 6 ended, [1-9]\d pictures with lines, 0 up at the end', 3),
+                               (r'openttd: play round 1: 61 pictures .*checked 6\d, 0 differ \(0 pixels', 2)],
+         has=[r'openttd: play chat: .* 0 up at the end; [1-9]\d* sets of lines made, [1-9]\d* lists drew them'], never=[r'not a network game']),
+    # the same with light pictures (the game running, OPENTTD_CHECK=last: the part's last picture alone checked, after the lines ended)
+    case('openttd-chat-light', 'games openttd', X + 'OPENTTD_HOST=1 OPENTTD_DRAW=cpu OPENTTD_PLAY=1 OPENTTD_PLAY_PART=scroll OPENTTD_PLAY_CHAT=1 OPENTTD_CHECK=last '
+         'openttd -g /usr/share/openttd/busy.sav',
+         True, wall=400, has=[r'openttd: play chat: 6 lines added, 6 ended, [1-9]\d pictures with lines, 0 up at the end',
+                              r'openttd: play round 1: 61 pictures .*checked 1, 0 differ \(0 pixels'], never=[r'not a network game']),
+    # and with the device taken back only every sixth pass, as a world draws a list once a frame (lists that do not wait for the GPU)
+    case('openttd-chat-device', 'games openttd', X + 'OPENTTD_HOST=1 OPENTTD_DRAW=cpu OPENTTD_PLAY=1 OPENTTD_PLAY_PART=scroll OPENTTD_PLAY_CHAT=1 OPENTTD_CHECK=1 '
+         'OPENTTD_PAUSE=1 openttd -g /usr/share/openttd/busy.sav', True, wall=600, env={'RVC_DEVICE_EVERY': '6'},
+         has=[r'openttd: play chat: 6 lines added, 6 ended, [1-9]\d pictures with lines, 0 up at the end',
+              r'openttd: play round 1: 61 pictures .*checked 6\d, 0 differ \(0 pixels'], never=[r'not a network game']),
     # the GPU's blitter: its lists made by the first core and the workers' records (with --races, what the workers store)
     case('openttd-gpu', 'games openttd', X + 'OPENTTD_PLAY=1 OPENTTD_PLAY_SHORT=1 OPENTTD_PAUSE=1 openttd -g /usr/share/openttd/busy.sav',
          True, wall=400, has=[r'openttd: play PL-DONE', r'openttd: play scroll: .* [1-9]\d* made again by workers']),

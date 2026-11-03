@@ -15,6 +15,7 @@
 #include "../window_func.h"
 #include "../timer/timer_game_tick.h"
 #include "../network/network.h"
+#include "../network/network_func.h"
 #include "../window_gui.h"
 #include "../viewport_func.h"
 #include "../tilehighlight_func.h"
@@ -218,10 +219,16 @@ void VideoDriver_ShaderEmu::UnlockVideoBuffer() {}
 /* OPENTTD_CHECK=1: every picture is drawn again whole and the pixels where the two differ are
  * counted (a scroll or a band left wrong). OPENTTD_HOLD=N|bad|big: the program stops at picture N
  * of the play script, or at the first that differs (by over 1,000 pixels), and says where both
- * pictures are in memory. */
+ * pictures are in memory. OPENTTD_CHECK=last: only the play part's last picture, and light pictures
+ * stay on before it. Chat lines shown are drawn again over the picture drawn whole, as they were. */
 bool VehViewsOut();
 static int _play_frame = -1;     ///< pictures of OPENTTD_PLAY's script so far, -1 before it
 static int _checked, _check_bad, _check_line, _check_part_line;
+static bool _check_now;          ///< (OPENTTD_CHECK=last) this picture is the part's last
+bool SeChatShown();              /* network_chat_gui.cpp */
+void SeChatDrawAgain();
+bool SeChatExpireOldest();
+int SeChatLines();
 static long long _check_pixels;
 
 static int Number(const char *s)
@@ -255,9 +262,10 @@ static void CheckPicture()
 	static const char *check_how = getenv("OPENTTD_CHECK");
 	static const bool check = check_how != nullptr;
 	static const bool keep = check && std::string_view(check_how) == "keep"; /* the picture as drawn is shown on, its errors kept */
+	static const bool last_only = check && std::string_view(check_how) == "last";
 	static const char *hold = getenv("OPENTTD_HOLD");
 	int w = _screen.width, h = _screen.height;
-	if (!check || _game_mode != GM_NORMAL) {
+	if (!check || _game_mode != GM_NORMAL || (last_only && !std::exchange(_check_now, false))) {
 		if (hold != nullptr && _play_frame == Number(hold)) {
 			if (SeGpuOn()) {
 				/* (the GPU's picture, in the bytes the 8-bit blitter would have drawn) */
@@ -290,6 +298,7 @@ static void CheckPicture()
 	/* (every vehicle's copy made anew: one the tick changed and did not say so differs) */
 	VehiclesChangedAll();
 	VehiclesSync(worker);
+	const bool chat = SeChatShown(); /* (the chat's lines, drawn again over the picture drawn whole) */
 	if (SeGpuOn()) {
 		/* the GPU's picture as drawn, then drawn again whole */
 		SeGpuSubmit();
@@ -297,6 +306,7 @@ static void CheckPicture()
 		SeGpuPicture(shown);
 		MarkWholeScreenDirty();
 		DrawDirtyBlocks();
+		if (chat) SeChatDrawAgain();
 		SeGpuSubmit();
 		SeGpuSettle();
 		static std::vector<uint8_t> whole;
@@ -306,6 +316,7 @@ static void CheckPicture()
 		shown.assign(_picture, _picture + w * h);
 		MarkWholeScreenDirty();
 		DrawDirtyBlocks();
+		if (chat) SeChatDrawAgain();
 	}
 	int bad = 0, l = w, t = h, r = -1, b = -1, line = 0;
 	static std::vector<int> down; /* differing pixels in a column so far, ending at this row */
@@ -1192,6 +1203,32 @@ static void PlayBuild(int n)
 	if (n == 59) PlayLine(fmt::format("openttd: play built {} of {} so far\n", made, placed));
 }
 
+/* OPENTTD_PLAY_CHAT=1, over the scroll (pictures 0 to 59; docs/games/openttd.md, "Chat lines"): a chat line added at pictures 2 to 17,
+ * every third, of lengths that wrap and colours that differ, and from picture 20 the oldest ended every sixth, the last at 50, as the
+ * timer ends a line whose time is up. Upstream takes the lines away before drawing only in a network game: OPENTTD_HOST=1. */
+static void PlayChat(int f)
+{
+	static int added, ended, up;
+	static const char *const words[] = { "the", "train", "to", "Fort", "Gondhattan", "is", "late", "again,", "send", "buses", "please", "and",
+			"build", "a", "second", "platform", "before", "1951" };
+	static const TextColour colours[] = { TC_WHITE, TC_YELLOW, TC_LIGHT_BLUE, TC_ORANGE };
+	if (f == 0 && !_networking) PlayLine("openttd: play chat: not a network game (OPENTTD_HOST=1): upstream leaves the lines on the screen\n");
+	if (f >= 2 && f <= 17 && (f - 2) % 3 == 0) {
+		std::string line = fmt::format("Player {}:", added + 1);
+		for (int i = 0; i < 3 + added * 5 % 13; i++) line += fmt::format(" {}", words[(added * 7 + i) % std::size(words)]);
+		NetworkAddChatMessage(colours[added % std::size(colours)], 600, line);
+		added++;
+	}
+	if (f >= 20 && f <= 50 && (f - 20) % 6 == 0 && SeChatExpireOldest()) ended++;
+	if (SeChatLines() > 0) up++;
+	if (f == 59) {
+		uint32_t sets = 0, lists = 0;
+		if (SeGpuOn()) SeGpuChatCounts(sets, lists);
+		PlayLine(fmt::format("openttd: play chat: {} lines added, {} ended, {} pictures with lines, {} up at the end; {} sets of lines made, {} lists drew them\n",
+				added, ended, up, SeChatLines(), sets, lists));
+	}
+}
+
 static void PlayStep()
 {
 	static const char *play = getenv("OPENTTD_PLAY");
@@ -1252,6 +1289,9 @@ static void PlayStep()
 	if (PlayDriveStep()) return;
 	const int at = _play_frame++ % len;
 	const int f = list != nullptr ? list[at] : at;
+	_check_now = at == len - 2; /* (OPENTTD_CHECK=last: the picture this step makes, the last before the round's end) */
+	static const bool play_chat = getenv("OPENTTD_PLAY_CHAT") != nullptr;
+	if (play_chat && f < 60) PlayChat(f);
 	/* (what the script does next but for scrolling wants the tick held) */
 	if (f == 60 || f == 80 || f == 100 || f == 110 || f == 170 || f == 199 || f == 200 || f >= 300 && (f == 300 || f == 305 || f == 320 || f == 340)) TwHold(false);
 	/* OPENTTD_PLAY_TIMES=1: each picture's time, to see where a part's time goes */

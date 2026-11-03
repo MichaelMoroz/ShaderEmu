@@ -377,6 +377,33 @@ The check: `OPENTTD_PLAY_SHORT=1 OPENTTD_PLAY_ODD=1 OPENTTD_PAUSE=1 OPENTTD_CHEC
 picture early under WARP against the 8-bit blitter's sums. `tools/test_all.py openttd-gpu --races`: 0 undone.
 Calibrated (31 October 2026, the play benchmark, alternating), the two blitters are within the model's 7%.
 
+## Chat lines
+
+Upstream draws a network game's chat lines over the screen: before drawing them it copies the rectangle under
+them aside (`NetworkDrawChatMessage`, `CopyToBuffer`), and to take them away it puts the copy back
+(`NetworkUndrawChatMessage`, `CopyFromBuffer`). Under the GPU's blitter that cannot work: the picture is the
+GPU's and its copy back is the pointer's way, which draws nothing, so the lines' shaded box went into the
+picture and stayed, darker at each drawing, and the machine's copy of a scroll moved it with the view: dark
+boxes in a staircase where lines had been (seen in the world, November 2026).
+
+So under the GPU's blitter the lines are never in the picture (`SeGpuChatBegin`, `SeGpuChatEnd`,
+`SeGpuChatDrop` in `shaderemu_gpu.cpp`; `network_chat_gui.cpp` in `openttd.patch`): what the first core draws
+between Begin and End goes to records of their own, their pixels and tables copied. A list of their own draws
+them over their rectangle of the picture into words of their own whenever the lines or the picture under them
+changed, and the show list puts those words over the picture. Taken away, they are simply not shown. Two sets
+of lines alternate, since the GPU may still read one while the next is made (lists do not wait for it).
+`OPENTTD_CHAT=picture` is the way before. The 8-bit blitter (`OPENTTD_DRAW=cpu`) keeps upstream's copy aside.
+
+`OPENTTD_PLAY_CHAT=1` over the scroll adds six chat lines of several lengths and colours and ends them one by
+one (`PlayChat` in `shaderemu_v.cpp`; a network game, `OPENTTD_HOST=1`). `OPENTTD_CHECK` draws the lines
+again over the picture drawn whole (`SeChatDrawAgain`), and `OPENTTD_CHECK=last` checks the part's last picture
+only, with light pictures on before it. `test_all.py openttd-chat` (on workers and on the first core alone,
+then the GPU's blitter), `openttd-chat-light` and `openttd-chat-device` (`RVC_DEVICE_EVERY=6`): 0 pixels differ
+over 60 pictures, 6 lines added and 6 ended, none left. The GPU blitter's run makes 48 sets of lines and 48
+lists that drew them; its pixels are not checked there, since `rvc_cpu` draws no list (a capture under WARP
+would, which this round did not run). Under `RVC_RACES` the unpaused scroll has 2 changes undone with and
+without the lines, and on the prebuilt program too (3 November 2026): not of this change.
+
 ## Is it the same game
 
 `host_sum.sh` builds the same tree for the build computer, without a window and without

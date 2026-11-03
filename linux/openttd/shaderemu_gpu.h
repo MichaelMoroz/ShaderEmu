@@ -33,6 +33,16 @@ void SeGpuWho(int x, int y);
 /** The mouse pointer's sprites are drawn: what was captured since CopyToBuffer is the pointer. */
 void SeGpuPointerDrawn();
 
+/* The chat's lines (network_chat_gui.cpp; docs/games/openttd.md, "Chat lines"): not drawn into the picture but recorded apart and
+ * shown over it, so that taking them away puts nothing back. Begin: what the first core draws next is the lines', in the screen's
+ * rectangle (x, y, w, h); false when the GPU does not draw the picture (or OPENTTD_CHAT=picture), and they go to the screen as
+ * upstream's do. Drop: they are no longer shown; false likewise. */
+bool SeGpuChatBegin(int x, int y, int w, int h);
+void SeGpuChatEnd();
+bool SeGpuChatDrop();
+/** (OPENTTD_PLAY_CHAT's line) sets of lines made, and lists that drew them over the picture. */
+void SeGpuChatCounts(uint32_t &sets, uint32_t &lists);
+
 /* The viewport's pieces (viewport.cpp's ViewportFlush): each is drawn on some core into a range of its records,
  * and the pieces of a flush, which do not overlap, are put in the list together after the round. */
 void SeGpuPiecesBegin(int pieces);
