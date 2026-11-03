@@ -116,13 +116,14 @@ a mouse's wheel tilted (Shift) and turned on a desktop.
 | Age of Empires (`port/window.c`) | pans the map: an arrow held 120 ms a notch | | as before | |
 | Quake, Quake III, Half-Life, Jedi Outcast | | the next weapon up or right, the one before down or left (Half-Life: its own wheel binds) | as before | A jumps, B uses (not Quake), the left stick pressed crouches (not Quake), Y is Escape |
 | Doom | | | as before | A or B uses |
+| NES (osd_shaderemu.c) | the d-pad: a notch holds its way 9 frames (0.15 s) | | | A and B the pad's, Y Select, the right stick pressed Start |
 
 A sitter in a holodeck's seat keeps the controller's own mapping (`EmuGamepad`): the 3D games take none of
 these while seated. Groups of units in the C&C games and AoE are not mapped: the game says nothing of which
 groups exist, so a button that cycles them would select empty ones.
 
 `NXTETRIS_PRINT=1` and `NXPINBALL_PRINT=1` say each move a controller made, and `test_all.py
-pad-tetris`, `pad-pinball`, `pad-mines` and `pad-chess` play them with `--scroll` and `--pointer-button`.
+pad-tetris`, `pad-pinball`, `pad-mines`, `pad-chess`, `pad-tdawn`, `pad-openttd`, `pad-quake` and `pad-nes` play them with `--scroll` and `--pointer-button`.
 
 ## A beam as the pointer, steadied (the VRChat world)
 

@@ -788,6 +788,11 @@ CASES = [
          has=[r'openttd: pad pans left', r'openttd: pad pans down']),
     case('pad-quake', 'games quake', X + 'QUAKE_TRACK=5 quake +map e1m1 +host_framerate 0.05', True, until='track 200:', wall=300,
          more=['--pointer-button', '0x10080,32,32.5'], has=[r'quake: track \d+: .* on ground 0']),
+    # the NES: a notch of the left hand's stick holds the d-pad's way 9 frames, A and B are the pad's (the frames' state sums show the presses)
+    case('pad-nes', 'games nes', X + 'NES_PAD_LOG=1 NES_FRAMES=900 nes thwaite', True, wall=300,
+         more=['--pointer-sweep', '0', '--pointer-circle', '300,250,0', '--scroll', '8,ly,-1', '--scroll', '9,lx,1',
+               '--pointer-button', '0x10080,10,10.5'],
+         has=[r'nes: pad holds down', r'nes: pad holds right']),
     case('pad-pinball', 'desktop games', X + 'NXPINBALL_PRINT=1 nxpinball & sleep 4; nxkey space; sleep 8; killall nxpinball', wall=120,
          more=['--pointer-button', '0x80,5,20', '--pointer-button', '0x100,8,8.5', '--pointer-button', '0x400,9,9.5', '--pointer-button', '0x10000,10,11'],
          has=[r'^nxpinball: left flipper held', r'^nxpinball: left flipper let go', r'^nxpinball: right flipper held', r'^nxpinball: plunger held',
