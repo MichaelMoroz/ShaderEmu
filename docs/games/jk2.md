@@ -7,7 +7,8 @@ both. Since the plan's step 2 (2 November 2026) it is **drawn on the machine's G
 rd-vanilla over Half-Life's OpenGL ("The picture"); keys and the pointer drive it, its sound goes to the card, and a
 script of keys plays its start from the menu as a test. **It is far too slow**: a frame of play is 11.4 million
 instructions of core 0 with the picture (7.8 without), against about 400 thousand for 5 frames a second at 2 MIPS,
-and the load to the level 11.5 billion. It goes into private images only.
+and the load to the level 11.5 billion. It goes into an image only when asked: `pwsh tools\make_image.ps1 --jk2` (the shared
+image, with `--aoe` too if wanted) or a private one.
 
     wsl -- python3 linux/jk2/data.py host ~/jk2-host/data --accept-eula   (the demo, fetched once into a cache; its licence)
     wsl -- bash linux/jk2/host_sum.sh                                     (builds the build computer's program, plays, sums)
@@ -426,7 +427,7 @@ The owner chose on 2 November 2026 to go on past step 1's gate. Steps 2 and 4 ha
    Ghoul2 bolts made cheaper, or the game on a worker (step 5).
 4. **Sound** as voices of the card (the decoded sounds and the MP3s' 14.5 MB of decoder states out of RAM), music, films.
 5. **The player's own view checked**: HUD, hands and saber, in a capture after the opening scene with the player alive.
-6. **In** (step 6): `image.py --jk2`/`JK2_IMAGE=1` calling `data.py`, `AGENTS.md`'s line.
+6. **In** (step 6, done 3 November 2026): `image.py --jk2`/`JK2_IMAGE=1` calling `data.py`, `AGENTS.md`'s line.
 
 **For the owner:** whether the pak may be baked (converted) on the build computer at all, given the licence's "no
 modified files, no derivative works" (above). An image holds the installer unchanged since 2 November 2026 (below).
@@ -452,8 +453,7 @@ to its end, accepted, the bar to the end, the pak's CRC-32.
 
 The renderer of our own, Ghoul2 on the GPU, sound by voices, music and films (skipped: a film says it could not be
 opened, in red at the top of the picture), the HUD and the first person's weapon seen, depth ranges, mirrors and
-portals, shadows, the glow; `ui_single_instance`, the holodeck's seat; nothing in the shared image (`image.py --jk2` is
-not wired: a private image only); pictures decoded on workers; `RVC_RACES` (no workers are used: `HLGL_WORKERS=0`);
+portals, shadows, the glow; `ui_single_instance`, the holodeck's seat; pictures decoded on workers; `RVC_RACES` (no workers are used: `HLGL_WORKERS=0`);
 OpenJK's `alloc-dealloc-mismatch` in `strip.cpp` at shutdown (upstream's, seen under AddressSanitizer). The renderer's
 variables are not put back at a `vid_restart` as the game's are.
 
