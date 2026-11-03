@@ -178,10 +178,30 @@ GAMES = {
             + ';'.join(['2000 view'] * 6) + '" aoe', wall=900,
         mark='aoe: mark begins', until='aoe: mark over', frames=AOE_FRAMES, rate=AOE_RATE),
 }
+# (units busy in the window: food, wood and quick building by the game's cheats, three houses, nine villagers trained, the twelve
+# boxed and ordered to and fro across the view every 6 s, measured over 150 updates from the first order; docs/games/aoe.md,
+# "The world in slices")
+AOE_BUSY_640 = ('3000 click 320 196;3000 click 320 138;3000 click 190 454;3000 chat PEPPERONI PIZZA;2000 chat STEROIDS;2000 chat WOODSTOCK;'
+                '2000 click 560 300;' + '1000 click 157 122;1000 click 163 388;1000 click 163 388;1000 click {};'.format('380 250') +
+                '1000 click 157 122;1000 click 163 388;1000 click 163 388;1000 click 440 280;'
+                '1000 click 157 122;1000 click 163 388;1000 click 163 388;1000 click 330 300;6000 click 295 165;1000 click 163 388;'
+                + '300 click 163 388;' * 8 + '10000 box 20 60 420 240;2000 rclick 560 300;10 mark 150;'
+                + '6000 rclick 120 120;6000 rclick 560 300;' * 4)
+GAMES['aoe-busy-640'] = dict(
+    what='twelve villagers ordered at once to and fro across the view in the window, 150 updates from the first order',
+    cmd=AOE_UNPACK + 'nano-X -p & sleep 2; AOE_SEED=1 AOE_SCRIPT="' + AOE_BUSY_640 + '" aoe', wall=1200,
+    mark='aoe: mark begins', until='aoe: mark over', frames=AOE_FRAMES, rate=AOE_RATE)
 # (each of those the way before 3 November 2026's speed work: the scroll by words, a keyed copy a byte at a time)
 for _n in ('aoe-still-640', 'aoe-drag-scroll', 'aoe-late-640'):
     GAMES[_n + '-before'] = dict(GAMES[_n], what=GAMES[_n]['what'] + ', the way before (AOE_SCROLL_COPY=words AOE_BLT=bytes)',
                                  cmd=GAMES[_n]['cmd'].replace('AOE_SEED=1 ', 'AOE_SEED=1 AOE_SCROLL_COPY=words AOE_BLT=bytes '))
+# (and each with the world's update whole between two pictures, the way before its slices: AOE_WORLD=whole)
+for _n in ('aoe-still-640', 'aoe-drag-scroll', 'aoe-late-640', 'aoe-busy-640'):
+    GAMES[_n + '-whole'] = dict(GAMES[_n], what=GAMES[_n]['what'] + ', the world whole between pictures (AOE_WORLD=whole)',
+                                cmd=GAMES[_n]['cmd'].replace('AOE_SEED=1 ', 'AOE_SEED=1 AOE_WORLD=whole '))
+# (and the busy scene as the program was before: the world whole, the path finder's distances by doubles)
+GAMES['aoe-busy-640-before'] = dict(GAMES['aoe-busy-640'], what=GAMES['aoe-busy-640']['what'] + ', the way before (AOE_WORLD=whole AOE_PATH=doubles)',
+                                    cmd=GAMES['aoe-busy-640']['cmd'].replace('AOE_SEED=1 ', 'AOE_SEED=1 AOE_WORLD=whole AOE_PATH=doubles '))
 GAMES.update({
     # (a person's input: real events through the kernel and the window system on the desktop: tools/aoe_play.py reads the log)
     'aoe-play': dict(

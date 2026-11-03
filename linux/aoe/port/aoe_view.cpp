@@ -31,6 +31,35 @@ static struct { unsigned start, walked_at, end; char pad[4]; } job_counts __attr
 static inline unsigned my_instructions(void) { unsigned n; __asm__ volatile("rdinstret %0" : "=r"(n)); return n; }
 static struct { RGE_View* view; int busy, inline_job, workers, opened, wanted; char pad[8]; } st __attribute__((aligned(16)));
 
+// The parts of a frame (aoe_cores.h): the first core's by the machine's time (rdtime, 5 kHz) and instructions, the view's job's
+// instructions summed at each join
+static inline unsigned my_time(void) { unsigned t; __asm__ volatile("rdtime %0" : "=r"(t)); return t; }
+static struct { unsigned at[AOE_PH_COUNT], time[AOE_PH_COUNT], ins_at[AOE_PH_COUNT], ins[AOE_PH_COUNT], n[AOE_PH_COUNT];
+                unsigned walk, raster, jobs, from_time, from_ins; } ph;
+void aoe_phase(int part, int begin) {
+    if (begin) { ph.at[part] = my_time(); ph.ins_at[part] = my_instructions(); return; }
+    ph.time[part] += my_time() - ph.at[part];
+    ph.ins[part] += my_instructions() - ph.ins_at[part];
+    ph.n[part]++;
+}
+void aoe_phases_reset(void) {
+    memset(&ph, 0, sizeof ph);
+    ph.from_time = my_time(); ph.from_ins = my_instructions();
+}
+extern "C" unsigned aoe_path_calls, aoe_path_wrong;
+void aoe_phases_print(long frames) {
+    static const char* names[AOE_PH_COUNT] = {"wait for the walk", "world update", "wait at the join", "paint"};
+    if (frames < 1) frames = 1;
+    unsigned all = my_time() - ph.from_time;
+    fprintf(stderr, "aoephase: %ld frames, %u.%u ms a frame, core 0 %u instructions a frame\n", frames, all / 5 / frames,
+            all * 2 / frames % 10, (my_instructions() - ph.from_ins) / frames);
+    for (int i = 0; i < AOE_PH_COUNT; i++)
+        fprintf(stderr, "aoephase: %-18s %5u.%u ms a frame (%u%%), %7u instructions a frame, %u times\n", names[i], ph.time[i] / 5 / frames,
+                ph.time[i] * 2 / frames % 10, all ? (unsigned) (100.0 * ph.time[i] / all) : 0, ph.ins[i] / frames, ph.n[i]);
+    fprintf(stderr, "aoephase: the view's job %u: walk %u, raster %u instructions a frame\n", ph.jobs, ph.walk / frames, ph.raster / frames);
+    if (aoe_path_calls) fprintf(stderr, "aoephase: path distances %u, %u of them not as the doubles\n", aoe_path_calls, aoe_path_wrong);
+}
+
 // AOE_SCROLL_COPY=words: a scroll moves the view by words, on 8 pixels across, as before (OverlayMemCopy); read here, on the first core
 struct AoeScrollWay aoe_scroll_way = {1};
 int aoe_view_wanted(void) {
@@ -82,8 +111,13 @@ static TDrawArea* area_copy;
 static TDrawSystem* system_copy;
 static TDrawArea* area_real;
 
+struct AoeViewStack aoe_view_stack;
 static void job(uint32_t view, uint32_t) {
     job_counts.start = my_instructions();
+    // the stack this job runs on (aoe_cores.h, aoe_view_core): noted once, the same worker's each time
+    char here;
+    unsigned lo = (unsigned) &here - (60u << 10), hi = (unsigned) &here + 1024;
+    if (st.workers > 0 && (aoe_view_stack.lo != lo || aoe_view_stack.hi != hi)) { aoe_view_stack.lo = lo; aoe_view_stack.hi = hi; }
     ((RGE_View*) view)->RGE_View::draw();
     walked.v = 1;
     job_counts.end = my_instructions();
@@ -139,18 +173,23 @@ extern void aoe_lat(int kind, int a, int b);
 void aoe_view_wait_walked(void) {
     if (!st.busy) return;
     aoe_lat('w', 0, 0);
+    aoe_phase(AOE_PH_WALKED, 1);
     while (!walked.v) {
         if (mcw_done(1)) break;
         mcw_rest();
     }
+    aoe_phase(AOE_PH_WALKED, 0);
     aoe_lat('x', 0, 0);
 }
 
 void aoe_view_join(void) {
     if (!st.busy) return;
     aoe_lat('j', 0, 0);
+    aoe_phase(AOE_PH_JOIN, 1);
     if (st.workers > 0) mcw_wait(1);
+    aoe_phase(AOE_PH_JOIN, 0);
     aoe_lat('k', (job_counts.walked_at - job_counts.start) / 1000, (job_counts.end - job_counts.walked_at) / 1000);
+    ph.walk += job_counts.walked_at - job_counts.start; ph.raster += job_counts.end - job_counts.walked_at; ph.jobs++;
     st.busy = 0;
 }
 

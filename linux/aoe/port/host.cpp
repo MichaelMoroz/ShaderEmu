@@ -8,6 +8,8 @@ extern "C" int mcw_on_worker(void);
 #include "aoe_port.h"
 #include "aoe_fonts.h"
 #include "aoe_window.h"
+#include "aoe_cores.h"
+extern "C" void aoe_shot(void);
 #undef open
 #undef fopen
 
@@ -216,11 +218,17 @@ static void events_of_window(void) {
 // step before: for the tests. AOE_STATS_MS: a line of frames and the clock.
 static const char* script;
 static unsigned long step_from;
+static int box_x, box_y, box_x2, box_y2, box_step = -1;   // the script's box
+static unsigned long box_at;
+static const char* chat_text;   // the script's chat: its text, typed once the line is up
+static unsigned long chat_at;
 extern unsigned long aoe_updates, aoe_world_ms;
 void aoe_panel_changed(const char* n) {
     step_from = timeGetTime();
     if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: panel %s at %lu, frame %ld\n", n, step_from, frames);
 }
+static int mark_read, mark_a, mark_b;
+static void mark_from_script(int n) { mark_read = 1; mark_a = (int) aoe_updates + 1; mark_b = mark_a + n; }
 void aoe_events(void) {
     if (lat_stop) lat_write();
     if (window_open) {
@@ -242,18 +250,19 @@ void aoe_events(void) {
         stats_at = timeGetTime(); stats_frames = frames; stats_updates = aoe_updates; stats_world = aoe_world_ms;
     }
     // AOE_MARK=A,B: the span of world updates A to B, for tools/game_par.py and tools/prof.py
-    static int mark_read, mark_a, mark_b;
     if (!mark_read) { const char* e = getenv("AOE_MARK"); mark_read = 1; if (e) sscanf(e, "%d,%d", &mark_a, &mark_b); }
     if (mark_a) {
         static unsigned long m_ms, m_world; static long m_frames; static unsigned long m_updates;
         if (mark_a > 0 && aoe_updates >= (unsigned long) mark_a) {
             mark_a = -2;
             m_ms = timeGetTime(); m_world = aoe_world_ms; m_frames = frames; m_updates = aoe_updates;
+            aoe_phases_reset();
             fprintf(stderr, "aoe: mark begins\n");
         } else if (mark_a == -2 && aoe_updates >= (unsigned long) mark_b) {
             mark_a = 0;
             fprintf(stderr, "aoe: mark ends, %ld frames in %lu ms, updates %lu, game ms %lu\n", frames - m_frames, timeGetTime() - m_ms,
                 aoe_updates - m_updates, aoe_world_ms - m_world);
+            aoe_phases_print(frames - m_frames);
             fprintf(stderr, "aoe: mark over\n");   // (what a run stops at: the line before is whole by then)
         }
     }
@@ -271,6 +280,21 @@ void aoe_events(void) {
             aoe_mouse_x = sweep_x - 20 * (k <= 10 ? k : 20 - k); aoe_mouse_y = sweep_y;
             aoe_post(WM_MOUSEMOVE, MK_RBUTTON, MAKELONG(aoe_mouse_x, aoe_mouse_y));
         }
+    }
+    if (box_step >= 0 && timeGetTime() - box_at >= 100) {
+        box_at = timeGetTime();
+        if (++box_step > 5) {
+            aoe_keys[1] = 0; box_step = -1;
+            aoe_post(WM_LBUTTONUP, 0, MAKELONG(box_x2, box_y2));
+        } else {
+            aoe_mouse_x = box_x + (box_x2 - box_x) * box_step / 5; aoe_mouse_y = box_y + (box_y2 - box_y) * box_step / 5;
+            aoe_post(WM_MOUSEMOVE, MK_LBUTTON, MAKELONG(aoe_mouse_x, aoe_mouse_y));
+        }
+    }
+    if (chat_text && timeGetTime() - chat_at >= 500) {
+        for (const char* t = chat_text; *t && *t != ';'; t++) aoe_post(WM_CHAR, (unsigned char) *t, 1);
+        aoe_post(WM_KEYDOWN, 13, 1); aoe_post(WM_KEYUP, 13, 1);
+        chat_text = 0;
     }
     if (!script || !*script) return;
     int at;
@@ -298,6 +322,27 @@ void aoe_events(void) {
         aoe_keys[2] = 1; sweep_step = 0; sweep_at = timeGetTime();
         aoe_post(WM_MOUSEMOVE, 0, MAKELONG(x, y));
         aoe_post(WM_RBUTTONDOWN, MK_RBUTTON, MAKELONG(x, y));
+    } else if (!strcmp(what, "box")) {
+        // "box X1 Y1 X2 Y2": the left button pressed at one corner and dragged to the other over half a second, then let go
+        // (a selection of many: a press held shorter is a click)
+        box_x2 = x; box_y2 = y;
+        sscanf(script, "%*d %*s %*d %*d %d %d", &box_x2, &box_y2);
+        box_x = aoe_mouse_x = x; box_y = aoe_mouse_y = y;
+        box_step = 0; box_at = timeGetTime();
+        aoe_keys[1] = 1;
+        aoe_post(WM_MOUSEMOVE, 0, MAKELONG(x, y));
+        aoe_post(WM_LBUTTONDOWN, MK_LBUTTON, MAKELONG(x, y));
+    } else if (!strcmp(what, "chat")) {
+        // "chat TEXT": Enter, then the text and Enter half a second later, when the chat's line is up (the game's cheats:
+        // game_par.py's busy scene)
+        chat_text = strstr(script, "chat ") + 5;
+        chat_at = timeGetTime();
+        aoe_post(WM_KEYDOWN, 13, 1); aoe_post(WM_KEYUP, 13, 1);
+    } else if (!strcmp(what, "mark")) {
+        // "mark N": AOE_MARK's span from the next update, N updates long (a scene measured from a step of its script)
+        mark_from_script(x);
+    } else if (!strcmp(what, "shot")) {
+        aoe_shot();
     } else if (!strcmp(what, "close")) {
         aoe_post(WM_CLOSE, 0, 0);
     } else if (!strcmp(what, "key")) {
