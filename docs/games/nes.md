@@ -310,6 +310,14 @@ machine's clock, over the frames of play.
 The first core's readout: `speed_caption` in `osd_shaderemu.c`, from the frames the emulating core
 says it has made (`emu_said.frames`) and the machine's clock; its variables are 16 bytes of their own.
 
+## The window
+
+The console's picture is 256 x 240 whatever the window: a larger window shows it larger, at the console's shape (8:7
+pixels, a television's 4:3 less its overscan: 292 x 240), as large as fits and centred, the rest black (`nes_viewport` in
+`osd_shaderemu.c`, 3 November 2026). Before, it was stretched to the window's shape. `NES_STRETCH=1` is the way before.
+The NES takes no pointer, so no place has to be mapped. Not seen in a picture (`rvc_cpu` draws no list, and this round ran no
+WARP capture); `test_all.py nes` passes with it.
+
 ## Sound
 
 No sample is computed. The NES's five channels are five voices of the sound card

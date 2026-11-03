@@ -170,6 +170,8 @@ struct se_asks_t { unsigned fn[64], n, unused[3]; } se_asks;   // (what gl_shade
 static GR_WINDOW_ID se_window;
 static void se_input( void );
 static int se_win_w = 640, se_win_h = 480;
+static int se_vid_w = 640, se_vid_h = 480;     // what the renderer draws (glConfig's size)
+static unsigned se_resized_ms;                 // when the window's size last changed (0: settled)
 
 // A window when there is a window system (else none, and the picture is nullgl's: a run for the sums)
 static void se_window_open( int w, int h )
@@ -213,6 +215,7 @@ window_t WIN_Init( const windowDesc_t *desc, glconfig_t *glConfig )
 		w = 640, h = 480;
 	glConfig->vidWidth = w;
 	glConfig->vidHeight = h;
+	se_vid_w = w, se_vid_h = h;
 	glConfig->colorBits = 32;
 	glConfig->depthBits = 24;
 	glConfig->stencilBits = 0;
@@ -516,6 +519,24 @@ static void se_input( void )
 	}
 	if ( !ui )
 		se_menu_x = -1;     // (a menu that comes is told where the pointer is at once)
+	// The renderer at the window's size (docs/games/jk2.md, "The window's size"): a second after the last change of it, a
+	// restart of the renderer at that size, of 320 x 240 to 1024 x 768 in whole 8s; JK2_RESIZE=stretch draws 640 x 480 stretched
+	static int resize_stretch = -1;
+	if ( resize_stretch < 0 ) {
+		const char *how = getenv( "JK2_RESIZE" );
+		resize_stretch = how && !strcmp( how, "stretch" );
+	}
+	if ( se_resized_ms && *clock - se_resized_ms >= 1000 ) {
+		int w = se_win_w > 1024 ? 1024 : se_win_w < 320 ? 320 : se_win_w & ~7, h = se_win_h > 768 ? 768 : se_win_h < 240 ? 240 : se_win_h & ~7;
+		se_resized_ms = 0;
+		if ( !resize_stretch && ( w != se_vid_w || h != se_vid_h ) ) {
+			Com_Printf( "jk2: the window is %dx%d: the renderer restarted at %dx%d\n", se_win_w, se_win_h, w, h );
+			Cvar_Set( "r_mode", "-1" );
+			Cvar_SetValue( "r_customwidth", w );
+			Cvar_SetValue( "r_customheight", h );
+			Cbuf_AddText( "vid_restart\n" );
+		}
+	}
 	for ( int i = 2; i < 4; i++ )
 		if ( seen[i] != input[i] ) {
 			seen[i] = input[i], ask = 8;
@@ -546,6 +567,7 @@ static void se_input( void )
 				seglSize( &se_win_w, &se_win_h );
 				if ( se_win_w < 1 || se_win_h < 1 )
 					se_win_w = 640, se_win_h = 480;
+				se_resized_ms = *clock | 1;
 			}
 			se_origin_known = 0, se_menu_x = -1;   // (moved or resized: asked again)
 			break;

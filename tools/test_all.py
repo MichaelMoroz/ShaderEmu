@@ -327,6 +327,15 @@ CASES = [
          'nxkey tab enter) & jk2 --unpack; JK2_POINTER_LOG=1 JK2_FRAMES=150 jk2; else echo JK2-NO-DATA; fi', True, wall=1800,
          more=['--pointer-sweep', '0', '--pointer-circle', '400,300,100'],
          has=[r'(jk2pointer: (\d+),(\d+) of the display to \d+,\d+ of the menu \(window at \d+,\d+, 640x480\)|JK2-NO-DATA)']),
+    # the window maximised at the main menu: the renderer restarted at the window's size (docs/games/jk2.md, "The window's size"), then
+    # New and a click on Begin Game where the stretched menu has it (500, 455 of 640 x 480) in the window's place: the level loads
+    case('jk2-resize', 'games jk2 desktop long', 'nx; sleep 3; if [ -f /usr/share/jk2/jk2demo.exe ]; then (sleep 6; nxkey pagedown; sleep 1; '
+         'nxkey end; sleep 1; nxkey tab enter) & jk2 --unpack; (JK2_POINTER_LOG=1 jk2 &); sleep 320; nxkey ctrl+alt+up; sleep 120; '
+         'set -- $(nxwintest list | grep Jedi); P=${5%,*}; Q=${5#*,}; S=$6; W=${S%x*}; H=${S#*x}; echo PLACE $P $Q $W $H; nxkey enter; sleep 40; '
+         'nxkey $((P+3+500*(W-6)/640)),$((Q+26+455*(H-29)/480)); sleep 200; killall jk2.bin; else echo JK2-NO-DATA; fi', True, wall=2400,
+         has=[r'(jk2: the window is \d+x\d+: the renderer restarted at \d+x\d+|JK2-NO-DATA)', r'(^PLACE \d+ \d+ \d+ \d+|JK2-NO-DATA)',
+              r'(jk2pointer: \d+,\d+ of the display to (49\d|50\d),(44\d|45\d|46\d) of the menu|JK2-NO-DATA)',
+              r'(Server Initialization|SpawnServer|JK2-NO-DATA)']),
     case('jk2-install', 'games jk2 desktop', X + 'if [ -f /usr/share/jk2/jk2demo.exe ]; then (sleep 6; nxkey a; sleep 1; nxkey pagedown; sleep 1; nxkey end; '
          'sleep 1; nxkey tab enter) & CABINST_PRINT=1 CABINST_SUMS=1 jk2 --unpack; echo INSTALL=$?; else echo JK2-NO-DATA; fi', True, wall=300,
          has=[r'^(cabinst: licence \\Disk1\\Install\\license\.txt: 3529 bytes, CRC-32 4361c574|JK2-NO-DATA)', r'^(cabinst: licence shown, \d+ lines|JK2-NO-DATA)',
@@ -768,6 +777,22 @@ CASES = [
                '--scroll', '13.3,x,-1', '--pointer-button', '0x80,7,16', '--pointer-button', '0x10000,14,14.3'],
          has=[r'^nxtetris: pad left: piece \d at 2,', r'^nxtetris: pad left: piece \d at 1,', r'^nxtetris: pad down: .* score 1$',
               r'^nxtetris: pad cw: .* turned 1,', r'^nxtetris: pad ccw: .* turned 0,', r'^nxtetris: pad drop: ']),
+    # the C&C games: a notch of the left hand's stick is an arrow pressed and let go (the map scrolls a step) over Tiberian Dawn's window
+    case('pad-tdawn', 'games tdawn', X + 'TDAWN_INPUT_LOG=1 ' + TD + 'TDAWN_SCEN=10 TDAWN_FRAMES=2000 tdawn FROMINSTALL', True, until='pad key 38 up', wall=300,
+         more=['--pointer-sweep', '0', '--pointer-circle', '300,250,0', '--scroll', '14,lx,-2', '--scroll', '15,ly,1'],
+         count=[(r'tdinput: pad key 37 down', 2)], has=[r'tdinput: pad key 38 down']),
+    # OpenTTD: a notch holds an arrow 120 ms (the main view scrolls); Quake: the jump button (A, bit 16) jumps
+    case('pad-openttd', 'games openttd', X + 'OPENTTD_PAD_LOG=1 openttd -g /usr/share/openttd/busy.sav', True, until='pad pans down', wall=400,
+         more=['--pointer-sweep', '0', '--pointer-circle', '300,250,0', '--scroll', '60,lx,-1', '--scroll', '62,ly,-1', '--scroll', '64,ly,-1',
+               '--scroll', '66,ly,-1'],
+         has=[r'openttd: pad pans left', r'openttd: pad pans down']),
+    case('pad-quake', 'games quake', X + 'QUAKE_TRACK=5 quake +map e1m1 +host_framerate 0.05', True, until='track 200:', wall=300,
+         more=['--pointer-button', '0x10080,32,32.5'], has=[r'quake: track \d+: .* on ground 0']),
+    # the NES: a notch of the left hand's stick holds the d-pad's way 9 frames, A and B are the pad's (the frames' state sums show the presses)
+    case('pad-nes', 'games nes', X + 'NES_PAD_LOG=1 NES_FRAMES=900 nes thwaite', True, wall=300,
+         more=['--pointer-sweep', '0', '--pointer-circle', '300,250,0', '--scroll', '8,ly,-1', '--scroll', '9,lx,1',
+               '--pointer-button', '0x10080,10,10.5'],
+         has=[r'nes: pad holds down', r'nes: pad holds right']),
     case('pad-pinball', 'desktop games', X + 'NXPINBALL_PRINT=1 nxpinball & sleep 4; nxkey space; sleep 8; killall nxpinball', wall=120,
          more=['--pointer-button', '0x80,5,20', '--pointer-button', '0x100,8,8.5', '--pointer-button', '0x400,9,9.5', '--pointer-button', '0x10000,10,11'],
          has=[r'^nxpinball: left flipper held', r'^nxpinball: left flipper let go', r'^nxpinball: right flipper held', r'^nxpinball: plunger held',

@@ -700,3 +700,101 @@ failed:
 			m_unmap(e->seg[k].out, e->seg[k].room);
 	return NULL;
 }
+
+/* ---------------------------------------------------------------- gzip (media_gzip) */
+
+#define GZ_PIECE 65536
+
+struct gzenc {
+	const uint8_t *in;
+	uint32_t n, pieces;
+	int chain;
+	struct seg seg[SEG_MOST];	/* row0: where the piece starts, rows: its bytes; crc: the input's */
+	uint8_t *per_core;
+	uint32_t core_bytes;
+};
+
+static void
+gzip_job(void *ctx, uint32_t from, uint32_t to)
+{
+	struct gzenc *g = ctx;
+	struct work *w = (struct work *)(g->per_core + (uint32_t)mcw_self() * g->core_bytes);
+	uint32_t k;
+
+	for (k = from; k < to; k++) {
+		struct seg *s = &g->seg[k];
+		struct out o;
+
+		o.p = s->out, o.end = s->out + s->room, o.hold = 0, o.count = 0;
+		deflate(&o, w, g->in + s->row0, s->rows, g->chain, k == g->pieces - 1);
+		s->bytes = o.p >= o.end ? 0 : (uint32_t)(o.p - s->out);
+		s->crc = crc_update(0, g->in + s->row0, s->rows);
+	}
+}
+
+uint8_t *
+media_gzip(const void *bytes, uint32_t n, int level, uint32_t *size, int workers)
+{
+	static struct gzenc job;
+	static const int chains[10] = {1, 2, 4, 8, 16, 32, 64, 128, 256, 1024};
+	struct gzenc *g = &job;
+	uint32_t k, at, crc = 0;
+	uint8_t *f = NULL, *p;
+	int got;
+
+	memset(g, 0, sizeof *g);
+	crc_make();
+	g->in = bytes;
+	g->n = n;
+	g->chain = chains[level < 0 ? 0 : level > 9 ? 9 : level];
+	g->pieces = n ? (n + GZ_PIECE - 1) / GZ_PIECE : 1;
+	if (g->pieces > SEG_MOST)
+		return NULL;
+	for (k = 0; k < g->pieces; k++) {
+		struct seg *s = &g->seg[k];
+
+		s->row0 = k * GZ_PIECE;
+		s->rows = n - s->row0 < GZ_PIECE ? n - s->row0 : GZ_PIECE;
+		s->room = s->rows + s->rows / 64 + 1024;
+		if (!(s->out = m_map(s->room)))
+			goto failed;
+	}
+	got = m_workers_begin(workers > ENC_WORKERS ? ENC_WORKERS : workers);
+	g->core_bytes = ((uint32_t)sizeof(struct work) + 15) & ~15u;
+	if (g->chain > 1)
+		g->core_bytes += WINDOW * 4;
+	if (!(g->per_core = m_map(g->core_bytes * (uint32_t)(mcw_count() + 1)))) {
+		m_workers_end();
+		goto failed;
+	}
+	for (k = 0; k <= (uint32_t)mcw_count(); k++) {
+		struct work *w = (struct work *)(g->per_core + k * g->core_bytes);
+
+		w->prev = g->chain > 1 ? (int32_t *)((uint8_t *)w + (((uint32_t)sizeof(struct work) + 15) & ~15u)) : NULL;
+	}
+	m_for(g->pieces, gzip_job, g, 0, got);
+	m_workers_end();
+	m_unmap(g->per_core, g->core_bytes * (uint32_t)(mcw_count() + 1));
+	g->per_core = NULL;
+	at = 10 + 8;
+	for (k = 0; k < g->pieces; k++) {
+		if (!g->seg[k].bytes)
+			goto failed;
+		at += g->seg[k].bytes;
+		crc = k ? crc_combine(crc, g->seg[k].crc, g->seg[k].rows) : g->seg[k].crc;
+	}
+	*size = at;
+	if (!(f = m_map(at)))
+		goto failed;
+	p = f;
+	memcpy(p, "\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\xff", 10), p += 10;	/* deflate, no name, no time, unknown system */
+	for (k = 0; k < g->pieces; k++)
+		memcpy(p, g->seg[k].out, g->seg[k].bytes), p += g->seg[k].bytes;
+	p[0] = (uint8_t)crc, p[1] = (uint8_t)(crc >> 8), p[2] = (uint8_t)(crc >> 16), p[3] = (uint8_t)(crc >> 24);
+	p[4] = (uint8_t)n, p[5] = (uint8_t)(n >> 8), p[6] = (uint8_t)(n >> 16), p[7] = (uint8_t)(n >> 24);
+failed:
+	for (k = 0; k < SEG_MOST; k++)
+		if (g->seg[k].out)
+			m_unmap(g->seg[k].out, g->seg[k].room);
+	return f;
+}

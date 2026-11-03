@@ -250,6 +250,29 @@ video_show(bitmap_t *bmp, int num_dirties, rect_t *dirty_rects)
 	frame_counted(frames_emulated, skip + 1, picture);
 }
 
+/* The picture in the window at the console's shape, as large as fits, centred, the rest black (docs/games/nes.md,
+ * "The window"): a window made wider or taller shows more black, not a picture pulled out of shape. NES_STRETCH=1 fills
+ * it as before. The console's 256 x 240 is shown at 8:7 pixels, a television's 4:3 less its overscan: 292 x 240. */
+static void
+nes_viewport(int width, int height)
+{
+	static int stretch = -1;
+	int w = width, h = height;
+
+	if (stretch < 0)
+		stretch = getenv("NES_STRETCH") != NULL;
+	glViewport(0, 0, width, height);
+	if (stretch)
+		return;
+	glClearColor(0, 0, 0, 1);
+	glClear(GL_COLOR_BUFFER_BIT);
+	if (w * 240 > h * 292)
+		w = h * 292 / 240;
+	else
+		h = w * 240 / 292;
+	glViewport((width - w) / 2, (height - h) / 2, w, h);
+}
+
 /* The GPU draws a picture over the whole window. Without `wait` the list is only submitted:
  * for a picture that nobody writes while it is the one on show. */
 static void
@@ -260,7 +283,7 @@ window_draw(GLuint of, int wait)
 	int width, height;
 
 	seglSize(&width, &height);
-	glViewport(0, 0, width, height);
+	nes_viewport(width, height);
 	glMatrixMode(GL_PROJECTION);
 	glLoadMatrixx(whole);
 	glMatrixMode(GL_MODELVIEW);
@@ -1111,7 +1134,7 @@ gd_draw(uint32_t written, uint32_t record)
 	if (width != gd.set_w || height != gd.set_h) {
 		gd.set_w = width;
 		gd.set_h = height;
-		glViewport(0, 0, width, height);
+		nes_viewport(width, height);
 		glMatrixMode(GL_PROJECTION);
 		glLoadMatrixx(whole);
 		glMatrixMode(GL_MODELVIEW);
@@ -1714,6 +1737,49 @@ input_due(void)
 	return 1;
 }
 
+/*
+ * A controller with the beam on the window (docs/machine/input.md, "Game controls"): the jump button (A) is the
+ * pad's A, B its B, Y Select, the right stick pressed Start (bits of the machine's buttons word, read each frame), and a
+ * notch of the left hand's stick (the second wheel, a button event) holds that way of the d-pad 9 frames (0.15 s).
+ */
+static unsigned pad_word_held;
+static int pad_hold_until[4];	/* up, down, left, right: held until that emulated frame, 0 not held */
+
+static void
+pad_word(void)
+{
+	static const struct { unsigned bit; int button; } map[] = { {0x10000, 4}, {0x8000, 5}, {0x4000, 7}, {0x2000, 6} };
+	const volatile unsigned *input = (const volatile unsigned *)((char *)seglPalette() - 0x400 + 0x20);
+	unsigned now = input[2], changed = now ^ pad_word_held;
+	unsigned i;
+
+	pad_word_held = now;
+	for (i = 0; changed && i < sizeof map / sizeof map[0]; i++)
+		if (changed & map[i].bit)
+			press(map[i].button, (now & map[i].bit) != 0);
+	for (i = 0; i < 4; i++)
+		if (pad_hold_until[i] && frames_emulated >= pad_hold_until[i]) {
+			pad_hold_until[i] = 0;
+			press((int)i, 0);
+		}
+}
+
+static void
+pad_notch(GR_BUTTON b)
+{
+	int way = b & GR_BUTTON_SCROLL2UP ? 0 : b & GR_BUTTON_SCROLL2DN ? 1 : b & GR_BUTTON_SCROLL2LEFT ? 2 : b & GR_BUTTON_SCROLL2RIGHT ? 3 : -1;
+
+	if (way < 0)
+		return;
+	if (!pad_hold_until[way])
+		press(way, 1);
+	pad_hold_until[way] = frames_emulated + 9;
+	if (getenv("NES_PAD_LOG")) {
+		printf("nes: pad holds %s\n", (const char *[]){"up", "down", "left", "right"}[way]);
+		fflush(stdout);
+	}
+}
+
 /* A test's presses (NES_PRESS="300 start 420 a"): each at its frame, until the next look. */
 static void
 pad_script(unsigned *let_go)
@@ -1757,6 +1823,7 @@ osd_getinput(void)
 			press(button, 0);
 	let_go = 0;
 	pad_script(&let_go);
+	pad_word();
 	if (!input_due())
 		return;
 	for (;;) {
@@ -1769,6 +1836,8 @@ osd_getinput(void)
 			gd_show(1);	/* (not while a worker core is in the library) */
 			seglWindowChanged();
 		}
+		if (event.type == GR_EVENT_TYPE_BUTTON_DOWN)
+			pad_notch(event.button.changebuttons);
 		if (event.type != GR_EVENT_TYPE_KEY_DOWN && event.type != GR_EVENT_TYPE_KEY_UP)
 			continue;
 		if (event.keystroke.ch == MWKEY_ESCAPE)
@@ -1801,6 +1870,8 @@ pad_here(void)
 		if (event.type == GR_EVENT_TYPE_CLOSE_REQ)
 			exit(0);
 		/* (a window resized has another buffer: the swap asks the window system then) */
+		if (event.type == GR_EVENT_TYPE_BUTTON_DOWN)
+			pad_notch(event.button.changebuttons);
 		if (event.type != GR_EVENT_TYPE_KEY_DOWN && event.type != GR_EVENT_TYPE_KEY_UP)
 			continue;
 		if (event.keystroke.ch == MWKEY_ESCAPE)
@@ -1875,7 +1946,14 @@ osd_init(void)
 	for (scale = 3; scale > 1 && (WIDTH * scale + 8 > screen.cols || HEIGHT * scale + 60 > screen.rows); scale--)
 		;
 	window = GrNewWindowEx(GR_WM_PROPS_APPWINDOW, "NES", GR_ROOT_WINDOW_ID, -1, -1, WIDTH * scale, HEIGHT * scale, 0);
-	GrSelectEvents(window, GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_KEY_UP | GR_EVENT_MASK_CLOSE_REQ | GR_EVENT_MASK_UPDATE);
+	GrSelectEvents(window, GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_KEY_UP | GR_EVENT_MASK_CLOSE_REQ | GR_EVENT_MASK_UPDATE |
+		GR_EVENT_MASK_BUTTON_DOWN);
+	{
+		GR_WM_PROPERTIES props;	/* the left hand's stick: the d-pad (pad_notch) */
+
+		props.flags = GR_WM_FLAGS_COMMAND, props.props = GR_WMC_BUTTONS, props.background = 1;
+		GrSetWMProperties(window, &props);
+	}
 	GrMapWindow(window);
 	GrSetFocus(window);
 	if (seglInit(window) < 0 || !(picture = seglMemory(WIDTH * HEIGHT))) {

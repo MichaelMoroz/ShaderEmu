@@ -102,6 +102,7 @@ struct Options {
     double hostMouse = 0;                          // --host-mouse: counts a second a sitter's mouse goes right
     double hostWheel = 0;                          // --host-wheel: notches a second their wheel turns up
     std::vector<TimedInput> inputs;                // --scroll, --input-event: the key ring's events by the guest's second
+    std::string volumeLog;                         // --volume-log FILE: each whole frame a 3D program gives a host (docs/world/volume.md)
     bool desktop = false, tabs = false, quiet = false;
     int netPort = 0, netId = 1;          // --net, --net-id: the link to other machines (docs/system/lan.md)
     double netLoss = 0, netDelay = 0, netRate = 0;   // --net-rate: bytes a second, as the world's link
@@ -2455,6 +2456,33 @@ static void control_pass() {
         if (opt.hostWheel != 0) word(CTRL + 0x374) = (opt.host[5] & 0xff00ffffu) | ((u32)(long long)(guest_seconds * opt.hostWheel) & 255u) << 16;
     }
     if (!opt.buttons.empty()) word(CTRL + 0x28) = buttons_at(opt.buttons, guest_seconds);
+    if (!opt.volumeLog.empty()) {
+        // What a holodeck would show of each frame (docs/world/volume.md): the frame's words, its draws with a place in space
+        // (perspective with a modelview: the world) and the rest (flat over the picture: a status bar, text, a cross-hair, a console)
+        static FILE* vlog = fopen(opt.volumeLog.c_str(), "w");
+        static u32 seen = ~0u;
+        u32 frames = word(CTRL + 0x308);
+        if (vlog && frames != seen) {
+            seen = frames;
+            u32 list = word(CTRL + 0x300), n = std::min<u32>(word(CTRL + 0x304), 4096), size = word(CTRL + 0x30c);
+            int world = 0, flat = 0, text = 0;
+            for (u32 i = 0; list && i < n; i++) {
+                u32 at = list + 64 * i;
+                if (at < 0x80000000u || at + 64 > RAM_BASE + RAM_SIZE) break;
+                u32 cmd = word(at);
+                if (cmd == 0) break;
+                if (cmd == 4 || cmd == 5) { text++; continue; }
+                if (cmd != 3) continue;
+                u32 how = word(at + 16), uniforms = word(at + 24) & ~15u;
+                bool persp = (how & 0x100) && (how & 0xff) != 0 && uniforms >= 0x80000000u && uniforms + 64 <= RAM_BASE + RAM_SIZE && word(uniforms + 56) != 0;
+                if (persp) world++;
+                else flat++;
+            }
+            fprintf(vlog, "%.3f frame %u list %08x commands %u size %ux%u up %u flat %u: world %d, flat %d, text %d\n", guest_seconds, frames, list,
+                    word(CTRL + 0x304), size & 0xffff, (size >> 16) & 0xfff, (size >> 28) & 7, size >> 31, world, flat, text);
+            fflush(vlog);
+        }
+    }
     if (!opt.inputs.empty()) {
         // up to four a pass, as a host gives them, at ring positions (sequence number) mod 32
         static size_t input_next = 0;
@@ -2994,6 +3022,7 @@ int main(int argc, char** argv) {
         else if (a == "--host-mouse") opt.hostMouse = atof(next("--host-mouse").c_str());
         else if (a == "--host-wheel") opt.hostWheel = atof(next("--host-wheel").c_str());
         else if (a == "--pointer-button") { if (!parse_button(next("--pointer-button"), opt.buttons)) return 2; }
+        else if (a == "--volume-log") opt.volumeLog = next("--volume-log");
         else if (a == "--scroll") { if (!parse_scroll(next("--scroll"), opt.inputs)) return 2; }
         else if (a == "--input-event") { if (!parse_input_event(next("--input-event"), opt.inputs)) return 2; }
         else if (a == "--desktop") opt.desktop = true;
@@ -3042,6 +3071,7 @@ int main(int argc, char** argv) {
                    "                         given again, the bits of each that holds then\n"
                    "  --scroll S,W,N         at second S, N notches of wheel W (y x: the pointer's; ly lx, ry rx: a hand's stick)\n"
                    "  --input-event S,HEX    at second S, the key ring's event HEX (bit 31 a press); B above takes hex too\n"
+                   "  --volume-log FILE      each whole 3D frame's words, its draws in space and flat (docs/world/volume.md)\n"
                    "  --desktop --tabs       the host flags of those names\n"
                    "  --quiet                do not print the console\n"
                    "  --net PORT --net-id N  the network: this machine is 10.0.0.N (1 to 16) and hears UDP port\n"

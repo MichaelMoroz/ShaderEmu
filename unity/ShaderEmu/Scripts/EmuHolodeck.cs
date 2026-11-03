@@ -23,6 +23,12 @@ public class EmuHolodeck : UdonSharpBehaviour
     public Vector3 roomSize;           // wide, high, deep
     public Transform content;          // the mask and the seal: one room's faces, moved to the room in use
     public Transform scene;            // the program's world (GpuHolodeck.shader)
+    // The HUD layer (GpuHolodeckHud.shader; docs/world/holodeck.md, "The HUD layer"): what the program draws flat over its
+    // picture, which the world cannot place, on a quad before the sitter: it follows the head's turn slowly, below the eyes.
+    public Transform hud;
+    public float hudDistance = 1.1f, hudWidth = 1.0f, hudDrop = 0.12f, hudFollow = 2.5f;   // metres, metres, metres, a second
+    private float hudYaw;
+    private bool hudPlaced;
     public Material sceneMaterial;
     public Transform[] screens;        // a room's screen: a unit quad, scaled
     public Renderer[] screenRenderers;
@@ -322,6 +328,7 @@ public class EmuHolodeck : UdonSharpBehaviour
         }
         content.gameObject.SetActive(world);
         scene.gameObject.SetActive(world);
+        if (hud != null && hud.gameObject.activeSelf != world) { hud.gameObject.SetActive(world); hudPlaced = false; }
         if (pointer != null) { pointer.holoFlat = seated && flat; pointer.holoHidden = hidden; }
         Aims();
         nextAt = 0f;
@@ -578,9 +585,27 @@ public class EmuHolodeck : UdonSharpBehaviour
     public override void PostLateUpdate()
     {
         VRCPlayerApi player = Networking.LocalPlayer;
-        if (own < 0 || !Utilities.IsValid(player) || player.IsUserInVR()) return;
+        if (own < 0 || !Utilities.IsValid(player)) return;
         VRCPlayerApi.TrackingData head = player.GetTrackingData(VRCPlayerApi.TrackingDataType.Head);
+        PlaceHud(player, head);
+        if (player.IsUserInVR()) return;
         scene.SetPositionAndRotation(head.position, Quaternion.Euler(0f, head.rotation.eulerAngles.y, 0f));
+    }
+
+    // The HUD layer before the sitter's eyes: on a desktop it turns with the view at once; in a headset it follows the head's
+    // turn about the upright a little late (a layer fixed to the face is tiring), its tilt and roll never.
+    private void PlaceHud(VRCPlayerApi player, VRCPlayerApi.TrackingData head)
+    {
+        if (hud == null || !hud.gameObject.activeSelf) return;
+        float yaw = head.rotation.eulerAngles.y;
+        if (!hudPlaced || !player.IsUserInVR()) hudYaw = yaw;
+        else hudYaw = Mathf.LerpAngle(hudYaw, yaw, Mathf.Clamp01(Time.deltaTime * hudFollow));
+        hudPlaced = true;
+        Quaternion turn = Quaternion.Euler(0f, hudYaw, 0f);
+        hud.SetPositionAndRotation(head.position + turn * new Vector3(0f, -hudDrop, hudDistance), turn);
+        int w = machine.OwnWidth(), h = machine.OwnHeight();
+        float aspect = w > 0 && h > 0 ? (float)w / h : 4f / 3f;
+        hud.localScale = new Vector3(hudWidth, hudWidth / aspect, 1f);
     }
 
     // ---- what the machine is told of where it is shown (docs/world/holodeck.md, "What the machine is told")
