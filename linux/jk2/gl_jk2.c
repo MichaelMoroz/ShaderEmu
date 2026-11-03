@@ -22,8 +22,13 @@ int jk2glOpen(unsigned window) {
     on = 1;
     return 0;
 }
+static int depth_seen;   // a draw of this frame was depth-tested (fast_triangles: what is drawn before it is behind it)
+static int gl_frames, gl_log_at = -1;
 void jk2glSwap(void) {
     if (on) hlglSwap();
+    depth_seen = 0;
+    if (gl_log_at < 0) gl_log_at = getenv("JK2_GL_LOG") ? atoi(getenv("JK2_GL_LOG")) : 0;
+    gl_frames++;
 }
 void jk2glStats(unsigned* in_gpu, unsigned* gpu_size, unsigned* left_out, unsigned* vertices) {
     unsigned tiles;
@@ -84,10 +89,14 @@ void jk2_glDrawBuffer(GLenum m) { (void)m; }
 // twice on the way. The coordinates' least and most and whether all have one colour are over that range (rd-vanilla's
 // arrays hold the surfaces' vertices, all of them named). Anything else, and a pulled offset, goes the plain way.
 // JK2_GL=plain: always.
-static int fast_off = -1;
+static int fast_off = -1, fast_passes;
 static uint32_t made[MAX_PRIMITIVE * 4] __attribute__((aligned(16)));   // a vertex's words, from the range's first
 static int fast_ok(void) {
-    if (fast_off < 0) fast_off = getenv("JK2_GL") && !strcmp(getenv("JK2_GL"), "plain");
+    if (fast_off < 0) {
+        const char* g = getenv("JK2_GL");
+        fast_off = g && !strcmp(g, "plain");
+        fast_passes = g && !strcmp(g, "passes");
+    }
     return !fast_off && va_pos.on && va_pos.type == GL_FLOAT && va_pos.size >= 3 && va_coord.on && va_coord.type == GL_FLOAT &&
         va_coord.size >= 2 && va_colour.on && va_colour.type == GL_UNSIGNED_BYTE && va_colour.size == 4 && !(offsetting && offset_pull != 0);
 }
@@ -105,7 +114,44 @@ static int fast_triangles(int count, const uint32_t* idx) {
     int n = (int)(hi - lo) + 1;
     if (n > MAX_PRIMITIVE) return 0;
     gpu_state s;
-    if (!draw_state(&s)) return 1;
+    if (!draw_state(&s)) {
+        if (gl_log_at > 0 && gl_log_at == gl_frames) printf("jk2gl: draw %d indices skipped: texture %d not in GPU memory\n", count, (int)bound);
+        return 1;
+    }
+    // Two things the GPU's passes do otherwise than OpenGL (docs/games/jk2.md, "What the menu was missing"):
+    // - one depth buffer a frame, and a pass draws after every pass before it whatever the list's order: rd-vanilla's 2D
+    //   (z 0, the near plane, mostly depth-tested) covered the 3D a menu draws after it (the turning logo: OpenGL
+    //   clears the depth for a scene), which the shim cannot clear. So 2D before the frame's first 3D draw goes to the
+    //   depth-tested passes at the far plane (z made -1 under rd-vanilla's ortho of 0 to 1): what comes later in 3D is
+    //   in front of it; and 2D after it to the passes without depth: on top, as in the list. JK2_GL=passes: not.
+    // - "added" scales by alpha, which GL_ONE, GL_ONE does not: the menu's saber halos, whose alpha is a wave from -1
+    //   to 1, were drawn at their alpha, so not at all half the time. Their alpha is made 1 here.
+    int far = 0;
+    uint32_t keep = 0xffffffffu;
+    if (blending && blend_src == GL_ONE && blend_dst == GL_ONE) keep = 0x00ffffffu;
+    if (!fast_passes) {
+        float m[16];
+        seglGetMatrix(GL_PROJECTION, m);	// (columns: rd-vanilla's 2D is an ortho of depth 0 to 1)
+        unsigned pass = s.fragment >> 16 & 7;
+        if (!(m[10] == -2.0f && m[14] == -1.0f && m[11] == 0.0f && m[15] == 1.0f)) {
+            depth_seen = 1;
+        } else if (!depth_seen) {
+            far = 1;   // 2D before the frame's 3D: behind it
+            if (pass >= 4) s.fragment -= GPU_PASS(4);
+        } else if (pass < 4) {
+            s.fragment += GPU_PASS(pass ? 4 : 5);   // 2D after it: on top (OpenGL's 3D had its own depth cleared)
+        }
+    }
+    const uint32_t far_z = bits(-0.9999f);
+    if (gl_log_at > 0 && gl_log_at == gl_frames) {   // JK2_GL_LOG=F: frame F's draws, one a line
+        float m[16];
+        const float* p0 = (const float*)(va_pos.p + (size_t)idx[0] * va_pos.stride);
+        seglGetMatrix(GL_PROJECTION, m);
+        printf("jk2gl: draw %d indices %d vertices, texture %d, pass %u, depth %d, blend %x %x, far %d, colour %08x, "
+               "first %.1f %.1f %.1f, projection %.3f %.3f %.3f %.3f\n", count, n, texturing ? (int)bound : -1,
+               s.fragment >> 16 & 7, depth_test, blending ? blend_src : 0, blending ? blend_dst : 0, far,
+               *(const uint32_t*)(va_colour.p + (size_t)idx[0] * va_colour.stride), p0[0], p0[1], p0[2], m[0], m[5], m[10], m[14]);
+    }
     const uint8_t *pos = va_pos.p + (size_t)lo * va_pos.stride, *tc = va_coord.p + (size_t)lo * va_coord.stride,
                   *col = va_colour.p + (size_t)lo * va_colour.stride;
     int ps = va_pos.stride, ts = va_coord.stride, cs = va_colour.stride;
@@ -130,7 +176,7 @@ static int fast_triangles(int count, const uint32_t* idx) {
     } else {
         for (int k = 1; k < n && one; k++) one = *(const uint32_t*)(col + (size_t)k * cs) == first;
     }
-    first = WORD_OF(first);
+    first = WORD_OF(first) & keep;
     if (replace && textured) one = 1, first = 0x00ffffff;
     uint32_t* table = 0;
     if (one || high_s - low_s >= 4 || high_t - low_t >= 4) {
@@ -139,7 +185,7 @@ static int fast_triangles(int count, const uint32_t* idx) {
             const float* p = (const float*)(pos + (size_t)k * ps);
             const float* t = (const float*)(tc + (size_t)k * ts);
             uint32_t* m = &made[k * 4];
-            m[0] = bits(p[0]), m[1] = bits(p[1]), m[2] = bits(p[2]);
+            m[0] = bits(p[0]), m[1] = bits(p[1]), m[2] = far ? far_z : bits(p[2]);
             m[3] = ((uint32_t)(int32_t)((t[0] - low_s) * 1024.0f) & 0xffff) | (uint32_t)(int32_t)((t[1] - low_t) * 1024.0f) << 16;
         }
     } else if (n <= 256) {
@@ -152,8 +198,8 @@ static int fast_triangles(int count, const uint32_t* idx) {
             const float* p = (const float*)(pos + (size_t)k * ps);
             const float* t = (const float*)(tc + (size_t)k * ts);
             uint32_t* m = &made[k * 4];
-            table[k] = WORD_OF(c);
-            m[0] = bits(p[0]), m[1] = bits(p[1]), m[2] = bits(p[2]);
+            table[k] = WORD_OF(c) & keep;
+            m[0] = bits(p[0]), m[1] = bits(p[1]), m[2] = far ? far_z : bits(p[2]);
             m[3] = ((uint32_t)((t[0] - low_s) * 1024.0f) & 0xfff) | ((uint32_t)((t[1] - low_t) * 1024.0f) & 0xfff) << 12 | (uint32_t)k << 24;
         }
     } else {
@@ -169,8 +215,8 @@ static int fast_triangles(int count, const uint32_t* idx) {
                 uint32_t k = idx[done + i] - lo, w = *(const uint32_t*)(col + (size_t)k * cs);
                 const float* p = (const float*)(pos + (size_t)k * ps);
                 const float* t = (const float*)(tc + (size_t)k * ts);
-                table[i] = WORD_OF(w);
-                to[0] = bits(p[0]), to[1] = bits(p[1]), to[2] = bits(p[2]);
+                table[i] = WORD_OF(w) & keep;
+                to[0] = bits(p[0]), to[1] = bits(p[1]), to[2] = far ? far_z : bits(p[2]);
                 to[3] = ((uint32_t)((t[0] - low_s) * 1024.0f) & 0xfff) | ((uint32_t)((t[1] - low_t) * 1024.0f) & 0xfff) << 12 | (uint32_t)i << 24;
             }
             done += c;
