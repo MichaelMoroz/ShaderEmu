@@ -341,6 +341,18 @@ console out, or the program flat); a desktop sitter's is the view's middle and t
 its button, and with the view on it neither the click nor the wheel is the game's.
 On `rvc_cpu` (its closing line says the bit): Quake III's menu 1, its level 0.
 
+When each game says its frame is flat (read from the ports on 3 November 2026; no game's rule changed that day,
+and none of it was tried in the world then):
+
+| Game | Flat (the large screen before the seat) |
+|---|---|
+| Doom | not in a level (the title, an intermission, the finale) or a menu up (`doom_video.c`) |
+| Quake | a menu or the console, not connected or not signed on, the loading plaque, a level's end (`vid_shaderemu.c`) |
+| Quake III | any key catcher (menu, console, chat), not active, the scoreboard at a level's end (`tr_shaderemu.c`) |
+| Half-Life | not playing: not active or signed on, the menu or console, an intermission (`playing()`, `vid_shaderemu.c`) |
+| ClassiCube | no world loaded, or a screen that takes the pointer (a menu, the inventory, chat) while not seated, or typing (`SE_Flat`) |
+| Jedi Outcast, the 2D games | not registered: always on the large screen, menus and all |
+
 Only the registered games have a world round the seat (`EmuHolodeck.Registered`: Doom, Quake,
 ClassiCube, Quake III, nxphys and Half-Life, by the number of the program whose window has the keyboard,
 `linux/apps/gameid.h`); any other program is on the large screen however it draws, as on a

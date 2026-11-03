@@ -337,7 +337,13 @@ buffer on core 0 whatever the GL under it.
 - **Keys and the pointer** (`se_input` in `sys_shaderemu.cpp`, once a frame from `WIN_Present`), Quake III's way: the
   window's keys as the game's (`A_*`; a printable key is its character, F5 to F12 are not after F4 in OpenJK's table), the
   machine's input words for the pointer, the window system asked when they moved and four times a second. In a menu
-  the pointer's move is the menu's cursor's; in play the left button held turns the view by the pointer's travel and
+  the menu's cursor (the saber) is put where the pointer is in the window (`se_menu_pointer`, `_UI_MouseTo` in
+  `jk2.patch`'s `ui_main.cpp`), stretched with the picture to 640 x 480, and a click lands where it was pressed. Until
+  3 November 2026 a menu was told the pointer's travel instead: the cursor stopped at the menu's edges while the
+  pointer went on, a move outside the window was lost and a moved window kept the old offset, so the saber and the
+  desktop's pointer went apart and clicks missed (the owner's photo of the main menu in the world). `JK2_POINTER_LOG=1`
+  prints each place given; `test_all.py jk2-pointer` (on an image with the demo) moves the pointer round over the
+  menu: on a window at 43,46 the display's 303,326 is the menu's 260,280. In play the left button held turns the view by the pointer's travel and
   the right button fires (`A_MOUSE1`, the demo's `+attack`). Ctrl fires too (the starter's `+bind CTRL "+attack"`; the
   demo binds Ctrl to use, which E is as well).
 - **Sound**: the engine's own mixer, into a stream voice's ring of 8,192 stereo frames on the sound card

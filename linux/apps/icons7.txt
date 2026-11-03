@@ -43,6 +43,7 @@ imdemo                  imdemo
 nxray                   nxray
 nxpath                  nxpath
 nxphys                  nxphys
+nxperf                  nxperf
 nxide                   nxide
 example                 mimetypes/text-x-csrc
 restart                 actions/system-reboot

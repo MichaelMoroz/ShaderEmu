@@ -209,7 +209,7 @@ bits of its properties, which any program reads with `GrGetWindowInfo` (`GR_WM_P
 
 - **A program or the bar tells the window manager** with `GrSetWMProperties(window, flags GR_WM_FLAGS_COMMAND, props GR_WMC_*,
   background its argument)`: a frame to a zone, shaded, on top, to a desktop, a desktop shown, a window brought forward from
-  wherever it is, a process that is starting.
+  wherever it is, a process that is starting, a window that wants the extra buttons (`GR_WMC_BUTTONS`, `docs/machine/input.md`, "More of a mouse and the hands").
 - **The window manager tells the bar** with a hotkey event to whoever grabbed the Windows key (`wm_tell_bar`): `ch` is
   `GR_WM_TELL(what)`, `subwid` the frame, `rootx` and `rooty` the arguments. With no bar, Tab goes round as it did.
 
@@ -1140,7 +1140,8 @@ button go, at that last place, usually tens of pixels short of the 8 that snap (
   300 ms of a last step that, taken once more, would have reached the edge snaps there (`wm_thrown_zone`). A mouse slows down by small steps, or waits, and does not
   snap short of the edge: `test_all.py wm-snap-beam` and `wm-snap-mouse`.
 - In the world: a button pressed on the room's display stays down when the beam runs off the picture, the pointer on the edge where the beam's line meets the display's
-  plane, unsmoothed there (`EdgeOf`). Written but never run: no editor was at hand when this was done (31 October 2026).
+  plane, unsmoothed there (`EdgeOf`). Written but never run: no editor was at hand when this was done (31 October 2026). Since 3 November 2026 a margin
+  round the picture holds the pointer on the edge with no button too (`docs/machine/input.md`, "The screen's edge").
 
 A title set while another window has the keyboard reaches the bar by `GR_WM_TELL_TITLE`: the server's old word for a new title is about the window with the
 keyboard, and so the browser's button stayed "Loading: Page" under its Notice (`test_all.py wm-retitle`; that case fails on the window system of before).

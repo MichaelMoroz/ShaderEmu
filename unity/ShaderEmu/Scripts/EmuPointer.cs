@@ -97,6 +97,10 @@ public class EmuPointer : UdonSharpBehaviour
     [HideInInspector] public bool steady = true;
     public float steadyCutoff = 1.2f, steadyBeta = 0.012f;   // a one-euro filter: Hz at rest, and per pixel a second
     public float dragSlop = 7f, doubleSlop = 10f, doubleTime = 0.5f;   // pixels, pixels, seconds
+    // The screen's edge (docs/machine/input.md, "The screen's edge"): a beam within this share of the
+    // picture's width (across) or height (down) outside it is still the pointer, held on the edge, its
+    // buttons as they are, so a game's edge scrolling, an edge's button and a drag resting there work.
+    public float edgeMargin = 0.04f;
 
     private const int Nothing = -1, Display = 0, Memory = -2, Console = -3;   // a target; 1 and up: keyboard number + 1
 
@@ -113,10 +117,13 @@ public class EmuPointer : UdonSharpBehaviour
     private int[] pressedOn = new int[2];   // the keyboard a hand holds a key on, or -1
     private bool[] onTube = new bool[2];    // the display it points at is its own classroom tube
     private bool[] onMain = new bool[2];    // it was last on the room's display
-    private bool[] onEdge = new bool[2];    // it has run off that display with a button held: at its edge
+    private bool[] onEdge = new bool[2];    // it is off the picture and held on its edge: in the margin, or run off with a button held
     private int owner = 1;                  // the hand the machine's pointer follows
     private float stick;                    // the right stick, up positive
-    private float turned;                   // notches of the wheel not sent yet
+    private float stickX, moveX, moveY;     // the right stick across, the left one across and up
+    // notches not sent yet of the four wheels: the right hand's (or the mouse's) up and across, the left hand's up and across
+    private float[] turnedOf = new float[4];
+    private bool jumpDown, stilled;         // the jump button is held; the player stands still while a stick scrolls
     private bool started;
     private bool aimShown;                  // an aim's beam is on
     private bool[] landedOn = new bool[2];  // a hand's beam is on something of the room's
@@ -221,20 +228,60 @@ public class EmuPointer : UdonSharpBehaviour
         return inDen && avatarSeen && Time.time - avatarAt > avatarSettle;
     }
 
+    // Where a ray meets a quad's plane, in the quad's own units (a unit quad: -0.5 to 0.5 across and
+    // up), and how far along it in metres: false for a ray that goes away from it or along it. The
+    // plane is taken in the world (its normal and a point), so the quad's scale does not bend the
+    // way: the first EdgeOf took the way unscaled against a scaled origin, and its place along the
+    // edge was wrong on a quad scaled unevenly, as the room's display is.
+    private bool OnPlane(Transform t, Vector3 origin, Vector3 direction, out Vector3 local, out float distance)
+    {
+        local = Vector3.zero;
+        distance = 0f;
+        Vector3 normal = t.forward;
+        float facing = Vector3.Dot(direction, normal);
+        if (Mathf.Abs(facing) < 1e-5f) return false;
+        float along = Vector3.Dot(t.position - origin, normal) / facing;
+        if (along <= 0f) return false;
+        Vector3 at = origin + direction * along;
+        local = t.InverseTransformPoint(at);
+        distance = along * direction.magnitude;
+        return true;
+    }
+
+    // A place on a quad of shape quadAspect to the picture's share across and down (0 to 1 on it):
+    // the picture sits centred in the quad, as large as fits (Display.shader).
+    private void Share(Vector3 local, float quadAspect, int w, int ht, out float x, out float y)
+    {
+        float shape = (float)w / ht;
+        x = local.x * Mathf.Max(1f, quadAspect / shape) + 0.5f;
+        y = -local.y * Mathf.Max(1f, shape / quadAspect) + 0.5f;
+    }
+
+    // The picture's share to a pixel of hand h: 0 on it, 1 in the margin round it (kept to its
+    // edge), -1 beyond. margin is a share of the picture's side.
+    private int ToPixel(int h, float x, float y, int w, int ht, float margin)
+    {
+        if (x >= 0f && y >= 0f && x < 1f && y < 1f)
+        {
+            px[h] = (int)(x * w);
+            py[h] = (int)(y * ht);
+            return 0;
+        }
+        if (x < -margin || y < -margin || x >= 1f + margin || y >= 1f + margin) return -1;
+        px[h] = Mathf.Clamp((int)(x * w), 0, w - 1);
+        py[h] = Mathf.Clamp((int)(y * ht), 0, ht - 1);
+        return 1;
+    }
+
     // Where the ray meets the display's plane, kept to the picture: false for a ray that goes away from it.
     private bool EdgeOf(int h, Vector3 origin, Vector3 direction)
     {
         int w = machine.shownWidth, ht = machine.shownHeight;
         if (w <= 0 || ht <= 0 || away) return false;
-        Transform t = screen.transform;
-        Vector3 from = t.InverseTransformPoint(origin), way = t.InverseTransformDirection(direction);
-        if (Mathf.Abs(way.z) < 1e-5f) return false;
-        float along = -from.z / way.z;
-        if (along <= 0f) return false;
-        Vector3 local = from + way * along;
-        float shape = (float)w / ht;
-        float x = local.x * Mathf.Max(1f, aspect / shape) + 0.5f;
-        float y = -local.y * Mathf.Max(1f, shape / aspect) + 0.5f;
+        Vector3 local;
+        float distance, x, y;
+        if (!OnPlane(screen.transform, origin, direction, out local, out distance)) return false;
+        Share(local, aspect, w, ht, out x, out y);
         px[h] = Mathf.Clamp((int)(x * w), 0, w - 1);
         py[h] = Mathf.Clamp((int)(y * ht), 0, ht - 1);
         return true;
@@ -251,25 +298,40 @@ public class EmuPointer : UdonSharpBehaviour
         Vector3 at = origin;
         // a beam that meets the open links panel is VRChat's to use, not the machine's pointer
         bool covered = linksPlate != null && machine.linksPanel.activeSelf && linksPlate.Raycast(ray, out hit, best);
-        if (!away && !covered && screen.Raycast(ray, out hit, best))
+        bool margin = false;   // the pointer is held on the picture's edge from the margin round it
+        float behind = 0.03f;  // how far before the place a thing must stand to stop the beam
+        if (!away && !covered)
         {
-            landed = true;
-            best = hit.distance;
-            at = hit.point;
+            // the quad itself, or its plane within the margin round the picture (a beam past the
+            // quad's side misses its collider, so the margin is the plane's)
             int w = machine.shownWidth, ht = machine.shownHeight;   // another player's, while theirs is shown
-            if (w > 0 && ht > 0)
+            Vector3 local = Vector3.zero;
+            float distance = 0f;
+            bool onQuad = screen.Raycast(ray, out hit, best);
+            if (onQuad)
             {
-                Vector3 local = screen.transform.InverseTransformPoint(hit.point);
-                // the picture sits centred in the quad, as large as fits
-                float shape = (float)w / ht;
-                float x = local.x * Mathf.Max(1f, aspect / shape) + 0.5f;
-                float y = -local.y * Mathf.Max(1f, shape / aspect) + 0.5f;
-                if (x >= 0f && y >= 0f && x < 1f && y < 1f)
+                landed = true;
+                best = hit.distance;
+                at = hit.point;
+                local = screen.transform.InverseTransformPoint(hit.point);
+            }
+            if (w > 0 && ht > 0 && (onQuad || OnPlane(screen.transform, origin, direction, out local, out distance) && distance < best))
+            {
+                float x, y;
+                Share(local, aspect, w, ht, out x, out y);
+                int where = ToPixel(h, x, y, w, ht, edgeMargin);
+                if (where >= 0)
                 {
-                    px[h] = (int)(x * w);
-                    py[h] = (int)(y * ht);
                     found = Display;
                     mainHit = true;
+                    margin = where == 1;
+                    if (!onQuad)
+                    {
+                        landed = true;
+                        best = distance;
+                        at = origin + direction * distance;
+                        behind = 0.1f;   // (the display's frame stands a little before its plane)
+                    }
                 }
             }
         }
@@ -279,6 +341,8 @@ public class EmuPointer : UdonSharpBehaviour
             best = hit.distance;
             at = hit.point;
             found = Nothing;
+            margin = false;   // (a tube has no margin: its glass is curved)
+            behind = 0.03f;
             int w = machine.OwnWidth(), ht = machine.OwnHeight();
             if (w > 0 && ht > 0)
             {
@@ -314,26 +378,40 @@ public class EmuPointer : UdonSharpBehaviour
                 }
             }
         }
-        if (HoloScreenShown() && holoScreens != null && ownHolo < holoScreens.Length && holoScreens[ownHolo].Raycast(ray, out hit, best))
+        if (HoloScreenShown() && holoScreens != null && ownHolo < holoScreens.Length)
         {
-            landed = true;
-            best = hit.distance;
-            at = hit.point;
-            found = Nothing;
+            // the quad, or its plane within the margin round the picture, as on the den's wall
+            Transform quad = holoScreens[ownHolo].transform;
+            Vector3 local = Vector3.zero;
+            float distance = 0f;
+            bool onQuad = holoScreens[ownHolo].Raycast(ray, out hit, best);
+            if (onQuad)
+            {
+                landed = true;
+                best = hit.distance;
+                at = hit.point;
+                found = Nothing;
+                local = quad.InverseTransformPoint(hit.point);
+            }
             int w = machine.OwnWidth(), ht = machine.OwnHeight();
-            if (w > 0 && ht > 0)
+            if (w > 0 && ht > 0 && (onQuad || OnPlane(quad, origin, direction, out local, out distance) && distance < best))
             {
                 // the picture sits centred in the quad, as large as fits, as on the den's wall
-                Vector3 local = holoScreens[ownHolo].transform.InverseTransformPoint(hit.point);
-                float shape = (float)w / ht;
-                float x = local.x * Mathf.Max(1f, holoAspect / shape) + 0.5f;
-                float y = -local.y * Mathf.Max(1f, shape / holoAspect) + 0.5f;
-                if (x >= 0f && y >= 0f && x < 1f && y < 1f)
+                float x, y;
+                Share(local, holoAspect, w, ht, out x, out y);
+                int where = ToPixel(h, x, y, w, ht, edgeMargin);
+                if (where >= 0)
                 {
-                    px[h] = (int)(x * w);
-                    py[h] = (int)(y * ht);
                     found = Display;
                     tube = true;   // this visitor's own machine's, as a classroom tube is
+                    margin = where == 1;
+                    if (!onQuad)
+                    {
+                        landed = true;
+                        best = distance;
+                        at = origin + direction * distance;
+                        behind = 0.1f;
+                    }
                 }
             }
         }
@@ -393,11 +471,13 @@ public class EmuPointer : UdonSharpBehaviour
 
         // What stands between stops the beam (a classroom's monitor before the wall's display): it
         // used to reach through, and move the pointer from behind a thing the hand pointed at.
-        if (landed && Physics.Raycast(ray, out hit, best - 0.03f, 1, QueryTriggerInteraction.Ignore))
+        if (found != Display) margin = false;
+        if (landed && Physics.Raycast(ray, out hit, best - (found == Display ? behind : 0.03f), 1, QueryTriggerInteraction.Ignore))
         {
             landed = false;
             found = Nothing;
             foundKey = -1;
+            margin = false;
         }
 
         // A button held since it was pressed on the display: a beam that runs off the picture stays
@@ -410,7 +490,7 @@ public class EmuPointer : UdonSharpBehaviour
             foundKey = -1;
             onEdge[h] = true;
         }
-        else onEdge[h] = false;
+        else onEdge[h] = margin;
 
         // the key under the beam lights up; the one it left goes dark
         int was = target[h];
@@ -601,8 +681,10 @@ public class EmuPointer : UdonSharpBehaviour
             else danger.Point(true, memoryU[hand], memoryV[hand], burning[hand]);
         }
 
+        // (a sitter's are told while seated: their program has the controller's hands)
+        machine.moreButtons = target[0] == Display || target[1] == Display || away ? MoreButtons(player) : 0;
         // (the pointer is the controller's, but where a beam is on the room's screen: the only display it reaches then)
-        if (away && !holoFlat && target[0] != Display && target[1] != Display) { LetGo(); return; }
+        if (away && !holoFlat && target[0] != Display && target[1] != Display) { LetGo(); Still(player, false); return; }
         // The machine has one pointer: a hand holding a button on the display keeps it, then
         // the hand that had it, then whichever points there.
         int other = 1 - owner;
@@ -619,23 +701,91 @@ public class EmuPointer : UdonSharpBehaviour
             machine.SetPointer(outX, outY, buttons);
             machine.pointerOwn = onTube[owner];
             drove = away;
-            // the wheel: the mouse's on desktop, the right stick in VR at up to 12 notches a second
-            if (player.IsUserInVR()) turned += away ? 0f : stick * 12f * Time.deltaTime;   // (a sitter's stick turns them)
-            else turned += Input.GetAxis("Mouse ScrollWheel") * 10f;
-            int notches = (int)turned;
-            if (notches != 0)
-            {
-                turned -= notches;
-                machine.Wheel(notches);
-            }
+            Wheels(player);
         }
         else if (!away)   // (with a controller held the pointer and its buttons are still the sticks')
         {
             steadyFrom = false;
             drove = false;
             machine.SetPointerButtons(0);
-            turned = 0f;
+            for (int w = 0; w < 4; w++) turnedOf[w] = 0f;
+            Still(player, false);
         }
+    }
+
+    // ---- more of a mouse and the hands (docs/machine/input.md, "More of a mouse and the hands") ----
+
+    // The buttons word past the pointer's three: a mouse's side buttons on a desktop; in a headset
+    // bit 7, and from bit 8 the hands' own buttons, whichever hand has the pointer.
+    private int MoreButtons(VRCPlayerApi player)
+    {
+        if (!player.IsUserInVR()) return (Input.GetMouseButton(3) ? 8 : 0) | (Input.GetMouseButton(4) ? 16 : 0);
+        return 0x80 | (useDown[0] ? 0x100 : 0) | (gripDown[0] ? 0x200 : 0) | (useDown[1] ? 0x400 : 0) | (gripDown[1] ? 0x800 : 0)
+            | (Input.GetAxis("Oculus_CrossPlatform_PrimaryThumbstick") > 0.5f ? 0x1000 : 0)
+            | (Input.GetAxis("Oculus_CrossPlatform_SecondaryThumbstick") > 0.5f ? 0x2000 : 0)
+            | (Input.GetAxis("Oculus_CrossPlatform_Button4") > 0.5f ? 0x4000 : 0)
+            | (Input.GetAxis("Oculus_CrossPlatform_Button2") > 0.5f ? 0x8000 : 0)
+            | (jumpDown ? 0x10000 : 0);
+    }
+
+    // The wheels. On a desktop the mouse's (with Shift held it is tilted: across). In a headset each
+    // hand's stick is that hand's wheel while its beam is on the display, at up to 12 notches a second:
+    // the right one is the wheel it always was, the left one a second wheel; the player stands still
+    // while a stick scrolls, or the left would walk and the right turn them.
+    private void Wheels(VRCPlayerApi player)
+    {
+        if (!player.IsUserInVR())
+        {
+            float wheel = Input.GetAxis("Mouse ScrollWheel") * 10f;
+            if (Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift)) turnedOf[1] -= wheel;   // (up is left, as a tilt)
+            else turnedOf[0] += wheel;
+        }
+        else if (!away)   // (a sitter's sticks are the controller's: they turn and walk them)
+        {
+            float rate = 12f * Time.deltaTime;
+            bool right = target[1] == Display, left = target[0] == Display;
+            turnedOf[0] = right ? turnedOf[0] + stick * rate : 0f;
+            turnedOf[1] = right ? turnedOf[1] + stickX * rate : 0f;
+            turnedOf[2] = left ? turnedOf[2] + moveY * rate : 0f;
+            turnedOf[3] = left ? turnedOf[3] + moveX * rate : 0f;
+            Still(player, (right && (stick != 0f || stickX != 0f)) || (left && (moveX != 0f || moveY != 0f)));
+        }
+        for (int w = 0; w < 4; w++)
+        {
+            int notches = (int)turnedOf[w];
+            if (notches == 0) continue;
+            turnedOf[w] -= notches;
+            // (the mouse's wheel is the pointer's own; a stick's is its hand's)
+            int from = w >= 2 ? EmuMachine.WheelOfLeftHand : player.IsUserInVR() ? EmuMachine.WheelOfRightHand : EmuMachine.WheelOfPointer;
+            machine.Scroll(from, (w & 1) != 0, notches);
+        }
+    }
+
+    private void Still(VRCPlayerApi player, bool on)
+    {
+        if (on == stilled) return;
+        stilled = on;
+        player.Immobilize(on);
+    }
+
+    public override void InputLookHorizontal(float value, UdonInputEventArgs args)
+    {
+        stickX = Mathf.Abs(value) < 0.25f ? 0f : value;
+    }
+
+    public override void InputMoveHorizontal(float value, UdonInputEventArgs args)
+    {
+        moveX = Mathf.Abs(value) < 0.25f ? 0f : value;
+    }
+
+    public override void InputMoveVertical(float value, UdonInputEventArgs args)
+    {
+        moveY = Mathf.Abs(value) < 0.25f ? 0f : value;
+    }
+
+    public override void InputJump(bool value, UdonInputEventArgs args)
+    {
+        jumpDown = value;
     }
 
     public override void InputLookVertical(float value, UdonInputEventArgs args)

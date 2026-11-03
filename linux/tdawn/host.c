@@ -271,6 +271,13 @@ host_open(int width, int height)
 	GrSelectEvents(window, GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_KEY_UP | GR_EVENT_MASK_BUTTON_DOWN |
 		GR_EVENT_MASK_BUTTON_UP | GR_EVENT_MASK_MOUSE_ENTER | GR_EVENT_MASK_MOUSE_EXIT | GR_EVENT_MASK_CLOSE_REQ |
 		GR_EVENT_MASK_UPDATE);
+	{
+		/* the extra buttons: the left hand's stick pans the map (docs/machine/input.md, "Game controls") */
+		GR_WM_PROPERTIES props;
+
+		props.flags = GR_WM_FLAGS_COMMAND, props.props = GR_WMC_BUTTONS, props.background = 1;
+		GrSetWMProperties(window, &props);
+	}
 	GrMapWindow(window);
 	GrSetFocus(window);
 	if (seglInit(window) < 0) {
@@ -1889,6 +1896,34 @@ idle_poll(void)
 		mcw_rest();
 }
 
+/*
+ * A controller's moves as keys (docs/machine/input.md, "Game controls"): a notch of the left hand's stick
+ * (the second wheel) is an arrow key pressed and let go, which scrolls the map a step, and the Y button
+ * is Escape (the menu). They wait here and are given before anything else is asked.
+ */
+static int pad_queue[16], pad_head, pad_tail;	/* a key, + 0x1000 for its press */
+static uint32_t pad_held;
+
+static void
+pad_tap(int key)
+{
+	if (((pad_tail + 2) & 15) == pad_head || ((pad_tail + 1) & 15) == pad_head)
+		return;
+	pad_queue[pad_tail] = key | 0x1000, pad_tail = (pad_tail + 1) & 15;
+	pad_queue[pad_tail] = key, pad_tail = (pad_tail + 1) & 15;
+}
+
+static int
+pad_scroll(GR_BUTTON b)
+{
+	int key = b & GR_BUTTON_SCROLL2LEFT ? 0x25 : b & GR_BUTTON_SCROLL2RIGHT ? 0x27 : b & GR_BUTTON_SCROLL2UP ? 0x26 :
+		  b & GR_BUTTON_SCROLL2DN ? 0x28 : 0;
+
+	if (key)
+		pad_tap(key);
+	return key;
+}
+
 int
 host_event(struct host_event *event)
 {
@@ -1900,6 +1935,22 @@ host_event(struct host_event *event)
 
 	if (!screen)
 		return 0;
+	if (pad_head != pad_tail) {
+		event->type = HOST_KEY;
+		event->key = pad_queue[pad_head] & 0xfff;
+		event->down = pad_queue[pad_head] >> 12;
+		pad_head = (pad_head + 1) & 15;
+		if (log > 0)
+			fprintf(stderr, "tdinput: pad key %d %s\n", event->key, event->down ? "down" : "up");
+		return 1;
+	}
+	{
+		uint32_t buttons = control(REG_INPUT)[2], down = buttons & ~pad_held;
+
+		pad_held = buttons;
+		if (down & 0x4000)	/* (Y: input_words.h's INPUT_LEFT_UPPER) */
+			pad_tap(0x1b);
+	}
 	if (scene_out && mcw_ready(scene_handle))
 		scene_finish();		/* the worker has made the scene: its frame is shown */
 	frames_pump(1);
@@ -1965,6 +2016,16 @@ host_event(struct host_event *event)
 		case GR_EVENT_TYPE_BUTTON_UP:
 			owed -= owed > 0;
 			seglPicturePoint(e.button.x, e.button.y, screen_w, screen_h, &pointer_x, &pointer_y);
+			if (e.type == GR_EVENT_TYPE_BUTTON_DOWN && pad_scroll(e.button.changebuttons) && pad_head != pad_tail) {
+				/* (the key's press now, its release at the next call) */
+				event->type = HOST_KEY;
+				event->key = pad_queue[pad_head] & 0xfff;
+				event->down = 1;
+				pad_head = (pad_head + 1) & 15;
+				if (log)
+					fprintf(stderr, "tdinput: pad key %d down\n", event->key);
+				return 1;
+			}
 			if (!(e.button.changebuttons & (GR_BUTTON_L | GR_BUTTON_R)))
 				break;
 			event->type = HOST_BUTTON;

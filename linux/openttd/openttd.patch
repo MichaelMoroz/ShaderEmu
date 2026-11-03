@@ -2169,6 +2169,146 @@ index 8b358bd..88ac455 100644
  	void MoveFrom(MidiFile &other);
  
  	bool WriteSMF(const std::string &filename);
+diff --git a/src/network/network_chat_gui.cpp b/src/network/network_chat_gui.cpp
+index de5ac6c..ab4b6df 100644
+--- a/src/network/network_chat_gui.cpp
++++ b/src/network/network_chat_gui.cpp
+@@ -27,6 +27,9 @@
+ #include "../widgets/network_chat_widget.h"
+ 
+ #include "table/strings.h"
++#ifdef WITH_SHADEREMU
++#include "../video/shaderemu_gpu.h"
++#endif
+ 
+ #include "../safeguards.h"
+ 
+@@ -52,6 +55,20 @@ static uint MAX_CHAT_MESSAGES = 0;        ///< The limit of chat messages to sho
+  */
+ static std::chrono::steady_clock::time_point _chatmessage_dirty_time;
+ 
++#ifdef WITH_SHADEREMU
++static std::chrono::steady_clock::time_point _se_chat_now; ///< the time the lines were last drawn at
++static bool _se_chat_as_drawn; ///< (OPENTTD_CHECK's picture drawn whole) the lines drawn as at that time
++
++/** Now, for which lines are shown: the last drawing's time while the chat is drawn again as it was. */
++static std::chrono::steady_clock::time_point ChatNow()
++{
++	if (!_se_chat_as_drawn) _se_chat_now = std::chrono::steady_clock::now();
++	return _se_chat_now;
++}
++#else
++static std::chrono::steady_clock::time_point ChatNow() { return std::chrono::steady_clock::now(); }
++#endif
++
+ /**
+  * The chatbox grows from the bottom so the coordinates are pixels from
+  * the left and pixels from the bottom. The height is the maximum height.
+@@ -68,7 +85,7 @@ static inline bool HaveChatMessages(bool show_all)
+ {
+ 	if (show_all) return !_chatmsg_list.empty();
+ 
+-	auto now = std::chrono::steady_clock::now();
++	auto now = ChatNow();
+ 	for (auto &cmsg : _chatmsg_list) {
+ 		if (cmsg.remove_time >= now) return true;
+ 	}
+@@ -154,6 +171,10 @@ void NetworkUndrawChatMessage()
+ 
+ 		_chatmessage_visible = false;
+ 		/* Put our 'shot' back to the screen */
++#ifdef WITH_SHADEREMU
++		/* (the GPU's picture never had the lines: they are drawn over it when it is shown) */
++		if (!SeGpuChatDrop())
++#endif
+ 		blitter->CopyFromBuffer(blitter->MoveTo(_screen.dst_ptr, x, y), _chatmessage_backup.GetBuffer(), width, height);
+ 		/* And make sure it is updated next time */
+ 		VideoDriver::GetInstance()->MakeDirty(x, y, width, height);
+@@ -206,13 +227,21 @@ void NetworkDrawChatMessage()
+ 	}
+ 	if (width <= 0 || height <= 0) return;
+ 
++#ifdef WITH_SHADEREMU
++	/* (under the GPU's blitter the lines are records of their own, drawn over the picture when it is shown: docs/games/openttd.md, "Chat") */
++	const bool apart = SeGpuChatBegin(x, y, width, height);
++	if (!apart) {
++#endif
+ 	/* Make a copy of the screen as it is before painting (for undraw) */
+ 	uint8_t *buffer = _chatmessage_backup.Allocate(BlitterFactory::GetCurrentBlitter()->BufferSize(width, height));
+ 	blitter->CopyToBuffer(blitter->MoveTo(_screen.dst_ptr, x, y), buffer, width, height);
++#ifdef WITH_SHADEREMU
++	}
++#endif
+ 
+ 	_cur_dpi = &_screen; // switch to _screen painting
+ 
+-	auto now = std::chrono::steady_clock::now();
++	auto now = ChatNow();
+ 	int string_height = 0;
+ 	for (auto &cmsg : _chatmsg_list) {
+ 		if (!show_all && cmsg.remove_time < now) continue;
+@@ -236,6 +265,9 @@ void NetworkDrawChatMessage()
+ 		ypos = DrawStringMultiLine(_chatmsg_box.x + ScaleGUITrad(3), _chatmsg_box.x + _chatmsg_box.width - 1, top, ypos, cmsg.message, cmsg.colour, SA_LEFT | SA_BOTTOM | SA_FORCE) - NETWORK_CHAT_LINE_SPACING;
+ 		if (ypos < top) break;
+ 	}
++#ifdef WITH_SHADEREMU
++	if (apart) SeGpuChatEnd();
++#endif
+ 
+ 	/* Make sure the data is updated next flush */
+ 	VideoDriver::GetInstance()->MakeDirty(x, y, width, height);
+@@ -244,6 +276,51 @@ void NetworkDrawChatMessage()
+ 	_chatmessage_dirty = false;
+ }
+ 
++#ifdef WITH_SHADEREMU
++/** Whether chat lines are on the screen (for OPENTTD_CHECK). */
++bool SeChatShown()
++{
++	return _chatmessage_visible;
++}
++
++/** The lines drawn again as they were last drawn, over a screen just drawn again whole (OPENTTD_CHECK's picture): in a
++ * game with no network nothing took them away first, and their shot is of a screen drawn over since. */
++void SeChatDrawAgain()
++{
++	if (_chatmessage_visible) {
++		SeGpuChatDrop();
++		_chatmessage_visible = false;
++	}
++	_chatmessage_dirty = true;
++	_se_chat_as_drawn = true;
++	NetworkDrawChatMessage();
++	_se_chat_as_drawn = false;
++}
++
++/** (OPENTTD_PLAY_CHAT) The oldest line still shown ends now, as the timer ends a line whose time is up; false if none. */
++bool SeChatExpireOldest()
++{
++	auto now = std::chrono::steady_clock::now();
++	for (auto it = _chatmsg_list.rbegin(); it != _chatmsg_list.rend(); ++it) {
++		if (it->remove_time < now) continue;
++		it->remove_time = now - std::chrono::milliseconds(1);
++		_chatmessage_dirty_time = now;
++		_chatmessage_dirty = true;
++		return true;
++	}
++	return false;
++}
++
++/** (OPENTTD_PLAY_CHAT) How many lines are still to be shown. */
++int SeChatLines()
++{
++	auto now = std::chrono::steady_clock::now();
++	int n = 0;
++	for (auto &cmsg : _chatmsg_list) n += cmsg.remove_time >= now;
++	return n;
++}
++#endif
++
+ /**
+  * Send an actual chat message.
+  * @param buf The message to send.
 diff --git a/src/newgrf_canal.cpp b/src/newgrf_canal.cpp
 index 480ab51..ea8df23 100644
 --- a/src/newgrf_canal.cpp

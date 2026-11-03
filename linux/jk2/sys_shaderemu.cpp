@@ -188,6 +188,9 @@ static void se_window_open( int w, int h )
 	GrSelectEvents( se_window, GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_KEY_UP | GR_EVENT_MASK_BUTTON_DOWN |
 		GR_EVENT_MASK_BUTTON_UP | GR_EVENT_MASK_MOUSE_ENTER | GR_EVENT_MASK_MOUSE_EXIT | GR_EVENT_MASK_CLOSE_REQ |
 		GR_EVENT_MASK_UPDATE );
+	GR_WM_PROPERTIES props;     // the wheel tilted too (se_input: the weapons)
+	props.flags = GR_WM_FLAGS_COMMAND, props.props = GR_WMC_BUTTONS, props.background = 1;
+	GrSetWMProperties( se_window, &props );
 	GrMapWindow( se_window );
 	GrSetFocus( se_window );
 	if ( jk2glOpen( se_window ) < 0 ) {
@@ -444,10 +447,56 @@ static int se_key( int ch )
 	return ch > 32 && ch < 127 ? ch : ch == ' ' ? A_SPACE : 0;   // (the printable keys' codes are their characters)
 }
 
-// The window's keys and buttons as the game's events, and the pointer's travel as its mouse: in a menu its move, in
-// the game while the left button is held (the view dragged round, a finger on glass), the right button the fire
-// (Quake III's way, linux/quake3/tr_shaderemu.c). The window system is asked when the machine's input words moved
-// and a few times a second.
+// The window's keys and buttons as the game's events, and the pointer as its mouse: in a menu the menus' cursor is
+// put where the pointer is, in the game the pointer's travel while the left button is held (the view dragged round, a
+// finger on glass), the right button the fire (Quake III's way, linux/quake3/tr_shaderemu.c). The window system is
+// asked when the machine's input words moved and a few times a second.
+void _UI_MouseTo( int x, int y );     // (jk2.patch, ui_main.cpp)
+static int se_origin_x, se_origin_y, se_origin_known;   // the window's first pixel on the display
+static int se_menu_x = -1, se_menu_y = -1;              // where the menus' cursor was put last (640 x 480)
+
+// The pointer's place in the menus' 640 x 480: the window's picture is the whole window, stretched (seglPicturePoint).
+// Until 3 November 2026 a menu was told how far the pointer went, a pixel of the window for 640 / its width of the
+// menu's; the menu's cursor stops at its edges and the pointer does not, a move outside the window was not told, and a
+// window that had been moved or resized went on from the cursor's old place: the saber and the desktop's pointer
+// went apart and a click landed where the saber was, not where the pointer was (the owner's photo of the main menu
+// in the world). Now the cursor is put where the pointer is, at any size of the window.
+static void se_menu_pointer( int x, int y )
+{
+	if ( !se_origin_known )
+		gpuWindowOrigin( &se_origin_x, &se_origin_y ), se_origin_known = 1;
+	int mx = ( x - se_origin_x ) * 640 / se_win_w, my = ( y - se_origin_y ) * 480 / se_win_h;
+	mx = mx < 0 ? 0 : mx > 640 ? 640 : mx;
+	my = my < 0 ? 0 : my > 480 ? 480 : my;
+	if ( mx == se_menu_x && my == se_menu_y )
+		return;
+	se_menu_x = mx, se_menu_y = my;
+	_UI_MouseTo( mx, my );
+	if ( getenv( "JK2_POINTER_LOG" ) )
+		Com_Printf( "jk2pointer: %d,%d of the display to %d,%d of the menu (window at %d,%d, %dx%d)\n", x, y, mx, my,
+			se_origin_x, se_origin_y, se_win_w, se_win_h );
+}
+
+// A controller (docs/machine/input.md, "Game controls"; the bits are linux/apps/input_words.h's): the jump button
+// (A) jumps, B uses, the left stick pressed crouches, Y is Escape; the wheel (the right stick, tilted too) is the next
+// weapon up or right, the one before down or left, and the menus' own wheel in a menu.
+static void se_pad_buttons( unsigned buttons )
+{
+	static unsigned held;
+	unsigned down = buttons & ~held, up = held & ~buttons;
+	held = buttons;
+	if ( ( down | up ) & 0x10000 )
+		Sys_QueEvent( 0, SE_KEY, A_SPACE, ( down & 0x10000 ) != 0, 0, NULL );
+	if ( ( down | up ) & 0x8000 )
+		Sys_QueEvent( 0, SE_KEY, 'e', ( down & 0x8000 ) != 0, 0, NULL );
+	if ( ( down | up ) & 0x1000 )
+		Sys_QueEvent( 0, SE_KEY, 'c', ( down & 0x1000 ) != 0, 0, NULL );
+	if ( down & 0x4000 ) {
+		Sys_QueEvent( 0, SE_KEY, A_ESCAPE, qtrue, 0, NULL );
+		Sys_QueEvent( 0, SE_KEY, A_ESCAPE, qfalse, 0, NULL );
+	}
+}
+
 static void se_input( void )
 {
 	static unsigned seen[4], asked_ms;
@@ -456,19 +505,23 @@ static void se_input( void )
 		return;
 	const volatile unsigned *input = gpuControl( REG_INPUT ), *clock = gpuControl( REG_CLOCK );
 	int menu = ( Key_GetCatcher() & ( KEYCATCH_UI | KEYCATCH_CONSOLE ) ) != 0 || cls.state != CA_ACTIVE;
+	int ui = ( Key_GetCatcher() & KEYCATCH_UI ) != 0;
 	if ( mouse_inside || dragging ) {
 		int x = (int)input[0], y = (int)input[1];
-		if ( mouse_known && ( x != mouse_x || y != mouse_y ) ) {
-			if ( menu )
-				Sys_QueEvent( 0, SE_MOUSE, ( x - mouse_x ) * 640 / se_win_w, ( y - mouse_y ) * 480 / se_win_h, 0, NULL );
-			else if ( dragging )
-				Sys_QueEvent( 0, SE_MOUSE, ( x - mouse_x ) * 2, ( y - mouse_y ) * 2, 0, NULL );
-		}
+		if ( ui )
+			se_menu_pointer( x, y );
+		else if ( !menu && dragging && mouse_known && ( x != mouse_x || y != mouse_y ) )
+			Sys_QueEvent( 0, SE_MOUSE, ( x - mouse_x ) * 2, ( y - mouse_y ) * 2, 0, NULL );
 		mouse_x = x, mouse_y = y, mouse_known = 1;
 	}
+	if ( !ui )
+		se_menu_x = -1;     // (a menu that comes is told where the pointer is at once)
 	for ( int i = 2; i < 4; i++ )
-		if ( seen[i] != input[i] )
+		if ( seen[i] != input[i] ) {
 			seen[i] = input[i], ask = 8;
+			if ( i == 2 )
+				se_pad_buttons( seen[2] );
+		}
 	if ( !ask && *clock - asked_ms >= 250 )
 		ask = 1;
 	while ( ask ) {
@@ -494,10 +547,26 @@ static void se_input( void )
 				if ( se_win_w < 1 || se_win_h < 1 )
 					se_win_w = 640, se_win_h = 480;
 			}
+			se_origin_known = 0, se_menu_x = -1;   // (moved or resized: asked again)
 			break;
 		case GR_EVENT_TYPE_BUTTON_DOWN:
 		case GR_EVENT_TYPE_BUTTON_UP:
 			down = e.type == GR_EVENT_TYPE_BUTTON_DOWN;
+			if ( e.button.changebuttons & ( GR_BUTTON_SCROLLUP | GR_BUTTON_SCROLLDN | GR_BUTTON_SCROLLLEFT | GR_BUTTON_SCROLLRIGHT ) ) {
+				int ahead = ( e.button.changebuttons & ( GR_BUTTON_SCROLLUP | GR_BUTTON_SCROLLRIGHT ) ) != 0;
+				if ( !menu && down )
+					Cbuf_AddText( ahead ? "weapnext\n" : "weapprev\n" );
+				else if ( menu )
+					Sys_QueEvent( 0, SE_KEY, ahead ? A_MWHEELUP : A_MWHEELDOWN, down, 0, NULL );
+				break;
+			}
+			if ( e.button.changebuttons & GR_BUTTON_EXTRA )
+				break;
+			// (where the window is, for nothing: the press's place in it and on the display)
+			se_origin_x = e.button.rootx - e.button.x, se_origin_y = e.button.rooty - e.button.y, se_origin_known = 1;
+			// a click in a menu lands where it was pressed, whatever the words said meanwhile (nxkey's presses are not in them)
+			if ( ui )
+				se_menu_pointer( e.button.rootx, e.button.rooty );
 			if ( !menu ) {
 				if ( e.button.changebuttons & GR_BUTTON_L )
 					dragging = down, mouse_known = 0;

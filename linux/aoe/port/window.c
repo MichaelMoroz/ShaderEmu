@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <GLES/segl.h>
 #include <nano-X.h>
 #include "aoe_window.h"
@@ -33,6 +34,12 @@ uint8_t *aoe_win_open(int w, int h, const char *title)
     window = GrNewWindowEx(GR_WM_PROPS_APPWINDOW | (screen.rows < h + 58 ? GR_WM_PROPS_ONTOP : 0), (char *) title, GR_ROOT_WINDOW_ID, -1, -1, w, h, 0);
     GrSelectEvents(window, GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_KEY_UP | GR_EVENT_MASK_BUTTON_DOWN |
         GR_EVENT_MASK_BUTTON_UP | GR_EVENT_MASK_MOUSE_POSITION | GR_EVENT_MASK_CLOSE_REQ | GR_EVENT_MASK_UPDATE | GR_EVENT_MASK_EXPOSURE);
+    {
+        /* the extra buttons: the left hand's stick scrolls the map (docs/machine/input.md, "Game controls") */
+        GR_WM_PROPERTIES props;
+        props.flags = GR_WM_FLAGS_COMMAND, props.props = GR_WMC_BUTTONS, props.background = 1;
+        GrSetWMProperties(window, &props);
+    }
     GrMapWindow(window);
     GrSetFocus(window);
     if (seglInit(window) < 0) { fprintf(stderr, "aoe: this machine has no GPU\n"); exit(1); }
@@ -141,11 +148,28 @@ static int vk_of(GR_KEY k)
     return 0;
 }
 
+/* A controller's notch of the left hand's stick: its arrow key held PAD_HOLD_MS, which scrolls the map
+ * (docs/machine/input.md, "Game controls"). */
+#define PAD_HOLD_MS 120
+static int pad_key;                 /* the arrow held, or 0 */
+static long long pad_until;
+static long long pad_ms(void)
+{
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return t.tv_sec * 1000LL + t.tv_nsec / 1000000;
+}
+
 /* One event, or 0. */
 int aoe_win_event(struct aoe_event *e)
 {
     GR_EVENT g;
     if (!window) return 0;
+    if (pad_key && pad_ms() >= pad_until) {
+        e->kind = AOE_KEY_UP, e->a = pad_key, e->b = 0;
+        pad_key = 0;
+        return 1;
+    }
     for (;;) {
         if (!GrPeekEvent(&g)) return 0;
         GrGetNextEvent(&g);
@@ -159,6 +183,15 @@ int aoe_win_event(struct aoe_event *e)
             return 1;
         case GR_EVENT_TYPE_BUTTON_DOWN:
         case GR_EVENT_TYPE_BUTTON_UP:
+            if (g.type == GR_EVENT_TYPE_BUTTON_DOWN && !pad_key &&
+                (g.button.changebuttons & (GR_BUTTON_SCROLL2LEFT | GR_BUTTON_SCROLL2UP | GR_BUTTON_SCROLL2RIGHT | GR_BUTTON_SCROLL2DN))) {
+                GR_BUTTON b = g.button.changebuttons;
+                pad_key = b & GR_BUTTON_SCROLL2LEFT ? 0x25 : b & GR_BUTTON_SCROLL2UP ? 0x26 : b & GR_BUTTON_SCROLL2RIGHT ? 0x27 : 0x28;
+                pad_until = pad_ms() + PAD_HOLD_MS;
+                e->kind = AOE_KEY_DOWN, e->a = pad_key, e->b = 0;
+                if (getenv("AOE_INPUT_LOG")) fprintf(stderr, "aoe: pad holds key %d\n", pad_key);
+                return 1;
+            }
             e->kind = g.type == GR_EVENT_TYPE_BUTTON_DOWN ? AOE_BUTTON_DOWN : AOE_BUTTON_UP;
             e->a = g.button.x; e->b = g.button.y;
             aoe_win_map(&e->a, &e->b);

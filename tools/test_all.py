@@ -322,6 +322,11 @@ CASES = [
     # the level played with no input for 4,000 frames: host_sum.sh's nine lines (the last two of them here)
     # the demo's first start on the desktop (docs/system/install.md): LucasArts' licence read out of the installer in a window, Accept
     # refused until it is scrolled to its end, the pak unpacked into memory with the bar, and its CRC-32 7-Zip's (239abc19)
+    # the menus' cursor is the pointer (docs/games/jk2.md, "Input"): the pointer's place in the window, not its travel, at the window's place
+    case('jk2-pointer', 'games jk2 desktop long', X + 'if [ -f /usr/share/jk2/jk2demo.exe ]; then (sleep 6; nxkey pagedown; sleep 1; nxkey end; sleep 1; '
+         'nxkey tab enter) & jk2 --unpack; JK2_POINTER_LOG=1 JK2_FRAMES=150 jk2; else echo JK2-NO-DATA; fi', True, wall=1800,
+         more=['--pointer-sweep', '0', '--pointer-circle', '400,300,100'],
+         has=[r'(jk2pointer: (\d+),(\d+) of the display to \d+,\d+ of the menu \(window at \d+,\d+, 640x480\)|JK2-NO-DATA)']),
     case('jk2-install', 'games jk2 desktop', X + 'if [ -f /usr/share/jk2/jk2demo.exe ]; then (sleep 6; nxkey a; sleep 1; nxkey pagedown; sleep 1; nxkey end; '
          'sleep 1; nxkey tab enter) & CABINST_PRINT=1 CABINST_SUMS=1 jk2 --unpack; echo INSTALL=$?; else echo JK2-NO-DATA; fi', True, wall=300,
          has=[r'^(cabinst: licence \\Disk1\\Install\\license\.txt: 3529 bytes, CRC-32 4361c574|JK2-NO-DATA)', r'^(cabinst: licence shown, \d+ lines|JK2-NO-DATA)',
@@ -362,6 +367,25 @@ CASES = [
          True, wall=600, has=[r'openttd: play PL-DONE', r'openttd: play scroll: .* [1-9]\d* made again by workers',
                               r'openttd: play round 1: .*checked \d+, 0 differ \(0 pixels'],
          sums=[(r'openttd: 1 ticks, map 256 x 256, .* sum ([0-9a-f]+)', ['e49e18e3'])]),
+    # chat lines over the scroll in a network game (docs/games/openttd.md, "Chat lines"): six lines added and ended one by one while it
+    # scrolls, every picture against one drawn whole with the lines drawn again over it, on workers and on the first core alone; then
+    # the GPU's blitter, whose lines are records of their own (rvc_cpu draws no list: its run counts the sets of lines and the lists that drew them)
+    case('openttd-chat', 'games openttd', X + ' ; '.join(
+        f'OPENTTD_HOST=1 OPENTTD_PLAY=1 OPENTTD_PLAY_PART=scroll OPENTTD_PLAY_CHAT=1 {e} openttd -g /usr/share/openttd/busy.sav' for e in (
+            'OPENTTD_DRAW=cpu OPENTTD_PLAY_ODD=1 OPENTTD_PAUSE=1 OPENTTD_CHECK=1', 'OPENTTD_DRAW=cpu OPENTTD_PAUSE=1 OPENTTD_CHECK=1 OPENTTD_WORKERS=0', '')),
+         True, wall=600, count=[(r'openttd: play chat: 6 lines added, 6 ended, [1-9]\d pictures with lines, 0 up at the end', 3),
+                               (r'openttd: play round 1: 61 pictures .*checked 6\d, 0 differ \(0 pixels', 2)],
+         has=[r'openttd: play chat: .* 0 up at the end; [1-9]\d* sets of lines made, [1-9]\d* lists drew them'], never=[r'not a network game']),
+    # the same with light pictures (the game running, OPENTTD_CHECK=last: the part's last picture alone checked, after the lines ended)
+    case('openttd-chat-light', 'games openttd', X + 'OPENTTD_HOST=1 OPENTTD_DRAW=cpu OPENTTD_PLAY=1 OPENTTD_PLAY_PART=scroll OPENTTD_PLAY_CHAT=1 OPENTTD_CHECK=last '
+         'openttd -g /usr/share/openttd/busy.sav',
+         True, wall=400, has=[r'openttd: play chat: 6 lines added, 6 ended, [1-9]\d pictures with lines, 0 up at the end',
+                              r'openttd: play round 1: 61 pictures .*checked 1, 0 differ \(0 pixels'], never=[r'not a network game']),
+    # and with the device taken back only every sixth pass, as a world draws a list once a frame (lists that do not wait for the GPU)
+    case('openttd-chat-device', 'games openttd', X + 'OPENTTD_HOST=1 OPENTTD_DRAW=cpu OPENTTD_PLAY=1 OPENTTD_PLAY_PART=scroll OPENTTD_PLAY_CHAT=1 OPENTTD_CHECK=1 '
+         'OPENTTD_PAUSE=1 openttd -g /usr/share/openttd/busy.sav', True, wall=600, env={'RVC_DEVICE_EVERY': '6'},
+         has=[r'openttd: play chat: 6 lines added, 6 ended, [1-9]\d pictures with lines, 0 up at the end',
+              r'openttd: play round 1: 61 pictures .*checked 6\d, 0 differ \(0 pixels'], never=[r'not a network game']),
     # the GPU's blitter: its lists made by the first core and the workers' records (with --races, what the workers store)
     case('openttd-gpu', 'games openttd', X + 'OPENTTD_PLAY=1 OPENTTD_PLAY_SHORT=1 OPENTTD_PAUSE=1 openttd -g /usr/share/openttd/busy.sav',
          True, wall=400, has=[r'openttd: play PL-DONE', r'openttd: play scroll: .* [1-9]\d* made again by workers']),
@@ -521,6 +545,9 @@ CASES = [
               r'^nxedit: read /usr/share/doc/shaderemu/README\.md: \d+ nodes, 526 x \d+; \d+ texts \(\d+ characters, \d+ links\), \d+ boxes; 0 texts past the edge; sum'],
          never=[r'^nxedit: read /tmp/']),
     # the script languages (docs/system/scripts.md): QuickJS's pi example, MicroPython with its built-in modules
+    # the benchmark (docs/apps/bench.md): every test's own check, the GPU's in a window of its own; some 30 s of the guest's
+    case('nxperf', 'programs', X + 'nxperf --cli', True, has=[r'^nxperf: 61 results: 61 OK, 0 FAIL, 0 not run'],
+         never=[r'^nxperf: .* FAIL \(', r'Segmentation fault']),
     case('qjs', 'programs', "qjs /examples/pi.js 50; qjs --std -e 'print([1, 2, 3].map(x => x * x).join(), std.getenv(\"HOME\"))'",
          has=[r'^3\.14159265358979323846264338327950288419716939937510\r?$', r'^1,4,9 /root']),
     case('micropython', 'programs', "micropython -c 'import asyncio, json, os, re, random, time; print(json.dumps({\"a\": [1, 2]}), "
@@ -722,6 +749,37 @@ CASES = [
     case('wm-gpu', 'desktop wm', "nxreg set bar.pinned 'sh -c glxgears'; export UI_ASK_PRINT=1 UI_LAUNCH=print; " + WM + "glxgears >/dev/null & P=$!; sleep 3; nxkey 49,586; sleep 4; nxwintest list; nxkey enter; sleep 6; nxwintest list; "
          "kill -0 $P 2>/dev/null || echo FIRST-GONE; cat /proc/gpu | head -3; nxreg unset bar.pinned", wall=120,
          has=[r'^FIRST-GONE', r'^win \d .*gears']),
+    # more of a mouse and the hands (docs/machine/input.md): the wheel tilted, the left hand's stick as a second wheel, the right hand's,
+    # the side buttons and a hand's trigger, as rvc_cpu's --scroll and --pointer-button give them; a window that asked (GR_WMC_BUTTONS)
+    # has them as button events of their own, evdev has REL_HWHEEL, REL_DIAL, REL_MISC and BTN_SIDE, BTN_EXTRA, BTN_TRIGGER_HAPPY3
+    case('input-more', 'desktop', X + 'nxinput 6', wall=120,
+         more=['--scroll', '5,x,2', '--scroll', '5.5,ly,-1', '--scroll', '5.6,lx,1', '--scroll', '6,ry,1', '--pointer-button', '0x419,6.5,7'],
+         has=[r'^nx down 0x200 ', r'^nx down 0x2000 ', r'^nx down 0x8000 ', r'^nx down 0x20 ', r'^nx down 0xc00 ', r'^nx up 0xc00 ',
+              r'^ev rel 6 2', r'^ev rel 7 -1', r'^ev rel 9 1', r'^ev rel 8 1', r'^ev key 0x113 1', r'^ev key 0x114 1', r'^ev key 0x2c2 1',
+              r'^word 0x419', r'^nxinput done']),
+    # and a window that did not ask has the usual buttons alone: most programs take any button that goes down for a click
+    case('input-plain', 'desktop', X + 'nxinput 6 plain', wall=120,
+         more=['--scroll', '5,x,2', '--scroll', '5.5,ly,-1', '--scroll', '6,ry,1', '--pointer-button', '0x419,6.5,7'],
+         has=[r'^nx down 0x20 ', r'^nx down 0x1 ', r'^ev rel 6 2', r'^nxinput done'], never=[r'^nx (down|up) 0x(200|2000|c00|c01) ']),
+    # the desktop's games played by a controller (docs/machine/input.md, "Game controls"): the hands' bits (0x80 told, 0x100 the left
+    # trigger, 0x400 the right, 0x8000 B, 0x10000 A) and the sticks' notches, with the pointer over each window (WM places it at 40,20)
+    case('pad-tetris', 'desktop games', X + 'NXTETRIS_PRINT=1 NXTETRIS_SEED=1 nxtetris & sleep 4; nxkey enter; sleep 10; killall nxtetris', wall=120,
+         more=['--pointer-sweep', '0', '--pointer-circle', '400,300,0', '--scroll', '12,lx,-2', '--scroll', '12.5,ly,-1', '--scroll', '13,y,1',
+               '--scroll', '13.3,x,-1', '--pointer-button', '0x80,7,16', '--pointer-button', '0x10000,14,14.3'],
+         has=[r'^nxtetris: pad left: piece \d at 2,', r'^nxtetris: pad left: piece \d at 1,', r'^nxtetris: pad down: .* score 1$',
+              r'^nxtetris: pad cw: .* turned 1,', r'^nxtetris: pad ccw: .* turned 0,', r'^nxtetris: pad drop: ']),
+    case('pad-pinball', 'desktop games', X + 'NXPINBALL_PRINT=1 nxpinball & sleep 4; nxkey space; sleep 8; killall nxpinball', wall=120,
+         more=['--pointer-button', '0x80,5,20', '--pointer-button', '0x100,8,8.5', '--pointer-button', '0x400,9,9.5', '--pointer-button', '0x10000,10,11'],
+         has=[r'^nxpinball: left flipper held', r'^nxpinball: left flipper let go', r'^nxpinball: right flipper held', r'^nxpinball: plunger held',
+              r'^nxpinball: plunger let go']),
+    case('pad-mines', 'desktop games', X + 'NXMINE_PRINT=1 NXMINE_SEED=5 nxmine & sleep 11; killall nxmine', wall=120,
+         more=['--pointer-sweep', '0', '--pointer-circle', '120,150,0', '--pointer-button', '0x80,5,20', '--scroll', '8,lx,2', '--scroll', '8.3,ly,-1',
+               '--pointer-button', '0x10000,9,9.3'],
+         has=[r'^nxmine: open: 9x9 10 mines, 18 opened']),
+    case('pad-chess', 'desktop games', X + 'NXCHESS_PRINT=1 NXCHESS_WORKERS=0 NXCHESS_MS=200 nxchess & sleep 14; killall nxchess', wall=120,
+         more=['--pointer-sweep', '0', '--pointer-circle', '200,200,0', '--pointer-button', '0x80,5,20', '--pointer-button', '0x10000,6,6.3',
+               '--pointer-button', '0x10000,7,7.3', '--scroll', '8,ly,2', '--pointer-button', '0x10000,9,9.3', '--pointer-button', '0x8000,13,13.3'],
+         has=[r'^nxchess: played: 1 moves, last e4 e2e4', r'^nxchess: undo: 0 moves']),
     # a pointer that has no edge (a beam: docs/system/nanox.md, "A drag that leaves the screen"): its moves stop short of the edge and the button comes up there,
     # after a step that would have reached it. A mouse's slow last steps to the same place, or a wait there, do not snap
     case('wm-snap-beam', 'desktop wm', WM + "nxwintest plain a & sleep 2; nxkey hold:150,32 to:400,100 to:690,100 to:750,100 drop:750,100 1000; nxwintest list", wall=120,

@@ -8,6 +8,7 @@
 #include "ui_menu.h"
 #include "ui_ask.h"
 #include "ui_single.h"
+#include "ui_pad.h"
 #include "mcw.h"
 #include "mcwx.h"
 #include <stdint.h>
@@ -735,6 +736,7 @@ bench_book(void)
 /* ---- the window ---- */
 
 static GR_WINDOW_ID window;
+static struct ui_pad pad;	/* a controller: the left stick moves the square, A picks and drops, B takes back (docs/machine/input.md, "Game controls") */
 static int printing;
 static int level = 3, play_as = 0, flipped;	/* play_as: 0 white, 1 black, 2 two players, 3 watch */
 static int picked = -1, last_from = -1, last_to = -1, drag_from = -1;
@@ -1355,6 +1357,10 @@ game_event(GR_EVENT *event)
 	case GR_EVENT_TYPE_BUTTON_DOWN:
 		if (event->button.wid != window)
 			break;
+		if ((i = ui_pad_arrow(event)) != 0) {
+			key(i);
+			break;
+		}
 		if (event->button.y < MENU_H) {
 			for (i = 0; i < 4; i++)
 				if (event->button.x >= menu_x[i] && event->button.x < menu_x[i + 1])
@@ -1419,6 +1425,7 @@ run_window(void)
 	game_new(getenv("NXCHESS_FEN") ? getenv("NXCHESS_FEN") : start_fen);
 	window = GrNewWindowEx(UI_FIXED, "Chess", GR_ROOT_WINDOW_ID, -1, -1, WIN_W, WIN_H, UI_FACE);
 	GrSelectEvents(window, EVENTS);
+	ui_pad_ask(window);
 	GrMapWindow(window);
 	GrSetFocus(window);
 	if (printing) {
@@ -1448,7 +1455,15 @@ run_window(void)
 			engine_start();
 			continue;
 		}
-		GrGetNextEvent(&event);
+		ui_pad_poll(&pad);
+		if ((i = ui_pad_key(&pad, ' ', 'u', 0)) != 0)
+			key(i);
+		if (pad.held & INPUT_HANDS) {	/* (a headset's buttons are no event: looked at ten times a second) */
+			GrGetNextEventTimeout(&event, 100);
+			if (event.type == GR_EVENT_TYPE_TIMEOUT)
+				continue;
+		} else
+			GrGetNextEvent(&event);
 		game_event(&event);
 	}
 }

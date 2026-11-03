@@ -44,7 +44,7 @@ public class EmuGamepad : UdonSharpBehaviour
     private bool[] down = new bool[Held];
     private int[] code = new int[Held];
     private float px, py;                   // where the pointer is
-    private float turned;                   // notches of the wheel not sent yet
+    private float turned, turnedAcross;     // notches of the wheel not sent yet, up and across
     private float phase;                    // where in a pulse a slight turn is
     private float bothGrips;                // seconds both grips have been held
     private float[] alone = new float[2];   // seconds a grip has been held without the other; -1: it was with it
@@ -313,13 +313,19 @@ public class EmuGamepad : UdonSharpBehaviour
             // (a beam on the room's screen has the pointer: EmuPointer)
             if (pointer.OnScreen(0) || pointer.OnScreen(1)) { px = machine.pointerX; py = machine.pointerY; }
             else Point(!rightGrip, fire, other);
-            // the right grip held: the right stick is the wheel
+            // the right grip held: the right stick is the right hand's wheel, up and across
             turned = rightGrip && Mathf.Abs(lookY) > 0.25f ? turned + lookY * 12f * Time.deltaTime : 0f;
-            int notches = (int)turned;
+            turnedAcross = rightGrip && Mathf.Abs(lookX) > 0.25f ? turnedAcross + lookX * 12f * Time.deltaTime : 0f;
+            int notches = (int)turned, across = (int)turnedAcross;
             if (notches != 0)
             {
                 turned -= notches;
-                machine.Wheel(notches);
+                machine.Scroll(EmuMachine.WheelOfRightHand, false, notches);
+            }
+            if (across != 0)
+            {
+                turnedAcross -= across;
+                machine.Scroll(EmuMachine.WheelOfRightHand, true, across);
             }
             Set(Forward, moveY > 0.5f);
             Set(Back, moveY < -0.5f);
