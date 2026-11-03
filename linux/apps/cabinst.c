@@ -207,20 +207,25 @@ lic_ask_window(void)
 	GrRaiseWindow(lic.w);
 	GrSetFocus(lic.w);
 	ui_framed();
-	while (answer < 0) {
+	/* (drawn now: ui_framed drops the events it takes, the first exposure too, which left the window bare) */
+	event.type = GR_EVENT_TYPE_EXPOSURE, event.general.wid = lic.w;
+	for (int first = 1; answer < 0; first = 0) {
 		int ch, press = -1;
 
-		GrGetNextEvent(&event);
+		if (!first)
+			GrGetNextEvent(&event);
 		if (event.general.wid != lic.w)
 			continue;
 		switch (event.type) {
 		case GR_EVENT_TYPE_EXPOSURE:
 			lic_draw();
-			ui_window_origin(lic.w, &x, &y);
-			/* (where a test clicks: the buttons' middles on the screen) */
-			say("licence shown, %d lines, %d at a time; accept at %d,%d, decline at %d,%d", lic.lines, lic.shown,
-			    x + lic.accept_x + LIC_BUTTON_W / 2, y + LIC_BUTTON_Y + LIC_BUTTON_H / 2, x + lic.decline_x + LIC_BUTTON_W / 2,
-			    y + LIC_BUTTON_Y + LIC_BUTTON_H / 2);
+			if (first) {
+				ui_window_origin(lic.w, &x, &y);
+				/* (where a test clicks: the buttons' middles on the screen) */
+				say("licence shown, %d lines, %d at a time; accept at %d,%d, decline at %d,%d", lic.lines, lic.shown,
+				    x + lic.accept_x + LIC_BUTTON_W / 2, y + LIC_BUTTON_Y + LIC_BUTTON_H / 2,
+				    x + lic.decline_x + LIC_BUTTON_W / 2, y + LIC_BUTTON_Y + LIC_BUTTON_H / 2);
+			}
 			break;
 		case GR_EVENT_TYPE_CLOSE_REQ:
 			answer = 0;

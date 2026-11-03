@@ -638,7 +638,7 @@ struct stream {
 	struct part *p;		/* parts' records, 64 bytes each */
 	struct made *made;	/* 48 bytes each */
 	struct dec *dec;	/* a decoder for each part */
-	uint16_t *rings;	/* WINDOW values each */
+	uint16_t **ring_at;	/* each part's values (ring_of of them; part 0's unused) */
 	uint8_t *after;		/* WINDOW bytes each: the window after the part */
 	uint32_t *offset, *wlen;
 	const uint8_t **window;
@@ -656,6 +656,7 @@ struct stream {
 
 /* A part's values, how many it keeps. The last parts keep twice as many: a final block is never looked for, and the part before it makes both. */
 #define LONGER 4
+#define ONE_PIECE (1u << 20)	/* the most the room is asked for in one piece, its rings with it */
 static inline uint32_t
 ring_of(const struct stream *s, uint32_t k)
 {
@@ -665,9 +666,33 @@ ring_of(const struct stream *s, uint32_t k)
 static inline uint16_t *
 values_of(const struct stream *s, uint32_t k)
 {
-	uint32_t first = s->parts > LONGER ? s->parts - LONGER : 0;
+	return s->ring_at[k];
+}
 
-	return s->rings + (size_t)k * s->ring + (s->ring > WINDOW && k > first ? (size_t)(k - first) * s->ring : 0);
+/* The rings in the room's one piece, each after the one before */
+static void
+rings_in(struct stream *s, uint16_t *rings)
+{
+	uint32_t k, first = s->parts > LONGER ? s->parts - LONGER : 0;
+
+	for (k = 0; k < s->parts; k++)
+		s->ring_at[k] = rings + (size_t)k * s->ring + (s->ring > WINDOW && k > first ? (size_t)(k - first) * s->ring : 0);
+}
+
+/* The rings apart, each a mapping of its own (1 up): whether all were mapped */
+static int
+rings_apart(struct stream *s)
+{
+	uint32_t k, j;
+
+	s->ring_at[0] = NULL;
+	for (k = 1; k < s->parts; k++)
+		if (!(s->ring_at[k] = m_map(ring_of(s, k) * 2))) {
+			for (j = 1; j < k; j++)
+				m_unmap(s->ring_at[j], ring_of(s, j) * 2);
+			return 0;
+		}
+	return 1;
 }
 
 /* Part k's bit range ends here. */
@@ -883,12 +908,13 @@ take_room(uint8_t **room, uint32_t bytes)
 
 static const char *
 inflate_stream(const void *in, uint32_t in_size, void *out, uint32_t out_size, uint32_t *made, uint32_t *used, uint32_t *crc,
-	       int workers, int no_crc)
+	       int workers, int no_crc, int rest)
 {
 	struct stream s;
 	mcw_for_opts o;
-	uint32_t parts, k, c, total = 0, room_bytes, sum = 0, chain = 0;
+	uint32_t parts, k, c, total = 0, room_bytes, base, sum = 0, chain = 0;
 	uint8_t *room, *at;
+	int apart = 0;
 	const char *why = NULL;
 	int got;
 
@@ -900,8 +926,10 @@ inflate_stream(const void *in, uint32_t in_size, void *out, uint32_t out_size, u
 	 * every block is then the first of some part's bits, and no part makes two. A PNG's blocks
 	 * are some 15 to 40 KB apart: 16 KB, or a part goes on into a second block and is the longest. */
 	parts = in_size / (no_crc ? 16384 : 32768);
-	got = m_workers_begin(parts > 1 ? (int)parts - 1 < workers ? (int)parts - 1 : workers : 0);
-	parts = parts < (uint32_t)got + 1 ? parts : (uint32_t)got + 1;
+	got = m_workers_begin(parts > 1 ? (int)parts - !rest < workers ? (int)parts - !rest : workers : 0);
+	/* (rest: the first core takes no part, it rests until the workers are through; a part a worker) */
+	rest = rest && got > 0;
+	parts = parts < (uint32_t)got + !rest ? parts : (uint32_t)got + !rest;
 	if (parts < 1)
 		parts = 1;
 	s.parts = parts;
@@ -911,12 +939,35 @@ inflate_stream(const void *in, uint32_t in_size, void *out, uint32_t out_size, u
 	if (no_crc)
 		while (s.ring < out_size / parts * 2 && (uint64_t)(parts + LONGER) * s.ring * 4 <= 32u << 20)
 			s.ring <<= 1;
-	room_bytes = parts * (uint32_t)(sizeof(struct part) + sizeof(struct made) + sizeof(struct dec) + 16 * 5 + 64) + (parts - 1) * WINDOW + (parts + LONGER) * s.ring * 2 + 64;
-	if (!(room = m_map(room_bytes))) {
+	base = parts * (uint32_t)(sizeof(struct part) + sizeof(struct made) + sizeof(struct dec) + sizeof(void *) + 16 * 6 + 64) + (parts - 1) * WINDOW + 64;
+	/* (a machine without an MMU may have no room of that many bytes in one piece, a mapping there taking a block of a power
+	 * of two pages: the rings each a mapping of their own, else half as long, down to the window, and a part that makes
+	 * more than its ring is inflated again) */
+	for (;;) {
+		room_bytes = base + (parts + LONGER) * s.ring * 2;
+		/* (in one piece only when that is small: a large one is a block of twice as many pages to look for, and
+		 * the kernel's message when it is not there) */
+		if ((room_bytes <= ONE_PIECE || parts <= 1) && (room = m_map(room_bytes)))
+			break;
+		if (parts > 1 && (room = m_map(base))) {
+			s.ring_at = (uint16_t **)room;
+			if (rings_apart(&s)) {
+				room_bytes = base, apart = 1;
+				break;
+			}
+			m_unmap(room, base);
+			room = NULL;
+		}
+		if (s.ring <= WINDOW)
+			break;
+		s.ring >>= 1;
+	}
+	if (!room) {
 		m_workers_end();
 		return "not enough memory";
 	}
 	at = room;
+	s.ring_at = take_room(&at, parts * (uint32_t)sizeof(void *));
 	s.p = take_room(&at, parts * (uint32_t)sizeof(struct part));
 	s.made = take_room(&at, parts * (uint32_t)sizeof(struct made));
 	s.dec = take_room(&at, parts * (uint32_t)sizeof(struct dec));
@@ -925,14 +976,16 @@ inflate_stream(const void *in, uint32_t in_size, void *out, uint32_t out_size, u
 	s.window = take_room(&at, parts * (uint32_t)sizeof(void *));
 	s.next = take_room(&at, parts * 4);
 	s.list = take_room(&at, parts * 4);
-	s.rings = (uint16_t *)take_room(&at, (parts + LONGER) * s.ring * 2);	/* (part 0's goes unused) */
 	s.after = (uint8_t *)take_room(&at, (parts - 1) * WINDOW) - WINDOW;
+	if (!apart)
+		rings_in(&s, (uint16_t *)take_room(&at, (parts + LONGER) * s.ring * 2));	/* (part 0's goes unused) */
 	memset(s.p, 0, parts * sizeof(struct part));
 	memset((void *)s.window, 0, parts * sizeof(void *));
 
 	memset(&o, 0, sizeof o);
 	o.workers = got;
 	o.grain = 1;
+	o.first_idle = rest;
 	mcw_for_opt(parts, parts_job, &s, &o);
 
 	/* the chain: from part 0, each to the part that starts where it ended, each window from the one before */
@@ -975,6 +1028,7 @@ inflate_stream(const void *in, uint32_t in_size, void *out, uint32_t out_size, u
 				w.workers = got;
 				w.out_bytes = 1;	/* (each core whole 16 bytes of it) */
 				w.grain = 2048;
+				w.first_idle = rest;
 				s.window_bad = 0;
 				mcw_for_opt(WINDOW, window_job, &s, &w);
 				if (s.window_bad) {
@@ -1049,6 +1103,9 @@ inflate_stream(const void *in, uint32_t in_size, void *out, uint32_t out_size, u
 		*made = why ? 0 : total;
 	if (crc)
 		*crc = sum;
+	if (apart)
+		for (k = 1; k < parts; k++)
+			m_unmap(s.ring_at[k], ring_of(&s, k) * 2);
 	m_unmap(room, room_bytes);
 	m_workers_end();
 	return why;
@@ -1058,14 +1115,21 @@ const char *
 media_inflate_stream(const void *in, uint32_t in_size, void *out, uint32_t out_size, uint32_t *made, uint32_t *used, uint32_t *crc,
 		     int workers)
 {
-	return inflate_stream(in, in_size, out, out_size, made, used, crc, workers, 0);
+	return inflate_stream(in, in_size, out, out_size, made, used, crc, workers, 0, 0);
+}
+
+/* The same with the first core resting while the workers inflate (mcw_rest): it makes no part itself. */
+const char *
+m_inflate_stream_rest(const void *in, uint32_t in_size, void *out, uint32_t out_size, uint32_t *made, uint32_t *crc, int workers)
+{
+	return inflate_stream(in, in_size, out, out_size, made, NULL, crc, workers, crc == NULL, 1);
 }
 
 /* The same with no CRC-32 (a PNG's). */
 const char *
 m_inflate_stream_plain(const void *in, uint32_t in_size, void *out, uint32_t out_size, uint32_t *made, int workers)
 {
-	return inflate_stream(in, in_size, out, out_size, made, NULL, NULL, workers, 1);
+	return inflate_stream(in, in_size, out, out_size, made, NULL, NULL, workers, 1, 0);
 }
 
 /* ---------------------------------------------------------------- MSZip: a cabinet's folder */

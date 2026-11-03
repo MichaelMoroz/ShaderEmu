@@ -40,6 +40,8 @@ void m_scratch_done(int slot, void *memory, uint32_t bytes);
 
 /* One deflate stream on every core, without its CRC-32 (m_inflate.c): what `made` says is all of it, or a reason. */
 const char *m_inflate_stream_plain(const void *in, uint32_t in_size, void *out, uint32_t out_size, uint32_t *made, int workers);
+/* the same (crc NULL: no CRC-32, as the plain one) with the first core resting, taking no part */
+const char *m_inflate_stream_rest(const void *in, uint32_t in_size, void *out, uint32_t out_size, uint32_t *made, uint32_t *crc, int workers);
 
 /* The output's pixel for red, green, blue, alpha (3 or 4 channels, either order). */
 static inline void
@@ -80,6 +82,7 @@ uint32_t m_jpeg_parts_room(uint32_t size);
 uint32_t m_jpeg_parts(const uint8_t *f, uint32_t size, struct media_image *out, void *room);
 int m_jpeg_part(void *room, uint32_t from, uint32_t to, int clear);
 const char *m_jpeg_decode_alone(const uint8_t *f, uint32_t size, struct media_image *out, void *room);
+const char *m_jpeg_decode_alone_shrunk(const uint8_t *f, uint32_t size, struct media_image *out, void *room, int shrink);
 const char *m_jpeg_decode_shrunk(const uint8_t *f, uint32_t size, struct media_image *out, int workers, int shrink);
 const char *m_gif_probe(const uint8_t *f, uint32_t size, struct media_info *info);
 const char *m_gif_decode(const uint8_t *f, uint32_t size, struct media_image *out, int workers);

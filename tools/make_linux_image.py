@@ -246,16 +246,20 @@ def desktop_shortcuts(extra):
                 columns.setdefault(folder, []).append((label, 'name=%s\nrun=%s\n' % (label, run)))
     # the documentation (documentation()) in a column of its own, the last: no other icon moves for it
     columns.setdefault(' docs', []).append(('Docs', 'name=Docs\nicon=documents\nrun=nxfiles %s\n' % DOCS))
-    files, places, column = [], [], 0
+    # 7 icons down a column: what an 800 x 600 screen has room for above its bar. A folder goes on
+    # under the last one when it fits in what that column has left (a column a folder made 11
+    # columns of 55 icons, the last past the screen's edge, 10 columns' room).
+    files, places, at = [], [], 0
     for folder in columns:
-        for row, (label, text) in enumerate(columns[folder]):
-            # 7 icons down a column: what an 800 x 600 screen has room for above its bar
+        if at % 7 and at % 7 + len(columns[folder]) > 7:
+            at += 7 - at % 7
+        for label, text in columns[folder]:
             name = label.replace('/', '-') + '.app'
             if any(name == other for _, _, other in files):
                 raise SystemExit('two shortcuts on the desktop would be called %s' % name)
-            places.append('%d %d %s\n' % ((column + row // 7) * 76, 4 + row % 7 * 70, name))
+            places.append('%d %d %s\n' % (at // 7 * 76, 4 + at % 7 * 70, name))
             files.append((text.encode(), DESKTOP, name))
-        column += (len(columns[folder]) + 6) // 7
+            at += 1
     files.append((''.join(places).encode(), DESKTOP, '.places'))
     return files
 

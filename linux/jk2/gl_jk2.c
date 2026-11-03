@@ -51,7 +51,7 @@ static void render_open(void) {
     const char* how = getenv("JK2_RENDER");
     rw0.mode = 0;
     if (how && !strcmp(how, "core")) return;
-    int n = mcw_open(getenv("JK2_WORKERS") ? atoi(getenv("JK2_WORKERS")) : 16);
+    int n = mcw_open(getenv("JK2_WORKERS") ? atoi(getenv("JK2_WORKERS")) : 32);   // (as sys_shaderemu.cpp's: the first to open decides)
     if (n <= 0) return;
     mcw_touch_code(_start, (unsigned)(etext - _start));   // (a worker stops at a page of code no core has run)
     mcw_touch(render_stack, RENDER_STACK);

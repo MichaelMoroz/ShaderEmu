@@ -244,6 +244,14 @@ static void words_from(uint32_t* to, const uint8_t* p, int n, unsigned format, i
     }
 }
 
+// RGBA bytes made the GPU's words in place, as words_from makes them (opaque: as OPAQUE_RGBA), on any core: for a
+// picture a worker prepares whole (Jedi Outcast's tr_image.cpp, se_prepare), then given to glTexImage2D as GL_SE_WORDS.
+#define GL_SE_WORDS 0x5E57   // (a type of ours: the pixels are words already; the format says whether it has holes)
+void hlglWordsInPlace(uint8_t* rgba, int n, int opaque, int* holes) {
+    uint32_t* to = (uint32_t*)rgba;
+    for (int i = 0; i < n; i++, rgba += 4) to[i] = word_of(rgba[0], rgba[1], rgba[2], opaque ? 255 : rgba[3], holes);
+}
+
 // words_from in shares of 4-word multiples, on workers and this core, for a large picture.
 #define WORD_JOBS 8
 static struct { uint32_t* to; const uint8_t* from; unsigned format; int step, per; int holes[WORD_JOBS][4] __attribute__((aligned(16))); } words_job;
@@ -290,7 +298,7 @@ static void s_glBindTexture(unsigned target, unsigned name) {
 static void s_glTexImage2D(unsigned target, int lvl, int internal, int width, int height, int border, unsigned format,
                            unsigned type, const void* pixels) {
     (void)target, (void)border;
-    if (lvl != 0 || !bound || type != GL_UNSIGNED_BYTE || width <= 0 || height <= 0) return;
+    if (lvl != 0 || !bound || (type != GL_UNSIGNED_BYTE && type != GL_SE_WORDS) || width <= 0 || height <= 0) return;
     texture* t = &textures[bound];
     if (t->kind == TILES) return;   // (ref/gl's copy in words of what hlglTexIndexed took)
     uint32_t* to = (uint32_t*)texture_room(WORDS, width, height, (uint32_t)width * height * 4);
@@ -299,8 +307,16 @@ static void s_glTexImage2D(unsigned target, int lvl, int internal, int width, in
     t->opaque = internal == 1 || internal == 3 || internal == GL_RGB || internal == GL_LUMINANCE ||
         (internal >= 0x803F && internal <= 0x8042) || (internal >= 0x804F && internal <= 0x8054);   // GL_LUMINANCE4..16, GL_RGB4..16
     if (t->opaque && format == GL_RGBA) format = OPAQUE_RGBA;
-    if (pixels) words_from_shared(to, pixels, width * height, format, &t->holes);    else memset(to, 0, t->bytes);
+    if (type == GL_SE_WORDS && pixels) memcpy(to, pixels, (size_t)width * height * 4), t->holes = format != 0;
+    else if (pixels) words_from_shared(to, pixels, width * height, format, &t->holes);    else memset(to, 0, t->bytes);
     if (log_uploads) fprintf(stderr, "hlgl: words %d %dx%d holes %d internal %x format %x\n", bound, width, height, t->holes, internal, format);
+    static int tex_sum = -1;   // (HLGL_TEX_SUM=1: a line a texture made, its name, size, holes and its words' FNV-1a sum)
+    if (tex_sum < 0) tex_sum = getenv("HLGL_TEX_SUM") != NULL;
+    if (tex_sum) {
+        uint32_t h = 2166136261u;
+        for (int i = 0; i < width * height; i++) h = (h ^ to[i]) * 16777619u;
+        printf("hlgltex: %d %dx%d holes %d %08x\n", bound, width, height, t->holes, h);
+    }
 }
 // The worker that writes the light maps' atlas now (hlglLightBlock), waited for before this core does.
 static int atlas_writer;

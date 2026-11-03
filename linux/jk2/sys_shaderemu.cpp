@@ -253,6 +253,7 @@ static unsigned long long se_instructions( void )
 	return 0;
 #endif
 }
+unsigned long long SE_Instructions( void ) { return se_instructions(); }   // (this core's, for the files' log of files.cpp)
 static unsigned long long se_window_instructions;
 
 void WIN_Present( window_t *window )
@@ -842,6 +843,7 @@ void SNDDMA_Activate( qboolean activate ) {}
 // the engine decodes and mixes as before.
 #ifdef SE_WINDOW
 #include "media.h"
+#include <zlib.h>
 #include "mcw.h"
 #include "mcwx.h"
 
@@ -892,7 +894,7 @@ int SE_MusicOn( void )
 	se_music_state = 0;
 	if ( m && !strcmp( m, "engine" ) )
 		return 0;
-	se_music_workers = mcw_open( env_int( "JK2_WORKERS", 16 ) );
+	se_music_workers = mcw_open( env_int( "JK2_WORKERS", 32 ) );
 	if ( se_music_workers <= 0 ) {
 		Com_Printf( "jk2: no workers: the music decoded by this core\n" );
 		return 0;
@@ -1087,7 +1089,715 @@ void SE_MixSettle( void )
 {
 	jk2MixSettle();
 }
+
+// The workers opened for the load (JK2_WORKERS, 32), at the first; 0 for none. A team of libmedia's takes at most
+// JK2_TEAM of them (16: a team over more costs this core more than it saves it), a large pak entry's split inflate all
+// (se_wide_workers), the pictures and sounds side by side any that has nothing to do.
+static int se_opened = -1;
+static int se_wide_workers( void )
+{
+	if ( se_opened < 0 ) {
+		se_opened = mcw_open( env_int( "JK2_WORKERS", 32 ) );
+		if ( se_opened > 0 )
+			mcw_touch_code( _start, (unsigned)( etext - _start ) );   // (a worker stops at a page of code no core has run)
+		else
+			se_opened = 0;
+	}
+	return mcw_on_worker() ? 0 : se_opened;
+}
+static int se_load_workers( void )
+{
+	static int team = -1;
+	if ( team < 0 )
+		team = env_int( "JK2_TEAM", 16 );
+	int workers = se_wide_workers();
+	return workers < team ? workers : team;
+}
+
+// Whether JK2_<what> asks for the engine's own decoder (the way before).
+static int se_engine_decodes( const char *what )
+{
+	const char *how = getenv( what );
+	return how && !strcmp( how, "engine" );
+}
+
+// A sound effect's MP3 decoded by libmedia on the workers, for S_LoadSound (docs/games/jk2.md, "The load"): the level's
+// load decoded about 220 of them on this core, one after another, 1.65 billion instructions. Only where libmedia has the
+// same rate and channels and the engine's length to a frame, or -1 and the engine decodes it.
+// JK2_SOUNDS=engine is the way before.
+int SE_SoundMP3( const void *data, int size, void *out, int bytes, int rate, int channels )
+{
+	static int engine = -1;
+	if ( engine < 0 )
+		engine = se_engine_decodes( "JK2_SOUNDS" );
+	int workers = engine ? 0 : se_load_workers();
+	if ( workers <= 0 || bytes <= 0 || channels < 1 )
+		return -1;
+	const char *why;
+	struct media_audio *a = media_audio_open( data, (uint32_t)size, &why );
+	if ( !a )
+		return -1;
+	struct media_audio_info info;
+	media_audio_get_info( a, &info );
+	// the engine counts a frame libmedia's table leaves out (one that decodes to nothing) or the other way round: the
+	// length stays the engine's (ICARUS waits for a sound's end), a missing frame silence, a frame more cut off
+	uint32_t frames = (uint32_t)bytes / ( 2u * (uint32_t)channels ), some = info.frames < frames ? info.frames : frames;
+	int16_t *pcm = NULL;
+	int done = -1;
+	if ( info.rate == rate && info.channels == channels && info.frames + 1152u >= frames && frames + 1152u >= info.frames &&
+	     frames * 2u * (uint32_t)channels == (uint32_t)bytes && !posix_memalign( (void **)&pcm, 16, (size_t)bytes ) ) {
+		if ( media_audio_decode_all( a, pcm, some, workers ) == some ) {
+			memcpy( out, pcm, (size_t)some * 2u * (uint32_t)channels );
+			memset( (char *)out + (size_t)some * 2u * (uint32_t)channels, 0, (size_t)( frames - some ) * 2u * (uint32_t)channels );
+			done = bytes;
+		}
+		free( pcm );
+	}
+	media_audio_close( a );
+	return done;
+}
+
+// A pak's large entry inflated by libmedia over the workers, for minizip's unzReadCurrentFile when the whole of it is read
+// at once (docs/games/jk2.md, "The load"): the level's animations are 9.6 MB, 202 million instructions of zlib's on this
+// core. As a PNG's stream (m_inflate_stream_plain: the output's size known, a part's values kept, no second inflate, no
+// CRC-32); with JK2_PAK_CRC=1 (`crc` given) media_inflate_stream, which makes the CRC. Under JK2_PAK_MIN packed bytes
+// (65,536) zlib, which is faster on this core than libmedia's inflate. 0, or -1 and zlib inflates it; `in` NULL asks. JK2_PAK=engine is
+// the way before.
+extern "C" const char *m_inflate_stream_plain( const void *in, uint32_t in_size, void *out, uint32_t out_size, uint32_t *made,
+					       int workers );
+extern "C" const char *m_inflate_stream_rest( const void *in, uint32_t in_size, void *out, uint32_t out_size, uint32_t *made,
+					      uint32_t *crc, int workers );
+
+static void se_files_reap( int all );	// (files read ahead: below)
+extern "C" int SE_PakInflate( const void *in, unsigned in_size, void *out, unsigned out_size, unsigned *crc )
+{
+	static int engine = -1;
+	static unsigned least;
+	if ( engine < 0 ) {
+		engine = se_engine_decodes( "JK2_PAK" );
+		least = (unsigned)env_int( "JK2_PAK_MIN", 65536 );
+	}
+	if ( engine || in_size < least || se_load_workers() <= 0 )
+		return -1;
+	if ( !in )
+		return 0;	// (asked whether it would take it, before the bytes are read)
+	uint32_t made = 0;
+	se_files_reap( 1 );	// (every worker for the team)
+	mcw_touch( out, out_size );   // (stored to by this core first: the workers write it)
+	// (JK2_PAK_REST=0: this core takes a part of each as the workers do, where it rests until they are through)
+	static int rest = env_int( "JK2_PAK_REST", 1 );
+	const char *why = rest ? m_inflate_stream_rest( in, in_size, out, out_size, &made, crc, se_wide_workers() )
+		: crc ? media_inflate_stream( in, in_size, out, out_size, &made, NULL, crc, se_wide_workers() )
+		      : m_inflate_stream_plain( in, in_size, out, out_size, &made, se_wide_workers() );
+	if ( getenv( "JK2_PAK_LOG" ) )
+		printf( "jk2: pak entry of %u packed bytes, %u made: %s\n", in_size, out_size,
+			why ? why : made != out_size ? "short: zlib's" : "libmedia's" );
+	return !why && made == out_size ? 0 : -1;
+}
+
+// ---- pictures decoded side by side (rd-vanilla's R_FindImageFile, tr_image.cpp; docs/games/jk2.md, "The load") ----
+// A picture's job: its file's bytes as they lie in the pak (deflated or stored), inflated into `plain` and decoded into
+// `rgba` on a worker that has nothing to do (mcw_try_call: libmedia's teams leave such a worker out), with rooms of that
+// worker's own. What a worker stores to is the picture's memory and its rooms alone; the record is read only.
+extern "C" const char *m_jpeg_decode_alone_shrunk( const uint8_t *f, uint32_t size, struct media_image *out, void *room, int shrink );
+extern "C" uint32_t m_jpeg_room( void );
+static void ( *se_tga_pixels )( const void *file, unsigned char *rgba );	// (rd-common's SE_TGAPixels, which the renderer gives)
+// (rd-vanilla's se_prepare, what Upload32 makes of the pixels before their upload: the samples, 3 or 4, + 8 made the
+// GPU's words and + 16 with holes; NULL for none)
+static int ( *se_prepare )( unsigned char *rgba, int width, int height, int halvings, int lightscale );
+
+#define SE_PICTURES 256
+struct __attribute__((aligned(16))) se_picture_t {
+	const void *raw;
+	uint32_t raw_len;
+	int method;		// 8 deflated, 0 stored
+	void *plain;		// the inflated file's room (deflated)
+	uint32_t len;
+	int kind, shrink;	// 1 JPEG (2^shrink times smaller), 2 TGA
+	int width, height;	// the decoded picture's
+	void *rgba;
+	int halvings, lightscale;	// se_prepare's
+	int handle;		// this core's: the call, 0 for a free record
+};
+static se_picture_t se_pictures[SE_PICTURES];
+static struct se_rooms_t { void *inflate, *jpeg, *mp3; } se_rooms[256];
+static void *se_head_room;
+static int se_rooms_made;	// (every worker's rooms: SE_PicturesOn)
+static void *se_head_room_mp3( void )
+{
+	static void *room;
+	if ( !room && posix_memalign( &room, 16, media_mp3_room() ) )
+		room = NULL;
+	return room;
+}
+
+static uint32_t se_picture_job( uint32_t a0, uint32_t a1 )
+{
+	(void)a1;
+	const se_picture_t *p = (const se_picture_t *)(uintptr_t)a0;
+	const se_rooms_t *room = &se_rooms[mcw_self()];
+	const uint8_t *data = (const uint8_t *)p->raw;
+	uint32_t n = p->raw_len;
+	if ( p->method == 8 ) {
+		uint32_t made = 0;
+		if ( media_inflate_one( p->raw, p->raw_len, p->plain, p->len, &made, NULL, NULL, room->inflate ) || made != p->len )
+			return 2;
+		data = (const uint8_t *)p->plain, n = p->len;
+	}
+	if ( p->kind == 1 ) {
+		struct media_image out;
+		memset( &out, 0, sizeof out );
+		out.width = p->width, out.height = p->height, out.channels = 4, out.stride = p->width * 4, out.pixels = (uint8_t *)p->rgba;
+		if ( m_jpeg_decode_alone_shrunk( data, n, &out, room->jpeg, 1 << p->shrink ) )
+			return 2;
+	} else {
+		se_tga_pixels( data, (unsigned char *)p->rgba );
+	}
+	// (1 decoded; 32 + se_prepare's answer where it is prepared for its upload too)
+	return se_prepare ? 32 + se_prepare( (unsigned char *)p->rgba, p->width, p->height, p->halvings, p->lightscale ) : 1;
+}
+
+// Whether pictures are decoded side by side now: off on a worker and in play, where the drawing's and the mix's workers
+// are posted to directly. JK2_PICTURES_AHEAD=0 (or JK2_PICTURES=engine) is the way before. `tga` decodes a TGA's pixels
+// (the renderer's own functions are its alone at the link).
+int SE_PicturesOn( void ( *tga )( const void *file, unsigned char *rgba ),
+		   int ( *prepare )( unsigned char *rgba, int width, int height, int halvings, int lightscale ) )
+{
+	static int on = -1;
+	se_tga_pixels = tga, se_prepare = prepare;
+	if ( on < 0 ) {
+		on = 0;
+		int workers = !se_engine_decodes( "JK2_PICTURES" ) && env_int( "JK2_PICTURES_AHEAD", 1 ) ? se_wide_workers() : 0;
+		if ( workers > 0 && !posix_memalign( &se_head_room, 16, media_inflate_room() ) ) {
+			on = 1;
+			for ( int k = 1; k <= workers && k < 256 && on; k++ ) {
+				if ( posix_memalign( &se_rooms[k].inflate, 16, media_inflate_room() ) ||
+				     posix_memalign( &se_rooms[k].jpeg, 16, m_jpeg_room() ) ||	// (m_jpeg_room makes the colours' tables, here)
+				     posix_memalign( &se_rooms[k].mp3, 16, media_mp3_room() ) )
+					on = 0;
+				else
+					mcw_touch( se_rooms[k].inflate, media_inflate_room() ), mcw_touch( se_rooms[k].jpeg, m_jpeg_room() ),
+					mcw_touch( se_rooms[k].mp3, media_mp3_room() );
+			}
+			// (a fixed block inflated here first: the tables inflate makes at its first call are this core's)
+			static const uint8_t empty[2] = { 3, 0 };
+			uint8_t none[16];
+			uint32_t made;
+			media_inflate_one( empty, 2, none, sizeof none, &made, NULL, NULL, se_head_room );
+			se_rooms_made = on;
+		}
+	}
+	return on && !mcw_on_worker() && !SE_InPlay();
+}
+
+// A file's first bytes, to `room` of them, inflated when it is deflated: how many. By zlib, which stops where the room
+// is full (media_inflate_one made the whole first block: 139 thousand instructions a head; JK2_HEAD=media the way before),
+// its state in malloc's memory, not the engine's zone.
+static voidpf se_zalloc( voidpf, uInt items, uInt size ) { return malloc( (size_t)items * size ); }
+static void se_zfree( voidpf, voidpf at ) { free( at ); }
+int SE_PictureHead( const void *raw, int raw_len, int method, int len, void *head, int room )
+{
+	static int by_media = -1;
+	if ( by_media < 0 ) {
+		const char *e = getenv( "JK2_HEAD" );
+		by_media = e && !strcmp( e, "media" );
+	}
+	uint32_t made = 0, want = (uint32_t)( len < room ? len : room );
+	if ( method != 8 ) {
+		made = (uint32_t)( raw_len < room ? raw_len : room );
+		memcpy( head, raw, made );
+	} else if ( by_media ) {
+		media_inflate_one( raw, (uint32_t)raw_len, head, want, &made, NULL, NULL, se_head_room );
+	} else {
+		z_stream z;
+		memset( &z, 0, sizeof( z ) );
+		z.zalloc = se_zalloc, z.zfree = se_zfree;
+		if ( inflateInit2( &z, -MAX_WBITS ) != Z_OK )
+			return 0;
+		z.next_in = (Bytef *)raw, z.avail_in = (uInt)raw_len;
+		z.next_out = (Bytef *)head, z.avail_out = want;
+		int r = inflate( &z, Z_SYNC_FLUSH );
+		made = r == Z_OK || r == Z_STREAM_END || r == Z_BUF_ERROR ? want - z.avail_out : 0;
+		inflateEnd( &z );
+	}
+	return (int)made;
+}
+
+// A deflated file's first bytes inflated in steps, 512 bytes and then twice as many each time, until `known` says they are
+// enough or `room` of them (or the file) are made: how many (rd-vanilla's JPEG heads, whose frame is mostly in their first
+// few hundred bytes: 80 thousand instructions a head to 4 KB)
+int SE_PictureHeadUntil( const void *raw, int raw_len, int len, void *head, int room, int ( *known )( const unsigned char *head, int got ) )
+{
+	uint32_t made = 0, want = (uint32_t)( len < room ? len : room ), step = 512;
+	z_stream z;
+	memset( &z, 0, sizeof( z ) );
+	z.zalloc = se_zalloc, z.zfree = se_zfree;
+	if ( inflateInit2( &z, -MAX_WBITS ) != Z_OK )
+		return 0;
+	z.next_in = (Bytef *)raw, z.avail_in = (uInt)raw_len;
+	z.next_out = (Bytef *)head;
+	while ( made < want ) {
+		uint32_t to = want - made > step ? made + step : want;
+		z.avail_out = to - made;
+		int r = inflate( &z, Z_SYNC_FLUSH );
+		made = to - z.avail_out;
+		if ( r != Z_OK || known( (const unsigned char *)head, (int)made ) )
+			break;
+		step *= 2;
+	}
+	inflateEnd( &z );
+	return (int)made;
+}
+
+// A picture given to a worker with nothing to do: its handle, 0 when none has nothing to do (or no record is free)
+int SE_PictureGive( const void *raw, int raw_len, int method, void *plain, int len, int kind, int shrink, void *rgba, int width,
+		    int height, int halvings, int lightscale )
+{
+	se_files_reap( 0 );
+	int i;
+	for ( i = 0; i < SE_PICTURES && se_pictures[i].handle; i++ ) {}
+	if ( i == SE_PICTURES )
+		return 0;
+	se_picture_t *p = &se_pictures[i];
+	p->raw = raw, p->raw_len = (uint32_t)raw_len, p->method = method, p->plain = plain, p->len = (uint32_t)len;
+	p->kind = kind, p->shrink = shrink, p->width = width, p->height = height, p->rgba = rgba;
+	p->halvings = halvings, p->lightscale = lightscale;
+	int h = mcw_try_call( se_picture_job, (uint32_t)(uintptr_t)p, 0 );
+	p->handle = h;
+	return h ? i + 1 : 0;
+}
+
+// The rest of this pass given up, a picture waiting for a worker with nothing to do (mcw_rest: the kernel's idle work)
+void SE_PicturesRest( void ) { mcw_rest(); }
+
+// Whether a given picture is through; its answer (1 decoded, 32 + se_prepare's decoded and prepared, 2 not), waited for
+int SE_PictureReady( int given ) { return mcw_ready( se_pictures[given - 1].handle ); }
+int SE_PictureJoin( int given )
+{
+	se_picture_t *p = &se_pictures[given - 1];
+	int answer = (int)mcw_join( p->handle );
+	p->handle = 0;
+	return answer;
+}
+
+// A file of the pak read ahead (files.cpp's FS_ReadFile, "files read ahead"): its deflated bytes where they lie inflated
+// into `out` on a worker with nothing to do, with that worker's room. Its handle, 0 when none has nothing to do, no record
+// is free or the rooms are not made (SE_PicturesOn); SE_FileJoin waits: 1 made whole. What a worker stores to is `out`.
+#define SE_FILES 64
+struct __attribute__((aligned(16))) se_file_t { const void *raw; uint32_t raw_len; void *out; uint32_t len; int handle, state, answer; };
+static se_file_t se_files[SE_FILES];	// state 0 free, 1 out on a worker, 2 through (its worker let go: se_files_reap)
+static int se_files_out;
+static uint32_t se_file_job( uint32_t a0, uint32_t a1 )
+{
+	(void)a1;
+	const se_file_t *f = (const se_file_t *)(uintptr_t)a0;
+	uint32_t made = 0;
+	return !media_inflate_one( f->raw, f->raw_len, f->out, f->len, &made, NULL, NULL, se_rooms[mcw_self()].inflate ) &&
+		made == f->len ? 1 : 2;
+}
+// Files out on workers: those through joined, so that their workers are free for libmedia's teams and the pictures;
+// with `all` every one waited for
+static void se_files_reap( int all )
+{
+	for ( int i = 0; i < SE_FILES && se_files_out; i++ ) {
+		se_file_t *f = &se_files[i];
+		if ( f->state == 1 && ( all || mcw_ready( f->handle ) ) ) {
+			f->answer = (int)mcw_join( f->handle );
+			f->handle = 0, f->state = 2;
+			se_files_out--;
+		}
+	}
+}
+int SE_FileGive( const void *raw, int raw_len, void *out, int len )
+{
+	if ( !se_rooms_made || mcw_on_worker() || SE_InPlay() || raw_len <= 0 || len <= 0 )
+		return 0;
+	se_files_reap( 0 );
+	int i;
+	for ( i = 0; i < SE_FILES && se_files[i].state; i++ ) {}
+	if ( i == SE_FILES )
+		return 0;
+	se_file_t *f = &se_files[i];
+	f->raw = raw, f->raw_len = (uint32_t)raw_len, f->out = out, f->len = (uint32_t)len;
+	mcw_touch( out, (unsigned)len );   // (stored to by this core first: the worker writes it)
+	int h = mcw_try_call( se_file_job, (uint32_t)(uintptr_t)f, 0 );
+	if ( !h )
+		return 0;
+	f->handle = h, f->state = 1;
+	se_files_out++;
+	return i + 1;
+}
+// A file given waited for and its record let go: 1 made whole
+int SE_FileJoin( int given )
+{
+	if ( given <= 0 || given > SE_FILES || !se_files[given - 1].state )
+		return 0;
+	se_file_t *f = &se_files[given - 1];
+	if ( f->state == 1 ) {
+		f->answer = (int)mcw_join( f->handle );
+		f->handle = 0;
+		se_files_out--;
+	}
+	f->state = 0;
+	return f->answer;
+}
+
+// The map's MD4 made on a worker while this core loads its lumps (cm_load.cpp's CM_LoadMap_Actual; docs/games/jk2.md,
+// "The load"): Com_BlockChecksum's value, its digest's four words XORed, 112 million instructions of this core's. The
+// engine's md4.cpp keeps its state in a static; this one keeps it on the worker's stack. JK2_MD4_CHECK=1 makes both.
+#define SE_MD4_F( x, y, z ) ( ( (x) & (y) ) | ( ~(x) & (z) ) )
+#define SE_MD4_G( x, y, z ) ( ( (x) & (y) ) | ( (x) & (z) ) | ( (y) & (z) ) )
+#define SE_MD4_H( x, y, z ) ( (x) ^ (y) ^ (z) )
+#define SE_MD4_ROT( x, s ) ( ( (x) << (s) ) | ( (x) >> ( 32 - (s) ) ) )
+#define SE_MD4_R1( a, b, c, d, k, s ) a = SE_MD4_ROT( a + SE_MD4_F( b, c, d ) + X[k], s )
+#define SE_MD4_R2( a, b, c, d, k, s ) a = SE_MD4_ROT( a + SE_MD4_G( b, c, d ) + X[k] + 0x5A827999u, s )
+#define SE_MD4_R3( a, b, c, d, k, s ) a = SE_MD4_ROT( a + SE_MD4_H( b, c, d ) + X[k] + 0x6ED9EBA1u, s )
+static void se_md4_block( uint32_t h[4], const uint8_t *in )
+{
+	uint32_t copy[16], a = h[0], b = h[1], c = h[2], d = h[3];
+	const uint32_t *X = (const uint32_t *)in;	// (the machine's words are little-endian, as MD4's)
+	if ( (uintptr_t)in & 3 )
+		memcpy( copy, in, 64 ), X = copy;
+	SE_MD4_R1( a, b, c, d, 0, 3 ); SE_MD4_R1( d, a, b, c, 1, 7 ); SE_MD4_R1( c, d, a, b, 2, 11 ); SE_MD4_R1( b, c, d, a, 3, 19 );
+	SE_MD4_R1( a, b, c, d, 4, 3 ); SE_MD4_R1( d, a, b, c, 5, 7 ); SE_MD4_R1( c, d, a, b, 6, 11 ); SE_MD4_R1( b, c, d, a, 7, 19 );
+	SE_MD4_R1( a, b, c, d, 8, 3 ); SE_MD4_R1( d, a, b, c, 9, 7 ); SE_MD4_R1( c, d, a, b, 10, 11 ); SE_MD4_R1( b, c, d, a, 11, 19 );
+	SE_MD4_R1( a, b, c, d, 12, 3 ); SE_MD4_R1( d, a, b, c, 13, 7 ); SE_MD4_R1( c, d, a, b, 14, 11 ); SE_MD4_R1( b, c, d, a, 15, 19 );
+	SE_MD4_R2( a, b, c, d, 0, 3 ); SE_MD4_R2( d, a, b, c, 4, 5 ); SE_MD4_R2( c, d, a, b, 8, 9 ); SE_MD4_R2( b, c, d, a, 12, 13 );
+	SE_MD4_R2( a, b, c, d, 1, 3 ); SE_MD4_R2( d, a, b, c, 5, 5 ); SE_MD4_R2( c, d, a, b, 9, 9 ); SE_MD4_R2( b, c, d, a, 13, 13 );
+	SE_MD4_R2( a, b, c, d, 2, 3 ); SE_MD4_R2( d, a, b, c, 6, 5 ); SE_MD4_R2( c, d, a, b, 10, 9 ); SE_MD4_R2( b, c, d, a, 14, 13 );
+	SE_MD4_R2( a, b, c, d, 3, 3 ); SE_MD4_R2( d, a, b, c, 7, 5 ); SE_MD4_R2( c, d, a, b, 11, 9 ); SE_MD4_R2( b, c, d, a, 15, 13 );
+	SE_MD4_R3( a, b, c, d, 0, 3 ); SE_MD4_R3( d, a, b, c, 8, 9 ); SE_MD4_R3( c, d, a, b, 4, 11 ); SE_MD4_R3( b, c, d, a, 12, 15 );
+	SE_MD4_R3( a, b, c, d, 2, 3 ); SE_MD4_R3( d, a, b, c, 10, 9 ); SE_MD4_R3( c, d, a, b, 6, 11 ); SE_MD4_R3( b, c, d, a, 14, 15 );
+	SE_MD4_R3( a, b, c, d, 1, 3 ); SE_MD4_R3( d, a, b, c, 9, 9 ); SE_MD4_R3( c, d, a, b, 5, 11 ); SE_MD4_R3( b, c, d, a, 13, 15 );
+	SE_MD4_R3( a, b, c, d, 3, 3 ); SE_MD4_R3( d, a, b, c, 11, 9 ); SE_MD4_R3( c, d, a, b, 7, 11 ); SE_MD4_R3( b, c, d, a, 15, 15 );
+	h[0] += a, h[1] += b, h[2] += c, h[3] += d;
+}
+
+static uint32_t se_md4_job( uint32_t a0, uint32_t a1 )
+{
+	const uint8_t *in = (const uint8_t *)(uintptr_t)a0;
+	uint32_t n = a1, h[4] = { 0x67452301u, 0xefcdab89u, 0x98badcfeu, 0x10325476u }, at;
+	uint8_t tail[128];
+	for ( at = 0; at + 64 <= n; at += 64 )
+		se_md4_block( h, in + at );
+	uint32_t left = n - at, bits = n * 8, blocks = left <= 55 ? 1 : 2;
+	memset( tail, 0, sizeof tail );
+	memcpy( tail, in + at, left );
+	tail[left] = 0x80;
+	memcpy( tail + blocks * 64 - 8, &bits, 4 );	// (md4.cpp's: the length's low word, its high one 0)
+	for ( uint32_t k = 0; k < blocks; k++ )
+		se_md4_block( h, tail + k * 64 );
+	return h[0] ^ h[1] ^ h[2] ^ h[3];
+}
+
+// The checksum begun on a worker that has nothing to do: its handle, 0 for none (Com_BlockChecksum here then)
+int SE_ChecksumGive( const void *buffer, int length )
+{
+	if ( !SE_PicturesOn( se_tga_pixels, se_prepare ) || length < 65536 )	// (the load's workers, as the pictures')
+		return 0;
+	return mcw_try_call( se_md4_job, (uint32_t)(uintptr_t)buffer, (uint32_t)length );
+}
+uint32_t SE_ChecksumJoin( int given, const void *buffer, int length )
+{
+	uint32_t value = mcw_join( given );
+	if ( getenv( "JK2_MD4_CHECK" ) ) {
+		extern uint32_t Com_BlockChecksum( const void *buffer, int length );
+		uint32_t engine = Com_BlockChecksum( buffer, length );
+		Com_Printf( "jk2: the map's checksum %08x on a worker, %08x by md4.cpp: %s\n", value, engine, value == engine ? "the same" : "NOT THE SAME" );
+	}
+	return value;
+}
+
+// ---- sounds made side by side (snd_mem.cpp's S_LoadSound_Actual; docs/games/jk2.md, "The load") ----
+// A sound's job: an MP3 decoded from its first frame into `pcm` (media_mp3_decode_alone), fitted to the engine's length
+// (`pcm_frames`; what it lacks silence), and ResampleSfx's loop from `src` into `out`, on a worker with nothing to do. Its
+// answer is 1 + the loudness ResampleSfx finds (sfx_t's fVolRange), 0 when the decode made under half the engine's length
+// (a file of a few frames). It stores to pcm and out alone; the record is read only.
+#define SE_SOUNDS 256
+struct __attribute__((aligned(16))) se_sound_t {
+	const void *mp3;	// NULL: src is the file's samples
+	uint32_t mp3_size;
+	int16_t *pcm;
+	uint32_t pcm_frames;
+	int channels;
+	const uint8_t *src;
+	int width;		// 1 or 2 bytes a sample
+	uint32_t step;		// ResampleSfx's uiFracStep
+	int count;		// samples out
+	int16_t *out;
+	const void *packed;	// a WAV's bytes deflated as they lie in the pak, inflated into `plain` first (src lies in it)
+	uint32_t packed_size;
+	void *plain;
+	uint32_t plain_size;
+	int handle;		// this core's: the call, 0 for a free record
+};
+static se_sound_t se_sounds[SE_SOUNDS];
+
+static uint32_t se_sound_run( const se_sound_t *p, void *room, void *inflate_room )
+{
+	if ( p->packed ) {
+		uint32_t made = 0;
+		if ( media_inflate_one( p->packed, p->packed_size, p->plain, p->plain_size, &made, NULL, NULL, inflate_room ) ||
+		     made != p->plain_size )
+			return 0;	// (made by the first core then: snd_mem.cpp)
+	}
+	if ( p->mp3 ) {
+		uint32_t made = media_mp3_decode_alone( p->mp3, p->mp3_size, p->pcm, p->pcm_frames, p->channels, room );
+		if ( made * 2 < p->pcm_frames )
+			return 0;	// (under half the engine's length: the engine's decode, on the first core)
+		if ( made < p->pcm_frames )
+			memset( p->pcm + made * (uint32_t)p->channels, 0, ( p->pcm_frames - made ) * (uint32_t)p->channels * 2 );
+	}
+	// (ResampleSfx's loop)
+	uint32_t frac = 0;
+	int most = 0;
+	for ( int i = 0; i < p->count; i++ ) {
+		int at = (int)( frac >> 8 ), sample;
+		frac += p->step;
+		if ( p->width == 2 ) {
+			int16_t v;
+			memcpy( &v, p->src + at * 2, 2 );
+			sample = v;
+		} else {
+			sample = (int)( (unsigned)( (unsigned char)p->src[at] - 128 ) << 8 );
+		}
+		p->out[i] = (int16_t)sample;
+		if ( sample < 0 )
+			sample = -sample;
+		if ( most < ( sample >> 8 ) )
+			most = sample >> 8;
+	}
+	return 1 + (uint32_t)most;
+}
+static uint32_t se_sound_job( uint32_t a0, uint32_t a1 )
+{
+	(void)a1;
+	return se_sound_run( (const se_sound_t *)(uintptr_t)a0, se_rooms[mcw_self()].mp3, se_rooms[mcw_self()].inflate );
+}
+
+// ResampleSfx's loop alone, on this core (a sound the engine decoded after all): 1 + its loudness
+int SE_SoundResample( const void *src, int width, unsigned step, int count, void *out )
+{
+	se_sound_t p;
+	memset( &p, 0, sizeof p );
+	p.src = (const uint8_t *)src, p.width = width, p.step = step, p.count = count, p.out = (int16_t *)out;
+	return (int)se_sound_run( &p, NULL, NULL );
+}
+
+// A deflate stream inflated on this core (a WAV whose worker's inflate failed): whether it made its length
+int SE_InflateHere( const void *in, int in_size, void *out, int out_size )
+{
+	uint32_t made = 0;
+	return se_head_room && !media_inflate_one( in, (uint32_t)in_size, out, (uint32_t)out_size, &made, NULL, NULL, se_head_room ) &&
+	       made == (uint32_t)out_size;
+}
+
+// Whether sounds are made side by side now (as the pictures; JK2_SOUNDS_AHEAD=0 or JK2_SOUNDS=engine the way before)
+int SE_SoundsOn( void )
+{
+	static int on = -1;
+	if ( on < 0 )
+		on = !se_engine_decodes( "JK2_SOUNDS" ) && env_int( "JK2_SOUNDS_AHEAD", 1 );
+	return on && SE_PicturesOn( se_tga_pixels, se_prepare );
+}
+
+// An MP3's channels as its first frame says them (after an ID3v2 tag), 0 when none is found in its first 4 KB: the engine
+// makes a stereo file mono, which media_mp3_decode_alone does not
+int SE_MP3Channels( const void *data, int size )
+{
+	const uint8_t *f = (const uint8_t *)data;
+	uint32_t at = 0, n = (uint32_t)size;
+	if ( n > 10 && !memcmp( f, "ID3", 3 ) )
+		at = 10 + ( (f[6] & 127u) << 21 | (f[7] & 127u) << 14 | (f[8] & 127u) << 7 | (f[9] & 127u) );
+	for ( uint32_t end = at + 4096 < n ? at + 4096 : n; at + 4 <= end; at++ )
+		if ( f[at] == 0xff && ( f[at + 1] & 0xe0 ) == 0xe0 && ( f[at + 1] & 0x18 ) != 0x08 && ( f[at + 1] & 0x06 ) != 0 &&
+		     ( f[at + 2] & 0xf0 ) != 0xf0 && ( f[at + 2] & 0x0c ) != 0x0c )
+			return ( f[at + 3] >> 6 ) == 3 ? 1 : 2;
+	return 0;
+}
+
+// A sound given to a worker with nothing to do (its handle), or made here at once when none has (0, and *answer)
+int SE_SoundGive( const void *mp3, int mp3_size, void *pcm, int pcm_frames, int channels, const void *src, int width,
+		  unsigned step, int count, void *out, int *answer, const void *packed, int packed_size, void *plain, int plain_size )
+{
+	int i;
+	for ( i = 0; i < SE_SOUNDS && se_sounds[i].handle; i++ ) {}
+	se_sound_t here, *p = i < SE_SOUNDS ? &se_sounds[i] : &here;
+	p->mp3 = mp3, p->mp3_size = (uint32_t)mp3_size, p->pcm = (int16_t *)pcm, p->pcm_frames = (uint32_t)pcm_frames;
+	p->channels = channels, p->src = (const uint8_t *)src, p->width = width, p->step = step, p->count = count;
+	p->out = (int16_t *)out;
+	p->packed = packed, p->packed_size = (uint32_t)packed_size, p->plain = plain, p->plain_size = (uint32_t)plain_size;
+	if ( plain )
+		mcw_touch( plain, (unsigned)plain_size );
+	if ( pcm )
+		mcw_touch( pcm, (unsigned)pcm_frames * (unsigned)channels * 2 );	// (stored to by this core first: a worker writes them)
+	mcw_touch( out, (unsigned)count * 2 );
+	int h = p != &here ? mcw_try_call( se_sound_job, (uint32_t)(uintptr_t)p, 0 ) : 0;
+	if ( !h ) {
+		*answer = (int)se_sound_run( p, se_head_room_mp3(), se_head_room );
+		return 0;
+	}
+	p->handle = h;
+	return i + 1;
+}
+int SE_SoundReady( int given ) { return mcw_ready( se_sounds[given - 1].handle ); }
+int SE_SoundJoin( int given )
+{
+	se_sound_t *p = &se_sounds[given - 1];
+	int answer = (int)mcw_join( p->handle );
+	p->handle = 0;
+	return answer;
+}
+
+// A picture saved as a JPEG by libmedia on the workers, for rd-common's RE_SaveJPGToBuffer (the autosave's screenshot;
+// docs/games/jk2.md, "The load"): 3 bytes a pixel, rows width * 3 + padding apart, the last first unless `flip`. The
+// bytes are libmedia's, in restart intervals, not libjpeg's; the picture no game state reads. Its size, or -1 and libjpeg
+// saves it. JK2_PICTURES=engine is the way before.
+int SE_JPGEncode( unsigned char *out, int room, int quality, int width, int height, const unsigned char *rgb, int padding, int flip )
+{
+	if ( se_engine_decodes( "JK2_PICTURES" ) || se_load_workers() <= 0 || width <= 0 || height <= 0 )
+		return -1;
+	struct media_image image;
+	memset( &image, 0, sizeof image );
+	image.width = width, image.height = height, image.channels = 3, image.stride = ( width * 3 + 15 ) & ~15;
+	if ( posix_memalign( (void **)&image.pixels, 16, (size_t)image.stride * height ) )
+		return -1;
+	for ( int y = 0; y < height; y++ )
+		memcpy( image.pixels + (size_t)y * image.stride, rgb + (size_t)( flip ? y : height - 1 - y ) * ( width * 3 + padding ), (size_t)width * 3 );
+	uint32_t size = 0;
+	uint8_t *jpeg = media_jpeg_encode( &image, quality, &size, se_load_workers() );
+	free( image.pixels );
+	int done = jpeg && size <= (uint32_t)room ? (int)size : -1;
+	if ( done >= 0 )
+		memcpy( out, jpeg, size );
+	if ( jpeg )
+		media_free( jpeg, size );
+	return done;
+}
+
+// strtod for every atof and strtod of the program (the link's --wrap=strtod, build.sh; docs/games/jk2.md, "The load"):
+// musl's makes every number of the text it parses in long doubles, which this machine has in software. A decimal of a
+// mantissa up to 2^53 and a power of ten up to 22 is one exact double times or over an exact power of ten, rounded once:
+// strtod's value (Clinger's fast path). Any other text is musl's. JK2_STRTOD_CHECK=1 makes both and says where they differ.
+extern "C" double __real_strtod( const char *s, char **end );
+extern "C" double __wrap_strtod( const char *s, char **end )
+{
+	static const double tens[23] = { 1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15,
+					 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22 };
+	const char *p = s;
+	while ( *p == ' ' || ( *p >= '\t' && *p <= '\r' ) )
+		p++;
+	int negative = *p == '-';
+	if ( *p == '-' || *p == '+' )
+		p++;
+	uint64_t m = 0;
+	int digits = 0, exp10 = 0, any = 0;
+	for ( ; *p >= '0' && *p <= '9'; p++, any = 1 ) {
+		if ( m || *p != '0' )
+			digits++;
+		if ( digits > 18 )
+			return __real_strtod( s, end );
+		m = m * 10 + (uint64_t)( *p - '0' );
+	}
+	if ( *p == '.' ) {
+		for ( p++; *p >= '0' && *p <= '9'; p++, any = 1 ) {
+			if ( m || *p != '0' )
+				digits++;
+			if ( digits > 18 )
+				return __real_strtod( s, end );
+			m = m * 10 + (uint64_t)( *p - '0' ), exp10--;
+		}
+	}
+	if ( !any || ( *p == 'x' || *p == 'X' ) )
+		return __real_strtod( s, end );
+	if ( *p == 'e' || *p == 'E' ) {
+		const char *q = p + 1;
+		int eneg = *q == '-', e = 0;
+		if ( *q == '-' || *q == '+' )
+			q++;
+		if ( *q >= '0' && *q <= '9' ) {
+			for ( ; *q >= '0' && *q <= '9'; q++ )
+				if ( e < 10000 )
+					e = e * 10 + ( *q - '0' );
+			exp10 += eneg ? -e : e;
+			p = q;
+		}
+	}
+	if ( m > ( 1ull << 53 ) || exp10 > 22 || exp10 < -22 )
+		return __real_strtod( s, end );
+	double v = (double)m;
+	v = exp10 >= 0 ? v * tens[exp10] : v / tens[-exp10];
+	if ( negative )
+		v = -v;
+	if ( end )
+		*end = (char *)p;
+	static int check = -1;
+	if ( check < 0 )
+		check = getenv( "JK2_STRTOD_CHECK" ) != NULL;
+	if ( check ) {
+		char *e2;
+		double w = __real_strtod( s, &e2 );
+		if ( memcmp( &v, &w, sizeof v ) || e2 != p )
+			printf( "jk2: strtod NOT THE SAME for \"%.40s\": %.17g against %.17g\n", s, v, w );
+	}
+	return v;
+}
+
+extern "C" const char *m_jpeg_decode_shrunk( const uint8_t *f, uint32_t size, struct media_image *out, int workers, int shrink );
+
+// A picture's JPEG decoded by libmedia on the workers, for rd-common's LoadJPG (docs/games/jk2.md, "The load"): JPEG was a
+// fifth of core 0's load, libjpeg's. `shrink` halvings each way (r_picmip), as libjpeg's scaled IDCT makes them: a side
+// (n + 2^shrink - 1) >> shrink. With `pic` NULL the size alone; then RGBA into `pic`, rows width * 4 apart. 0, or -1 and
+// libjpeg decodes it. JK2_PICTURES=engine is the way before, JK2_PICTURES_CHECK=1 both and how far apart.
+int SE_PictureJPG( const void *data, int size, int shrink, int *width, int *height, unsigned char *pic )
+{
+	static int engine = -1;
+	if ( engine < 0 )
+		engine = se_engine_decodes( "JK2_PICTURES" );
+	struct media_info info;
+	if ( engine || mcw_on_worker() || size <= 0 || shrink < 0 || shrink > 3 ||
+	     media_probe( data, (uint32_t)size, &info ) || info.kind != MEDIA_JPEG || !info.width || !info.height )
+		return -1;
+	int s = 1 << shrink, w = ( info.width + s - 1 ) / s, h = ( info.height + s - 1 ) / s;
+	if ( !pic ) {
+		*width = w, *height = h;
+		return 0;
+	}
+	if ( *width != w || *height != h )
+		return -1;
+	struct media_image out;
+	memset( &out, 0, sizeof out );
+	out.width = w, out.height = h, out.channels = 4, out.stride = w * 4, out.pixels = pic;
+	mcw_touch( pic, (unsigned)( w * h * 4 ) );   // (stored to by this core first: the workers write it)
+	return m_jpeg_decode_shrunk( (const uint8_t *)data, (uint32_t)size, &out, se_load_workers(), s ) ? -1 : 0;
+}
 #else
+int SE_SoundMP3( const void *data, int size, void *out, int bytes, int rate, int channels ) { return -1; }
+int SE_PictureJPG( const void *data, int size, int shrink, int *width, int *height, unsigned char *pic ) { return -1; }
+int SE_PicturesOn( void ( *tga )( const void *file, unsigned char *rgba ),
+		   int ( *prepare )( unsigned char *rgba, int width, int height, int halvings, int lightscale ) ) { return 0; }
+int SE_ChecksumGive( const void *buffer, int length ) { return 0; }
+int SE_SoundsOn( void ) { return 0; }
+int SE_JPGEncode( unsigned char *out, int room, int quality, int width, int height, const unsigned char *rgb, int padding, int flip ) { return -1; }
+int SE_MP3Channels( const void *data, int size ) { return 0; }
+int SE_SoundResample( const void *src, int width, unsigned step, int count, void *out ) { return 1; }
+int SE_InflateHere( const void *in, int in_size, void *out, int out_size ) { return 0; }
+int SE_SoundGive( const void *mp3, int mp3_size, void *pcm, int pcm_frames, int channels, const void *src, int width,
+		  unsigned step, int count, void *out, int *answer, const void *packed, int packed_size, void *plain, int plain_size )
+{ *answer = 0; return 0; }
+int SE_SoundReady( int given ) { return 1; }
+int SE_SoundJoin( int given ) { return 1; }
+uint32_t SE_ChecksumJoin( int given, const void *buffer, int length ) { return 0; }
+int SE_PictureHead( const void *raw, int raw_len, int method, int len, void *head, int room ) { return 0; }
+int SE_PictureHeadUntil( const void *raw, int raw_len, int len, void *head, int room, int ( *known )( const unsigned char *head, int got ) ) { return 0; }
+int SE_PictureGive( const void *raw, int raw_len, int method, void *plain, int len, int kind, int shrink, void *rgba, int width,
+		    int height, int halvings, int lightscale ) { return 0; }
+int SE_PictureReady( int given ) { return 1; }
+int SE_PictureJoin( int given ) { return 2; }
+int SE_FileGive( const void *raw, int raw_len, void *out, int len ) { return 0; }
+int SE_FileJoin( int given ) { return 0; }
+void SE_PicturesRest( void ) {}
+extern "C" int SE_PakInflate( const void *in, unsigned in_size, void *out, unsigned out_size, unsigned *crc ) { return -1; }
 int SE_MixWorker( void ) { return 0; }
 void SE_MixGive( void ( *fn )( void ) ) { fn(); }
 void SE_MixSettle( void ) {}

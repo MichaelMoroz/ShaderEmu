@@ -265,7 +265,7 @@ media_jpeg_encode(const struct media_image *image, int quality, uint32_t *size, 
 {
 	static struct jenc job;
 	struct jenc *e = &job;
-	uint32_t at, total, i, rows_bytes;
+	uint32_t at, total, i, rows_bytes, per;
 	uint8_t *f = NULL, *p;
 	int k, t, got, scale;
 
@@ -295,27 +295,35 @@ media_jpeg_encode(const struct media_image *image, int quality, uint32_t *size, 
 	/* some 512 intervals: a decoder's cores take them one by one */
 	e->restart = ((uint32_t)(e->mcus_x * e->mcus_y) + 511) / 512;
 	e->intervals = ((uint32_t)(e->mcus_x * e->mcus_y) + e->restart - 1) / e->restart;
-	/* room for an interval: far more than any but noise needs; only the pages written are memory */
-	e->room = (e->restart * (uint32_t)e->blocks * 420u + 64u + 15u) & ~15u;
-	rows_bytes = e->room * e->intervals;
-	e->rows = mmap(NULL, (rows_bytes + 4095) & ~4095u, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-	e->row_bytes = m_map(e->intervals * 16);
-	e->failed = mcw_alloc(16);
-	if (e->rows == MAP_FAILED || !e->row_bytes || !e->failed) {
-		if (e->rows != MAP_FAILED)
-			munmap(e->rows, (rows_bytes + 4095) & ~4095u);
-		m_unmap(e->row_bytes, e->intervals * 16);
+	/* room for an interval: 105 bytes a block first, and where an interval needs more, 420, far more than any but noise
+	 * needs (a machine without an MMU maps all of it, in one piece: 5 MB for 800 x 600, which a full memory had not) */
+	if (!(e->failed = mcw_alloc(16)))
 		return NULL;
+	for (per = 105;; per = 420) {
+		e->room = (e->restart * (uint32_t)e->blocks * per + 64u + 15u) & ~15u;
+		rows_bytes = e->room * e->intervals;
+		e->rows = mmap(NULL, (rows_bytes + 4095) & ~4095u, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+		e->row_bytes = m_map(e->intervals * 16);
+		if (e->rows == MAP_FAILED || !e->row_bytes) {
+			if (e->rows != MAP_FAILED)
+				munmap(e->rows, (rows_bytes + 4095) & ~4095u);
+			m_unmap(e->row_bytes, e->intervals * 16);
+			return NULL;
+		}
+		*e->failed = 0;
+		/* (the first part of each interval's room there before any core writes it: what most take) */
+		for (i = 0; i < e->intervals; i++)
+			mcw_touch(e->rows + i * e->room, e->room / 8);
+		got = m_workers_begin(workers);
+		m_for(e->intervals, intervals_job, e, 0, got);
+		m_workers_end();
+		if (!*e->failed)
+			break;
+		if (per == 420)
+			goto done;
+		munmap(e->rows, (rows_bytes + 4095) & ~4095u);
+		m_unmap(e->row_bytes, e->intervals * 16);
 	}
-	*e->failed = 0;
-	/* (the first part of each interval's room there before any core writes it: what most take) */
-	for (i = 0; i < e->intervals; i++)
-		mcw_touch(e->rows + i * e->room, e->room / 8);
-	got = m_workers_begin(workers);
-	m_for(e->intervals, intervals_job, e, 0, got);
-	m_workers_end();
-	if (*e->failed)
-		goto done;
 	total = 2 + 18 + 2 * 69 + 19 + 4 * 2 + 33 + 179 + 33 + 179 + 6 + 14 + 2;
 	for (i = 0; i < e->intervals; i++)
 		total += e->row_bytes[i * 4] + 2;

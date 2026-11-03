@@ -8,7 +8,7 @@
 #   bash linux/jk2/build.sh                for the machine, with OpenTTD's C++ compiler (linux/openttd/toolchain.sh):
 #                                          written, not yet built (docs/games/jk2.md, "What is left")
 # Nothing of the demo is here: linux/jk2/data.py fetches it, and puts it into an image only when asked.
-#   JK2_TREE=keep          the tree as it stands, for writing the patch: (cd TREE && git diff -- code codeJK2 shared) > linux/jk2/jk2.patch
+#   JK2_TREE=keep          the tree as it stands, for writing the patch: (cd TREE && git diff -- code codeJK2 shared lib) > linux/jk2/jk2.patch
 #   JK2_OUT=DIR            where the program goes (usr/bin/jk2.bin), for the machine; the host's stays in its folder
 #   JK2_JOBS=N             compilers at once (4)
 #   JK2_CFLAGS=, JK2_LINK= more flags for every compile, for the link (-fsanitize=address on the host, with JK2_WORK=DIR
@@ -236,7 +236,8 @@ if [ "${JK2_HOST:-}" != 1 ]; then
         $OBJCOPY --set-section-alignment '.data*=16' --set-section-alignment '.sdata*=16' --set-section-alignment '.bss*=16' \
             --set-section-alignment '.sbss*=16' "$o"
     done
-    MACHINE="$BUILD/window/*.o $MW/src/lib/libnano-X.a $MEDIA"
+    # (every strtod and atof through sys_shaderemu.cpp's __wrap_strtod: musl's parses in software long doubles)
+    MACHINE="$BUILD/window/*.o $MW/src/lib/libnano-X.a $MEDIA -Wl,--wrap=strtod"
 fi
 
 step "the program"

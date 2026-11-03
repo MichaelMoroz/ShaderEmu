@@ -85,7 +85,11 @@ def model(asset, lines):
     folder = os.path.join(CACHE, asset)
     gltf = get(entry["url"], os.path.join(folder, asset + ".gltf"))
     for relative, item in entry["include"].items():
-        get(item["url"], os.path.join(folder, relative))
+        path = get(item["url"], os.path.join(folder, relative))
+        if os.path.getsize(path) != item["size"]:
+            # (the listing named side_table_tall_01's 8k buffer, an older mesh than its 1k gltf's: the one beside the gltf is it)
+            os.remove(path)
+            get(entry["url"].rsplit("/", 1)[0] + "/" + relative, path)
     document = json.load(open(gltf, encoding="utf-8"))
     out = os.path.join(UNITY, "Textures", "Assets")
     os.makedirs(out, exist_ok=True)
