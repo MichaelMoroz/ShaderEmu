@@ -24,6 +24,7 @@ struct BackendOptions {
     std::string dxcOpt = "-O3", dxcSm = "6_6", dxcDir;
     const SLShader* gpuShader = nullptr;   // the GPU device's passes (gpu.shader), if the machine has one
     const SLShader* soundShader = nullptr; // the sound card's mix pass (sound.shader); needs the GPU device
+    const SLShader* hudShader = nullptr;   // --hud-capture: a seated frame's flat draws as the HUD layer draws them (hud.shader)
     unsigned tickRows = 64;       // rows of the 64 texels wide state block that the tick pass draws (16: shader_vm)
     int readbackBatch = 1;        // D3D11: frames whose rows are read back with one Map (--readback-batch)
     bool stateLog = false;        // D3D12 only: read the CPU's 64 x 64 state texels back every frame (--l1-log)
@@ -150,6 +151,9 @@ public:
     virtual bool readProf(std::vector<uint32_t>& out) { (void)out; return false; }
     // Saves the GPU device's whole colour target as a BMP.
     virtual bool gpuCapture(const std::string& path) { (void)path; return false; }
+    // The last volume frame's flat draws (docs/world/holodeck.md, "The HUD layer") over a plain grey, as a BMP of the
+    // GPU target's size with the volume's picture in its top left (tools/hud_shot.py crops it by the snapshot's size word).
+    virtual bool hudCapture(Material& mat, const std::string& path) { (void)mat; (void)path; return false; }
     // Empty while the device is fine.
     virtual std::string deviceRemoved() = 0;
 

@@ -2424,11 +2424,18 @@ R_Subsector(int number)
 		R_AddLine(seg++);
 }
 
-/* The sky: one picture a quarter turn wide behind everything, sliding with the view angle. */
+/* The sky: one picture a quarter turn wide behind everything, sliding with the view angle. Not from a holodeck's seat:
+ * there it is a flat draw, which the HUD layer put over the whole world (a picture of the layer, tools/hud_shot.py,
+ * 4 November 2026); the room has the sky ceilings laid as a panorama and a sky of its own behind them. */
 static void
 sky(void)
 {
-	GLuint name = sky_texture();
+	extern int doom_seated;
+	GLuint name;
+
+	if (doom_seated)
+		return;
+	name = sky_texture();
 	fixed_t u = (fixed_t)(((told.angle + ANG45) >> 22) << 8), v = ((100 - told.high / 2) << FRACBITS) / 128;
 	fixed_t far = -(FRACUNIT - 2);
 	int k;
