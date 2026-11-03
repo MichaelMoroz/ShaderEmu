@@ -598,7 +598,8 @@ CASES = [
          never=[r'^nxedit: read /tmp/']),
     # the script languages (docs/system/scripts.md): QuickJS's pi example, MicroPython with its built-in modules
     # the benchmark (docs/apps/bench.md): every test's own check, the GPU's in a window of its own; some 30 s of the guest's
-    case('nxperf', 'programs', X + 'nxperf --cli', True, has=[r'^nxperf: 61 results: 61 OK, 0 FAIL, 0 not run'],
+    case('nxperf', 'programs', X + 'nxperf --cli', True, has=[r'^nxperf: 61 results: 61 OK, 0 FAIL, 0 not run', r'^nxperf: score \d+ of 61 results', r'^nxperf: part GPU +\d+ \(5 results\)',
+                                                                    r'^nxperf: beside it: RTX 3090 +\d+'],
          never=[r'^nxperf: .* FAIL \(', r'Segmentation fault']),
     case('qjs', 'programs', "qjs /examples/pi.js 50; qjs --std -e 'print([1, 2, 3].map(x => x * x).join(), std.getenv(\"HOME\"))'",
          has=[r'^3\.14159265358979323846264338327950288419716939937510\r?$', r'^1,4,9 /root']),

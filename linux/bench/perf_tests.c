@@ -818,6 +818,8 @@ static void t_lanes(struct perf_run *r)
 	perf_check(r, bad == 0, "%d of 256 indices wrong (%d lanes a worker)", bad, mcw_lanes_here());
 }
 
+int perf_field_lanes = -1;	/* (-1: the field not run) */
+
 static void t_field(struct perf_run *r)
 {
 	static struct lanejob j __attribute__((aligned(16)));
@@ -833,7 +835,8 @@ static void t_field(struct perf_run *r)
 	perf_end(r);
 	perf_rate(r, (float)n, 1e6f);
 	bad = lane_wrong(j.out, n);
-	perf_check(r, bad == 0, "%d of 256 indices wrong (%d lanes in the field)", bad, mcw_field_lanes());
+	perf_field_lanes = mcw_field_lanes();
+	perf_check(r, bad == 0, "%d of 256 indices wrong (%d lanes in the field)", bad, perf_field_lanes);
 }
 
 static uint32_t shade_fn(int x, int y, void *ctx)

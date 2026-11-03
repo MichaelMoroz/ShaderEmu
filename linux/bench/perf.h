@@ -65,4 +65,18 @@ void perf_gpu_quads(struct perf_run *r);
 void perf_gpu_fill(struct perf_run *r);
 void perf_gpu_memcpy(struct perf_run *r);
 
+/* the score (perf_score.c): a part's is 1,000 times the geometric mean of its results over the reference machine's */
+#define PERF_PARTS 8
+extern const char *const perf_parts[PERF_PARTS];
+int perf_part_of(int test);
+float perf_ratio(int test, float value);
+float perf_score(const float *value, float *parts, int *counted);
+/* other machines' scores of the same tests, beside a run's */
+#define PERF_MACHINES 3
+struct perf_machine { const char *name, *note; int column; };
+extern const struct perf_machine perf_machines[PERF_MACHINES];
+float perf_machine_score(int m, float *parts, int *counted);
+/* the lanes the field had in the last run of `field` (0: none, as on rvc_cpu) */
+extern int perf_field_lanes;
+
 #endif
