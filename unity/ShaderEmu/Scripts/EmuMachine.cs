@@ -45,7 +45,7 @@ public class EmuMachine : UdonSharpBehaviour
     // and triangles, in the meshes' order: BlitOrder.shader measures the order the card draws a patch's points in.
     public Material gatherBlitMaterial;     // MachineCommitBlit.shader, its pass 0: the gather into the stage
     public Material pointsBlitMaterial;     // the same shader, its pass 1: the RAM commit into the state
-    public Material gpuBlitMaterial;        // GpuDrawBlit.shader: the depth cleared (pass 8), then the GPU's 8 passes
+    public Material gpuBlitMaterial;        // GpuDrawBlit.shader: the depth cleared (pass 8), then the GPU's 12 passes
     public Material orderMaterial;          // BlitOrder.shader
     public RenderTexture orderTexture;      // 81 x 81: its pass 0's
     public RenderTexture rankTexture;       // 81 x 1: each point's place, which the blits' calls go by (_AmpRank)
@@ -1309,6 +1309,7 @@ public class EmuMachine : UdonSharpBehaviour
     }
 
     // The GPU's list: the camera's mesh, or as blits into its target and depth (GpuDrawBlit.shader).
+    private int[] BlitPassOrder = new int[] { 0, 1, 2, 3, 9, 10, 4, 5, 6, 7, 11, 12 };
     private void GpuDraw()
     {
         if ((oldPaths & 64) == 0 && gpuBlitMaterial != null)
@@ -1316,7 +1317,9 @@ public class EmuMachine : UdonSharpBehaviour
             RenderTexture target = gpuCamera.targetTexture;
             gpuBlitMaterial.SetTexture("_State", state);
             VRCGraphics.Blit(blackTexture, target, gpuBlitMaterial, 8);
-            for (int p = 0; p < 8; p++) VRCGraphics.Blit(blackTexture, target, gpuBlitMaterial, p);
+            // the GPU's passes in their order (FRAGMENT_PASS in gpu.h): 0-3, 8 and 9 (the shader's 9 and 10), 4-7,
+            // 12 and 13 (its 11 and 12)
+            for (int i = 0; i < 12; i++) VRCGraphics.Blit(blackTexture, target, gpuBlitMaterial, BlitPassOrder[i]);
             return;
         }
         gpuMaterial.SetTexture("_State", state);

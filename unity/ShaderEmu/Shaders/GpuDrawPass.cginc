@@ -1,4 +1,4 @@
-// One pass of the GPU device's draw (docs/machine/gpu.md). The including pass defines _GpuPass (0-7)
+// One pass of the GPU device's draw (docs/machine/gpu.md). The including pass defines _GpuPass (0-9, 12, 13)
 // and sets that pass's blending and depth use.
 // The mesh is 65,536 points, one per triangle of the device's mesh. The geometry shader finds
 // the command that claims the point's three vertices and emits them; for a triangle no
@@ -13,7 +13,7 @@ Texture2D<float4> _Data_ROM;   // the ROM: a 16-byte texel a pixel, read by its 
 float _StateRow;
 #define GPU_STATE_ROW ((uint)(int)_StateRow)
 #define GPU_PASS_UNIFORMS
-#define _GpuPasses 0xffu
+#define _GpuPasses 0x33ffu   // (every pass drawn every frame: 0-9, 12 and 13)
 // the picture is 1280x720 at most here
 #define GPU_TARGET_W 1280.0
 #define GPU_TARGET_H 720.0

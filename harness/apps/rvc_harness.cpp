@@ -1316,7 +1316,7 @@ int main(int argc, char** argv) {
         fprintf(stderr, "[harness] network: this machine is 10.0.0.%d, UDP port %d\n", opt.netId, opt.netPort + opt.netId);
     }
     bool netDelivered = false;
-    int gpuPassLife[8] = {};      // frames each of the GPU's passes 1-7 is still drawn for
+    int gpuPassLife[16] = {};     // frames each of the GPU's passes 1-15 is still drawn for
     // The sound card (docs/machine/sound.md). While the guest has it enabled the host mixes: it names a
     // cursor, the device draws the samples from there on and moves its voices up to it.
     SoundOut audio;
@@ -1406,7 +1406,7 @@ int main(int argc, char** argv) {
         // passes a submitted list asks for: drawn from now on, and for a while after the last use
         if (raw.size() >= (64 + 2) * 16 && texel(64 + 1, 0) != 0) backend.listDue = 4;   // (RVC_LIST_LAZY)
         if (raw.size() >= (64 + 2) * 16)
-            for (int p = 1; p < 8; ++p)
+            for (int p = 1; p < 16; ++p)
                 if ((texel(64 + 1, 0) >> (8 + p)) & 1) gpuPassLife[p] = 600;
         if (net.on() && raw.size() >= (64 + kControlTexels + kNetSlot) * 16)
             net.fromGuest(texel(64 + 0x3e, 0), texel(64 + 0x3e, 1), t + (64 + kControlTexels) * 4);
@@ -2047,12 +2047,12 @@ int main(int argc, char** argv) {
             if (statsStarted) altPicked[v]++;
         }
         {
-            // every pass every frame, as a world draws them (Unity's _GpuPasses 0xff): a list that asked for a pass the
+            // every pass every frame, as a world draws them (Unity's _GpuPasses 0xffff): a list that asked for a pass the
             // host drew only after a readback saw it waited submitted for it, and the machine with it, three frames
             // (27 October 2026). RVC_PASS_LIFE=1: the passes seen lately only
             static const bool passLife = getenv("RVC_PASS_LIFE") && atoi(getenv("RVC_PASS_LIFE")) != 0;
-            uint32_t passes = passLife ? 1u : 0xffu;
-            for (int p = 1; p < 8; ++p)
+            uint32_t passes = passLife ? 1u : 0x33ffu;   // (0-7, 8, 9, 12 and 13: shader_vm/src/gpu.h, FRAGMENT_PASS)
+            for (int p = 1; p < 16; ++p)
                 if (gpuPassLife[p] > 0) {
                     --gpuPassLife[p];
                     passes |= 1u << p;

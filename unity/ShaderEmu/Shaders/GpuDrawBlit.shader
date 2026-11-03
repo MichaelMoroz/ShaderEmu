@@ -1,7 +1,7 @@
 Shader "ShaderEmu/GpuDrawBlit"
 {
     // GpuDraw.shader as blits, with no camera (docs/machine/gpu.md, "Blits in place of cameras"; src/amp.cginc): the
-    // same 8 passes, each a blit into the GPU's target and its depth buffer. A blit's two triangles are two patches
+    // same 12 passes, each a blit into the GPU's target and its depth buffer. A blit's two triangles are two patches
     // tessellated at factor 8, and a geometry shader of 32 instances gives 5,184 calls, 13 of the device's triangles
     // each in the mesh's order (gpu_amp_geom in src/gpu.cginc). Pass 8 clears the depth to far, as the camera's
     // clear did; EmuMachine blits it first.
@@ -162,7 +162,7 @@ Shader "ShaderEmu/GpuDrawBlit"
             #include "GpuDrawPass.cginc"
             ENDCG
         }
-        Pass   // 8: the depth cleared to far, as the GPU camera's clear (Depth) did, before passes 0 to 7
+        Pass   // 8: the depth cleared to far, as the GPU camera's clear (Depth) did, before the passes
         {
             Name "CLEAR"
             ColorMask 0
@@ -174,6 +174,78 @@ Shader "ShaderEmu/GpuDrawBlit"
             #pragma fragment frag
             #define _GpuPass 0
             #define GPU_CLEAR
+            #include "GpuDrawPass.cginc"
+            ENDCG
+        }
+        Pass
+        {
+            Name "GPU8"
+            Blend OneMinusDstAlpha One
+            ZTest LEqual
+            ZWrite Off
+            CGPROGRAM
+            #pragma target 5.0
+            #pragma vertex amp_vert
+            #pragma hull amp_hull
+            #pragma domain amp_dom
+            #pragma geometry gpu_amp_geom
+            #pragma fragment frag
+            #define GPU_AMP
+            #define _GpuPass 8
+            #include "GpuDrawPass.cginc"
+            ENDCG
+        }
+        Pass
+        {
+            Name "GPU9"
+            Blend DstColor OneMinusDstAlpha, DstAlpha OneMinusDstAlpha
+            ZTest LEqual
+            ZWrite Off
+            CGPROGRAM
+            #pragma target 5.0
+            #pragma vertex amp_vert
+            #pragma hull amp_hull
+            #pragma domain amp_dom
+            #pragma geometry gpu_amp_geom
+            #pragma fragment frag
+            #define GPU_AMP
+            #define _GpuPass 9
+            #include "GpuDrawPass.cginc"
+            ENDCG
+        }
+        Pass
+        {
+            Name "GPU12"
+            Blend OneMinusDstAlpha One
+            ZTest Always
+            ZWrite Off
+            CGPROGRAM
+            #pragma target 5.0
+            #pragma vertex amp_vert
+            #pragma hull amp_hull
+            #pragma domain amp_dom
+            #pragma geometry gpu_amp_geom
+            #pragma fragment frag
+            #define GPU_AMP
+            #define _GpuPass 12
+            #include "GpuDrawPass.cginc"
+            ENDCG
+        }
+        Pass
+        {
+            Name "GPU13"
+            Blend DstColor OneMinusDstAlpha, DstAlpha OneMinusDstAlpha
+            ZTest Always
+            ZWrite Off
+            CGPROGRAM
+            #pragma target 5.0
+            #pragma vertex amp_vert
+            #pragma hull amp_hull
+            #pragma domain amp_dom
+            #pragma geometry gpu_amp_geom
+            #pragma fragment frag
+            #define GPU_AMP
+            #define _GpuPass 13
             #include "GpuDrawPass.cginc"
             ENDCG
         }

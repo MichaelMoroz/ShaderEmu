@@ -37,7 +37,7 @@ colour fragments. The CPU shader has no GPU code.
 | Address | Contents |
 |---|---|
 | `0x81000000` | display mode: 3 shows the GPU's picture (see `display.md` for width and height) |
-| `0x81000010` | submit: bit 0 draws the list; bit 1 then copies the picture to the RAM framebuffer at `0x81001000`; bit 2 copies it into the rectangle below instead; bits 9-15 say the list has commands for passes 1-7 (below). The GPU sets it back to 0 |
+| `0x81000010` | submit: bit 0 draws the list; bit 1 then copies the picture to the RAM framebuffer at `0x81001000`; bit 2 copies it into the rectangle below instead; bits 9-23 say the list has commands for passes 1-15 (below). The GPU sets it back to 0 |
 | `0x81000014` | address of the command list |
 | `0x81000018` | number of commands in it (at most 4096) |
 | `0x8100001c` | lists drawn so far; it changes when a submitted list has been drawn |
@@ -169,19 +169,32 @@ a draw of any part of it, repeating (which is a scroll that wraps), keyed on the
 `seglSprite`. The NES draws its picture so (`docs/games/nes.md`), which is its test: a held frame
 against `tools\gpu_reference.py`, every pixel away from an edge the same.
 
-**Passes.** Bits 16-18 of the fragment mode word say which pass a command is drawn in. The
-passes are drawn in order, each as one draw of the whole mesh with fixed blending and depth
+**Passes.** Bits 16-19 of the fragment mode word say which pass a command is drawn in. The
+passes are drawn in the order of the table, each as one draw of the whole mesh with fixed blending and depth
 use, and within a pass commands keep the list's order:
 
-| Pass | Blending | Depth |
+| Pass | Blending (colour; the picture's alpha the same factors) | Depth |
 |---|---|---|
 | 0 | none | tested and written |
 | 1 | over what is there, by alpha | tested |
 | 2 | added, scaled by alpha | tested |
-| 3 | what is there times the colour | tested |
-| 4-7 | the same four | not used: for drawing on top |
+| 3 | what is there times the colour (alpha kept) | tested |
+| 8 | added times (1 - what is there's alpha): `GL_ONE_MINUS_DST_ALPHA, GL_ONE` | tested |
+| 9 | what is there times the colour, plus what is there times (1 - its alpha): `GL_DST_COLOR, GL_ONE_MINUS_DST_ALPHA` | tested |
+| 4-7 | as 0-3 | not used: for drawing on top |
+| 12, 13 | as 8 and 9 | not used |
 
-So a frame is at most eight draws however many commands and state changes it has, and a list
+The picture keeps an alpha as GL's does with a destination alpha: a pass's factors apply to it too, a fragment's
+alpha is its colour's times its texel's, and the host clears it to 1. Passes 8, 9, 12 and 13 read it (3 November
+2026): Jedi Outcast's shine over its logo (`menu4`, its second stage) was added over the whole rectangle in pass 2,
+a white slant beside the letters; Quake III's light map over a glow (`largerblock3b_ow`, `pewter_shiney` and 55
+more shaders of the demo pak: `GL_DST_COLOR GL_ONE_MINUS_DST_ALPHA`) is a lit draw of its own in pass 9 after the
+stages under it, where it was the opaque stage's light and the stages over it were not lit (`bake.py`, `MASKED`).
+10, 11, 14 and 15 are no passes. In the world's volume and HUD layer, over the world's picture whose alpha is no
+game's, 9 and 13 multiply and 8 and 12 are not drawn (`VOLUME_BLENDING`). As with pass 3, a pass after 1 and 2 is
+drawn over what they blended in front of its surface.
+
+So a frame is at most twelve draws however many commands and state changes it has, and a list
 that only uses pass 0 is one. The host draws passes 1-7 only while lists ask for
 them: it reads the submit word back, sees the bits, and from then on draws those passes (and
 for some hundred frames after their last use). A list that needs a pass not being drawn yet

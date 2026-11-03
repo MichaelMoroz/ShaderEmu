@@ -266,6 +266,7 @@ def script_lines(name):
 
 WAVES = {'sin': 1, 'triangle': 2, 'square': 3, 'sawtooth': 4, 'inversesawtooth': 5, 'noise': 6}
 OPAQUE, BLEND, ADD, FILTER = 0, 1, 2, 3
+MASKED = 9   # the GPU's pass 9 (shader_vm/src/gpu.h): GL_DST_COLOR GL_ONE_MINUS_DST_ALPHA, by what is there's alpha
 S_KEYED, S_LIGHTMAP, S_ENV, S_CLAMP, S_IMPLICIT, S_INVERT = 1, 2, 4, 8, 16, 32
 RGB_IDENTITY, RGB_VERTEX, RGB_ENTITY, RGB_ONE_MINUS_ENTITY, RGB_DIFFUSE, RGB_WAVE, RGB_CONST = range(7)
 A_IDENTITY, A_VERTEX, A_ENTITY, A_ONE_MINUS_ENTITY, A_WAVE, A_CONST = range(6)
@@ -326,6 +327,7 @@ def blend_pass(blend):
     if not blend: return OPAQUE, False
     src, dst = blend
     if dst == 'gl_zero' and src == 'gl_one': return OPAQUE, False
+    if src == 'gl_dst_color' and dst == 'gl_one_minus_dst_alpha': return MASKED, False
     if src == 'gl_dst_color' or dst == 'gl_src_color': return FILTER, False
     if src == 'gl_zero' and dst == 'gl_one_minus_src_color': return FILTER, True
     if dst == 'gl_one_minus_src_alpha': return BLEND, False
@@ -338,14 +340,16 @@ shaders, shader_of, stages_out = [], {}, []
 
 def has_alpha(px): return px is not None and int(px[..., 3].min()) < 250
 
-def stage_textures(s, most, pass_, invert, over=None):
-    """The textures of a stage's pictures, in the kind its way of drawing needs. None: no picture."""
+def stage_textures(s, most, pass_, invert, over=None, alpha_kept=False):
+    """The textures of a stage's pictures, in the kind its way of drawing needs. None: no picture.
+    alpha_kept: a later stage goes by the picture's alpha (MASKED), so an opaque one keeps its alpha too."""
     out = []
     for f in s['frames']:
         if f == '$lightmap': return []
         px = picture(f)
         if px is None: return None
         kind = 'keyed' if s['flags'] & S_KEYED else 'words' if pass_ in (BLEND, ADD) and has_alpha(px) and s['blend'] and 'alpha' in ''.join(s['blend']) else 'rgb'
+        if kind == 'rgb' and alpha_kept and pass_ == OPAQUE and has_alpha(px): kind = 'words'
         key = (clean(f), kind, most, invert, over)
         if key not in texture_of:
             px = smaller(px, most)
@@ -400,11 +404,12 @@ def shader_made(name, context='3d'):
                     continue
                 kept.append(s)
             if kept: parsed = kept
+        masked = [i for i, s in enumerate(parsed) if blend_pass(s['blend'])[0] == MASKED]
         for i, s in enumerate(parsed):
             pass_, invert = blend_pass(s['blend'])
             lay = over if (over is not None and i == 0 and pass_ == BLEND) else None
             if lay is not None: pass_ = OPAQUE
-            tex = stage_textures(s, most, pass_, invert, lay)
+            tex = stage_textures(s, most, pass_, invert, lay, bool(masked) and i < masked[0])
             if tex is None: continue
             rgb = s['rgb']
             if rgb is None: rgb = RGB_IDENTITY
@@ -585,6 +590,10 @@ def stage_runs(sh):
     st = stages_out[first:first + count]
     light = [i for i, s in enumerate(st) if s['flags'] & S_LIGHTMAP]
     base = None
+    if light and st[light[0]]['pass_'] == MASKED:
+        # the light map over what the stages before it made, by its alpha (Quake III's glows under a grate): a draw of
+        # its own, the light map times white, after them
+        return [(i, bool(s['flags'] & S_LIGHTMAP), s['pass_']) for i, s in enumerate(st) if i == light[0] or not s['flags'] & S_LIGHTMAP]
     if light:
         l = light[0]
         if l + 1 < count and st[l + 1]['pass_'] == FILTER and not st[l + 1]['flags'] & S_LIGHTMAP: base = l + 1
@@ -653,7 +662,7 @@ for (m, sh, stage, page) in sorted(runs, key=lambda k: (k[0], stages_out[shaders
     if page == -2:
         flags, pass_ = R_SKY, OPAQUE
     elif page >= 0:
-        flags, pass_, light = flags | R_LIGHT, OPAQUE, light_pages[page]
+        flags, pass_, light = flags | R_LIGHT, MASKED if pass_ == MASKED else OPAQUE, light_pages[page]
         lm = np.clip(np.round(tri[:, 5:7] * 65535), 0, 65535).astype(np.uint32)
         uv2_at = place((lm[:, 0] | lm[:, 1] << 16).astype('<u4').tobytes())
     elif by_vertex:
