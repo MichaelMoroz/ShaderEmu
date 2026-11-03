@@ -3280,10 +3280,55 @@ index cf715b9..b22ad19 100644
  void MapRenderer_RenderNormal(float delta);
  /* Renders the meshes of translucent blocks in visible chunks. */
 diff --git a/src/Menus.c b/src/Menus.c
-index 9dd17d1..985dacf 100644
+index 9dd17d1..21cc60c 100644
 --- a/src/Menus.c
 +++ b/src/Menus.c
-@@ -2996,3 +2996,13 @@ void NostalgiaMenuScreen_Show(void) {
+@@ -228,6 +228,13 @@ static void Menu_SwitchEnv(void* a, void* b)       { EnvSettingsScreen_Show(); }
+ static void Menu_SwitchNostalgia(void* a, void* b) { NostalgiaMenuScreen_Show(); }
+ 
+ static void Menu_SwitchGenLevel(void* a, void* b)        { GenLevelScreen_Show(); }
++#ifdef CC_BUILD_SHADEREMU
++/* shaderemu: the world's LAN (Lan_ShaderEmu.c) */
++int SE_LanHost(void);
++void SE_LanJoin(void);
++static void Menu_SE_LanHost(void* a, void* b) { SE_LanHost(); }
++static void Menu_SE_LanJoin(void* a, void* b) { SE_LanJoin(); }
++#endif
+ static void Menu_SwitchClassicGenLevel(void* a, void* b) { ClassicGenScreen_Show(); }
+ static void Menu_SwitchLoadLevel(void* a, void* b)       { LoadLevelScreen_Show(); }
+ static void Menu_SwitchSaveLevel(void* a, void* b)       { SaveLevelScreen_Show(); }
+@@ -477,7 +484,7 @@ void MenuScreen_Render2(void* screen, float delta) {
+ /*########################################################################################################################*
+ *-----------------------------------------------------PauseScreenBase-----------------------------------------------------*
+ *#########################################################################################################################*/
+-#define PAUSE_MAX_BTNS 6
++#define PAUSE_MAX_BTNS 8
+ static struct PauseScreen {
+ 	Screen_Body
+ 	int descsCount;
+@@ -512,7 +519,7 @@ static void PauseScreenBase_AddWidgets(struct PauseScreen* s, int width) {
+ /*########################################################################################################################*
+ *-------------------------------------------------------PauseScreen-------------------------------------------------------*
+ *#########################################################################################################################*/
+-static struct Widget* pause_widgets[1 + 6 + 2];
++static struct Widget* pause_widgets[1 + PAUSE_MAX_BTNS + 2];
+ 
+ static void PauseScreen_CheckHacksAllowed(void* screen) {
+ 	struct PauseScreen* s = (struct PauseScreen*)screen;
+@@ -549,7 +556,11 @@ static void PauseScreen_Init(void* screen) {
+ 		{ -160,   50, "Hotkeys...",             Menu_SwitchHotkeys   },
+ 		{  160,  -50, "Generate new level...",  Menu_SwitchGenLevel  },
+ 		{  160,    0, "Load level...",          Menu_SwitchLoadLevel },
+-		{  160,   50, "Save level...",          Menu_SwitchSaveLevel }
++		{  160,   50, "Save level...",          Menu_SwitchSaveLevel },
++#ifdef CC_BUILD_SHADEREMU
++		{ -160,  100, "Host on the LAN",        Menu_SE_LanHost      },
++		{  160,  100, "Join a LAN game",        Menu_SE_LanJoin      }
++#endif
+ 	};
+ 
+ 	s->widgets     = pause_widgets;
+@@ -2996,3 +3007,13 @@ void NostalgiaMenuScreen_Show(void) {
  void TexIdsOverlay_Show(void) { }
  void UrlWarningOverlay_Show(const cc_string* url) { }
  #endif
@@ -3505,7 +3550,7 @@ index 614de99..33b4523 100644
  	struct timespec t;
  	#if defined CC_BUILD_IRIX || defined CC_BUILD_HPUX
 diff --git a/src/Protocol.c b/src/Protocol.c
-index 7657a5d..721a74f 100644
+index 7657a5d..88f0642 100644
 --- a/src/Protocol.c
 +++ b/src/Protocol.c
 @@ -216,6 +216,9 @@ static void AddEntity(cc_uint8* data, EntityID id, const cc_string* name, const
@@ -3518,6 +3563,75 @@ index 7657a5d..721a74f 100644
  		Event_RaiseInt(&EntityEvents.Added, id);
  	} else {
  		e = &Entities.CurPlayer->Base;
+@@ -487,6 +490,20 @@ static cc_uint8* Classic_WritePosition(cc_uint8* data, Vec3 pos, float yaw, floa
+ 	return data;
+ }
+ 
++#ifdef CC_BUILD_SHADEREMU
++/* shaderemu: CLASSICUBE_LAN_LOG=1, a joiner's block sent and its echo come back, by the machine's clock (two machines'
++   clocks are the host computer's), for the round trip */
++#include <stdio.h>
++#include <stdlib.h>
++#include <stdint.h>
++uint32_t SE_Milliseconds(void);
++static int se_lan_log = -1;
++static int SE_LanLog(void) {
++	if (se_lan_log < 0) se_lan_log = getenv("CLASSICUBE_LAN_LOG") != NULL;
++	return se_lan_log;
++}
++#endif
++
+ void Classic_SendSetBlock(int x, int y, int z, cc_bool place, BlockID block) {
+ 	cc_uint8 tmp[32];
+ 	cc_uint8* data = tmp;
+@@ -500,9 +517,15 @@ void Classic_SendSetBlock(int x, int y, int z, cc_bool place, BlockID block) {
+ 		WriteBlock(data, block);
+ 	}
+ 	Server.SendData(tmp, (cc_uint32)(data - tmp));
++#ifdef CC_BUILD_SHADEREMU
++	if (SE_LanLog()) { printf("lan: block %d sent at %d,%d,%d, %u ms\n", place ? block : 0, x, y, z, SE_Milliseconds()); fflush(stdout); }
++#endif
+ }
+ 
+ static void Classic_Handshake(cc_uint8* data) {
++#ifdef CC_BUILD_SHADEREMU
++	if (SE_LanLog()) { printf("lan: the server answered, %u ms\n", SE_Milliseconds()); fflush(stdout); }
++#endif
+ 	struct HacksComp* hacks;
+ 
+ 	Server.Name.length = 0;
+@@ -595,6 +618,9 @@ static void Classic_LevelDataChunk(cc_uint8* data) {
+ }
+ 
+ static void Classic_LevelFinalise(cc_uint8* data) {
++#ifdef CC_BUILD_SHADEREMU
++	if (SE_LanLog()) { printf("lan: the level came whole, %u ms\n", SE_Milliseconds()); fflush(stdout); }
++#endif
+ 	int width, height, length, volume;
+ 	cc_uint64 end;
+ 	int delta;
+@@ -657,6 +683,9 @@ static void Classic_SetBlock(cc_uint8* data) {
+ 	if (World_Contains(x, y, z)) {
+ 		Game_UpdateBlock(x, y, z, block);
+ 	}
++#ifdef CC_BUILD_SHADEREMU
++	if (!Server.IsSinglePlayer && SE_LanLog()) { printf("lan: block %d arrived at %d,%d,%d, %u ms\n", block, x, y, z, SE_Milliseconds()); fflush(stdout); }
++#endif
+ }
+ 
+ static void Classic_AddEntity(cc_uint8* data) {
+@@ -1959,6 +1988,11 @@ static void Protocol_Reset(void) {
+ 	WoM_Reset();
+ }
+ 
++#ifdef CC_BUILD_SHADEREMU
++/* shaderemu: the handlers in a singleplayer game that hosts others (Lan_ShaderEmu.c shows them with these) */
++void Protocol_SE_Install(void) { Protocol_Reset(); }
++#endif
++
+ void Protocol_Tick(void) {
+ 	cc_uint8 tmp[256];
+ 	cc_uint8* data = tmp;
 diff --git a/src/SelOutlineRenderer.c b/src/SelOutlineRenderer.c
 index 6333d62..8f684bc 100644
 --- a/src/SelOutlineRenderer.c
@@ -3587,7 +3701,7 @@ index 6333d62..8f684bc 100644
  }
  
 diff --git a/src/Server.c b/src/Server.c
-index 761927b..85e8ec1 100644
+index 761927b..ac21a48 100644
 --- a/src/Server.c
 +++ b/src/Server.c
 @@ -150,6 +150,12 @@ static void SPConnection_BeginConnect(void) {
@@ -3603,6 +3717,60 @@ index 761927b..85e8ec1 100644
  
  	Gen_Start(gen, seed, horSize, verSize, horSize);
  }
+@@ -179,9 +185,23 @@ static void SPConnection_AddPart(const cc_string* text) {
+ 	Chat_Add(&tmp);
+ }
+ 
++#ifdef CC_BUILD_SHADEREMU
++/* shaderemu: the game hosted on the world's LAN (Lan_ShaderEmu.c) */
++void SE_LanTick(void);
++void SE_LanBlock(int x, int y, int z, BlockID now);
++void SE_LanChat(const cc_string* text);
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++uint32_t SE_Milliseconds(void);
++#endif
++
+ static void SPConnection_SendChat(const cc_string* text) {
+ 	cc_string left, part;
+ 	if (!text->length) return;
++#ifdef CC_BUILD_SHADEREMU
++	SE_LanChat(text);
++#endif
+ 
+ 	sp_lastCol = '\0';
+ 	left = *text;
+@@ -196,6 +216,9 @@ static void SPConnection_SendChat(const cc_string* text) {
+ 
+ static void SPConnection_SendBlock(int x, int y, int z, BlockID old, BlockID now) {
+ 	Physics_OnBlockChanged(x, y, z, old, now);
++#ifdef CC_BUILD_SHADEREMU
++	SE_LanBlock(x, y, z, now);
++#endif
+ }
+ 
+ static void SPConnection_SendData(const cc_uint8* data, cc_uint32 len) { }
+@@ -205,6 +228,9 @@ static cc_bool SPConnection_Tick(struct ScheduledTask2* task) {
+ 	/* 60 -> 20 ticks a second */
+ 	if ((ticks++ % 3) != 0)  return true;
+ 	
++#ifdef CC_BUILD_SHADEREMU
++	SE_LanTick();
++#endif
+ 	Physics_Tick();
+ 	TexturePack_CheckPending();
+ 	return true;
+@@ -304,6 +330,9 @@ static void MPConnection_TickConnect(void) {
+ }
+ 
+ static void MPConnection_BeginConnect(void) {
++#ifdef CC_BUILD_SHADEREMU
++	if (getenv("CLASSICUBE_LAN_LOG")) { printf("lan: connecting, %u ms\n", SE_Milliseconds()); fflush(stdout); }
++#endif
+ 	static const cc_string invalid_reason = String_FromConst("Invalid IP address");
+ 	cc_string title; char titleBuffer[STRING_SIZE];
+ 	cc_sockaddr addrs[SOCKET_MAX_ADDRS];
 diff --git a/src/TexturePack.c b/src/TexturePack.c
 index 495c6ea..e8cb2c8 100644
 --- a/src/TexturePack.c

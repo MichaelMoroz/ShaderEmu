@@ -322,6 +322,38 @@ By hand:
 - To see where instructions go, snapshot a run at `classicube: steady` and resume it with `--pc-log` (`tools\pc_profile.py`, `classicube=classicube.nm`), or `python
   tools/prof.py` (`docs/machine/profiling.md`).
 
+## Played together
+
+A player's own world is served to others on the world's LAN (`docs/system/lan.md`) in ClassiCube's own protocol, Classic
+version 7, by the game itself (`linux/classicube/Lan_ShaderEmu.c`, hooked into the singleplayer server's tick, its block and
+its chat in `classicube.patch`): a joiner is the stock client, `classicube NAME lan 10.0.0.N 25565`. The pause menu has
+"Host on the LAN" and "Join a LAN game"; the second listens 1.5 s for a host's beacon (UDP broadcast to port 25566, four a
+second) and runs the client against the first heard, as `PlayerN` (N the machine's number). `CLASSICUBE_LAN=host` hosts
+from the start.
+
+- **A joiner's level** is the world's blocks gzipped by libmedia's deflate on the worker cores (`media_gzip`, pieces of
+  64 KB deflated apart and joined as one stream), sent in the protocol's 1,024-byte chunks. It is gzipped again only after
+  a block changed. The 64 x 64 x 64 world is 262,148 bytes, 12,725 gzipped, in 1.8 s of the guest's.
+- **Blocks** are deltas: a block a joiner places or takes away is applied by the host and sent to everybody as one SetBlock
+  of 8 bytes; one the host changes likewise. (The singleplayer physics' own changes are not sent: the tests turn it off.)
+- **Players**: the host shows joiners through its protocol's own handlers (`Protocol_SE_Install`: models, names, smoothed
+  moves), as a client would; every player's place goes to the others when it moved, at most ten times a second, 10 bytes.
+- **Chat** goes to everybody with whose it is.
+
+Measured on three `rvc_cpu` machines (`python tools/classicube_lan.py --joiners 2`: `--net-rate 4000 --net-delay 115`,
+the world's link; 3 November 2026):
+
+| | |
+|---|---|
+| a join, from connecting to the level whole | 9.1 and 9.2 s: 3.0 s the connection (the first SYN's retry), 0.2 s the answer, 1.8 s gzipping, 3.2 s the level on the link at 4,000 bytes a second |
+| a block's round trip, a joiner's to its echo | 396 to 660 ms (115 ms each way, the host's 20 ticks a second, the link's queue) |
+| with two joined, at rest | the host sends 57 bytes a second and takes 391 (the stock client tells its place 20 times a second) |
+
+`--races` runs every machine under `RVC_RACES` (`RVC_RACES_NEAR=4`): 0 undone on the host and the joiner. Not done: the world
+larger than 64 x 64 x 64 is untried, CPE (the extensions) is not offered (a joiner is a Classic client: no custom blocks), the
+host's physics is not shared, and a joiner's own client still fetches skins from ClassiCube's site; in the world, two players'
+machines over EmuNet are untried.
+
 ## Not done
 
 - Playing it by hand with the window's keys and pointer; the terminal's lines and the host's words are what the tests use. The world's beams are a pointer, not a mouse
