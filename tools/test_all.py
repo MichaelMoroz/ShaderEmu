@@ -824,6 +824,9 @@ CASES = [
     case('pad-tdawn', 'games tdawn', X + 'TDAWN_INPUT_LOG=1 ' + TD + 'TDAWN_SCEN=10 TDAWN_FRAMES=2000 tdawn FROMINSTALL', True, until='pad key 38 up', wall=300,
          more=['--pointer-sweep', '0', '--pointer-circle', '300,250,0', '--scroll', '14,lx,-2', '--scroll', '15,ly,1'],
          count=[(r'tdinput: pad key 37 down', 2)], has=[r'tdinput: pad key 38 down']),
+    case('pad-ralert', 'games ralert', X + 'TDAWN_INPUT_LOG=1 TDAWN_AUTO=1 RALERT_SIDE=allies RALERT_SEED=7 RALERT_FRAMES=2000 ralert', True,
+         until='pad key 38 up', wall=300, more=['--pointer-sweep', '0', '--pointer-circle', '300,250,0', '--scroll', '20,lx,-2', '--scroll', '21,ly,1'],
+         count=[(r'tdinput: pad key 37 down', 2)], has=[r'tdinput: pad key 38 down']),
     # OpenTTD: a notch holds an arrow 120 ms (the main view scrolls); Quake: the jump button (A, bit 16) jumps
     case('pad-openttd', 'games openttd', X + 'OPENTTD_PAD_LOG=1 openttd -g /usr/share/openttd/busy.sav', True, until='pad pans down', wall=400,
          more=['--pointer-sweep', '0', '--pointer-circle', '300,250,0', '--scroll', '60,lx,-1', '--scroll', '62,ly,-1', '--scroll', '64,ly,-1',
@@ -840,6 +843,32 @@ CASES = [
     # notch of the left hand's stick holds W, the jump button is Space
     case('pad-doom', 'games doom', X + 'DOOM_PAD_LOG=1 doom -warp 1 1 & sleep 40; killall doom.bin', True, wall=300,
          more=['--pointer-button', '0x10080,20,20.5'], has=[r'doom: pad uses']),
+    # Quake from a holodeck's seat (docs/world/holodeck.md, "Transitions"; a desktop sitter's words, the stick pushed: it walks): the menu
+    # opened and closed after 30 frames, a kill, a level change; tools/volume_frames.py on --volume-log: flat while the menu is up and
+    # during the load, the world with its HUD again after each, never an empty world over a second
+    case('quake-seated', 'games quake holodeck', X + 'QUAKE_TRACK=5 quake +map e1m1', True, until='track 400:', wall=600, volume=True,
+         more=['--host', '00000112,0,0,0,0,00007f00,0,0', '--expect', 'track 40:', '--send', 'togglemenu; ' + 'wait; ' * 30 + 'togglemenu\\n',
+               '--expect', 'track 80:', '--send', 'kill\\n', '--expect', 'track 160:', '--send', 'changelevel e1m2\\n'],
+         has=[r'maps/e1m2\.bsp', r'volume_frames: .*flat screen', r'volume_frames: .*world \+ HUD \(at most \d+ drawn flat\)',
+              r'volume_frames: frames: .*empty worlds over a second: 0', r'volume_frames: exit 0']),
+    # Jedi Outcast from the seat (an image with the demo; docs/world/holodeck.md): the level loaded flat, then the sitter's stick walks
+    # it ("seat: 2 ... move 127 0 0", JK2_SEAT=1), the world with its HUD, no empty world over a second
+    case('jk2-seat', 'games jk2 long holodeck', 'if [ -f /usr/share/jk2/jk2demo.exe ]; then JK2_SEAT=1 jk2 +map demo; else echo JK2-NO-DATA; fi',
+         until='move 127 0 0', wall=7200, volume=True,
+         more=['--expect', 'Type yes', '--send', 'yes\\n', '--host', '00000112,0,0,0,0,00007f00,0,0'],
+         has=[r'(seat: 2 aim .* move 127 0 0|JK2-NO-DATA)', r'(volume_frames: exit 0|JK2-NO-DATA)']),
+    # Half-Life from the seat (an image with Uplink's data): the menu at the level's second 10 (flat) closed by Escape at the guest's
+    # 125 s, a kill at 20, a new level at 30 (HL_SCRIPT; the script's text split so that the shell's echo is not the marks it waits for)
+    case('halflife-seated', 'games halflife holodeck', X + 'if [ -f /usr/share/halflife/valve/pak0.PAK ]; then S=10:togglemenu; '
+         'S="$S|20:kill|30:map hl"; HL_SCRIPT="${S}demo2|40:echo SEAT-$((1+1))" halflife -dev 1 +map hldemo1; else echo HL-NO-$((0))DATA; echo SEAT-$((1+1)); fi',
+         True, until='SEAT-2', wall=900, volume=True,
+         more=['--host', '00000112,0,0,0,0,00007f00,0,0', '--input-event', '125,80000001', '--input-event', '125.3,1'],
+         has=[r'(Spawn Server: hldemo2|HL-NO-0DATA)', r'(script 20\.\d+: kill|HL-NO-0DATA)', r'(volume_frames: .*flat screen|HL-NO-0DATA)',
+              r'(volume_frames: exit 0|HL-NO-0DATA)']),
+    # Half-Life (an image with Uplink's data; else HL-NO-DATA): the hands' buttons as its keys, A the jump and B the use (HL_PAD_LOG)
+    case('pad-halflife', 'games halflife', X + 'if [ -f /usr/share/halflife/valve/pak0.PAK ]; then HL_PAD_LOG=1 halflife -dev 1 +map hldemo1 & '
+         'sleep 150; killall halflife.bin; else echo HL-NO-DATA; fi', True, wall=900, more=['--pointer-button', '0x18080,120,120.5'],
+         has=[r'(halflife: pad down 18080|HL-NO-DATA)']),
     case('pad-quake3', 'games quake3', X + 'QUAKE3_PAD_LOG=1 ' + Q3, True, until='pad down 10080', wall=400,
          more=['--pointer-button', '0x10080,45,45.5'], has=[r'quake3: pad down 10080']),
     case('pad-classicube', 'games classicube', CC + 'CLASSICUBE_PAD_LOG=1 CLASSICUBE_SEED=7 classicube', True, until='pad key', wall=300,
@@ -1022,6 +1051,10 @@ def run(c, a, image, logs):
     if c['cmd'] is not None:
         args += ['--expect', '/ # ', '--send', c['cmd'] + '; ' + DONE + '\\n']
     args += ['--until', c['until']] + c['more']
+    if c.get('volume'):   # (a seated case: the frames given a holodeck, judged by tools/volume_frames.py after the run)
+        if os.path.exists(log + '.volume'):
+            os.remove(log + '.volume')
+        args += ['--volume-log', log + '.volume']
     env = dict(os.environ)
     env.pop('RVC_RACES', None)
     env.setdefault('RVC_THREADS', str(max(1, (os.cpu_count() or 4) // a.jobs)))   # the workers' host threads, all cases together
@@ -1053,6 +1086,11 @@ def run(c, a, image, logs):
         if os.path.exists(f):
             os.remove(f)
     text = open(log, encoding='latin-1').read() if os.path.exists(log) else ''
+    if c.get('volume') and os.path.exists(log + '.volume'):
+        # its runs (flat, world + HUD, an empty world) and its verdict, as lines of the console the checks read
+        v = subprocess.run([sys.executable, os.path.join(ROOT, 'tools', 'volume_frames.py'), log + '.volume'], capture_output=True,
+                           text=True, errors='replace')
+        text += '\nvolume_frames: ' + v.stdout.replace('\n', '\nvolume_frames: ') + '\nvolume_frames: exit %d\n' % v.returncode
     return text, err, races, secs
 
 
