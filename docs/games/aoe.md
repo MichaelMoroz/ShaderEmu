@@ -238,6 +238,87 @@ Tried and not taken: `-O3 -fsched-pressure -funroll-loops` was no faster in play
 LTO does not link: the decompiled source defines a class differently in different files (`taiuaimd.h`). PGO was not tried.
 A branchless `get_tile_mask_num` was 64 instructions a call against 59.
 
+### The world in slices (3 November 2026)
+
+The aim set after the last round was five times the speed in scrolling and in play. Where a frame went, by the machine's time on the
+first core (`aoephase:` lines at a mark's end, `aoe_phase` in `port/aoe_view.cpp`), calibrated, updates 200 to 350:
+
+| | Wait for the walk | World update | Panels | A frame |
+|---|---|---|---|---|
+| `aoe-drag-scroll` | 37.5 ms (45%) | 26.6 ms (32%) | 10.9 ms | 82.7 ms |
+| `aoe-still-640` | 14.5 ms (21%) | 26.0 ms (38%) | 12.3 ms | 67.0 ms |
+
+Every picture waited for one whole update, and the walk could not start before the update ended, since it reads the objects. So:
+
+- **The world's update in slices** (`port/aoe_world.cpp`). The update runs on a stack of its own on the first core and gives way between
+  two objects' updates (`RGE_Object_List::update`, `aoe_world_may_give_way`) once its slice is spent; a picture is drawn of the world as
+  the slice left it, and the next slice goes on where it stopped. The slice keeps an update to 70 ms of the real clock (`AOE_UPDATE_MS`): the
+  world's share of the time is the last update's work over 70 ms, and the slice is the time spent outside it since the last slice in that
+  ratio, at least 4 ms (`AOE_SLICE_MS`); an update whose work is over 90% of that is whole. So the game's time keeps up with the real
+  clock as before (its step is capped at 100 ms an update), and the pictures get the rest.
+  While it is out nothing writes the world: the walk and the panels only read it, a move only moves the view or the pointer, and any
+  other input (a button, a key, a close) runs the update to its end first (`aoe_world_finish` in `DispatchMessage`). The world's clock
+  stands still while it is out (`aoe_world_clock`), so a computer player's budget of milliseconds is its own work's. A picture between
+  two slices shows some objects one update further than others, a few pixels at most; nothing is drawn half moved, since an object's
+  update is never cut. `AOE_WORLD=whole` is an update between two pictures, the way before; so are `AOE_TICK_MS`, `AOE_VIEW=inline`
+  and `AOE_NOWINDOW` runs, which is how the state sums are made (`test_all.py aoe`: `5032c153` at update 1000 as before).
+- **Paths without doubles** (`port/aoe_path.c`). With a dozen villagers ordered, two thirds of the first core was `findTilePath` and its
+  soft doubles: `(int) (sqrt((double) d2) * 16.0)` at every step of its search. It is `floor(sqrt(256 d2))`, the same number for every
+  whole `d2` (16 times a correctly rounded root is exact, and a root that is not whole is farther from a whole number than any rounding),
+  so a table of 131,073 entries up to the largest map's diagonal, made at the first path. `AOE_PATH_CHECK=1` makes both at every call:
+  7,380 of 7,380 alike in the busy scene. The terrain's passability is compared with `0.0f`, which `g_path_zero_terrain_value` (0.0) is,
+  in place of a float made a double. `AOE_PATH=doubles` is the way before.
+- `mcw_on_worker`, a call at every sprite on the view's worker (6%), is a test of the stack pointer against the job's stack
+  (`aoe_view_core`, `aoe_cores.h`).
+
+A scene of busy units: `game_par.py aoe-busy-640` types the game's cheats into its chat (food, wood, quick building), builds three houses,
+trains nine villagers, boxes the twelve and orders them to and fro across the view every 6 s, and measures 150 updates from the first
+order (the script's `chat`, `box` and `mark` steps). Typing into the chat needed a fix: keys went to the game's hotkeys while the chat's
+line had the focus, since the game subclasses its edit controls (`DispatchMessage` in `port/win32.cpp`). There is no fight in it:
+no enemy is within a script's reach in the first minutes; `aoe-late-640`, the computer players' towns, is the scene with their armies.
+The `-whole` twins of the scenes are `AOE_WORLD=whole`; `aoe-busy-640-before` is `AOE_WORLD=whole AOE_PATH=doubles`.
+
+Calibrated (`--calibrated`, updates 200 to 350; busy 150 from the first order; late 3000 to 3200), the image before this work
+(the last commit's program) against this one, run side by side; game time is the game's milliseconds over the real ones. Two runs of
+one scene differ by up to 10% (the drag after: 16.7 and 18.1; the still: 20.4 and 24.7), so read the first digit:
+
+| Scene | Before: pictures a second, passes a picture, game time | After | Pictures |
+|---|---|---|---|
+| `aoe-drag-scroll` | 11.2, 60.7, 0.86 | 16.7, 40.8, 0.86 | 1.5x |
+| `aoe-still-640` | 14.2, 47.2, 0.97 | 24.7, 27.4, 0.99 | 1.7x |
+| `aoe-busy-640` (before: `-before`, the same program the way back) | 5.8, 116.0, 0.55 | 15.9, 42.5, 0.93 | 2.7x |
+| `aoe-late-640` | 17.0, 39.7, 0.98 | 23.8, 28.4, 0.94 | 1.4x |
+
+In the busy scene the world's update went from 603 thousand instructions to 173 thousand (the path finder), and its game time from
+0.55 of the real clock to 0.93: units walk at the game's speed again. In the others the update costs as before and gets the same share
+of the clock (an update about every 70 to 85 ms), and the pictures between are new.
+
+Not run on the card: at the owner's word this round is measured on `rvc_cpu` with the card's model only (`game_par.py --calibrated`).
+The last round's card runs gained more than the calibrated clock on the drag (the model has no cost for many short passes).
+
+`RVC_RACES` with `RVC_RACES_NEAR=4` on the drag and the busy scene: 0 undone; near places are core 0's panels and copies (`Blt`,
+`memcpy` of `aoe_view_post`) beside the view's job (`view_function_terrain`, `ASMDraw_Sprite`) two to four passes apart, as before.
+Pictures of the busy scene with the world in slices were looked at (the script's `shot` step, below): the villagers whole and where
+they walk, no seams.
+
+What bounds it now, and why five times was not reached:
+
+- **The walk.** A picture's walk of the visible tiles is 90 to 150 thousand instructions on one worker, and the first core can only wait
+  for it: the walk reads the objects, so the world cannot run beside it. That is 15 to 26 ms of a picture. The way on is the view in parts
+  over several workers (OpenTTD's `ViewportFlush`): by bands of rows, each worker drawing the terrain and capturing the objects of its band
+  with clip masks and object lists of its own, merged by line for the raster. The tile state the walk keeps (`last_drawn_as`,
+  `last_drawn_shape`, `draw_attribute`) lies in the tiles beside the world's own and would move to a table of its own, written after the
+  join. Not done.
+- **The world.** An update is 145 to 165 thousand instructions (computer players' placement 82 thousand a call, Gaia's animals 85
+  thousand, the path finder's A* about 1,000 instructions a node expanded); keeping it at 70 ms takes 38% of the first core. Running
+  it beside the walk needs the walk to work from copies of what it reads (sprites' frames and the objects on the visible tiles), and
+  the draw clears an animated sprite's `frame_changed`, which the game's logic reads: a frame behind would move the state sums.
+- **The panels**: 36 thousand a picture (a training button's border sprite 50 thousand when it shows progress, the minimap 76 thousand
+  every third picture).
+
+A picture for checking: the script's `shot` step keeps the page and its palette in memory under a mark, and `rvc_cpu --save-ram FILE`
+at the end lets a host read them out (marked `AOESHOT!`, then the number, width and height, 1,024 bytes of palette and the pixels).
+
 ## The view on a worker
 
 `RGE_View::draw`, the walk and the raster, is one job on a worker (`port/aoe_view.cpp`). The first core draws the other
