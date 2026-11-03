@@ -864,7 +864,30 @@ void SE_MusicRound( int sound_time, int muted )
 	}
 	se_round++;
 }
+
+// The mix painted on a worker (docs/games/jk2.md, "The mix on a worker"): S_Update_'s painting, the card's submit and
+// the lip syncs, given at the end of S_Update and done before the client's next frame (CL_Frame), while the server's
+// frame runs, which reads of the sound only the voices' loudness (gi.VoiceVolume). Only with the card (the sums' runs
+// mix on this core) and the drawing's workers; JK2_MIX=core is the way before.
+extern "C" int jk2MixOn( void );
+extern "C" void jk2MixGive( void ( *fn )( void ) );
+extern "C" void jk2MixSettle( void );
+int SE_MixWorker( void )
+{
+	return se_voice >= 0 && jk2MixOn();
+}
+void SE_MixGive( void ( *fn )( void ) )
+{
+	jk2MixGive( fn );
+}
+void SE_MixSettle( void )
+{
+	jk2MixSettle();
+}
 #else
+int SE_MixWorker( void ) { return 0; }
+void SE_MixGive( void ( *fn )( void ) ) { fn(); }
+void SE_MixSettle( void ) {}
 int SE_MusicOn( void ) { return 0; }
 int SE_MusicGive( const void *track, int bytes, int pos, int want, float volume, int raw_time ) { return -1; }
 void SE_MusicForget( const void *track ) {}
