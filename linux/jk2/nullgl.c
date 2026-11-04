@@ -107,3 +107,25 @@ int jk2glEnvElements(int count, const unsigned *idx, const float *normal, const 
 void jk2glKey(const void *surface, int frame) { (void)surface; (void)frame; }
 void jk2glKeysForget(void) {}
 int jk2MixWorkerHere(void) { return 0; }
+
+/* the GL's kept and tagged words, the in-play test and the joins' counts (gl_jk2.c's, sys_shaderemu.cpp's under SE_WINDOW):
+   none on the build computer, so the renderer makes tess's words itself, which leaves the game as it is */
+int SE_InPlay(void) { return 1; }
+void hlglWordsInPlace(unsigned char *rgba, int n, int opaque, int *holes) { (void)rgba; (void)n; (void)opaque; (void)holes; }
+int jk2glKeptOn(void) { return 0; }
+int jk2glKeptWords(unsigned *to, const float *points, int stride, int st, const int *idx, int count, int verts) {
+    (void)to; (void)points; (void)stride; (void)st; (void)idx; (void)count; (void)verts;
+    return 0;
+}
+int jk2glTaggedDraws(const unsigned *words, unsigned *tables, const int *counts, int draws) {
+    (void)words; (void)tables; (void)counts; (void)draws;
+    return 0;
+}
+void jk2glSettle(void) {}
+int jk2glKeptFaces(unsigned rgba, const unsigned *const *words, const int *counts, int faces, int floored) {
+    (void)rgba; (void)words; (void)counts; (void)faces; (void)floored;
+    return 0;
+}
+unsigned se_join_waits, se_rs_waits;
+/* mcwx.h's loop over the workers: the whole range on this core */
+void mcw_for_opt(unsigned n, void (*fn)(void *ctx, unsigned from, unsigned to), void *ctx, const void *o) { (void)o; if (n) fn(ctx, 0, n); }

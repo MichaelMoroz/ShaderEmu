@@ -335,7 +335,7 @@ index 94051760..57e8ac87 100644
  	if ( cl.viewangles[PITCH] - oldAngles[PITCH] > 90 ) {
  		cl.viewangles[PITCH] = oldAngles[PITCH] + 90;
 diff --git a/code/client/cl_main.cpp b/code/client/cl_main.cpp
-index 1a5c2446..204949cf 100644
+index 1a5c2446..5b7364d4 100644
 --- a/code/client/cl_main.cpp
 +++ b/code/client/cl_main.cpp
 @@ -145,6 +145,7 @@ void CL_FlushMemory( void ) {
@@ -354,7 +354,7 @@ index 1a5c2446..204949cf 100644
  		// clear nextmap so the cinematic shutdown doesn't execute it
  		Cvar_Set( "nextmap", "" );
  		CL_Disconnect();
-@@ -761,8 +763,29 @@ CL_Frame
+@@ -761,8 +763,128 @@ CL_Frame
  extern cvar_t	*cl_newClock;
  static unsigned int frameCount;
  float avgFrametime=0.0;
@@ -365,13 +365,112 @@ index 1a5c2446..204949cf 100644
 +// hands its two functions over at its first frame, as its module keeps its names)
 +static void ( *se_game_give )( void ), ( *se_game_take )( void );
 +void SE_GameHooks( void ( *give )( void ), void ( *take )( void ) ) { se_game_give = give, se_game_take = take; }
++// (JK2_SPLIT=ahead: the server's frame made here, the client's game given its copy first; common.cpp's Com_Frame skips it)
++// (1: =ahead, in order; 2: =worker, the server's frame on a worker of its own while the client's is made here)
++int SE_SplitAhead( void )
++{
++	static int ahead = -1;
++	if ( ahead < 0 ) {
++		const char *e = getenv( "JK2_SPLIT" );
++		ahead = e && !strcmp( e, "ahead" ) ? 1 : e && !strcmp( e, "worker" ) ? 2 : 0;
++	}
++	return ahead;
++}
++#include "../../shared/qcommon/se_server.h"
++#include <setjmp.h>
++extern "C" int jk2ServerOn( void );
++extern "C" void jk2ServerGive( void ( *fn )( void * ), void *arg ), jk2ServerSettle( void );
++// (what each side keeps its own copy of while the game's frame is apart: given before the game's frame, taken after the
++// client's, in either order of JK2_SPLIT=ahead and =worker; SE_ServerSide() says which side asks)
++static struct { void ( *give )( void ), ( *take )( void ); } se_side_hooks[8];
++static int se_side_n, se_sv_side;
++extern "C" void SE_SideHook( void ( *give )( void ), void ( *take )( void ) )
++{
++	if ( se_side_n < 8 )
++		se_side_hooks[se_side_n].give = give, se_side_hooks[se_side_n++].take = take;
++}
++extern "C" int SE_ServerSide( void ) { return se_sv_side || jk2ServerHere(); }
++static int se_sv_msec;
++static float se_sv_frac;
++static jmp_buf se_sv_abort;
++static int se_sv_failed;
++static char se_sv_error[1024];
++static char se_sv_kept[16384];
++static int se_sv_kept_used, se_sv_kept_lost;
++static void SE_ServerJob( void * )
++{
++	if ( setjmp( se_sv_abort ) )
++		return;
++	SV_Frame( se_sv_msec, se_sv_frac );
++}
++// (Com_Error on the worker: the frame ends and the error is raised by this core at the settle)
++void SE_ServerAbort( int code, const char *text )
++{
++	Q_strncpyz( se_sv_error, text, sizeof se_sv_error );
++	se_sv_failed = code + 1;
++	longjmp( se_sv_abort, 1 );
++}
++// (Com_Printf on the worker: kept, printed by this core at the settle)
++int SE_ServerKeepPrint( const char *text )
++{
++	if ( !jk2ServerHere() )
++		return 0;
++	const int n = (int)strlen( text ) + 1;
++	if ( se_sv_kept_used + n > (int)sizeof se_sv_kept )
++		se_sv_kept_lost++;
++	else
++		memcpy( se_sv_kept + se_sv_kept_used, text, n ), se_sv_kept_used += n;
++	return 1;
++}
++static void SE_ServerSettleAll( void )
++{
++	jk2ServerSettle();
++	for ( int at = 0; at < se_sv_kept_used; at += (int)strlen( se_sv_kept + at ) + 1 )
++		Com_Printf( "%s", se_sv_kept + at );
++	se_sv_kept_used = 0;
++	if ( se_sv_kept_lost )
++		Com_Printf( "(%d of the game's frame's lines lost)\n", se_sv_kept_lost ), se_sv_kept_lost = 0;
++	if ( se_sv_failed ) {
++		const int code = se_sv_failed - 1;
++		se_sv_failed = 0;
++		Com_Error( code, "%s", se_sv_error );
++	}
++}
++extern unsigned long long SE_Instructions( void );
++unsigned long long se_split_ins[4];	// (JK2_PARTS: give, game's frame here, take, frames)
 +void CL_Frame( int msec, float fractionMsec ) {
 +	SE_MixSettle();
++	unsigned long long se_i0 = SE_Instructions();
 +	if ( se_game_give )
 +		se_game_give();
++	int se_out = 0;
++	if ( SE_SplitAhead() ) {
++		for ( int k = 0 ; k < se_side_n ; k++ )
++			se_side_hooks[k].give();
++		const unsigned long long se_i1 = SE_Instructions();
++		se_split_ins[0] += se_i1 - se_i0, se_i0 = se_i1;
++		if ( SE_SplitAhead() == 2 && se_game_give && cls.state == CA_ACTIVE && com_sv_running && com_sv_running->integer &&
++			jk2ServerOn() ) {
++			se_sv_msec = msec, se_sv_frac = fractionMsec;
++			jk2ServerGive( SE_ServerJob, NULL );
++			se_out = 1;
++		} else {
++			se_sv_side = 1;
++			SV_Frame( msec, fractionMsec );
++			se_sv_side = 0;
++		}
++		se_split_ins[1] += SE_Instructions() - se_i0;
++	}
 +	CL_Frame_( msec, fractionMsec );
++	if ( se_out )
++		SE_ServerSettleAll();
++	se_i0 = SE_Instructions();
++	if ( SE_SplitAhead() )
++		for ( int k = 0 ; k < se_side_n ; k++ )
++			se_side_hooks[k].take();
 +	if ( se_game_take )
 +		se_game_take();
++	se_split_ins[2] += SE_Instructions() - se_i0, se_split_ins[3]++;
 +}
 +static void CL_Frame_( int msec, float fractionMsec ) {
 +#else
@@ -384,7 +483,7 @@ index 1a5c2446..204949cf 100644
  	if ( !com_cl_running->integer ) {
  		return;
  	}
-@@ -1127,6 +1150,9 @@ void CL_InitRef( void ) {
+@@ -1127,6 +1249,9 @@ void CL_InitRef( void ) {
  	RIT(CM_DeleteCachedMap);
  	RIT(CM_DrawDebugSurface);
  	RIT(CM_PointContents);
@@ -1529,7 +1628,7 @@ index 5407ffb0..62551e3a 100644
  	box_planes[1].dist = -maxs[0];
  	box_planes[2].dist = mins[0];
 diff --git a/code/qcommon/cm_local.h b/code/qcommon/cm_local.h
-index cfd9b106..1cdccaa8 100644
+index cfd9b106..2fd30e4e 100644
 --- a/code/qcommon/cm_local.h
 +++ b/code/qcommon/cm_local.h
 @@ -197,9 +197,48 @@ typedef struct traceWork_s {
@@ -1547,8 +1646,8 @@ index cfd9b106..1cdccaa8 100644
 +// A slot's marks of what its trace has seen (cm_trace.cpp): the world's brushes, then its surfaces, one array a slot; the
 +// slot's count is its traces'. Made by the first core (CM_SE_Marks), as the world's sizes are; a slot finding none ends.
 +bool CM_SE_Marks( int slot );
-+extern int *se_cm_marks[SE_SLOTS + 1];
-+extern int se_cm_count[SE_SLOTS + 1][4];
++extern int *se_cm_marks[SE_CORES];
++extern int se_cm_count[SE_CORES][4];
 +static inline bool CM_SE_Seen( traceWork_t *tw, clipMap_t *local, int *field, int index )
 +{
 +	if ( !tw->seSlot ) {
@@ -1617,7 +1716,7 @@ index efb97b53..83ee931a 100644
  
  void		CM_BoxTrace ( trace_t *results, const vec3_t start, const vec3_t end,
 diff --git a/code/qcommon/cm_test.cpp b/code/qcommon/cm_test.cpp
-index 77a2265f..ebfb4c76 100644
+index 77a2265f..e4e5bf18 100644
 --- a/code/qcommon/cm_test.cpp
 +++ b/code/qcommon/cm_test.cpp
 @@ -61,14 +61,27 @@ struct PointAndLeaf
@@ -1627,10 +1726,10 @@ index 77a2265f..ebfb4c76 100644
 +#ifdef SHADEREMU
 +// ShaderEmu: a cache a job slot (shared/qcommon/se_slot.h): the players made ahead on workers look leaves up at once
 +struct sePointToLeaf_t { PointAndLeaf a[MAX_POINTS_TO_LEAVES]; int oldest, size, unused[2]; } __attribute__(( aligned( 16 ) ));
-+static sePointToLeaf_t se_point_to_leaf[SE_SLOTS + 1];
-+#define pointToLeaf ( se_point_to_leaf[SE_Slot()].a )
-+#define oldestPointToLeaf ( se_point_to_leaf[SE_Slot()].oldest )
-+#define sizePointToLeaf ( se_point_to_leaf[SE_Slot()].size )
++static sePointToLeaf_t se_point_to_leaf[SE_CORES];
++#define pointToLeaf ( se_point_to_leaf[SE_Core()].a )
++#define oldestPointToLeaf ( se_point_to_leaf[SE_Core()].oldest )
++#define sizePointToLeaf ( se_point_to_leaf[SE_Core()].size )
 +#else
  static PointAndLeaf	pointToLeaf[MAX_POINTS_TO_LEAVES];
  static int	oldestPointToLeaf = 0, sizePointToLeaf = 0;
@@ -1642,7 +1741,7 @@ index 77a2265f..ebfb4c76 100644
  void CM_CleanLeafCache(void)
  {
 +#ifdef SHADEREMU
-+	for ( int s = 0; s <= SE_SLOTS; s++ )
++	for ( int s = 0; s < SE_CORES; s++ )
 +		se_point_to_leaf[s].oldest = se_point_to_leaf[s].size = 0;
 +#endif
  	oldestPointToLeaf = sizePointToLeaf = 0;
@@ -1653,7 +1752,7 @@ index 77a2265f..ebfb4c76 100644
  	}
  
 +#ifdef SHADEREMU
-+	if ( !SE_Slot() )	// (the first core's count)
++	if ( !SE_Core() )	// (the first core's count)
 +#endif
  	c_pointcontents++;		// optimize counter
  
@@ -1805,7 +1904,7 @@ index 77a2265f..ebfb4c76 100644
 +}
 +#endif
 diff --git a/code/qcommon/cm_trace.cpp b/code/qcommon/cm_trace.cpp
-index 7f605324..6a35cd9c 100644
+index 7f605324..b026dc69 100644
 --- a/code/qcommon/cm_trace.cpp
 +++ b/code/qcommon/cm_trace.cpp
 @@ -256,10 +256,16 @@ void CM_TestInLeaf( traceWork_t *tw, cLeaf_t *leaf, clipMap_t *local ) {
@@ -1916,7 +2015,7 @@ index 7f605324..6a35cd9c 100644
  
  			if ( !(patch->contents & tw->contents) ) {
  				continue;
-@@ -749,9 +782,108 @@ void CM_CalcExtents(const vec3_t start, const vec3_t end, const traceWork_t *tw,
+@@ -749,9 +782,109 @@ void CM_CalcExtents(const vec3_t start, const vec3_t end, const traceWork_t *tw,
  CM_BoxTrace
  ==================
  */
@@ -1930,8 +2029,8 @@ index 7f605324..6a35cd9c 100644
 +// million instructions). Kept by the exact words of start, end, mins, maxs, model and mask, one table a slot (SE_CoreSlot);
 +// a hit gives the trace's words before its Ghoul2 records, which come out empty as the made trace's do. Emptied with the map.
 +// JK2_TRACE_MEMO=0: not kept; =check: made anyway and compared (docs/games/jk2.md, "Fewer instructions")
-+int *se_cm_marks[SE_SLOTS + 1];
-+int se_cm_count[SE_SLOTS + 1][4] __attribute__(( aligned( 16 ) ));
++int *se_cm_marks[SE_CORES];
++int se_cm_count[SE_CORES][4] __attribute__(( aligned( 16 ) ));
 +static int se_cm_marks_for[4] __attribute__(( aligned( 16 ) )) = { -1, -1 };	// the brushes and surfaces they were made for
 +// Whether slot `slot` has its marks of the map now loaded; the first core makes every slot's when they are missing or
 +// of another map
@@ -1941,7 +2040,7 @@ index 7f605324..6a35cd9c 100644
 +		return true;
 +	if ( slot )
 +		return false;
-+	for ( int s = 1; s <= SE_SLOTS; s++ ) {
++	for ( int s = 1; s < SE_CORES; s++ ) {
 +		if ( se_cm_marks[s] )
 +			free( se_cm_marks[s] );
 +		se_cm_marks[s] = (int *)calloc( cmg.numBrushes + cmg.numSurfaces + 1, sizeof( int ) );
@@ -1951,6 +2050,7 @@ index 7f605324..6a35cd9c 100644
 +	return true;
 +}
 +extern "C" int SE_CoreSlot( void );
++unsigned se_cm_shared;	// traces of the game's worker made with the first core's marks
 +#define SE_TRACE_MEMO 256
 +#define SE_TRACE_HEAD ( offsetof( trace_t, G2CollisionMap ) )
 +struct seTraceMemo_t {
@@ -1958,19 +2058,19 @@ index 7f605324..6a35cd9c 100644
 +	uint32_t gen;
 +	unsigned char head[SE_TRACE_HEAD];
 +} __attribute__(( aligned( 16 ) ));
-+static seTraceMemo_t se_trace_memo[SE_SLOTS + 1][SE_TRACE_MEMO];
-+static uint32_t se_trace_gen[SE_SLOTS + 1][4] __attribute__(( aligned( 16 ) ));
++static seTraceMemo_t se_trace_memo[SE_CORES][SE_TRACE_MEMO];
++static uint32_t se_trace_gen[SE_CORES][4] __attribute__(( aligned( 16 ) ));
 +static int se_trace_mode = -1;	// 0 off, 1 on, 2 check
-+static uint32_t se_trace_count[SE_SLOTS + 1][4] __attribute__(( aligned( 16 ) ));	// asked, kept, wrong
++static uint32_t se_trace_count[SE_CORES][4] __attribute__(( aligned( 16 ) ));	// asked, kept, wrong
 +void CM_SE_TraceMemoClear( void )
 +{
-+	for ( int c = 0; c <= SE_SLOTS; c++ )
++	for ( int c = 0; c < SE_CORES; c++ )
 +		se_trace_gen[c][0]++;
 +	se_cm_marks_for[0] = -1;	// (the marks are made again for the next map)
 +}
 +void CM_SE_TraceMemoStats( void )
 +{
-+	for ( int c = 0; c <= SE_SLOTS; c++ )
++	for ( int c = 0; c < SE_CORES; c++ )
 +		if ( se_trace_count[c][0] )
 +			Com_Printf( "jk2trace: core slot %d, %u traces, %u kept, %u wrong\n", c, se_trace_count[c][0], se_trace_count[c][1], se_trace_count[c][2] );
 +}
@@ -2025,13 +2125,17 @@ index 7f605324..6a35cd9c 100644
  	int			i;
  	traceWork_t	tw;
  	vec3_t		offset;
-@@ -760,13 +892,32 @@ void CM_BoxTrace( trace_t *results, const vec3_t start, const vec3_t end,
+@@ -760,13 +893,36 @@ void CM_BoxTrace( trace_t *results, const vec3_t start, const vec3_t end,
  
  	cmod = CM_ClipHandleToModel( model, &local );
  
 +#ifdef SHADEREMU
 +	// (a slot's marks are of the world's map alone, made by the first core; c_traces is the first core's)
-+	const int se_slot = SE_Slot();
++	// (the game's frame on its worker, SE_SLOTS + 1: its own marks of the world's map; a sub-BSP's, or marks not made yet,
++	// with the first core's, counted in se_cm_shared)
++	int se_slot = SE_Core();
++	if ( se_slot > SE_SLOTS && ( local != &cmg || !CM_SE_Marks( se_slot ) ) )
++		se_slot = 0, se_cm_shared++;
 +	if ( se_slot ) {
 +		if ( local != &cmg )
 +			SE_SlotAbort( SE_WHY_SUBBSP );
@@ -2058,16 +2162,68 @@ index 7f605324..6a35cd9c 100644
  
  	if (!local->numNodes) {
  		*results = tw.trace;
+diff --git a/code/qcommon/cmd.cpp b/code/qcommon/cmd.cpp
+index a918cd26..63ac25ce 100644
+--- a/code/qcommon/cmd.cpp
++++ b/code/qcommon/cmd.cpp
+@@ -89,7 +89,18 @@ Cbuf_AddText
+ Adds command text at the end of the buffer, does NOT add a final \n
+ ============
+ */
++#ifdef SHADEREMU
++#include "../../shared/qcommon/se_server.h"
++struct seCbuf_t { int when; const char *t; };
++#endif
+ void Cbuf_AddText( const char *text ) {
++#ifdef SHADEREMU
++	if ( jk2ServerHere() ) {	// (the command buffer is the first core's: the game's frame's worker asks)
++		seCbuf_t a_ = { 0, text };
++		jk2ServerOnCore0( []( void *p ) -> unsigned { Cbuf_AddText( ( (seCbuf_t *)p )->t ); return 0; }, &a_ );
++		return;
++	}
++#endif
+ 	int		l;
+ 
+ 	l = strlen (text);
+@@ -113,6 +124,13 @@ Adds a \n to the text
+ ============
+ */
+ void Cbuf_InsertText( const char *text ) {
++#ifdef SHADEREMU
++	if ( jk2ServerHere() ) {
++		seCbuf_t a_ = { 0, text };
++		jk2ServerOnCore0( []( void *p ) -> unsigned { Cbuf_InsertText( ( (seCbuf_t *)p )->t ); return 0; }, &a_ );
++		return;
++	}
++#endif
+ 	int		len;
+ 	int		i;
+ 
+@@ -144,6 +162,13 @@ Cbuf_ExecuteText
+ */
+ void Cbuf_ExecuteText (int exec_when, const char *text)
+ {
++#ifdef SHADEREMU
++	if ( jk2ServerHere() ) {
++		seCbuf_t a_ = { exec_when, text };
++		jk2ServerOnCore0( []( void *p ) -> unsigned { seCbuf_t *a = (seCbuf_t *)p; Cbuf_ExecuteText( a->when, a->t ); return 0; }, &a_ );
++		return;
++	}
++#endif
+ 	switch (exec_when)
+ 	{
+ 	case EXEC_NOW:
 diff --git a/code/qcommon/common.cpp b/code/qcommon/common.cpp
-index aeaff246..5abeb4fe 100644
+index aeaff246..b6d06978 100644
 --- a/code/qcommon/common.cpp
 +++ b/code/qcommon/common.cpp
-@@ -135,10 +135,16 @@ to the apropriate place.
+@@ -135,14 +135,26 @@ to the apropriate place.
  A raw string should NEVER be passed as fmt, because of "%f" type crashers.
  =============
  */
 +#ifdef SHADEREMU
 +#include "../../shared/qcommon/se_slot.h"
++#include "../../shared/qcommon/se_server.h"
 +#endif
  void QDECL Com_Printf( const char *fmt, ... ) {
  	va_list		argptr;
@@ -2079,7 +2235,33 @@ index aeaff246..5abeb4fe 100644
  
  	va_start (argptr,fmt);
  	Q_vsnprintf (msg, sizeof(msg), fmt, argptr);
-@@ -1133,7 +1139,14 @@ void Com_Init( char *commandLine ) {
+ 	va_end (argptr);
++#ifdef SHADEREMU
++	extern int SE_ServerKeepPrint( const char *text );
++	if ( SE_ServerKeepPrint( msg ) )	// (on the game's frame's worker: printed at its settle, cl_main.cpp)
++		return;
++#endif
+ 
+ 	if ( rd_buffer ) {
+ 		if ((strlen (msg) + strlen(rd_buffer)) > (unsigned)(rd_buffersize - 1)) {
+@@ -286,6 +298,16 @@ void NORETURN QDECL Com_Error( int code, const char *fmt, ... ) {
+ 	static int	errorCount;
+ 	int			currentTime;
+ 
++#ifdef SHADEREMU
++	if ( jk2ServerHere() ) {	// (the game's frame on its worker: ended, the error raised by the first core, cl_main.cpp)
++		extern void SE_ServerAbort( int code, const char *text );
++		char text[1024];
++		va_start( argptr, fmt );
++		Q_vsnprintf( text, sizeof text, fmt, argptr );
++		va_end( argptr );
++		SE_ServerAbort( code, text );
++	}
++#endif
+ 	if ( com_errorEntered ) {
+ 		Sys_Error( "recursive error after: %s", com_errorMessage );
+ 	}
+@@ -1133,7 +1155,14 @@ void Com_Init( char *commandLine ) {
  		com_speedslog = Cvar_Get ("speedslog", "0", CVAR_TEMP );
  
  		com_timescale = Cvar_Get ("timescale", "1", CVAR_CHEAT );
@@ -2094,7 +2276,17 @@ index aeaff246..5abeb4fe 100644
  		com_showtrace = Cvar_Get ("com_showtrace", "0", CVAR_CHEAT);
  		com_speeds = Cvar_Get ("com_speeds", "0", 0);
  
-@@ -1449,7 +1462,21 @@ void Com_Frame( void ) {
+@@ -1298,6 +1327,9 @@ Com_ModifyMsec
+ */
+ 
+ 
++#ifdef SHADEREMU
++extern "C" unsigned se_allocs[2];	// (sys_shaderemu.cpp's wraps: allocations and frees made)
++#endif
+ int Com_ModifyMsec( int msec, float &fraction )
+ {
+ 	int		clampTime;
+@@ -1449,7 +1481,25 @@ void Com_Frame( void ) {
  			timeBeforeServer = Sys_Milliseconds ();
  		}
  
@@ -2102,21 +2294,25 @@ index aeaff246..5abeb4fe 100644
 +		// (JK2_PARTS=N: core 0's instructions in the server's frame and the client's, a line every N frames)
 +		extern unsigned long long SE_Instructions( void );
 +		static int se_parts_every = -1;
-+		static unsigned long long se_parts[4];
++		static unsigned long long se_parts[8];
++		const unsigned se_a0 = se_allocs[0], se_f0 = se_allocs[1];
 +		if ( se_parts_every < 0 ) {
 +			const char *e = getenv( "JK2_PARTS" );
 +			se_parts_every = e ? atoi( e ) : 0;
 +		}
 +		unsigned long long se_t0 = se_parts_every ? SE_Instructions() : 0;
++		extern int SE_SplitAhead( void );
++		if ( !SE_SplitAhead() )	// (JK2_SPLIT=ahead: in CL_Frame, after the client's game is given its copy)
 +#endif
  		SV_Frame (msec, fractionMsec);
 +#ifdef SHADEREMU
 +		unsigned long long se_t1 = se_parts_every ? SE_Instructions() : 0;
++		const unsigned se_a1 = se_allocs[0], se_f1 = se_allocs[1];
 +#endif
  
  
  		//
-@@ -1478,6 +1505,17 @@ void Com_Frame( void ) {
+@@ -1478,6 +1528,25 @@ void Com_Frame( void ) {
  			}
  
  			CL_Frame (msec, fractionMsec);
@@ -2124,18 +2320,63 @@ index aeaff246..5abeb4fe 100644
 +			if ( se_parts_every ) {
 +				const unsigned long long se_t2 = SE_Instructions();
 +				se_parts[0] += se_t1 - se_t0, se_parts[1] += se_t2 - se_t1, se_parts[2]++;
++				se_parts[4] += se_a1 - se_a0, se_parts[5] += se_f1 - se_f0, se_parts[6] += se_allocs[0] - se_a1, se_parts[7] += se_allocs[1] - se_f1;
 +				if ( se_parts[2] == (unsigned long long)se_parts_every ) {
-+					Com_Printf( "jk2parts: %d frames, core 0 a frame: server %uk, client %uk\n", se_parts_every,
-+						(unsigned)( se_parts[0] / se_parts[2] / 1000 ), (unsigned)( se_parts[1] / se_parts[2] / 1000 ) );
-+					se_parts[0] = se_parts[1] = se_parts[2] = 0;
++					extern unsigned long long se_split_ins[4];
++					if ( se_split_ins[3] )
++						Com_Printf( "jk2parts: the game apart a frame: give %uk, game's frame here %uk, take %uk\n",
++							(unsigned)( se_split_ins[0] / se_split_ins[3] / 1000 ), (unsigned)( se_split_ins[1] / se_split_ins[3] / 1000 ),
++							(unsigned)( se_split_ins[2] / se_split_ins[3] / 1000 ) );
++					memset( se_split_ins, 0, sizeof se_split_ins );
++					Com_Printf( "jk2parts: %d frames, core 0 a frame: server %uk, client %uk; allocations and frees: server %u %u, client %u %u\n", se_parts_every,
++						(unsigned)( se_parts[0] / se_parts[2] / 1000 ), (unsigned)( se_parts[1] / se_parts[2] / 1000 ),
++						(unsigned)se_parts[4], (unsigned)se_parts[5], (unsigned)se_parts[6], (unsigned)se_parts[7] );
++					memset( se_parts, 0, sizeof se_parts );
 +				}
 +			}
 +#endif
  
  			if ( com_speeds->integer ) {
  				timeAfter = Sys_Milliseconds ();
+diff --git a/code/qcommon/cvar.cpp b/code/qcommon/cvar.cpp
+index a5cef1e1..52f002d5 100644
+--- a/code/qcommon/cvar.cpp
++++ b/code/qcommon/cvar.cpp
+@@ -323,7 +323,18 @@ If the variable already exists, the value will not be set unless CVAR_ROM
+ The flags will be or'ed in if the variable exists.
+ ============
+ */
++#ifdef SHADEREMU
++#include "../../shared/qcommon/se_server.h"
++struct seCvar_t { const char *n, *v; int f; cvar_t *r; };
++#endif
+ cvar_t *Cvar_Get( const char *var_name, const char *var_value, int flags ) {
++#ifdef SHADEREMU
++	if ( jk2ServerHere() ) {	// (the cvars are the first core's: the game's frame's worker asks)
++		seCvar_t a_ = { var_name, var_value, flags, NULL };
++		jk2ServerOnCore0( []( void *p ) -> unsigned { seCvar_t *a = (seCvar_t *)p; a->r = Cvar_Get( a->n, a->v, a->f ); return 0; }, &a_ );
++		return a_.r;
++	}
++#endif
+ 	cvar_t	*var;
+ 	long	hash;
+ 	int		index;
+@@ -573,6 +584,13 @@ Cvar_Set2
+ ============
+ */
+ cvar_t *Cvar_Set2( const char *var_name, const char *value, qboolean force ) {
++#ifdef SHADEREMU
++	if ( jk2ServerHere() ) {
++		seCvar_t a_ = { var_name, value, force, NULL };
++		jk2ServerOnCore0( []( void *p ) -> unsigned { seCvar_t *a = (seCvar_t *)p; a->r = Cvar_Set2( a->n, a->v, (qboolean)a->f ); return 0; }, &a_ );
++		return a_.r;
++	}
++#endif
+ 	cvar_t	*var;
+ 
+ 	//Com_DPrintf( "Cvar_Set2: %s %s\n", var_name, value );
 diff --git a/code/qcommon/files.cpp b/code/qcommon/files.cpp
-index d105742d..b3819598 100644
+index d105742d..3f27c919 100644
 --- a/code/qcommon/files.cpp
 +++ b/code/qcommon/files.cpp
 @@ -271,6 +271,17 @@ typedef struct fileHandleData_s {
@@ -2317,7 +2558,27 @@ index d105742d..b3819598 100644
  	rmdir( osPath );
  }
  
-@@ -797,6 +920,7 @@ fileHandle_t FS_SV_FOpenFileWrite( const char *filename ) {
+@@ -746,8 +869,19 @@ search the paths.  This is to determine if opening a file to write
+ NOTE TTimo: this goes with FS_FOpenFileWrite for opening the file afterwards
+ ================
+ */
++#ifdef SHADEREMU
++#include "../../shared/qcommon/se_server.h"
++struct seFs_t { const void *a; void *b; int n; fileHandle_t f; long r; };
++#endif
+ qboolean FS_FileExists( const char *file )
+ {
++#ifdef SHADEREMU
++	if ( jk2ServerHere() ) {	// (the game's frame's worker asks the first core)
++		seFs_t a_ = { file, NULL, 0, 0, 0 };
++		jk2ServerOnCore0( []( void *p ) -> unsigned { seFs_t *a = (seFs_t *)p; a->r = FS_FileExists( (const char *)a->a ); return 0; }, &a_ );
++		return (qboolean)a_.r;
++	}
++#endif
+ 	return FS_FileInPathExists(FS_BuildOSPath(fs_homepath->string, fs_gamedir, file));
+ }
+ 
+@@ -797,6 +931,7 @@ fileHandle_t FS_SV_FOpenFileWrite( const char *filename ) {
  	}
  
  	Com_DPrintf( "writing to: %s\n", ospath );
@@ -2325,7 +2586,7 @@ index d105742d..b3819598 100644
  	fsh[f].handleFiles.file.o = fopen( ospath, "wb" );
  
  	Q_strncpyz( fsh[f].name, filename, sizeof( fsh[f].name ) );
-@@ -918,6 +1042,7 @@ void FS_SV_Rename( const char *from, const char *to, qboolean safe ) {
+@@ -918,6 +1053,7 @@ void FS_SV_Rename( const char *from, const char *to, qboolean safe ) {
  		FS_CheckFilenameIsMutable( to_ospath, __func__ );
  	}
  
@@ -2333,7 +2594,7 @@ index d105742d..b3819598 100644
  	if (rename( from_ospath, to_ospath )) {
  		// Failed, try copying it and deleting the original
  		FS_CopyFile ( from_ospath, to_ospath );
-@@ -948,6 +1073,7 @@ void FS_Rename( const char *from, const char *to ) {
+@@ -948,6 +1084,7 @@ void FS_Rename( const char *from, const char *to ) {
  
  	FS_CheckFilenameIsMutable( to_ospath, __func__ );
  
@@ -2341,7 +2602,35 @@ index d105742d..b3819598 100644
  	if (rename( from_ospath, to_ospath )) {
  		// Failed, try copying it and deleting the original
  		FS_CopyFile ( from_ospath, to_ospath );
-@@ -1025,6 +1151,7 @@ fileHandle_t FS_FOpenFileWrite( const char *filename, qboolean safe ) {
+@@ -975,6 +1112,13 @@ There are three cases handled:
+ ===========
+ */
+ void FS_FCloseFile( fileHandle_t f ) {
++#ifdef SHADEREMU
++	if ( jk2ServerHere() ) {
++		seFs_t a_ = { NULL, NULL, 0, f, 0 };
++		jk2ServerOnCore0( []( void *p ) -> unsigned { FS_FCloseFile( ( (seFs_t *)p )->f ); return 0; }, &a_ );
++		return;
++	}
++#endif
+ 	FS_AssertInitialised();
+ 
+ 	if (fsh[f].zipFile == qtrue) {
+@@ -1000,6 +1144,13 @@ FS_FOpenFileWrite
+ ===========
+ */
+ fileHandle_t FS_FOpenFileWrite( const char *filename, qboolean safe ) {
++#ifdef SHADEREMU
++	if ( jk2ServerHere() ) {
++		seFs_t a_ = { filename, NULL, safe, 0, 0 };
++		jk2ServerOnCore0( []( void *p ) -> unsigned { seFs_t *a = (seFs_t *)p; a->f = FS_FOpenFileWrite( (const char *)a->a, (qboolean)a->n ); return 0; }, &a_ );
++		return a_.f;
++	}
++#endif
+ 	char			*ospath;
+ 	fileHandle_t	f;
+ 
+@@ -1025,6 +1176,7 @@ fileHandle_t FS_FOpenFileWrite( const char *filename, qboolean safe ) {
  	// enabling the following line causes a recursive function call loop
  	// when running with +set logfile 1 +set developer 1
  	//Com_DPrintf( "writing to: %s\n", ospath );
@@ -2349,7 +2638,7 @@ index d105742d..b3819598 100644
  	fsh[f].handleFiles.file.o = fopen( ospath, "wb" );
  
  	Q_strncpyz( fsh[f].name, filename, sizeof( fsh[f].name ) );
-@@ -1068,6 +1195,7 @@ fileHandle_t FS_FOpenFileAppend( const char *filename ) {
+@@ -1068,6 +1220,7 @@ fileHandle_t FS_FOpenFileAppend( const char *filename ) {
  		return 0;
  	}
  
@@ -2357,7 +2646,21 @@ index d105742d..b3819598 100644
  	fsh[f].handleFiles.file.o = fopen( ospath, "ab" );
  	fsh[f].handleSync = qfalse;
  	if (!fsh[f].handleFiles.file.o) {
-@@ -1293,6 +1421,9 @@ long FS_FOpenFileRead( const char *filename, fileHandle_t *file, qboolean unique
+@@ -1250,6 +1403,13 @@ separate file or a ZIP file.
+ extern qboolean		com_fullyInitialized;
+ 
+ long FS_FOpenFileRead( const char *filename, fileHandle_t *file, qboolean uniqueFILE ) {
++#ifdef SHADEREMU
++	if ( jk2ServerHere() ) {
++		seFs_t a_ = { filename, file, uniqueFILE, 0, 0 };
++		jk2ServerOnCore0( []( void *p ) -> unsigned { seFs_t *a = (seFs_t *)p; a->r = FS_FOpenFileRead( (const char *)a->a, (fileHandle_t *)a->b, (qboolean)a->n ); return 0; }, &a_ );
++		return a_.r;
++	}
++#endif
+ 	searchpath_t	*search;
+ 	char			*netpath;
+ 	pack_t			*pak;
+@@ -1293,6 +1453,9 @@ long FS_FOpenFileRead( const char *filename, fileHandle_t *file, qboolean unique
  	}
  
  	isUserConfig = !Q_stricmp( filename, "autoexec_sp.cfg" ) || !Q_stricmp( filename, Q3CONFIG_NAME );
@@ -2367,7 +2670,7 @@ index d105742d..b3819598 100644
  
  	//
  	// search through the path, one element at a time
-@@ -1334,7 +1465,11 @@ long FS_FOpenFileRead( const char *filename, fileHandle_t *file, qboolean unique
+@@ -1334,7 +1497,11 @@ long FS_FOpenFileRead( const char *filename, fileHandle_t *file, qboolean unique
  
  						if ( uniqueFILE ) {
  							// open a new file on the pakfile
@@ -2379,7 +2682,7 @@ index d105742d..b3819598 100644
  							if (fsh[*file].handleFiles.file.z == NULL) {
  								Com_Error (ERR_FATAL, "Couldn't open %s", pak->pakFilename);
  							}
-@@ -1370,6 +1505,9 @@ long FS_FOpenFileRead( const char *filename, fileHandle_t *file, qboolean unique
+@@ -1370,6 +1537,9 @@ long FS_FOpenFileRead( const char *filename, fileHandle_t *file, qboolean unique
  							Com_Printf( "FS_FOpenFileRead: %s (found in '%s')\n",
  								filename, pak->pakFilename );
  						}
@@ -2389,7 +2692,7 @@ index d105742d..b3819598 100644
  						return pakFile->len;
  					}
  					pakFile = pakFile->next;
-@@ -1378,6 +1516,11 @@ long FS_FOpenFileRead( const char *filename, fileHandle_t *file, qboolean unique
+@@ -1378,6 +1548,11 @@ long FS_FOpenFileRead( const char *filename, fileHandle_t *file, qboolean unique
  				// check a file in the directory tree
  
  				dir = search->dir;
@@ -2401,7 +2704,35 @@ index d105742d..b3819598 100644
  
  				netpath = FS_BuildOSPath( dir->path, dir->gamedir, filename );
  				fsh[*file].handleFiles.file.o = fopen (netpath, "rb");
-@@ -1747,6 +1890,305 @@ Filename are relative to the quake search path
+@@ -1481,6 +1656,13 @@ Properly handles partial reads
+ =================
+ */
+ int FS_Read( void *buffer, int len, fileHandle_t f ) {
++#ifdef SHADEREMU
++	if ( jk2ServerHere() ) {
++		seFs_t a_ = { NULL, buffer, len, f, 0 };
++		jk2ServerOnCore0( []( void *p ) -> unsigned { seFs_t *a = (seFs_t *)p; a->r = FS_Read( a->b, a->n, a->f ); return 0; }, &a_ );
++		return (int)a_.r;
++	}
++#endif
+ 	int		block, remaining;
+ 	int		read;
+ 	byte	*buf;
+@@ -1532,6 +1714,13 @@ Properly handles partial writes
+ =================
+ */
+ int FS_Write( const void *buffer, int len, fileHandle_t h ) {
++#ifdef SHADEREMU
++	if ( jk2ServerHere() ) {
++		seFs_t a_ = { buffer, NULL, len, h, 0 };
++		jk2ServerOnCore0( []( void *p ) -> unsigned { seFs_t *a = (seFs_t *)p; a->r = FS_Write( a->a, a->n, a->f ); return 0; }, &a_ );
++		return (int)a_.r;
++	}
++#endif
+ 	int		block, remaining;
+ 	int		written;
+ 	byte	*buf;
+@@ -1747,7 +1936,313 @@ Filename are relative to the quake search path
  a null buffer will just return the file length without loading
  ============
  */
@@ -2705,9 +3036,17 @@ index d105742d..b3819598 100644
 +}
 +#endif
  long FS_ReadFile( const char *qpath, void **buffer ) {
++#ifdef SHADEREMU
++	if ( jk2ServerHere() ) {
++		seFs_t a_ = { qpath, buffer, 0, 0, 0 };
++		jk2ServerOnCore0( []( void *p ) -> unsigned { seFs_t *a = (seFs_t *)p; a->r = FS_ReadFile( (const char *)a->a, (void **)a->b ); return 0; }, &a_ );
++		return a_.r;
++	}
++#endif
  	fileHandle_t	h;
  	byte*			buf;
-@@ -1765,6 +2207,10 @@ long FS_ReadFile( const char *qpath, void **buffer ) {
+ 	long				len;
+@@ -1765,6 +2260,10 @@ long FS_ReadFile( const char *qpath, void **buffer ) {
  
  	// look for it in the filesystem or pack files
  	len = FS_FOpenFileRead( qpath, &h, qfalse );
@@ -2718,7 +3057,7 @@ index d105742d..b3819598 100644
  	if ( h == 0 ) {
  		if ( buffer ) {
  			*buffer = NULL;
-@@ -1794,14 +2240,108 @@ long FS_ReadFile( const char *qpath, void **buffer ) {
+@@ -1794,20 +2293,121 @@ long FS_ReadFile( const char *qpath, void **buffer ) {
  	}
  #endif
  
@@ -2827,7 +3166,20 @@ index d105742d..b3819598 100644
  /*
  =============
  FS_FreeFile
-@@ -1877,7 +2417,11 @@ static pack_t *FS_LoadZipFile( const char *zipfile, const char *basename )
+ =============
+ */
+ void FS_FreeFile( void *buffer ) {
++#ifdef SHADEREMU
++	if ( jk2ServerHere() ) {
++		seFs_t a_ = { NULL, buffer, 0, 0, 0 };
++		jk2ServerOnCore0( []( void *p ) -> unsigned { FS_FreeFile( ( (seFs_t *)p )->b ); return 0; }, &a_ );
++		return;
++	}
++#endif
+ 	FS_AssertInitialised();
+ 	if ( !buffer ) {
+ 		Com_Error( ERR_FATAL, "FS_FreeFile( NULL )" );
+@@ -1877,7 +2477,11 @@ static pack_t *FS_LoadZipFile( const char *zipfile, const char *basename )
  
  	fs_numHeaderLongs = 0;
  
@@ -2839,7 +3191,7 @@ index d105742d..b3819598 100644
  	err = unzGetGlobalInfo (uf,&gi);
  
  	if (err != UNZ_OK)
-@@ -1967,6 +2511,9 @@ Frees a pak structure and releases all associated resources
+@@ -1967,6 +2571,9 @@ Frees a pak structure and releases all associated resources
  
  void FS_FreePak(pack_t *thepak)
  {
@@ -3317,10 +3669,65 @@ index fdc2d38f..76224399 100644
  	char			temp_data[8192];
  	char			*test_token, *pos;
 diff --git a/code/qcommon/z_memman_pc.cpp b/code/qcommon/z_memman_pc.cpp
-index d0051ed6..79a87628 100644
+index d0051ed6..f8e023e0 100644
 --- a/code/qcommon/z_memman_pc.cpp
 +++ b/code/qcommon/z_memman_pc.cpp
-@@ -627,6 +627,16 @@ int Z_MemSize(memtag_t eTag)
+@@ -245,6 +245,12 @@ char *_D_Z_Filename_WithoutPath(const char *psFilename)
+ 
+ #include "../rd-common/tr_public.h"	// sorta hack sorta not
+ extern refexport_t re;
++#ifdef SHADEREMU
++#include "../../shared/qcommon/se_server.h"
++struct seZMalloc_t { int size; memtag_t tag; qboolean zero; void *r; };
++struct seZFree_t { void *p; int r; };
++struct seZTag_t { void *p; memtag_t tag; int r; };
++#endif
+ 
+ #ifdef DEBUG_ZONE_ALLOCS
+ void *_D_Z_Malloc ( int iSize, memtag_t eTag, qboolean bZeroit, const char *psFile, int iLine)
+@@ -252,6 +258,13 @@ void *_D_Z_Malloc ( int iSize, memtag_t eTag, qboolean bZeroit, const char *psFi
+ void *Z_Malloc(int iSize, memtag_t eTag, qboolean bZeroit, int /*unusedAlign*/)
+ #endif
+ {
++#ifdef SHADEREMU
++	if ( jk2ServerHere() ) {
++		seZMalloc_t a_ = { iSize, eTag, bZeroit, NULL };
++		jk2ServerOnCore0( []( void *p ) -> unsigned { seZMalloc_t *a = (seZMalloc_t *)p; a->r = Z_Malloc( a->size, a->tag, a->zero ); return 0; }, &a_ );
++		return a_.r;
++	}
++#endif
+ 	gbMemFreeupOccured = qfalse;
+ 
+ 	if (iSize == 0)
+@@ -428,6 +441,13 @@ int openjk_minizip_free(void *to_free)
+ //
+ void Z_MorphMallocTag( void *pvAddress, memtag_t eDesiredTag )
+ {
++#ifdef SHADEREMU
++	if ( jk2ServerHere() ) {
++		seZTag_t a_ = { pvAddress, eDesiredTag, 0 };
++		jk2ServerOnCore0( []( void *p ) -> unsigned { seZTag_t *a = (seZTag_t *)p; Z_MorphMallocTag( a->p, a->tag ); return 0; }, &a_ );
++		return;
++	}
++#endif
+ 	zoneHeader_t *pMemory = ((zoneHeader_t *)pvAddress) - 1;
+ 
+ 	if (pMemory->iMagic != ZONE_MAGIC)
+@@ -573,6 +593,13 @@ void Z_Label(const void *pvAddress, const char *psLabel)
+ //
+ int Z_Free(void *pvAddress)
+ {
++#ifdef SHADEREMU
++	if ( jk2ServerHere() ) {
++		seZFree_t a_ = { pvAddress, 0 };
++		jk2ServerOnCore0( []( void *p ) -> unsigned { seZFree_t *a = (seZFree_t *)p; a->r = Z_Free( a->p ); return 0; }, &a_ );
++		return a_.r;
++	}
++#endif
+ 	if (!TheZone.Stats.iCount)
+ 	{
+ 		//Com_Error(ERR_FATAL, "Z_Free(): Zone has been cleard already!");
+@@ -627,10 +654,27 @@ int Z_MemSize(memtag_t eTag)
  	return TheZone.Stats.iSizesPerTag[eTag];
  }
  
@@ -3337,6 +3744,17 @@ index d0051ed6..79a87628 100644
  // Frees all blocks with the specified tag...
  //
  void Z_TagFree(memtag_t eTag)
+ {
++#ifdef SHADEREMU
++	if ( jk2ServerHere() ) {
++		seZTag_t a_ = { NULL, eTag, 0 };
++		jk2ServerOnCore0( []( void *p ) -> unsigned { Z_TagFree( ( (seZTag_t *)p )->tag ); return 0; }, &a_ );
++		return;
++	}
++#endif
+ //#ifdef _DEBUG
+ //	int iZoneBlocks = TheZone.Stats.iCount;
+ //#endif
 diff --git a/code/rd-common/tr_image_jpg.cpp b/code/rd-common/tr_image_jpg.cpp
 index a3ddb84a..634e2b0e 100644
 --- a/code/rd-common/tr_image_jpg.cpp
@@ -3712,7 +4130,7 @@ index a0f0ace4..e1a2ddd9 100644
  	qboolean			(*SND_RegisterAudio_LevelLoadEnd)	( qboolean bDeleteEverythingNotUsedThisLevel );
  
 diff --git a/code/rd-vanilla/G2_API.cpp b/code/rd-vanilla/G2_API.cpp
-index 09bc27ed..cb27d4c3 100644
+index 09bc27ed..3952e297 100644
 --- a/code/rd-vanilla/G2_API.cpp
 +++ b/code/rd-vanilla/G2_API.cpp
 @@ -45,8 +45,15 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
@@ -3722,8 +4140,8 @@ index 09bc27ed..cb27d4c3 100644
 +#ifdef SHADEREMU
 +#include "../../shared/qcommon/se_slot.h"
 +extern mdxaBone_t		se_worldMatrix[], se_worldMatrixInv[];
-+#define worldMatrix ( se_worldMatrix[SE_Slot()] )
-+#define worldMatrixInv ( se_worldMatrixInv[SE_Slot()] )
++#define worldMatrix ( se_worldMatrix[SE_Core()] )
++#define worldMatrixInv ( se_worldMatrixInv[SE_Core()] )
 +#else
  extern mdxaBone_t		worldMatrix;
  extern mdxaBone_t		worldMatrixInv;
@@ -3731,7 +4149,40 @@ index 09bc27ed..cb27d4c3 100644
  
  extern	cvar_t	*r_Ghoul2TimeBase;
  
-@@ -2277,6 +2284,13 @@ bool G2_SetupModelPointers(CGhoul2Info *ghlInfo) // returns true if the model is
+@@ -57,7 +64,18 @@ extern refexport_t	re;
+ 
+ #define G2_DEBUG_TIME (0)
+ 
++#ifdef SHADEREMU
++extern "C" int SE_ServerSide( void );
++extern "C" void SE_SideHook( void ( *give )( void ), void ( *take )( void ) );
++static int se_g2_cl_time[NUM_G2T_TIME] __attribute__(( aligned( 16 ) ));
++static int se_g2_sv_time[NUM_G2T_TIME] __attribute__(( aligned( 16 ) ));
++static void se_g2_time_give( void ) { memcpy( se_g2_sv_time, se_g2_cl_time, sizeof se_g2_sv_time ); }
++static void se_g2_time_take( void ) { se_g2_cl_time[G2T_SV_TIME] = se_g2_sv_time[G2T_SV_TIME]; }
++static struct seG2TimeHook { seG2TimeHook() { SE_SideHook( se_g2_time_give, se_g2_time_take ); } } se_g2_time_hook;
++#define G2TimeBases ( SE_ServerSide() ? se_g2_sv_time : se_g2_cl_time )
++#else
+ static int G2TimeBases[NUM_G2T_TIME];
++#endif
+ 
+ bool G2_TestModelPointers(CGhoul2Info *ghlInfo);
+ 
+@@ -334,8 +352,13 @@ int	G2API_GetTime(int argTime) // this may or may not return arg depending on gh
+ 
+ 
+ // must be a power of two
++#ifdef SHADEREMU
++#define MAX_G2_MODELS (1024)	// (the client's frame has copies of its own: codeJK2/game/g_main.cpp)
++#define G2_MODEL_BITS (10)
++#else
+ #define MAX_G2_MODELS (512)
+ #define G2_MODEL_BITS (9)
++#endif
+ #define G2_INDEX_MASK (MAX_G2_MODELS-1)
+ 
+ void RemoveBoneCache(CBoneCache *boneCache);
+@@ -2277,6 +2300,13 @@ bool G2_SetupModelPointers(CGhoul2Info *ghlInfo) // returns true if the model is
  	if (ghlInfo->mModelindex != -1)
  	{
  		G2ERROR(ghlInfo->mFileName[0],"empty ghlInfo->mFileName");
@@ -3746,7 +4197,7 @@ index 09bc27ed..cb27d4c3 100644
  		ghlInfo->currentModel = R_GetModelByHandle(ghlInfo->mModel);
  		G2ERROR(ghlInfo->currentModel,va("NULL Model (glm) %s",ghlInfo->mFileName));
 diff --git a/code/rd-vanilla/G2_bones.cpp b/code/rd-vanilla/G2_bones.cpp
-index beb4bb30..432ae2f9 100644
+index beb4bb30..efe86b07 100644
 --- a/code/rd-vanilla/G2_bones.cpp
 +++ b/code/rd-vanilla/G2_bones.cpp
 @@ -3248,7 +3248,14 @@ static inline int G2_RagIndexForBoneNum(int boneNum)
@@ -3756,8 +4207,8 @@ index beb4bb30..432ae2f9 100644
 +#ifdef SHADEREMU
 +#include "../../shared/qcommon/se_slot.h"
 +extern mdxaBone_t		se_worldMatrix[], se_worldMatrixInv[];
-+#define worldMatrix ( se_worldMatrix[SE_Slot()] )
-+#define worldMatrixInv ( se_worldMatrixInv[SE_Slot()] )
++#define worldMatrix ( se_worldMatrix[SE_Core()] )
++#define worldMatrixInv ( se_worldMatrixInv[SE_Core()] )
 +#else
  extern mdxaBone_t		worldMatrix;
 +#endif
@@ -3765,7 +4216,7 @@ index beb4bb30..432ae2f9 100644
  void G2_RagGetAnimMatrix(CGhoul2Info &ghoul2, const int boneNum, mdxaBone_t &matrix, const int frame);
  
 diff --git a/code/rd-vanilla/G2_misc.cpp b/code/rd-vanilla/G2_misc.cpp
-index bc5ca630..82ced818 100644
+index bc5ca630..8d36735a 100644
 --- a/code/rd-vanilla/G2_misc.cpp
 +++ b/code/rd-vanilla/G2_misc.cpp
 @@ -197,8 +197,15 @@ CGoreSet::~CGoreSet()
@@ -3775,8 +4226,8 @@ index bc5ca630..82ced818 100644
 +#ifdef SHADEREMU
 +#include "../../shared/qcommon/se_slot.h"
 +extern mdxaBone_t		se_worldMatrix[], se_worldMatrixInv[];
-+#define worldMatrix ( se_worldMatrix[SE_Slot()] )
-+#define worldMatrixInv ( se_worldMatrixInv[SE_Slot()] )
++#define worldMatrix ( se_worldMatrix[SE_Core()] )
++#define worldMatrixInv ( se_worldMatrixInv[SE_Core()] )
 +#else
  extern mdxaBone_t		worldMatrix;
  extern mdxaBone_t		worldMatrixInv;
@@ -5053,7 +5504,7 @@ index c67c5d0a..0ac08dfc 100644
  		{
  			for ( int x=0; x<*piWidth; x++ )
 diff --git a/code/rd-vanilla/tr_ghoul2.cpp b/code/rd-vanilla/tr_ghoul2.cpp
-index 5062daf5..a8f2668e 100644
+index 5062daf5..c49ac623 100644
 --- a/code/rd-vanilla/tr_ghoul2.cpp
 +++ b/code/rd-vanilla/tr_ghoul2.cpp
 @@ -83,8 +83,19 @@ extern	cvar_t	*r_Ghoul2UnSqashAfterSmooth;
@@ -5062,13 +5513,13 @@ index 5062daf5..a8f2668e 100644
  // I hate doing this, but this is the simplest way to get this into the routines it needs to be
 +#ifdef SHADEREMU
 +#include "../../shared/qcommon/se_slot.h"
-+#define worldMatrix ( se_worldMatrix[SE_Slot()] )
-+#define worldMatrixInv ( se_worldMatrixInv[SE_Slot()] )
++#define worldMatrix ( se_worldMatrix[SE_Core()] )
++#define worldMatrixInv ( se_worldMatrixInv[SE_Core()] )
 +#endif
 +#ifdef SHADEREMU
 +// (one a job slot: every G2API_GetBoltMatrix makes them, and the players' bolts are made on worker cores; se_slot.h)
-+mdxaBone_t		se_worldMatrix[SE_SLOTS + 2] __attribute__(( aligned( 16 ) ));
-+mdxaBone_t		se_worldMatrixInv[SE_SLOTS + 2] __attribute__(( aligned( 16 ) ));
++mdxaBone_t		se_worldMatrix[SE_CORES] __attribute__(( aligned( 16 ) ));
++mdxaBone_t		se_worldMatrixInv[SE_CORES] __attribute__(( aligned( 16 ) ));
 +#else
  mdxaBone_t		worldMatrix;
  mdxaBone_t		worldMatrixInv;
@@ -9205,10 +9656,10 @@ index 221cf26d..f87c9246 100644
  void WriteInUseBits(void);
  void ReadInUseBits(void);
 diff --git a/codeJK2/game/g_main.cpp b/codeJK2/game/g_main.cpp
-index 671b309a..88a61add 100644
+index 671b309a..6bc7f08a 100644
 --- a/codeJK2/game/g_main.cpp
 +++ b/codeJK2/game/g_main.cpp
-@@ -28,6 +28,210 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
+@@ -28,6 +28,427 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
  #include "Q3_Interface.h"
  #include "g_nav.h"
  #include "g_roff.h"
@@ -9227,6 +9678,9 @@ index 671b309a..88a61add 100644
 +static gclient_t *se_sh_cl[MAX_GENTITIES], *se_gv_cl[MAX_GENTITIES], *se_live_cl[MAX_GENTITIES];
 +static gNPC_t *se_sh_npc[MAX_GENTITIES], *se_gv_npc[MAX_GENTITIES], *se_live_npc[MAX_GENTITIES];
 +static int se_split = -1, se_given, se_game_up;
++// (the library's memcpy, never a loop GCC makes in its place: the machine's copy from 4 KB up)
++static void *( *volatile se_copy )( void *, const void *, size_t ) = memcpy;
++static unsigned char se_was_used[MAX_GENTITIES];
 +static const unsigned short se_ent_ptrs[] = { offsetof( gentity_t, owner ), offsetof( gentity_t, nextTrain ),
 +	offsetof( gentity_t, prevTrain ), offsetof( gentity_t, chain ), offsetof( gentity_t, enemy ), offsetof( gentity_t, activator ),
 +	offsetof( gentity_t, teamchain ), offsetof( gentity_t, teammaster ), offsetof( gentity_t, lastEnemy ) };
@@ -9319,30 +9773,232 @@ index 671b309a..88a61add 100644
 +	if ( tail && memcmp( (const char *)now + bytes - tail, (const char *)given + bytes - tail, tail ) )
 +		memcpy( (char *)to + bytes - tail, (const char *)now + bytes - tail, tail );
 +}
++// ---- Ghoul2 copies of the client's frame (JK2_SPLIT=ahead and =worker; JK2_G2_COPY=0 without): the client's frame poses,
++// animates and draws a copy of each entity's Ghoul2 instance, made at the give from the game's (its own bone caches kept
++// while its models are the game's); what it changed of the copy's models, surfaces, bolts and bones against what it was
++// given goes back to the game's instance at the take, a word at once (a bone's flags a bit at once). A bone's words are
++// those before lastTimeUpdated (the rest is the rag doll's, which Jedi Outcast does not use)
++static int se_g2_mode = -1;
++static int se_g2_clone[MAX_GENTITIES];
++struct seG2Given_t { unsigned char *buf; int room, used, orig; };
++static seG2Given_t se_g2_given[MAX_GENTITIES];
++static unsigned se_g2_conflicts, se_g2_remade;
++static inline int &se_g2_item( CGhoul2Info_v &v ) { return *(int *)&v; }
++static inline size_t se_bone_words( void ) { boneInfo_t *b = 0; return ( (char *)&b->lastTimeUpdated - (char *)b ) / 4; }
++static inline size_t se_g2_scalar_at( void ) { CGhoul2Info *g = 0; return (char *)&g->mModelindex - (char *)g; }
++static inline size_t se_g2_scalar_words( void ) { CGhoul2Info *g = 0; return ( (char *)&g->mTransformedVertsArray - (char *)&g->mModelindex ) / 4; }
++static void se_put( seG2Given_t *gv, const void *p, int n )
++{
++	if ( gv->used + n > gv->room ) {
++		gv->room = ( gv->used + n ) * 2 + 1024;
++		gv->buf = (unsigned char *)realloc( gv->buf, gv->room );
++	}
++	memcpy( gv->buf + gv->used, p, n );
++	gv->used += n;
++}
++static void se_g2_clean( int &c )
++{
++	IGhoul2InfoArray &A = TheGameGhoul2InfoArray();
++	if ( c && A.IsValid( c ) ) {
++		std::vector<CGhoul2Info> &d = A.Get( c );
++#ifdef _G2_GORE
++		for ( size_t m = 0 ; m < d.size() ; m++ )
++			d[m].mGoreSetTag = 0;	// (the game's)
++#endif
++		(void)d;
++		gi.G2API_CleanGhoul2Models( *(CGhoul2Info_v *)&c );
++	}
++	c = 0;
++}
++static void se_g2_give( int i, gentity_t *g, gentity_t *s )
++{
++	seG2Given_t *gv = &se_g2_given[i];
++	gv->orig = 0;
++	IGhoul2InfoArray &A = TheGameGhoul2InfoArray();
++	const int orig = se_g2_item( g->ghoul2 );
++	if ( !orig || !A.IsValid( orig ) )
++		return;
++	std::vector<CGhoul2Info> &src = A.Get( orig );
++	if ( !src.size() )
++		return;
++	int &c = se_g2_clone[i];
++	if ( c && !A.IsValid( c ) )
++		c = 0;
++	int fits = c && A.Get( c ).size() == src.size();
++	for ( size_t m = 0 ; fits && m < src.size() ; m++ )
++		if ( A.Get( c )[m].mModelindex != src[m].mModelindex || A.Get( c )[m].mModel != src[m].mModel )
++			fits = 0;
++	if ( !fits ) {
++		if ( c )
++			se_g2_remade++;
++		se_g2_clean( c );
++		c = A.New();
++		A.Get( c ).resize( src.size() );
++	}
++	std::vector<CGhoul2Info> &dst = A.Get( c );
++	const size_t at = se_g2_scalar_at(), sw = se_g2_scalar_words(), bw = se_bone_words();
++	gv->used = 0;
++	const int models = (int)src.size();
++	se_put( gv, &models, 4 );
++	for ( int m = 0 ; m < models ; m++ ) {
++		CGhoul2Info &d = dst[m];
++		const CGhoul2Info &o = src[m];
++		CBoneCache *bc = d.mBoneCache;
++		intptr_t *tv = d.mTransformedVertsArray;
++		const int skel = d.mSkelFrameNum, mesh = d.mMeshFrameNum;
++		d.mSlist = o.mSlist;
++		d.mBltlist = o.mBltlist;
++		d.mBlist.resize( o.mBlist.size() );
++		for ( size_t j = 0 ; j < o.mBlist.size() ; j++ )
++			memcpy( (void *)&d.mBlist[j], (const void *)&o.mBlist[j], bw * 4 );
++		memcpy( (char *)&d + at, (const char *)&o + at, sw * 4 );
++		d.mSkin = o.mSkin, d.mValid = o.mValid, d.currentModel = o.currentModel, d.currentModelSize = o.currentModelSize;
++		d.animModel = o.animModel, d.currentAnimModelSize = o.currentAnimModelSize, d.aHeader = o.aHeader;
++		d.mBoneCache = bc, d.mTransformedVertsArray = tv, d.mSkelFrameNum = skel, d.mMeshFrameNum = mesh;
++		// what it was given
++		se_put( gv, (const char *)&o + at, (int)sw * 4 );
++		int n = (int)o.mSlist.size();
++		se_put( gv, &n, 4 );
++		if ( n ) se_put( gv, &o.mSlist[0], n * (int)sizeof( surfaceInfo_t ) );
++		n = (int)o.mBltlist.size();
++		se_put( gv, &n, 4 );
++		if ( n ) se_put( gv, &o.mBltlist[0], n * (int)sizeof( boltInfo_t ) );
++		n = (int)o.mBlist.size();
++		se_put( gv, &n, 4 );
++		for ( int j = 0 ; j < n ; j++ )
++			se_put( gv, &o.mBlist[j], (int)bw * 4 );
++	}
++	gv->orig = orig;
++	se_g2_item( s->ghoul2 ) = c;
++}
++// one list's entries (surfaces, bolts) the client's frame changed or added: into the game's at the same place
++template <class T> static const unsigned char *se_g2_list_back( const unsigned char *p, const std::vector<T> &cl, std::vector<T> &o )
++{
++	int n;
++	memcpy( &n, p, 4 ), p += 4;
++	const T *given = (const T *)p;
++	for ( size_t j = 0 ; j < cl.size() ; j++ ) {
++		if ( (int)j < n && !memcmp( (const void *)&cl[j], (const void *)&given[j], sizeof( T ) ) )
++			continue;
++		if ( j < o.size() && ( (int)j >= n || memcmp( (const void *)&o[j], (const void *)&given[j], sizeof( T ) ) ) )
++			se_g2_conflicts++;
++		if ( j >= o.size() )
++			o.resize( j + 1 );
++		memcpy( (void *)&o[j], (const void *)&cl[j], sizeof( T ) );
++	}
++	return p + n * sizeof( T );
++}
++static void se_g2_take( int i )
++{
++	seG2Given_t *gv = &se_g2_given[i];
++	const int orig = gv->orig, c = se_g2_clone[i];
++	gv->orig = 0;
++	IGhoul2InfoArray &A = TheGameGhoul2InfoArray();
++	if ( !orig || !A.IsValid( orig ) || !c || !A.IsValid( c ) )
++		return;
++	std::vector<CGhoul2Info> &cl = A.Get( c ), &dst = A.Get( orig );
++	const size_t at = se_g2_scalar_at(), sw = se_g2_scalar_words(), bw = se_bone_words();
++	CGhoul2Info *z = 0;
++	const size_t skel_w = ( (char *)&z->mSkelFrameNum - (char *)&z->mModelindex ) / 4, mesh_w = ( (char *)&z->mMeshFrameNum - (char *)&z->mModelindex ) / 4;
++	const size_t flags_w = ( (char *)&( (boneInfo_t *)0 )->flags - (char *)0 ) / 4;
++	const unsigned char *p = gv->buf;
++	int models;
++	memcpy( &models, p, 4 ), p += 4;
++	for ( int m = 0 ; m < models ; m++ ) {
++		const uint32_t *given = (const uint32_t *)p;
++		p += sw * 4;
++		const unsigned char *lists = p;
++		int ns, nb, nbones;
++		memcpy( &ns, lists, 4 );
++		lists += 4 + ns * sizeof( surfaceInfo_t );
++		memcpy( &nb, lists, 4 );
++		lists += 4 + nb * sizeof( boltInfo_t );
++		memcpy( &nbones, lists, 4 );
++		const unsigned char *bones = lists + 4, *next = bones + nbones * bw * 4;
++		if ( (size_t)m >= cl.size() || (size_t)m >= dst.size() || dst[m].mModelindex != (int)given[0] ) {
++			if ( (size_t)m < cl.size() )
++				se_g2_conflicts++;
++			p = next;
++			continue;
++		}
++		CGhoul2Info &k = cl[m], &o = dst[m];
++		if ( k.mModelindex < 0 && (int)given[0] >= 0 ) {	// (taken away by the client's frame)
++			gi.G2API_RemoveGhoul2Model( *(CGhoul2Info_v *)&orig, m );
++			p = next;
++			continue;
++		}
++		const uint32_t *kw = (const uint32_t *)( (const char *)&k + at );
++		uint32_t *ow = (uint32_t *)( (char *)&o + at );
++		for ( size_t w = 0 ; w < sw ; w++ )
++			if ( w != skel_w && w != mesh_w && kw[w] != given[w] )
++				ow[w] = kw[w];
++		p = se_g2_list_back( p, k.mSlist, o.mSlist );
++		p = se_g2_list_back( p, k.mBltlist, o.mBltlist );
++		p += 4;
++		const uint32_t *gb = (const uint32_t *)bones;
++		for ( size_t j = 0 ; j < k.mBlist.size() ; j++ ) {
++			const uint32_t *kb = (const uint32_t *)&k.mBlist[j];
++			if ( (int)j >= nbones ) {	// (a bone the client's frame added)
++				if ( j < o.mBlist.size() && o.mBlist[j].boneNumber != -1 && o.mBlist[j].boneNumber != k.mBlist[j].boneNumber )
++					se_g2_conflicts++;
++				if ( j >= o.mBlist.size() )
++					o.mBlist.resize( j + 1 );
++				memcpy( (void *)&o.mBlist[j], kb, bw * 4 );
++				continue;
++			}
++			const uint32_t *g0 = gb + j * bw;
++			if ( !memcmp( kb, g0, bw * 4 ) )
++				continue;
++			if ( j >= o.mBlist.size() || o.mBlist[j].boneNumber != (int)g0[0] ) {
++				se_g2_conflicts++;
++				continue;
++			}
++			uint32_t *ob = (uint32_t *)&o.mBlist[j];
++			for ( size_t w = 0 ; w < bw ; w++ ) {
++				const uint32_t x = kb[w] ^ g0[w];
++				if ( !x )
++					continue;
++				ob[w] = w == flags_w ? ( ob[w] & ~x ) | ( kb[w] & x ) : kb[w];
++			}
++		}
++		p = next;
++	}
++}
 +void SE_CGEntitiesAt( gentity_t *base );
 +void SE_GameGive( void );
 +void SE_GameTake( void );
 +void SE_GameHooks( void ( *give )( void ), void ( *take )( void ) );	// (cl_main.cpp's: the game module keeps its names)
-+void SE_GameDown( void ) { se_game_up = 0, se_given = 0, se_cg_gents = g_entities; SE_GameHooks( NULL, NULL ); }
++void SE_GameDown( void )
++{
++	se_game_up = 0, se_given = 0, se_cg_gents = g_entities;
++	SE_GameHooks( NULL, NULL );
++	for ( int i = 0 ; i < MAX_GENTITIES ; i++ )
++		se_g2_clean( se_g2_clone[i] ), se_g2_given[i].orig = 0;
++}
 +void SE_GameUp( void ) { if ( !se_game_up ) SE_GameHooks( SE_GameGive, SE_GameTake ); se_game_up = 1; }
 +void SE_GameGive( void )
 +{
 +	if ( se_split < 0 ) {
 +		const char *e = getenv( "JK2_SPLIT" );
-+		se_split = !e ? 0 : !strcmp( e, "check" ) ? 2 : !strcmp( e, "copy" ) ? 1 : 0;
++		se_split = !e ? 0 : !strcmp( e, "check" ) ? 2 : !strcmp( e, "copy" ) || !strcmp( e, "ahead" ) || !strcmp( e, "worker" ) ? 1 : 0;
 +	}
 +	if ( !se_split || !se_game_up || se_given )
 +		return;
-+	memcpy( se_sh, g_entities, sizeof( gentity_t ) * MAX_GENTITIES );
++	if ( se_g2_mode < 0 ) {
++		const char *e = getenv( "JK2_SPLIT" ), *c = getenv( "JK2_G2_COPY" );
++		se_g2_mode = e && ( !strcmp( e, "ahead" ) || !strcmp( e, "worker" ) ) && !( c && !strcmp( c, "0" ) );
++	}
++	se_copy( se_sh, g_entities, sizeof( gentity_t ) * MAX_GENTITIES );
 +	for ( int i = 0 ; i < MAX_GENTITIES ; i++ ) {
 +		gentity_t *g = &g_entities[i], *s = &se_sh[i];
 +		se_live_cl[i] = g->client, se_live_npc[i] = g->NPC;
++		se_was_used[i] = g->inuse || g->client || g->NPC;
 +		if ( g->client ) {
 +			if ( !se_sh_cl[i] ) {
 +				se_sh_cl[i] = (gclient_t *)malloc( sizeof( gclient_t ) );
 +				se_gv_cl[i] = (gclient_t *)malloc( sizeof( gclient_t ) );
 +			}
-+			memcpy( (void *)se_sh_cl[i], (const void *)g->client, sizeof( gclient_t ) );
++			se_copy( (void *)se_sh_cl[i], (const void *)g->client, sizeof( gclient_t ) );
 +			se_move_ptrs( se_sh_cl[i], se_cl_ptrs, SE_COUNT( se_cl_ptrs ) );
 +			s->client = se_sh_cl[i];
 +		}
@@ -9351,18 +10007,20 @@ index 671b309a..88a61add 100644
 +				se_sh_npc[i] = (gNPC_t *)malloc( sizeof( gNPC_t ) );
 +				se_gv_npc[i] = (gNPC_t *)malloc( sizeof( gNPC_t ) );
 +			}
-+			memcpy( (void *)se_sh_npc[i], (const void *)g->NPC, sizeof( gNPC_t ) );
++			se_copy( (void *)se_sh_npc[i], (const void *)g->NPC, sizeof( gNPC_t ) );
 +			se_move_ptrs( se_sh_npc[i], se_npc_ptrs, SE_COUNT( se_npc_ptrs ) );
 +			s->NPC = se_sh_npc[i];
 +		}
 +		se_move_ptrs( s, se_ent_ptrs, SE_COUNT( se_ent_ptrs ) );
++		if ( se_g2_mode && g->inuse )
++			se_g2_give( i, g, s );
 +	}
-+	memcpy( se_gv, se_sh, sizeof( gentity_t ) * MAX_GENTITIES );
++	se_copy( se_gv, se_sh, sizeof( gentity_t ) * MAX_GENTITIES );
 +	for ( int i = 0 ; i < MAX_GENTITIES ; i++ ) {
 +		if ( se_live_cl[i] )
-+			memcpy( (void *)se_gv_cl[i], (const void *)se_sh_cl[i], sizeof( gclient_t ) );
++			se_copy( (void *)se_gv_cl[i], (const void *)se_sh_cl[i], sizeof( gclient_t ) );
 +		if ( se_live_npc[i] )
-+			memcpy( (void *)se_gv_npc[i], (const void *)se_sh_npc[i], sizeof( gNPC_t ) );
++			se_copy( (void *)se_gv_npc[i], (const void *)se_sh_npc[i], sizeof( gNPC_t ) );
 +	}
 +	se_cg_gents = se_sh;
 +	SE_CGEntitiesAt( se_sh );
@@ -9376,8 +10034,18 @@ index 671b309a..88a61add 100644
 +	se_cg_gents = g_entities;
 +	SE_CGEntitiesAt( g_entities );
 +	const int check = se_split == 2;
++	if ( se_g2_mode > 0 ) {
++		for ( int i = 0 ; i < MAX_GENTITIES ; i++ )
++			se_g2_take( i );
++		if ( ( se_g2_conflicts || se_g2_remade ) && ++se_frames % 100 == 0 ) {
++			gi.Printf( "jk2split: Ghoul2 copies: %u given back over the game's own change, %u made again\n", se_g2_conflicts, se_g2_remade );
++			se_g2_conflicts = se_g2_remade = 0;
++		}
++	}
 +	for ( int i = 0 ; i < MAX_GENTITIES ; i++ ) {
 +		gentity_t *s = &se_sh[i], *v = &se_gv[i], *g = &g_entities[i];
++		if ( !check && !se_was_used[i] && !s->inuse )
++			continue;	// (free at the give and still free in the copy: nothing of the client's frame there)
 +		if ( !check ) {
 +			if ( se_live_cl[i] )
 +				se_give_listed( se_sh_cl[i], se_gv_cl[i], se_live_cl[i], se_cl_back, SE_COUNT( se_cl_back ), se_cl_ptrs, SE_COUNT( se_cl_ptrs ) );
@@ -9419,7 +10087,7 @@ index 671b309a..88a61add 100644
  #include "g_navigator.h"
  #include "b_local.h"
  #include "anims.h"
-@@ -74,12 +278,14 @@ void ClearInUse(gentity_t *ent)
+@@ -74,12 +495,14 @@ void ClearInUse(gentity_t *ent)
  	g_entityInUseBits[entNum/32]&=~(((unsigned int)1)<<(entNum&0x1f));
  }
  
@@ -9434,7 +10102,7 @@ index 671b309a..88a61add 100644
  
  qboolean PInUse2(gentity_t *ent)
  {
-@@ -736,6 +942,10 @@ ShutdownGame
+@@ -736,6 +1159,10 @@ ShutdownGame
  =================
  */
  void ShutdownGame( void ) {
@@ -9445,7 +10113,7 @@ index 671b309a..88a61add 100644
  	gi.Printf ("==== ShutdownGame ====\n");
  
  	gi.Printf ("... ICARUS_Shutdown\n");
-@@ -1256,6 +1466,9 @@ void G_RunFrame( int levelTime ) {
+@@ -1256,6 +1683,9 @@ void G_RunFrame( int levelTime ) {
  	int			i;
  	gentity_t	*ent;
  	int			ents_inuse=0; // someone's gonna be pissed I put this here...
@@ -9455,7 +10123,7 @@ index 671b309a..88a61add 100644
  #if	AI_TIMERS
  	AITime = 0;
  	navTime = 0;
-@@ -1482,8 +1695,84 @@ void G_RunFrame( int levelTime ) {
+@@ -1482,8 +1912,84 @@ void G_RunFrame( int levelTime ) {
  		ValidateInUseBits();
  	}
  #endif
@@ -9474,13 +10142,13 @@ index 671b309a..88a61add 100644
 +{
 +	h ^= (unsigned)v;
 +	return h * 16777619u;
- }
- 
++}
++
 +static int se_eighth( float f )
 +{
 +	return (int)( f * 8.0f + ( f < 0 ? -0.5f : 0.5f ) );
-+}
-+
+ }
+ 
 +extern "C" unsigned se_rand_state;    // (linux/jk2/se_rand.c)
 +extern "C" uint32_t SE_Holdrand( void );    // (q_math.c)
 +
@@ -10664,10 +11332,10 @@ index e7652fb3..731695b2 100644
  		Conversion using std::istream's operator>>
 diff --git a/shared/qcommon/se_slot.h b/shared/qcommon/se_slot.h
 new file mode 100755
-index 00000000..5ba67bf6
+index 00000000..4911072a
 --- /dev/null
 +++ b/shared/qcommon/se_slot.h
-@@ -0,0 +1,36 @@
+@@ -0,0 +1,48 @@
 +// ShaderEmu: which job slot this core is in (docs/games/jk2.md, "The players on workers"). 0: the first core, and any
 +// core not running a job of the client game's; 1 to SE_SLOTS: a job of the client game's (a player's CG_AddCEntity on a
 +// worker core, codeJK2/cgame/cg_ents.cpp), told by the stack it runs on (sys_shaderemu.cpp's se_slot_stacks, one a
@@ -10679,6 +11347,10 @@ index 00000000..5ba67bf6
 +#include <stdint.h>
 +#define SE_SLOTS 8
 +#define SE_SLOT_STACK ( 128 * 1024 )
++// the game's frame on a worker of its own (JK2_SPLIT=worker, se_server.h) runs on the stack after the slots' (gl_jk2.c's
++// SERVER_STACK): SE_Core() is SE_SLOTS + 1 there, so what the traces and Ghoul2 keep a core is its own too
++#define SE_SERVER_STACK ( 512 * 1024 )
++#define SE_CORES ( SE_SLOTS + 2 )
 +#ifdef __cplusplus
 +extern "C" {
 +#endif
@@ -10694,6 +11366,14 @@ index 00000000..5ba67bf6
 +	unsigned char here;
 +	const uint32_t d = (uint32_t)( (uintptr_t)&here - (uintptr_t)se_slot_stacks );
 +	return d < (uint32_t)( SE_SLOTS * SE_SLOT_STACK ) ? 1 + (int)( d / SE_SLOT_STACK ) : 0;
++}
++// which of the tables kept a core this core uses: SE_Slot(), or SE_SLOTS + 1 in the game's frame on its worker
++static inline int SE_Core( void )
++{
++	unsigned char here;
++	const uint32_t d = (uint32_t)( (uintptr_t)&here - (uintptr_t)se_slot_stacks );
++	return d < (uint32_t)( SE_SLOTS * SE_SLOT_STACK ) ? 1 + (int)( d / SE_SLOT_STACK ) :
++		d < (uint32_t)( SE_SLOTS * SE_SLOT_STACK + SE_SERVER_STACK ) ? SE_SLOTS + 1 : 0;
 +}
 +// whether this core makes a player ahead (a job, or the first core recording): then nothing that cannot be recorded
 +static inline int SE_Recording( void ) { return SE_Slot() || ( se_recording0 && SE_OnFirstCore() ); }

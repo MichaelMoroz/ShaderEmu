@@ -900,7 +900,8 @@ static void take_trap(Core& c, u32 cause, u32 value, u32 pc) {
     _InterlockedIncrement64((volatile long long*)&trap_counts[cause >> 31][cause & 15]);
     static int trap_log = getenv("RVC_TRAP_LOG") ? atoi(getenv("RVC_TRAP_LOG")) : 0;   // (the first N traps, said)
     if (trap_log > 0 && !(cause >> 31) && trap_log--)
-        fprintf(stderr, "[trap] core %d cause %u value %08x at %08x, instruction %llu\n", c.hart, cause, value, pc, (unsigned long long)c.clock);
+        fprintf(stderr, "[trap] core %d cause %u value %08x at %08x, instruction %llu, ra %08x sp %08x\n", c.hart, cause, value, pc,
+                (unsigned long long)c.clock, c.x[1], c.x[2]);
     c.scause = cause;
     c.stval = value;
     c.sepc = pc;

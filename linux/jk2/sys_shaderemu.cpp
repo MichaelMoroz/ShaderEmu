@@ -238,7 +238,9 @@ window_t WIN_Init( const windowDesc_t *desc, glconfig_t *glConfig )
 	se_glconfig = glConfig;
 	glConfig->vidWidth = w;
 	glConfig->vidHeight = h;
+#ifdef SE_WINDOW
 	se_vid_w = w, se_vid_h = h;
+#endif
 	glConfig->colorBits = 32;
 	glConfig->depthBits = 24;
 	glConfig->stencilBits = 0;
@@ -1209,10 +1211,11 @@ static void se_files_reap( int all );	// (files read ahead: below)
 // A call waited for in passes this core rests (mcw_rest_on: a pass of idle work, some hundreds of instructions), not by
 // mcw_join's polling, which served and counted instructions every turn: 15 million of the load's (docs/games/jk2.md, "The load")
 unsigned se_join_waits, se_rs_waits;	// (passes rested in joins, and of them the bones' (tr_ghoul2.cpp's SE_RSBones): JK2_STATS's jk2render line)
+extern "C" void jk2ServerServe( void );	// (gl_jk2.c: what the game's frame's worker asks, made while this core waits)
 static uint32_t se_join( int h )
 {
 	while ( !mcw_ready( h ) )
-		mcw_rest_on( &h, 1 ), se_join_waits++;
+		jk2ServerServe(), mcw_rest_on( &h, 1 ), se_join_waits++;
 	return mcw_join( h );
 }
 
@@ -1867,11 +1870,11 @@ extern "C" int jk2RenderWorkerHere( void );
 extern "C" int jk2MixWorkerHere( void );
 extern "C" int SE_CoreSlot( void )
 {
-	const int s = SE_Slot();
+	const int s = SE_Core();
 	return s ? s : mcw_on_worker() || jk2RenderWorkerHere() || jk2MixWorkerHere() ? -1 : 0;
 }
 #else
-extern "C" int SE_CoreSlot( void ) { return SE_Slot(); }
+extern "C" int SE_CoreSlot( void ) { return SE_Core(); }
 int SE_SoundMP3( const void *data, int size, void *out, int bytes, int rate, int channels ) { return -1; }
 int SE_PictureJPG( const void *data, int size, int shrink, int *width, int *height, unsigned char *pic ) { return -1; }
 int SE_PicturesOn( void ( *tga )( const void *file, unsigned char *rgba ),
@@ -1912,7 +1915,9 @@ void SE_MusicRound( int sound_time, int muted ) {}
 // stack, the jobs, what ends one, and what a job must not do (allocate, free)
 #include <setjmp.h>
 #include "qcommon/se_slot.h"
-unsigned char se_slot_stacks[SE_SLOTS * SE_SLOT_STACK] __attribute__(( aligned( 16 ) ));
+// (and after them the game's frame's on its worker, gl_jk2.c's se_server_stack)
+unsigned char se_slot_stacks[SE_SLOTS * SE_SLOT_STACK + SE_SERVER_STACK] __attribute__(( aligned( 16 ) ));
+extern "C" unsigned char *const se_server_stack = se_slot_stacks + SE_SLOTS * SE_SLOT_STACK;
 int se_recording0 __attribute__(( aligned( 16 ) ));
 struct seAbort_t { jmp_buf *jb; int why, unused[2]; } __attribute__(( aligned( 16 ) ));
 extern "C" { seAbort_t se_abort[SE_SLOTS + 1]; }
@@ -1930,7 +1935,9 @@ extern "C" void SE_SlotAbort( int why )
 #ifdef SE_WINDOW
 extern "C" int jk2RenderWorkerHere( void );
 extern "C" int jk2MixWorkerHere( void );
-extern "C" int SE_OnFirstCore( void ) { return !SE_Slot() && !mcw_on_worker() && !jk2RenderWorkerHere() && !jk2MixWorkerHere(); }
+extern "C" int jk2ServerHere( void );
+// (not the game's frame on its worker either: its prints are kept, never a player's abort into this core's jump)
+extern "C" int SE_OnFirstCore( void ) { return !SE_Slot() && !mcw_on_worker() && !jk2RenderWorkerHere() && !jk2MixWorkerHere() && !jk2ServerHere(); }
 extern "C" uint32_t jk2_call_on_stack( uint32_t ( *fn )( uint32_t ), uint32_t arg, void *stack_top );
 struct seSlotJob_t { void ( *fn )( void * ); void *arg; int slot, unused; } __attribute__(( aligned( 16 ) ));
 static seSlotJob_t se_slot_jobs[SE_SLOTS + 1];
@@ -1971,6 +1978,14 @@ extern "C" int SE_SlotGive( int slot, void ( *fn )( void * ), void *arg )
 }
 extern "C" void SE_SlotJoin( int handle ) { se_join( handle ); }
 #else
+// the game's frame on a worker (gl_jk2.c's, JK2_SPLIT=worker): made in order on the build computer
+extern "C" int jk2ServerHere( void ) { return 0; }
+extern "C" unsigned jk2ServerOnCore0( unsigned ( *fn )( void * ), void *args ) { return fn( args ); }
+extern "C" int jk2ServerOn( void ) { return 0; }
+extern "C" void jk2ServerServe( void ) {}
+extern "C" void jk2ServerSettle( void ) {}
+extern "C" void jk2ServerGive( void ( *fn )( void * ), void *arg ) { fn( arg ); }
+extern "C" void jk2ServerStats( unsigned *waits, unsigned *asks ) { *waits = *asks = 0; }
 extern "C" int SE_OnFirstCore( void ) { return !SE_Slot(); }
 extern "C" int SE_SlotMode( void )
 {
@@ -1989,7 +2004,37 @@ extern "C" void *__real_malloc( size_t );
 extern "C" void *__real_calloc( size_t, size_t );
 extern "C" void *__real_realloc( void *, size_t );
 extern "C" void __real_free( void * );
-extern "C" void *__wrap_malloc( size_t n ) { SE_NOT_AHEAD( SE_WHY_MALLOC ); return __real_malloc( n ); }
-extern "C" void *__wrap_calloc( size_t n, size_t m ) { SE_NOT_AHEAD( SE_WHY_MALLOC ); return __real_calloc( n, m ); }
-extern "C" void *__wrap_realloc( void *p, size_t n ) { SE_NOT_AHEAD( SE_WHY_MALLOC ); return __real_realloc( p, n ); }
-extern "C" void __wrap_free( void *p ) { SE_NOT_AHEAD( SE_WHY_MALLOC ); __real_free( p ); }
+extern "C" unsigned se_allocs[2];	// (allocations and frees made: JK2_PARTS's line)
+unsigned se_allocs[2];
+// On the game's frame's worker (JK2_SPLIT=worker) the C library's allocations are this core's, asked for (gl_jk2.c)
+extern "C" int jk2ServerHere( void );
+extern "C" uint32_t jk2ServerOnCore0( uint32_t ( *fn )( void * ), void *args );
+struct seAllocArgs_t { void *p; size_t a, b; };
+static uint32_t se_malloc_0( void *p ) { seAllocArgs_t *a = (seAllocArgs_t *)p; return (uint32_t)(uintptr_t)__real_malloc( a->a ); }
+static uint32_t se_calloc_0( void *p ) { seAllocArgs_t *a = (seAllocArgs_t *)p; return (uint32_t)(uintptr_t)__real_calloc( a->a, a->b ); }
+static uint32_t se_realloc_0( void *p ) { seAllocArgs_t *a = (seAllocArgs_t *)p; return (uint32_t)(uintptr_t)__real_realloc( a->p, a->a ); }
+static uint32_t se_free_0( void *p ) { seAllocArgs_t *a = (seAllocArgs_t *)p; __real_free( a->p ); return 0; }
+extern "C" void *__wrap_malloc( size_t n )
+{
+	SE_NOT_AHEAD( SE_WHY_MALLOC ); se_allocs[0]++;
+	if ( jk2ServerHere() ) { seAllocArgs_t a = { NULL, n, 0 }; return (void *)(uintptr_t)jk2ServerOnCore0( se_malloc_0, &a ); }
+	return __real_malloc( n );
+}
+extern "C" void *__wrap_calloc( size_t n, size_t m )
+{
+	SE_NOT_AHEAD( SE_WHY_MALLOC ); se_allocs[0]++;
+	if ( jk2ServerHere() ) { seAllocArgs_t a = { NULL, n, m }; return (void *)(uintptr_t)jk2ServerOnCore0( se_calloc_0, &a ); }
+	return __real_calloc( n, m );
+}
+extern "C" void *__wrap_realloc( void *p, size_t n )
+{
+	SE_NOT_AHEAD( SE_WHY_MALLOC ); se_allocs[0]++;
+	if ( jk2ServerHere() ) { seAllocArgs_t a = { p, n, 0 }; return (void *)(uintptr_t)jk2ServerOnCore0( se_realloc_0, &a ); }
+	return __real_realloc( p, n );
+}
+extern "C" void __wrap_free( void *p )
+{
+	SE_NOT_AHEAD( SE_WHY_MALLOC ); se_allocs[1] += p != 0;
+	if ( p && jk2ServerHere() ) { seAllocArgs_t a = { p, 0, 0 }; jk2ServerOnCore0( se_free_0, &a ); return; }
+	__real_free( p );
+}

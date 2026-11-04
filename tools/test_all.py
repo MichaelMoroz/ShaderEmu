@@ -416,6 +416,12 @@ CASES = [
          '+set com_maxfps 0 +map demo; else echo JK2-NO-DATA; fi', wall=1200, more=['--expect', 'Type yes', '--send', 'yes\\n'],
          has=[r'^.*(jk2sum: frame 3200 time 161250 entities 639 sum 559c85a7 draws 810d9e76|JK2-NO-DATA)',
               r'^.*(jk2sum: frame 3600 time 181250 entities 639 sum 286e9b16 draws 274198c2|JK2-NO-DATA)']),
+    # the game's next frame made after the client's game has its copy, before the client's frame (JK2_SPLIT=ahead): other sums, the
+    # build computer's in the same order (host_sum.sh with JK2_SPLIT=ahead) (docs/games/jk2.md, "The game's frame apart")
+    case('jk2-ahead', 'games jk2 long', 'if [ -d /usr/share/jk2/installed ]; then JK2_SPLIT=ahead JK2_FRAMES=4000 JK2_SUM=400 JK2_SEED=7 jk2 +set fixedtime 50 '
+         '+set com_maxfps 0 +map demo; else echo JK2-NO-DATA; fi', wall=1200, more=['--expect', 'Type yes', '--send', 'yes\\n'],
+         has=[r'^.*(jk2sum: frame 3200 time 161250 entities 639 sum 1530a9f9 draws 9367bd09|JK2-NO-DATA)',
+              r'^.*(jk2sum: frame 3600 time 181250 entities 639 sum ff07869a draws afc9cdbd|JK2-NO-DATA)']),
     case('openttd-scroll', 'games openttd', X + 'OPENTTD_DRAW=cpu OPENTTD_PLAY=1 OPENTTD_PLAY_ODD=1 OPENTTD_PAUSE=1 OPENTTD_CHECK=1 openttd -g /usr/share/openttd/busy.sav',
          True, wall=400, has=[r'openttd: play round 1: .*checked (19\d|200), 0 differ \(0 pixels']),
     case('openttd-scroll-serial', 'games openttd', X + 'OPENTTD_DRAW=cpu OPENTTD_PLAY=1 OPENTTD_PAUSE=1 OPENTTD_CHECK=1 OPENTTD_WORKERS=0 openttd -g /usr/share/openttd/busy.sav',

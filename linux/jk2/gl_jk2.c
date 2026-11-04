@@ -38,6 +38,7 @@ static int on_render(void) {
     return (uint8_t*)&here >= render_stack && (uint8_t*)&here < render_stack + RENDER_STACK;
 }
 int jk2RenderWorkerHere(void) { return on_render(); }
+void jk2ServerServe(void);   // (the game's frame's worker: below)
 static uint32_t render_body(uint32_t given) {
     while (job_go.go != given) mc_end_pass();   // (until this core has given the frame's skins out: SE_SkinGive)
     job.fn(job.arg);
@@ -73,7 +74,7 @@ int jk2RenderOn(void) { return on && rw0.mode && (rw0.mode == 2 || SE_InPlay());
 // The frame out done and shown
 void jk2RenderSettle(void) {
     if (!rw0.out || on_render()) return;
-    while (!mcw_done(rw0.worker)) mcw_rest_for(&rw0.worker, 1), rw0.waits++;
+    while (!mcw_done(rw0.worker)) jk2ServerServe(), mcw_rest_for(&rw0.worker, 1), rw0.waits++;
     rw0.out = 0, rw0.settles++;
     if (job.swap) job.swap = 0, gl_swap();
 }
@@ -114,7 +115,7 @@ int jk2MixOn(void) {
 }
 void jk2MixSettle(void) {
     if (!mw0.out) return;
-    while (!mcw_done(mw0.worker)) mcw_rest_for(&mw0.worker, 1), mw0.waits++;
+    while (!mcw_done(mw0.worker)) jk2ServerServe(), mcw_rest_for(&mw0.worker, 1), mw0.waits++;
     mw0.out = 0;
 }
 unsigned jk2MixWaits(void) {
@@ -127,6 +128,87 @@ void jk2MixGive(void (*fn)(void)) {
     mix_job.fn = fn;
     mcw_post(mw0.worker, mix_post, 0, 0);
     mw0.out = 1;
+}
+
+// ---- the game's next frame on a worker of its own beside the client's (JK2_SPLIT=worker: cl_main.cpp's CL_Frame,
+// docs/games/jk2.md, "The game's frame apart"). What only this core may do (allocations, the zone, cvars, commands,
+// files) the worker asks for and waits (jk2ServerOnCore0): this core makes it wherever it waits ----
+#define SERVER_STACK (512 * 1024)   // (se_slot.h's SE_SERVER_STACK: after the job slots' stacks, so SE_Core() knows it)
+extern uint8_t* const se_server_stack;
+#define server_stack se_server_stack
+static struct __attribute__((aligned(16))) { int worker, out, waits, asks; } sw0;   // this core's
+static struct __attribute__((aligned(16))) { void (*fn)(void*); void* arg; int unused[2]; } server_job;   // the worker's while out
+static struct __attribute__((aligned(16))) { volatile unsigned seq; uint32_t (*fn)(void*); void* args; unsigned unused; } sv_ask;   // the worker's
+static struct __attribute__((aligned(16))) { volatile unsigned seq; uint32_t result; unsigned unused[2]; } sv_answer;   // this core's
+int jk2ServerHere(void) {
+    char here;
+    return (uint32_t)((uint8_t*)&here - server_stack) < SERVER_STACK;
+}
+static uint32_t server_body(uint32_t unused) {
+    (void)unused;
+    server_job.fn(server_job.arg);
+    return 0;
+}
+static uint32_t server_post(uint32_t a0, uint32_t a1) {
+    (void)a0, (void)a1;
+    return jk2_call_on_stack(server_body, 0, server_stack + SERVER_STACK);
+}
+int jk2ServerOn(void) {
+    if (!sw0.worker && rw0.mode) {   // (a worker of the larger caches other than the drawing's and the mix's)
+        sw0.worker = -1;
+        jk2MixOn();
+        for (int k = mcw_count(); k >= 1; k--)
+            if (k != rw0.worker && k != mw0.worker && mcw_fast(k)) { sw0.worker = k; break; }
+        if (sw0.worker > 0) {
+            mcw_touch(server_stack, SERVER_STACK), mcw_touch(&server_job, sizeof server_job);
+            mcw_touch(&sv_ask, sizeof sv_ask);
+            printf("jk2: the game's frame on worker %d beside the client's\n", sw0.worker);
+        }
+    }
+    return on && sw0.worker > 0;
+}
+uint32_t jk2ServerOnCore0(uint32_t (*fn)(void*), void* args) {
+    if (!jk2ServerHere()) return fn(args);
+    sv_ask.fn = fn, sv_ask.args = args;
+    mc_publish();   // (the call before its number)
+    sv_ask.seq = sv_ask.seq + 1;
+    while (sv_answer.seq != sv_ask.seq) mc_end_pass();
+    return sv_answer.result;
+}
+// What the worker asks made now, if it asks (and its stop at a page or a system call served): wherever this core waits
+void jk2ServerServe(void) {
+    if (!sw0.out) return;
+    if (sv_ask.seq != sv_answer.seq) {
+        sv_answer.result = sv_ask.fn(sv_ask.args);
+        sv_answer.seq = sv_ask.seq;
+        sw0.asks++;
+    }
+    mcw_done(sw0.worker);
+}
+void jk2ServerSettle(void) {
+    if (!sw0.out) return;
+    while (!mcw_done(sw0.worker)) jk2ServerServe(), mcw_rest_for(&sw0.worker, 1), sw0.waits++;
+    sw0.out = 0;
+}
+void jk2ServerGive(void (*fn)(void*), void* arg) {
+    jk2ServerSettle();
+    static unsigned gives, deepest;   // (JK2_SERVER_DEPTH=1: how deep the frame's stack went, every 100 frames)
+    static int depth_on = -1;
+    if (depth_on < 0) depth_on = getenv("JK2_SERVER_DEPTH") != NULL;
+    if (depth_on && (++gives <= 10 || gives % 100 == 0)) {
+        const uint32_t* w = (const uint32_t*)server_stack;
+        unsigned k = 0;
+        while (k < SERVER_STACK / 4 && !w[k]) k++;
+        if (SERVER_STACK - k * 4 > deepest) deepest = SERVER_STACK - k * 4;
+        printf("jk2: the game's frame's stack %u bytes deep at most\n", deepest);
+    }
+    server_job.fn = fn, server_job.arg = arg;
+    mcw_post(sw0.worker, server_post, 0, 0);
+    sw0.out = 1;
+}
+void jk2ServerStats(unsigned* waits, unsigned* asks) {
+    *waits = sw0.waits, *asks = sw0.asks;
+    sw0.waits = sw0.asks = 0;
 }
 
 // The given frame may begin (posted first, so that no helper's job takes its worker)
