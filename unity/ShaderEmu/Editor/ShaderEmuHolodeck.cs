@@ -776,6 +776,7 @@ public static partial class ShaderEmuBuilder
         Gone(holodeck, "Holodeck HUD");
         Material hudMat = Mat("GpuHolodeckHud", "ShaderEmu/GpuHolodeckHud");
         hudMat.SetTexture("_State", sceneMat.GetTexture("_State"));
+        hudMat.SetTexture("_GpuVram", sceneMat.GetTexture("_GpuVram"));
         GiveRom(hudMat);
         hudMat.SetFloat("_HudFlip", 1f);
         hudMat.renderQueue = 3010;   // after the world (2503), the beams and the seal (2505), and the room's transparent things
@@ -904,6 +905,7 @@ public static partial class ShaderEmuBuilder
         Material sceneMat = Mat("GpuHolodeck", "ShaderEmu/GpuHolodeck");
         Material volumeMat = AssetDatabase.LoadAssetAtPath<Material>(Generated + "/GpuVolume.mat");
         if (volumeMat != null) sceneMat.SetTexture("_State", volumeMat.GetTexture("_State"));
+        if (volumeMat != null) sceneMat.SetTexture("_GpuVram", volumeMat.GetTexture("_GpuVram"));
         sceneMat.SetVector("_ScreenSize", new Vector4(1.28f, 0.8f, 0, 0));
         GiveRom(sceneMat);
         sceneMat.renderQueue = 2503;   // one later than its shader says: the room's own things are marked between the mask and it (HoloGuards)

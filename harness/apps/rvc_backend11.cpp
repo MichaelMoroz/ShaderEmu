@@ -124,7 +124,7 @@ public:
             if (d.first == "RAM_BUFFER") csBuffer_ = true;
         if (getenv("RVC11_COMPUTE") && !buildComputeTick(shader, bo, err)) return false;
         std::string gpuErr;
-        if (opt.gpuShader && (!buildPasses(gpu_, *opt.gpuShader, {"GPUDraw", "GPUControl"}, bo, gpuPasses_, gpuErr) ||
+        if (opt.gpuShader && (!buildPasses(gpu_, *opt.gpuShader, {"GPUDraw", "GPUControl", "GPUUpload"}, bo, gpuPasses_, gpuErr) ||
                               !createGpuTarget(gpuErr))) {
             fprintf(stderr, "[harness] GPU device disabled: %s\n", gpuErr.c_str());
             gpuPasses_.clear();
@@ -351,7 +351,7 @@ public:
             if (workers) zones.push_back(UpdateZone{64 + band / 2, kHeight - bandRows / 2, band, bandRows, 0});
             // TICK_MRT: the tick draws a pixel for every eight texels, into eight targets of its
             // own, and the pass that follows puts them where the state has them
-            static const char* const kPassLabels[] = {"tick", "unpack", "commit bands", "commit points", "commit copy", "devices", "", "", "", "", "", ""};
+            static const char* const kPassLabels[] = {"tick", "unpack", "commit bands", "commit points", "commit copy", "gpu draw", "control+sound", "", "", "", "", ""};
             if (rounds == 1 && getenv("RVC_PASS_PROF")) { prof_.labels = kPassLabels; profBegin(tag); }
             if (mrt_) tickDraw(mat, zones[0]);
             prof_.mark(gpu_.ctx.Get());
@@ -390,12 +390,13 @@ public:
         }
         if (rounds > 1) mat.setInt("_ZapKind", (int)zapKind);
         if (timeIt) gpu_.ctx->End(tsQuery_[2].Get());
-        if (gpuPasses_.size() == 2 && !freeze) {
+        if (gpuPasses_.size() >= 2 && !freeze) {
             bool listDrawn = !listLazy() || listDue > 0;   // (RVC_LIST_LAZY: only while a list is due)
             if (listDrawn) {
                 gpuDraw(mat);
                 if (listDue > 0) listDue--;
             }
+            prof_.mark(gpu_.ctx.Get());   // (RVC_PASS_PROF: the GPU's lists apart from the control words and the sound)
             mat.setInt("_GpuListSkipped", listDrawn ? 0 : 1);   // (the control zone takes the submit word back only when drawn)
             bool mixed = soundMix && !soundPasses_.empty();
             if (mixed) soundDraw(mat, tag);   // before the control zone moves the voices on
@@ -502,6 +503,36 @@ public:
         if (!rb.init(gpu_.device.Get(), DXGI_FORMAT_R32G32B32A32_UINT, 16, w, h, 1, err)) return false;
         rb.request(gpu_.ctx.Get(), stateTex(), 0, 0, 0);
         return rb.pop(gpu_.ctx.Get(), out, tag);
+    }
+
+    bool readVram(std::vector<uint8_t>& out) override {
+        if (!vramUsed_ || !vram_) return false;
+        D3D11_TEXTURE2D_DESC td{};
+        td.Width = td.Height = kVramSide;
+        td.MipLevels = td.ArraySize = 1;
+        td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        td.SampleDesc.Count = 1;
+        td.Usage = D3D11_USAGE_STAGING;
+        td.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        ComPtr<ID3D11Texture2D> staging;
+        if (FAILED(gpu_.device->CreateTexture2D(&td, nullptr, &staging))) return false;
+        gpu_.ctx->CopySubresourceRegion(staging.Get(), 0, 0, 0, 0, vram_.Get(), 0, nullptr);
+        D3D11_MAPPED_SUBRESOURCE m{};
+        if (FAILED(gpu_.ctx->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &m))) return false;
+        out.resize((size_t)kVramSide * kVramSide * 4);
+        for (UINT y = 0; y < kVramSide; y++) memcpy(&out[(size_t)y * kVramSide * 4], (const uint8_t*)m.pData + (size_t)y * m.RowPitch, kVramSide * 4);
+        gpu_.ctx->Unmap(staging.Get(), 0);
+        for (size_t i = 0; i < out.size(); i += 4096)   // (all zeros: nothing was ever uploaded)
+            for (size_t k = i; k < i + 4096; k++)
+                if (out[k]) return true;
+        return false;
+    }
+    bool writeVram(const uint8_t* texels, size_t bytes) override {
+        if (!vram_ || bytes != (size_t)kVramSide * kVramSide * 4) return false;
+        gpu_.ctx->UpdateSubresource(vram_.Get(), 0, nullptr, texels, kVramSide * 4, 0);
+        gpu_.ctx->GenerateMips(vramSrv_.Get());
+        vramUsed_ = true;
+        return true;
     }
 
     bool gpuTimes(double& tickMs, double& commitMs, double& deviceMs) override {
@@ -716,9 +747,57 @@ private:
             err = "GPU target: " + hrToString(hr);
             return false;
         }
-        const float black[4] = {0, 0, 0, 1};
+        // the VRAM (shader_vm/src/gpu.h, "VRAM"): uploads draw its level 0, GenerateMips the rest
+        D3D11_TEXTURE2D_DESC vd{};
+        vd.Width = vd.Height = kVramSide;
+        vd.MipLevels = 0;
+        vd.ArraySize = 1;
+        vd.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        vd.SampleDesc.Count = 1;
+        vd.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+        vd.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
+        if (SUCCEEDED(hr)) hr = gpu_.device->CreateTexture2D(&vd, nullptr, &vram_);
+        D3D11_RENDER_TARGET_VIEW_DESC rv{};
+        rv.Format = vd.Format;
+        rv.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+        if (SUCCEEDED(hr)) hr = gpu_.device->CreateRenderTargetView(vram_.Get(), &rv, &vramRtv_);
+        if (SUCCEEDED(hr)) hr = gpu_.device->CreateShaderResourceView(vram_.Get(), nullptr, &vramSrv_);
+        if (FAILED(hr)) {
+            err = "VRAM: " + hrToString(hr);
+            return false;
+        }
+        const float black[4] = {0, 0, 0, 1}, none[4] = {0, 0, 0, 0};
         gpu_.ctx->ClearRenderTargetView(gpuRtv_.Get(), black);
+        gpu_.ctx->ClearRenderTargetView(vramRtv_.Get(), none);
         return true;
+    }
+
+    // The list's uploads into the VRAM's level 0 (GPUUpload), every frame a list is drawn; its mip levels made anew with
+    // `mips`, on a frame whose passes word has GPU_UPLOADED, which a list with SUBMIT_UPLOADS waits for.
+    void gpuUpload(Material& mat, bool mips) {
+        ID3D11DeviceContext* ctx = gpu_.ctx.Get();
+        GpuPass& pass = gpuPasses_[2];
+        ctx->OMSetRenderTargets(1, vramRtv_.GetAddressOf(), nullptr);
+        D3D11_VIEWPORT vp{0, 0, (float)kVramSide, (float)kVramSide, 0, 1};
+        ctx->RSSetViewports(1, &vp);
+        ctx->RSSetState(gpu_.rasterNoCull.Get());
+        ctx->IASetInputLayout(nullptr);
+        ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        ID3D11ShaderResourceView* state = stateSrv();
+        mat.bind(ctx, pass, gpu_);
+        for (auto& t : pass.vsLayout.textures)
+            if (t.name == "_State") ctx->VSSetShaderResources(t.slot, 1, &state);
+        for (auto& t : pass.psLayout.textures)
+            if (t.name == "_State") ctx->PSSetShaderResources(t.slot, 1, &state);
+        ctx->OMSetBlendState(gpuBlend_[0].Get(), nullptr, 0xffffffff);
+        ctx->OMSetDepthStencilState(gpuDepthState_[2].Get(), 0);
+        ctx->Draw(kGpuTriangles * 3, 0);
+        ID3D11ShaderResourceView* none = nullptr;
+        for (auto& t : pass.vsLayout.textures) ctx->VSSetShaderResources(t.slot, 1, &none);
+        for (auto& t : pass.psLayout.textures) ctx->PSSetShaderResources(t.slot, 1, &none);
+        ctx->OMSetRenderTargets(0, nullptr, nullptr);
+        if (mips) ctx->GenerateMips(vramSrv_.Get());
+        vramUsed_ = true;   // (a snapshot keeps the VRAM unless it is all zeros)
     }
 
     // Draws the GPU device's mesh. Depth starts fresh every frame; colour is kept, so the
@@ -727,6 +806,8 @@ private:
         ID3D11DeviceContext* ctx = gpu_.ctx.Get();
         static const char* blitsOnly = getenv("RVC_BLITS");
         bool amp = !gpuAmp_.empty() && (!blitsOnly || strstr(blitsOnly, "gpu") != nullptr);
+        if (gpuPasses_.size() > 2) gpuUpload(mat, (gpuPasses & 0x10000u) != 0);   // (the levels made on GPU_UPLOADED)
+        mat.setTexture("_GpuVram", vramSrv_.Get(), kVramSide, kVramSide);
         GpuPass& pass = amp ? gpuAmp_[0] : gpuPasses_[0];
         ctx->OMSetRenderTargets(1, gpuRtv_.GetAddressOf(), gpuDsv_.Get());
         ctx->ClearDepthStencilView(gpuDsv_.Get(), D3D11_CLEAR_DEPTH, 1.0f, 0);
@@ -1135,7 +1216,7 @@ private:
         // the tick, from R; its state rows into A, which holds R's state rows for the rest
         bool ticks = !(cpuMode && !init);
         UpdateZone core0{32, kHeight - tickRows_ / 2, 64, tickRows_, 0};
-        static const char* const kInplaceLabels[] = {"tick", "unpack", "gather", "commit rows", "commit points", "devices", "", "", "", "", "", ""};
+        static const char* const kInplaceLabels[] = {"tick", "unpack", "gather", "commit rows", "commit points", "gpu draw", "control+sound", "", "", "", "", ""};
         if (getenv("RVC_PASS_PROF") && !init) { prof_.labels = kInplaceLabels; profBegin(tag); }
         // --tick-rounds N (and --unity): the tick and its commit N times before the devices, a tick of the clock on each round
         const uint32_t rounds = ticks && !init ? (std::max)(1u, tickRounds) : 1u;
@@ -1205,12 +1286,13 @@ private:
             prof_.mark(ctx);
         }
         if (timeIt) ctx->End(tsQuery_[2].Get());
-        if (gpuPasses_.size() == 2) {
+        if (gpuPasses_.size() >= 2) {
             bool listDrawn = !listLazy() || listDue > 0;   // (RVC_LIST_LAZY: only while a list is due)
             if (listDrawn) {
                 gpuDraw(mat);
                 if (listDue > 0) listDue--;
             }
+            prof_.mark(gpu_.ctx.Get());   // (RVC_PASS_PROF: the GPU's lists apart from the control words and the sound)
             mat.setInt("_GpuListSkipped", listDrawn ? 0 : 1);   // (the control zone takes the submit word back only when drawn)
             bool mixed = soundMix && !soundPasses_.empty();
             if (mixed) soundDraw(mat, tag);   // before the control zone moves the voices on
@@ -1346,6 +1428,11 @@ private:
     ComPtr<ID3D11RenderTargetView> gpuRtv_;
     ComPtr<ID3D11ShaderResourceView> gpuSrv_;
     ComPtr<ID3D11DepthStencilView> gpuDsv_;
+    static const UINT kVramSide = 4096;   // VRAM_SIDE
+    ComPtr<ID3D11Texture2D> vram_;
+    ComPtr<ID3D11RenderTargetView> vramRtv_;
+    ComPtr<ID3D11ShaderResourceView> vramSrv_;
+    bool vramUsed_ = false;   // something was uploaded: a snapshot keeps the VRAM
     ComPtr<ID3D11DepthStencilState> gpuDepthState_[3];
     ComPtr<ID3D11BlendState> gpuBlend_[kGpuBlendings];
     std::vector<ComPtr<ID3D11ShaderResourceView>> keep_;

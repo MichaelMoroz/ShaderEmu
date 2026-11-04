@@ -8,7 +8,6 @@
 #define CSR_FIELDS
 #endif
 
-#define glsl_mod(x,y) (((x)-(y)*floor((x)/(y)))) 
 
 
 // Where RAM texel number `lin` (16 bytes each) lives in the state texture.
@@ -110,7 +109,6 @@ uint ram_bands(uint lo, uint hi) {
 #else
 #define FP_STATE_AT (TLB_STATE_AT + TLB_STATE_TEXELS)
 #endif
-#define CORE0_ROWS ((FP_STATE_AT + 8 + 63) / 64)   // the rows of core 0's state the tick draws
 #ifndef STATE_ROWS
 #if L1_TABLE_BITS == 6 && L1_WAYS == 3
 #define STATE_ROWS 16   // 44 + 448 + 409 + 8 = 909 texels
@@ -444,33 +442,6 @@ ins_ret ins_ret_noop() {
 static uint mem_cache_bloom = 0;
 // one bit per 4 MB of RAM this tick wrote to, for a commit that skips the rest (COMMIT_BANDS)
 static uint mem_dirty = 0;
-// How many instructions the fast run in progress may be (cpu.h). A store the write cache has
-// no room for makes it none, which is how the run ends there: its loop looks at this and at
-// nothing else.
-static uint fast_budget = 0;
-// Searching the write cache is most of what a load or a store costs beyond its arithmetic (a
-// bucket's tags are three array reads, and a full bucket sends the search on to the next
-// table's), and most searches are for a texel just used: the next word of a register save, of
-// a structure, of a copy. So the two texels found or made last are remembered with where they
-// are, and so is the texel looked for last and not found. Entries do not move or go within a
-// pass, so what is remembered stays true; a texel that is made is no longer one not found.
-#if defined(X_P_ALU) || defined(X_P_READ) || defined(X_P_TEX)
-#define X_PROBE
-#endif
-static uint probe = 0;   // X_P_*: work added to every fast instruction, to time it (docs/machine/tick-costs.md)
-static uint l1_last_t = 0xffffffff, l1_last_at = 0, l1_last_t2 = 0xffffffff, l1_last_at2 = 0;
-static uint l1_absent_t = 0xffffffff;
-#define L1_KNOWN(t) ((t) == l1_last_t || (t) == l1_last_t2)
-#define L1_KNOWN_AT(t) ((t) == l1_last_t ? l1_last_at : l1_last_at2)
-#define L1_REMEMBER(t, at) { l1_last_t2 = l1_last_t; l1_last_at2 = l1_last_at; l1_last_t = t; l1_last_at = at; }
-// And a bit for each texel the cache was given in this pass, by a hash of its number: a load
-// of a texel whose bit is clear does not search. (The filter of addresses or-ed together,
-// mem_cache_bloom, lets nine loads in ten through; half of those find nothing.)
-#define L1_HAS_BITS 10
-static uint l1_has[1 << (L1_HAS_BITS - 5)];
-#define L1_HAS_H(t) (((t) ^ ((t) >> L1_HAS_BITS)) & ((1u << L1_HAS_BITS) - 1))
-#define L1_HAS(t) (((l1_has[L1_HAS_H(t) >> 5] >> (L1_HAS_H(t) & 31)) & 1) != 0)
-#define L1_HAS_SET(t) l1_has[L1_HAS_H(t) >> 5] |= 1u << (L1_HAS_H(t) & 31);
 #if CORES > 1
 // a worker core's word (41,0).a: 1 while it runs, else what parked it (mc.h)
 static uint mc_word = 0;

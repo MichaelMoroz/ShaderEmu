@@ -1159,6 +1159,11 @@ int main(int argc, char** argv) {
             fprintf(stderr, "[harness] %s\n", err.c_str());
             return 1;
         }
+        {
+            std::string vram;
+            if (readFileBinary(opt.loadState + ".vram", vram) && !backend.writeVram((const uint8_t*)vram.data(), vram.size()))
+                fprintf(stderr, "[harness] %s.vram: not the VRAM of this machine, left out\n", opt.loadState.c_str());
+        }
         timeBase = hdr.time;
         sentTag = consumedTag = hdr.sentTag;
         sentChar = hdr.sentChar;
@@ -1317,6 +1322,7 @@ int main(int argc, char** argv) {
     }
     bool netDelivered = false;
     int gpuPassLife[16] = {};     // frames each of the GPU's passes 1-15 is still drawn for
+    bool gpuUploadDue = false;    // a readback saw a list with uploads submitted: the next frame draws them (GPU_UPLOADED)
     // The sound card (docs/machine/sound.md). While the guest has it enabled the host mixes: it names a
     // cursor, the device draws the samples from there on and moves its voices up to it.
     SoundOut audio;
@@ -1408,6 +1414,8 @@ int main(int argc, char** argv) {
         if (raw.size() >= (64 + 2) * 16)
             for (int p = 1; p < 16; ++p)
                 if ((texel(64 + 1, 0) >> (8 + p)) & 1) gpuPassLife[p] = 600;
+        // a list with uploads (SUBMIT_UPLOADS) waits for a frame that draws them and makes the VRAM's levels: the next
+        if (raw.size() >= (64 + 2) * 16 && (texel(64 + 1, 0) & 9) == 9) gpuUploadDue = true;
         if (net.on() && raw.size() >= (64 + kControlTexels + kNetSlot) * 16)
             net.fromGuest(texel(64 + 0x3e, 0), texel(64 + 0x3e, 1), t + (64 + kControlTexels) * 4);
         if (raw.size() >= (64 + 0x25) * 16) openWord = texel(64 + 0x24, 0);
@@ -2057,6 +2065,7 @@ int main(int argc, char** argv) {
                     --gpuPassLife[p];
                     passes |= 1u << p;
                 }
+            if (gpuUploadDue) passes |= 0x10000u, gpuUploadDue = false;   // (GPU_UPLOADED, shader_vm/src/gpu.h)
             backend.gpuPasses = passes;
             mat.setInt("_GpuPasses", passes);
         }
@@ -2379,6 +2388,11 @@ int main(int argc, char** argv) {
             data.insert(data.begin(), (const uint8_t*)&hdr, (const uint8_t*)&hdr + sizeof hdr);
             ok = writeFileBinary(opt.saveState, data.data(), data.size());
         }
+        // the VRAM's textures beside it (docs/machine/gpu.md, "VRAM"), or no file: a machine that uploaded nothing
+        std::vector<uint8_t> vram;
+        std::string vramFile = opt.saveState + ".vram";
+        if (ok && backend.readVram(vram)) ok = writeFileBinary(vramFile, vram.data(), vram.size());
+        else if (ok) std::remove(vramFile.c_str());
         fprintf(stderr, "\n[harness] snapshot %s %s\n", ok ? "written to" : "FAILED:", opt.saveState.c_str());
         if (!ok) exitCode = 1;
     }

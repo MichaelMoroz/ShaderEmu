@@ -19,6 +19,14 @@
 #define SUBMIT_WRITEBACK 2   // afterwards copy the picture into the RAM framebuffer
 #define SUBMIT_INTO 4        // afterwards copy it into the rectangle of RAM at GPU_INTO, whose size the picture has
 #define SUBMIT_COPIES (SUBMIT_WRITEBACK | SUBMIT_INTO)
+// The host draws a list's CMD_UPLOADs into the VRAM before its passes, every frame a list is drawn (GPUUpload). The VRAM's mip
+// levels it makes anew only when asked: SUBMIT_UPLOADS, the list has an upload of a texture with levels (VRAM_LOD not 0).
+#define SUBMIT_UPLOADS 8
+// _GpuPasses' bit 16: the host made the levels this frame. A list with SUBMIT_UPLOADS waits, submitted and not drawn, until it
+// has (as one waits for a pass the host does not draw yet), so its draws find their textures' levels; one whose uploads are
+// all of textures without levels (a light map changed) waits for nothing.
+#define GPU_UPLOADED 0x10000u
+#define SUBMIT_WAITS(submit, passes) ((SUBMIT_PASSES(submit) & ~(passes)) != 0 || (((submit) & SUBMIT_UPLOADS) != 0 && ((passes) & GPU_UPLOADED) == 0))
 // Bits 9-23: the list has commands for passes 1-15. It is drawn, and the submit word taken back,
 // once the host draws all of those (it learns of them by reading these words back).
 #define SUBMIT_PASSES(submit) (((submit) >> 8) & 0xfffe)
@@ -37,6 +45,7 @@
 #define CMD_DRAW 3      // `count` vertices
 #define CMD_TEXT 4      // 6 vertices a character
 #define CMD_SPRITES 5   // 6 vertices a sprite record (docs/machine/gpu.md, "Sprites of a paletted picture")
+#define CMD_UPLOAD 6    // 6 vertices: a texture copied into the VRAM with its mip levels (docs/machine/gpu.md, "VRAM")
 
 // How a draw's vertices are projected.
 #define VERTEX_SCREEN 0   // position is already in pixels (x, y) and depth (z, 0..1)
@@ -99,6 +108,31 @@
 #define SPRITE_WORDS 7        // a picture these commands drew, a word a pixel: red the index, green its remaps (the command's table)
 #define SPRITE_RAW 8          // the byte, 0 too
 #define SPRITE_SHADES(kind) ((kind) == SPRITE_SHADE || (kind) == SPRITE_FILL_SHADE)
+
+// The VRAM (docs/machine/gpu.md, "VRAM"): a texture of VRAM_SIDE x VRAM_SIDE colours, RGBA8, with mip levels the host makes
+// of all of it after the uploads (GenerateMips), into which CMD_UPLOAD copies textures from RAM or the ROM. A texture lies in
+// a block padded with its own texels as it repeats (or with VRAM_CLAMPED its edge's), 2^L of them each side, the block's
+// corner and size whole multiples of 2^L: so its levels up to L are its own, and a sample of a level up to L weighs only its
+// texels. A draw's texture address (or a light map's) with its top two bits clear is not an address but such a texture:
+#define VRAM_SIDE 4096
+#define VRAM_X(slot) ((slot) & 0xfffu)               // its texel (0, 0), past the padding
+#define VRAM_Y(slot) (((slot) >> 12) & 0xfffu)
+#define VRAM_LOD(slot) (((slot) >> 24) & 7u)         // L, the most a sample is minified (2^L); its padding is 2^L (1 for L = 0)
+#define VRAM_PREMULTIPLIED 0x08000000u               // uploaded with a key: colours times alpha, the key's texels 0
+#define VRAM_CLAMPED 0x10000000u                     // padded with the edge's texels (a light map), not the other side's
+#define VRAM_IS(address) (((address) >> 30) == 0u)
+uint vram_pad(uint slot) { return 1u << VRAM_LOD(slot); }
+// The block CMD_UPLOAD covers for a w x h texture (programs/common/gpu.h has the same): from 2^L before its texel (0, 0),
+// rounded up to whole 2^L.
+uint2 vram_block(uint2 size, uint slot) {
+    uint pad = vram_pad(slot), mask = (1u << VRAM_LOD(slot)) - 1;
+    return (size + 2 * pad + mask) & ~mask;
+}
+
+#ifdef GPU_VRAM
+Texture2D<float4> _GpuVram;           // the VRAM, with its mip levels (VRAM_SIDE square)
+SamplerState sampler_linear_clamp;    // (its name is the sampler's kind, in Unity and the harness)
+#endif
 
 #ifndef GPU_STATE_ROW
 #define GPU_STATE_ROW 64u   // the state texture's row RAM starts in
@@ -331,7 +365,7 @@ bool gpu_command(uint id, uint span, out uint base, out uint4 head) {
     uint list = texel_of(ctrl.g), count = min(ctrl.b, GPU_MAX_COMMANDS);
     if ((ctrl.r & SUBMIT_DRAW) == 0 || count == 0) return false;
 #ifdef GPU_PASS_UNIFORMS
-    if ((SUBMIT_PASSES(ctrl.r) & ~_GpuPasses) != 0) return false;   // not until every pass it needs is drawn
+    if (SUBMIT_WAITS(ctrl.r, _GpuPasses)) return false;   // not until every pass it needs is drawn, and its uploads
 #endif
     // Commands claim rising vertex ranges, so the owner is the last one starting at or before
     // this vertex: a binary search, twelve steps for the largest list.
@@ -346,8 +380,14 @@ bool gpu_command(uint id, uint span, out uint base, out uint4 head) {
     base = list + 4 * lo;
     head = ram(base);
     uint op = head.r;
-    uint slots = op == CMD_CLEAR ? 3 : op == CMD_RECT ? 6 : op == CMD_DRAW ? head.b : op == CMD_TEXT ? 6 * ram(base + 1).b : op == CMD_SPRITES ? 6 * head.b : 0;
+    uint slots = op == CMD_CLEAR ? 3 : op == CMD_RECT ? 6 : op == CMD_DRAW ? head.b : op == CMD_TEXT ? 6 * ram(base + 1).b : op == CMD_SPRITES ? 6 * head.b
+               : op == CMD_UPLOAD ? 6 : 0;
     if (id < head.a || id + span > head.a + slots) return false;
+#ifdef GPU_UPLOAD_PASS
+    return op == CMD_UPLOAD;   // (the pass into the VRAM draws the uploads alone, before every other pass)
+#else
+    if (op == CMD_UPLOAD) return false;
+#endif
 #ifdef GPU_PASS_UNIFORMS
     uint drawn_in = op == CMD_RECT || op == CMD_TEXT ? FRAGMENT_PASS(ram(base + 2).r) : op == CMD_DRAW ? FRAGMENT_PASS(ram(base + 1).g) : 0;
     if (op == CMD_SPRITES) return ((ram(base + 1).r >> _GpuPass) & 1) != 0;   // (its word 4: the passes it is drawn in)
@@ -398,6 +438,19 @@ gpu_varyings gpu_vertex_sized(uint id, uint base, uint4 head, float2 size) {
             o.uv = float2(right ? uv.z : uv.x, low ? uv.w : uv.y);
             o.texture_info = tex;
             o.key = head.b;
+        } else if (op == CMD_UPLOAD) {
+            // head.g where the texture is (RAM or the ROM), head.b its kind (FRAGMENT_TEXTURE, _INDEXED or _RGB24, and
+            // FRAGMENT_KEYED); then width, height, the slot, the key; the palette's address (0: the display's) and the
+            // row's length in pixels (0: the width). A quad over the slot's block in the VRAM, drawn in the upload pass.
+            uint4 size = ram(base + 1), more = ram(base + 2);
+            uint slot = size.b, pad = vram_pad(slot);
+            uint2 block = vram_block(size.rg, slot);
+            uint corner = k < 3 ? k : (k == 3 ? 2 : (k == 4 ? 1 : 3));
+            float2 p = float2(VRAM_X(slot) - pad + ((corner & 1) ? block.x : 0), VRAM_Y(slot) - pad + ((corner & 2) ? block.y : 0));
+            o.position = float4(p.x * 2.0 / VRAM_SIDE - 1.0, 1.0 - p.y * 2.0 / VRAM_SIDE, 0.0, 1.0);
+            o.texture_info = uint4(head.b, head.g, size.r, size.g);
+            o.key = size.a;
+            o.light_info = uint3(slot, more.g != 0 ? more.g : size.r, more.r);
         } else if (op == CMD_SPRITES) {
             // head.g the records, head.b how many; then the passes (a bit each), the first record's place in the
             // order, the palette (0: the picture is of indices), then words 7 and 8 the two remaps green counts (SPRITE_WORDS). A record is a
@@ -629,11 +682,66 @@ float4 gpu_texel(gpu_varyings i, uint mode, uint x, uint y, uint width, out floa
     return colour_of(texel);
 }
 
+// The upload pass (CMD_UPLOAD): a texel of the VRAM in the texture's block, the texel of the texture it repeats (or, clamped,
+// the edge's nearest), as a colour; with VRAM_PREMULTIPLIED times its alpha, and the key's 0.
+float4 gpu_upload_fragment(gpu_varyings i) {
+    uint slot = i.light_info.r, row = i.light_info.g, width = i.texture_info.b, height = i.texture_info.a;
+    uint mode = i.texture_info.r & 0xff;
+    int2 at = int2(i.position.xy) - int2(VRAM_X(slot), VRAM_Y(slot));
+    uint x, y;
+    if (slot & VRAM_CLAMPED) {
+        x = (uint)clamp(at.x, 0, (int)width - 1);
+        y = (uint)clamp(at.y, 0, (int)height - 1);
+    } else {
+        // (the padding is under the texture's size or a few of its repeats: whole repeats added first)
+        x = (uint)(at.x + 64 * (int)width) % width;
+        y = (uint)(at.y + 64 * (int)height) % height;
+    }
+    uint n = y * row + x, texel;
+    [branch]
+    if (mode == FRAGMENT_INDEXED) {
+        texel = (texture_word(i.texture_info.g + (n & ~3u)) >> (8 * (n & 3))) & 0xff;
+        if ((i.texture_info.r & FRAGMENT_KEYED) && texel == i.key) return 0.0;
+        texel = ram_word((i.light_info.b != 0 ? i.light_info.b : DEV_AT + 0x1000400u) + 4 * texel);
+    } else {
+        texel = mode == FRAGMENT_RGB24 ? gpu_rgb24(i.texture_info.g, n) : texture_word(i.texture_info.g + 4 * n);
+        if ((i.texture_info.r & FRAGMENT_KEYED) && texel == i.key) return 0.0;
+    }
+    float4 c = colour_of(texel);
+    if (slot & VRAM_PREMULTIPLIED) c.rgb *= c.a;
+    return c;
+}
+
+#ifdef GPU_VRAM
+// A texture in the VRAM at uv (repeating, or clamped), its texel (0, 0) at `at` and `size` texels: the four texels round
+// the point weighed, at `lod` (a level, or between two; at most the slot's L).
+float4 vram_sample(uint slot, uint2 size, float2 uv, float lod, bool clamped) {
+    float2 p = (clamped ? saturate(uv) : frac(uv)) * float2(size);
+    float2 at = float2(VRAM_X(slot), VRAM_Y(slot)) + p;
+    return _GpuVram.SampleLevel(sampler_linear_clamp, at / VRAM_SIDE, min(lod, (float)VRAM_LOD(slot)));
+}
+// The nearest texel, of level `level` (whole, at most L).
+float4 vram_texel(uint slot, uint2 size, float2 uv, uint level, bool clamped) {
+    if (clamped) uv = saturate(uv) * 0.99999;
+    uint2 t = min((uint2)(frac(uv) * float2(size)), size - 1);
+    uint2 at = (uint2(VRAM_X(slot), VRAM_Y(slot)) + t) >> level;
+    return _GpuVram.Load(int3(at, level));
+}
+#endif
+
 // The light a lit draw's fragment is times: its light map's four texels round the point,
 // weighed, the map's edge going on beyond it.
 float3 gpu_light(gpu_varyings i) {
     uint width = i.light_info.g, height = i.light_info.b;
     if (width == 0 || height == 0) return 1.0;
+#ifdef GPU_VRAM
+    [branch]
+    if (VRAM_IS(i.light_info.r)) {
+        // (clamped, at level 0: the map's edge texels a half texel in, as below)
+        float2 p = clamp(saturate(i.light_uv) * float2(width, height), 0.5, float2(width, height) - 0.5);
+        return _GpuVram.SampleLevel(sampler_linear_clamp, (float2(VRAM_X(i.light_info.r), VRAM_Y(i.light_info.r)) + p) / VRAM_SIDE, 0).rgb;
+    }
+#endif
     float2 at = saturate(i.light_uv) * float2(width, height) - 0.5;
     float2 low = floor(at), part = at - low;
     uint x0 = (uint)clamp((int)low.x, 0, (int)width - 1), y0 = (uint)clamp((int)low.y, 0, (int)height - 1);
@@ -701,16 +809,48 @@ float4 gpu_sprite_fragment(gpu_varyings i) {
 
 float4 gpu_fragment(gpu_varyings i) {
     uint mode = i.texture_info.r & 0xff, width = i.texture_info.b, height = i.texture_info.a;
-    [branch]
-    if (mode == FRAGMENT_SPRITE) return gpu_sprite_fragment(i);
     float4 c = i.colour;
     float2 uv = i.uv;
     if (i.texture_info.r & FRAGMENT_LAID) {
         uv += i.position.xy * c.xy / 1024.0;
         c = 1.0;
     }
+#ifdef GPU_VRAM
+    // (how far apart the texels of neighbouring pixels are, before any branch: the level a VRAM texture is sampled at)
+    float2 across = ddx(uv) * float2(width, height), down = ddy(uv) * float2(width, height);
+    float lod = max(0.5 * log2(max(dot(across, across), dot(down, down))), 0.0);
+#endif
+    [branch]
+    if (mode == FRAGMENT_SPRITE) return gpu_sprite_fragment(i);
     [branch]
     if (i.texture_info.r & FRAGMENT_LIT) c.rgb *= gpu_light(i);
+#ifdef GPU_VRAM
+    [branch]
+    if (VRAM_IS(i.texture_info.g) && width != 0 && height != 0 && mode != FRAGMENT_COLOUR) {
+        // a texture in the VRAM (an upload's kind: words, indexed or three bytes, all colours there now)
+        uint slot = i.texture_info.g;
+        bool clamped = (i.texture_info.r & FRAGMENT_CLAMPED) != 0, keyed = (slot & VRAM_PREMULTIPLIED) != 0;
+        float4 t;
+        [branch]
+        if (i.texture_info.r & FRAGMENT_SMOOTH) {
+            t = vram_sample(slot, uint2(width, height), uv, lod, clamped);
+            // a key's texels are 0 and count for nothing; where they are most of it, nothing is drawn
+            if (keyed) {
+                if (t.a < 0.5) discard;
+                t.rgb /= t.a;
+                t.a = 1.0;
+            }
+        } else {
+            t = vram_texel(slot, uint2(width, height), uv, (uint)min(lod + 0.5, (float)VRAM_LOD(slot)), clamped);
+            if (keyed) {
+                if (t.a < 0.5) discard;
+                t.rgb /= t.a;
+                t.a = 1.0;
+            }
+        }
+        return saturate(c * t);
+    }
+#endif
     [branch]
     if (mode == FRAGMENT_MSDF) {
         // the pixel's coverage as four quarters' (2 x 2 samples): at each the four atlas pixels
@@ -1199,7 +1339,7 @@ uint4 gpu_control(uint2 pos) {
     // for is noted in GPU_COPY, for the next commit to make.
     // (A list that needs passes the host is not drawing yet waits, submitted, until it is.)
 #ifdef GPU_INPUT
-    bool served = (SUBMIT_PASSES(ram(GPU_CTRL).r) & ~_GpuPasses) == 0;
+    bool served = !SUBMIT_WAITS(ram(GPU_CTRL).r, _GpuPasses);
 #if defined(GPU_LIST_SKIP)
     served = served && _GpuListSkipped == 0;   // (rvc_harness's RVC_LIST_LAZY: the same; Unity draws it every frame)
 #endif

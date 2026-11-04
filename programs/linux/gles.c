@@ -43,7 +43,7 @@
 // The pause hint: this machine ends its frame there, which is when the GPU does its work.
 #define next_frame() __asm__ volatile(".word 0x0100000f")
 
-enum { CMD_CLEAR = 1, CMD_DRAW = 3 };
+enum { CMD_CLEAR = 1, CMD_DRAW = 3, CMD_UPLOAD = 6 };
 enum { VERTEX_CLIP = 1, VERTEX_MODELVIEW = 0x100, VERTEX_QUADS = 0x200, VERTEX_COMPACT = 0x400, VERTEX_FLOAT = 0x800,
        VERTEX_TAGGED = 0x1000, VERTEX_TABLE = 0x2000, VERTEX_PACKED = 0x4000, VERTEX_POINTS = 0x8000 };
 
@@ -97,9 +97,11 @@ static int view_x, view_y, view_w, view_h;
 
 static uint32_t colour = 0x00ffffff, clear_colour;
 static int texturing, depth_test, blending, alpha_test, blend_kind = 1, key_index;
-typedef struct { uint32_t address, width, height, indexed, used, smooth; } texture;   // smooth: FRAGMENT_SMOOTH or 0
+typedef struct { uint32_t address, width, height, indexed, used, smooth, slot; } texture;   // smooth: FRAGMENT_SMOOTH or 0; slot: in the VRAM, or 0
 static texture textures[MAX_TEXTURES];
 static uint32_t bound;
+// What a draw gives as its texture's address: its slot in the VRAM, or where it is in GPU memory.
+static inline uint32_t drawn_at(const texture* x) { return x->slot ? x->slot : GPU_PHYS + x->address; }
 
 typedef struct { const uint8_t* pointer; int size, stride, enabled, floats; } array;
 static array vertex_array, coord_array;
@@ -272,6 +274,8 @@ static volatile uint32_t hand_taken;   // the first core's: hands it has submitt
 static uint32_t hand_settled;          // the worker's: hands it has seen drawn
 static GR_WINDOW_INFO hand_info;       // the first core's: the window the hands are copied into
 static int hand_submit(int wait);
+static uint32_t uploads_put(void);   // (the VRAM's uploads, below)
+static void uploads_done(void);
 
 void seglSettle(void) {
     volatile uint32_t* regs = (volatile uint32_t*)gpu;
@@ -321,7 +325,7 @@ static int hand_submit(int wait) {
         regs[REG_INTO / 4 + 3] = hand_info.surface_row;
         regs[REG_SUBMIT / 4 + 1] = GPU_PHYS + set;
         regs[REG_SUBMIT / 4 + 2] = count;
-        regs[REG_SUBMIT / 4] = 1 | 4 | passes << 8;
+        regs[REG_SUBMIT / 4] = 1 | 4 | (passes & 1 ? 8 : 0) | (passes & ~1u) << 8;
         shown_set = set;
         shown_commands = count | passes << 16;
         __atomic_store_n(&regs[REG_LOCK / 4], 0, __ATOMIC_RELEASE);
@@ -347,6 +351,7 @@ static void swap(int wait) {
         buffers_seen = regs[REG_BUFFERS / 4];
         GrGetWindowInfo(window, &window_info);
     }
+    uint32_t uploading = commands && window_info.realized && window_info.surface_address ? uploads_put() : 0;
     if (commands && window_info.realized && window_info.surface_address) {
         for (;;) {
             while (__atomic_exchange_n(&regs[REG_LOCK / 4], 1, __ATOMIC_ACQUIRE)) sched_yield();
@@ -360,7 +365,8 @@ static void swap(int wait) {
         regs[REG_INTO / 4 + 3] = window_info.surface_row;
         regs[REG_SUBMIT / 4 + 1] = GPU_PHYS + set_at;
         regs[REG_SUBMIT / 4 + 2] = commands;
-        regs[REG_SUBMIT / 4] = 1 | 4 | passes_used << 8;   // draw, copy into the window; the passes used
+        regs[REG_SUBMIT / 4] = 1 | 4 | uploading | passes_used << 8;   // draw, copy into the window; uploads; the passes used
+        uploads_done();
         shown_set = set_at;
         shown_commands = commands | passes_used << 16;
         __atomic_store_n(&regs[REG_LOCK / 4], 0, __ATOMIC_RELEASE);
@@ -395,13 +401,15 @@ void seglSwapHand(void) {
         swap(0);
         return;
     }
+    uint32_t uploading = commands && window_info.realized && window_info.surface_address ? uploads_put() : 0;
     if (commands && window_info.realized && window_info.surface_address) {
         uint32_t n = hand[3];
         // the hand before is submitted and drawn: its set is where the next frame is built
         while (hand_taken != n || regs[REG_SUBMIT / 4] != 0) rest();
         hand_settled = n;
         hand[0] = set_at;
-        hand[1] = commands | passes_used << 16;
+        hand[1] = commands | passes_used << 16 | (uploading ? 1u << 16 : 0);   // (bit 16: uploads; passes are 1-15)
+        uploads_done();
         hand[2] = (uint32_t)window_info.width | (uint32_t)window_info.height << 16 | world_up << 28 | world_flat;
         __atomic_store_n(&hand[3], n + 1, __ATOMIC_RELEASE);
         set_at = set_at == SETS_AT ? SETS_AT + SET_SIZE : SETS_AT;
@@ -678,6 +686,117 @@ void glGenTextures(GLsizei n, GLuint* out) {
         }
     while (n-- > 0) *out++ = 0;
 }
+// ---- the VRAM (docs/machine/gpu.md, "VRAM") ----
+
+// A texture made by glTexImage2D lies in the VRAM too, padded with 2^L texels of itself each way (L the most it is drawn
+// smaller, its levels' count), in a block of whole 2^L: blocks are taken from shelves of the VRAM, and a dropped one is
+// taken again by a texture of its size. The upload is a command of the next list submitted (CMD_UPLOAD).
+#define VRAM_SIDE 4096
+#define VRAM_PREMULTIPLIED 0x08000000u
+#define MAX_UPLOADS 512
+static int vram_lod = -2;   // -2: not asked yet (SEGL_VRAM, then seglVram); -1 off
+typedef struct { uint16_t x, y, w, h; } vram_block;
+static vram_block vram_free[MAX_TEXTURES];
+static int vram_frees;
+static uint32_t shelf_x, shelf_y, shelf_h;
+static uint16_t uploads[MAX_UPLOADS];
+static int upload_count, uploads_left;
+static uint32_t vram_palette;   // seglVramPalette: the palette a paletted texture is uploaded with (0: the display's)
+
+void seglVram(int lod) {
+    const char* e = getenv("SEGL_VRAM");
+    vram_lod = e && *e ? atoi(e) : lod;
+    if (vram_lod > 4) vram_lod = 4;
+    if (vram_lod < -1) vram_lod = -1;
+}
+// The block of a texture of w x h at L: 2^L each side, rounded to whole 2^L (shader_vm/src/gpu.h, vram_block).
+static void vram_size(uint32_t w, uint32_t h, uint32_t lod, uint32_t* bw, uint32_t* bh) {
+    uint32_t pad = 1u << lod, mask = (1u << lod) - 1;
+    *bw = (w + 2 * pad + mask) & ~mask;
+    *bh = (h + 2 * pad + mask) & ~mask;
+}
+static void vram_drop(texture* x) {
+    if (!x->slot) return;
+    uint32_t lod = x->slot >> 24 & 7, pad = 1u << lod, bw, bh;
+    vram_size(x->width, x->height, lod, &bw, &bh);
+    if (vram_frees < MAX_TEXTURES)
+        vram_free[vram_frees++] = (vram_block){(uint16_t)((x->slot & 0xfff) - pad), (uint16_t)((x->slot >> 12 & 0xfff) - pad), (uint16_t)bw, (uint16_t)bh};
+    for (int i = 0; i < upload_count; i++)
+        if (&textures[uploads[i]] == x) uploads[i] = uploads[--upload_count], i--;
+    x->slot = 0;
+}
+static void vram_upload(texture* x) {
+    for (int i = 0; i < upload_count; i++)
+        if (&textures[uploads[i]] == x) return;
+    if (upload_count < MAX_UPLOADS) uploads[upload_count++] = (uint16_t)(x - textures);
+}
+// A texture into the VRAM: a block for it, and its upload in the next list. Paletted and word textures only.
+static void vram_take(texture* x) {
+    if (x->indexed > 1 || !x->width || !x->height || x->width > 2048 || x->height > 2048) return;
+    uint32_t lod = (uint32_t)vram_lod, bw, bh, at_x = 0, at_y = 0;
+    while (lod && ((x->width >> lod) < 1 || (x->height >> lod) < 1)) lod--;   // (no smaller than a texel)
+    vram_size(x->width, x->height, lod, &bw, &bh);
+    int found = 0;
+    for (int i = 0; i < vram_frees && !found; i++)
+        if (vram_free[i].w == bw && vram_free[i].h == bh) {
+            at_x = vram_free[i].x, at_y = vram_free[i].y;
+            vram_free[i] = vram_free[--vram_frees];
+            found = 1;
+        }
+    if (!found) {
+        // shelves of whole 16 texels: the corner of a block of any L up to 4 a whole 2^L
+        uint32_t w = (bw + 15) & ~15u, h = (bh + 15) & ~15u;
+        if (shelf_x + w > VRAM_SIDE) shelf_x = 0, shelf_y += shelf_h, shelf_h = 0;
+        if (shelf_y + h > VRAM_SIDE) return;   // (full: drawn from GPU memory)
+        at_x = shelf_x, at_y = shelf_y;
+        shelf_x += w;
+        if (h > shelf_h) shelf_h = h;
+    }
+    uint32_t pad = 1u << lod, keyed = 0;
+    if (x->indexed == 1 && key_index >= 0 && key_index < 256) {
+        const uint8_t* b = gpu + x->address;
+        for (uint32_t n = 0; n < x->width * x->height && !keyed; n++) keyed = b[n] == (uint8_t)key_index;
+    }
+    x->slot = (at_x + pad) | (at_y + pad) << 12 | lod << 24 | (keyed ? VRAM_PREMULTIPLIED : 0);
+    vram_upload(x);
+}
+void seglVramPalette(const unsigned int* words) { vram_palette = words ? (uint32_t)(uintptr_t)words : 0; }
+void seglTextureChanged(void) {
+    texture* x = &textures[bound];
+    if (vram_lod == -2) seglVram(-1);
+    if (x->slot) vram_upload(x);
+    else if (vram_lod >= 0) vram_take(x);
+}
+// The uploads waiting, as commands at the list's end (the host draws them every frame a list is drawn): SUBMIT_UPLOADS (8)
+// if one has mip levels, which the host then makes before the list is drawn. They are taken off only once the list is
+// submitted (uploads_done).
+static uint32_t uploads_put(void) {
+    int n = 0;
+    uint32_t levels = 0;
+    for (; n < upload_count; n++) {
+        texture* x = &textures[uploads[n]];
+        uint32_t* c = command(CMD_UPLOAD, 6);
+        if (!c) break;
+        c[1] = GPU_PHYS + x->address;
+        c[2] = (x->indexed ? FRAGMENT_INDEXED : FRAGMENT_TEXTURE) | (x->slot & VRAM_PREMULTIPLIED ? FRAGMENT_KEYED : 0);
+        c[4] = x->width;
+        c[5] = x->height;
+        c[6] = x->slot;
+        c[7] = (uint32_t)key_index;
+        c[8] = vram_palette;
+        c[9] = 0;
+        levels |= x->slot >> 24 & 7;
+    }
+    uploads_left = n;
+    return levels ? 8u : 0u;
+}
+// Those put in the list just submitted are done.
+static void uploads_done(void) {
+    for (int i = uploads_left; i < upload_count; i++) uploads[i - uploads_left] = uploads[i];
+    upload_count -= uploads_left;
+    uploads_left = 0;
+}
+
 // `top` raised to the end of `bytes` at a physical address, if that is texture memory.
 static uint32_t kept_to(uint32_t top, uint32_t address, uint32_t bytes) {
     uint32_t at = address - GPU_PHYS;
@@ -688,7 +807,10 @@ static uint32_t kept_to(uint32_t top, uint32_t address, uint32_t bytes) {
 void glDeleteTextures(GLsizei n, const GLuint* which) {
     seglSettle();   // (the memory given back is written again)
     for (int i = 0; i < n; i++)
-        if (which[i] < MAX_TEXTURES) textures[which[i]].used = 0;
+        if (which[i] < MAX_TEXTURES) {
+            vram_drop(&textures[which[i]]);
+            textures[which[i]].used = 0;
+        }
     uint32_t top = TEXTURES_AT;
     for (uint32_t t = 1; t < MAX_TEXTURES; t++) {
         texture* x = &textures[t];
@@ -730,6 +852,7 @@ void glTexParameterx(GLenum target, GLenum name, GLfixed value) { glTexParameter
 
 void seglTexturePointer(const void* pixels, GLsizei width, GLsizei height, GLenum internal) {
     texture* x = &textures[bound];
+    vram_drop(x);   // (the program's own memory, which it goes on writing: drawn from there unless it asks, seglTextureChanged)
     x->address = (uint32_t)((const uint8_t*)pixels - gpu);
     x->width = width;
     x->height = height;
@@ -751,6 +874,8 @@ void glTexImage2D(GLenum target, GLint level, GLint internal, GLsizei width, GLs
             w[i] = (uint32_t)(255 - p[3]) << 24 | (uint32_t)p[0] << 16 | (uint32_t)p[1] << 8 | p[2];
     }
     seglTexturePointer(to, width, height, internal);
+    if (vram_lod == -2) seglVram(-1);
+    if (vram_lod >= 0) vram_take(&textures[bound]);
 }
 void glColorTableEXT(GLenum target, GLenum internal, GLsizei count, GLenum format, GLenum type, const GLvoid* table) {
     (void)target, (void)internal, (void)format, (void)type;
@@ -863,7 +988,7 @@ void glDrawArrays(GLenum mode, GLint first, GLsizei count) {
         c[4] = vertex;
         c[5] = fragment;
         c[6] = block;
-        c[7] = GPU_PHYS + x->address;
+        c[7] = drawn_at(x);
         c[8] = x->width;
         c[9] = x->height;
         c[10] = key_index;
@@ -930,7 +1055,7 @@ static uint32_t* compact_begin(GLenum mode, GLsizei count, uint32_t* stored_out,
         c[4] = vertex;
         c[5] = fragment;
         c[6] = block;
-        c[7] = GPU_PHYS + x->address;
+        c[7] = drawn_at(x);
         c[8] = x->width;
         c[9] = x->height;
         c[10] = key_index;
@@ -1044,7 +1169,7 @@ void seglQuad(const GLfixed* xyz, const GLfixed* uv, GLuint name, unsigned grey,
         c[4] = last_state[0] = vertex;
         c[5] = last_state[1] = fragment;
         c[6] = last_state[2] = block;
-        c[7] = GPU_PHYS + x->address;
+        c[7] = drawn_at(x);
         last_state[3] = x->address;
         c[8] = x->width;
         c[9] = x->height;
@@ -1118,7 +1243,7 @@ static __attribute__((noinline)) void sprite_command(const GLfixed* box, const i
         c[4] = last_state[0] = vertex;
         c[5] = last_state[1] = fragment;
         c[6] = last_state[2] = block;
-        c[7] = GPU_PHYS + x->address;
+        c[7] = drawn_at(x);
         last_state[3] = x->address;
         c[8] = x->width;
         c[9] = x->height;
@@ -1205,7 +1330,7 @@ void seglSpritesAt(const void* vertices, GLsizei quads, GLuint name, unsigned co
     c[5] = (x->indexed == 2 ? 3u : x->indexed == 3 ? 5u : (x->indexed == 4 ? 6u : x->indexed ? FRAGMENT_INDEXED : FRAGMENT_TEXTURE) | x->smooth) |
            (keyed ? FRAGMENT_KEYED : 0) | 5u << 16;
     c[6] = block;
-    c[7] = GPU_PHYS + x->address;
+    c[7] = drawn_at(x);
     c[8] = x->width;
     c[9] = x->height;
     c[10] = key_index;
@@ -1244,7 +1369,7 @@ void seglScreenUsed(GLsizei count, GLuint name) {
     c[4] = NUM_FORMAT;   // vertex mode 0: positions are pixels
     c[5] = (x->address ? FRAGMENT_TEXTURE : FRAGMENT_COLOUR) | 5u << 16;
     c[6] = 0;
-    c[7] = GPU_PHYS + x->address;
+    c[7] = drawn_at(x);
     c[8] = x->width;
     c[9] = x->height;
     c[10] = c[11] = 0;
@@ -1277,7 +1402,7 @@ void seglScreenCompactUsed(GLsizei count, int quads, GLuint name, const unsigned
     c[4] = NUM_FORMAT | VERTEX_COMPACT | VERTEX_TAGGED | VERTEX_TABLE | (quads ? VERTEX_QUADS : 0);   // vertex mode 0: pixels
     c[5] = (x->address ? FRAGMENT_TEXTURE : FRAGMENT_COLOUR) | 5u << 16;
     c[6] = 0;
-    c[7] = GPU_PHYS + x->address;
+    c[7] = drawn_at(x);
     c[8] = x->width;
     c[9] = x->height;
     c[10] = 0;
@@ -1308,7 +1433,7 @@ void seglScreenCompactAt(const unsigned int* vertices, GLsizei count, int quads,
     c[4] = NUM_FORMAT | VERTEX_COMPACT | VERTEX_TAGGED | VERTEX_TABLE | (quads ? VERTEX_QUADS : 0);   // vertex mode 0: pixels
     c[5] = (x->address ? FRAGMENT_TEXTURE : FRAGMENT_COLOUR) | 5u << 16;
     c[6] = 0;
-    c[7] = GPU_PHYS + x->address;
+    c[7] = drawn_at(x);
     c[8] = x->width;
     c[9] = x->height;
     c[10] = 0;
@@ -1393,7 +1518,7 @@ void seglKeptQuads(int index, const void* vertices, int first_quad, int quads, G
         c[4] = VERTEX_CLIP | VERTEX_MODELVIEW | VERTEX_COMPACT | VERTEX_QUADS | NUM_FORMAT;
         c[5] = FRAGMENT_INDEXED | t->smooth | (keyed ? FRAGMENT_KEYED : 0);
         c[6] = GPU_PHYS + SETS_AT + set * SET_SIZE + UNIFORMS_IN;
-        c[7] = GPU_PHYS + t->address;
+        c[7] = drawn_at(t);
         c[8] = t->width;
         c[9] = t->height;
         c[10] = key_index;
@@ -1430,7 +1555,7 @@ void seglKeptTexture(int index, GLuint name) {
     for (int set = 0; set < 2; set++) {
         uint32_t* c = kept_command(set, index);
         c[5] = (c[5] & ~(uint32_t)FRAGMENT_SMOOTH) | t->smooth;
-        c[7] = GPU_PHYS + t->address;
+        c[7] = drawn_at(t);
         c[8] = t->width;
         c[9] = t->height;
     }

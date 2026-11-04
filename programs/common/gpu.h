@@ -20,7 +20,23 @@
 #define GPU_MAX_COMMANDS 4096
 #define GPU_MAX_VERTICES 196608    // per list, over all commands (65,536 triangles)
 
-enum { GPU_END, GPU_CLEAR, GPU_RECT, GPU_DRAW };
+enum { GPU_END, GPU_CLEAR, GPU_RECT, GPU_DRAW, GPU_TEXT, GPU_SPRITES, GPU_UPLOAD };
+#define GPU_SUBMIT_UPLOADS 8   // (gpu_submit_as adds it) the list has uploads: drawn once the host has drawn them and made the levels
+
+// The VRAM (docs/machine/gpu.md, "VRAM"): 4096 x 4096 colours with mip levels, which gpu_upload() copies a texture into. A
+// texture there is drawn by giving its slot in place of its address: GPU_VRAM_SLOT(x, y, L), (x, y) its texel (0, 0), L the
+// most it is minified, 2^L (0: no levels); the block it needs is gpu_vram_block()'s, from 2^L before (x, y), and x and y are
+// whole multiples of 2^L.
+#define GPU_VRAM_SIDE 4096
+#define GPU_VRAM_SLOT(x, y, lod) ((uint32_t)(x) | (uint32_t)(y) << 12 | (uint32_t)(lod) << 24)
+#define GPU_VRAM_PREMULTIPLIED 0x08000000u   // with GPU_FRAGMENT_KEYED: the key's texels are holes (in the upload's slot and the draws')
+#define GPU_VRAM_CLAMPED 0x10000000u         // padded with its edge (a light map), not as it repeats
+static inline uint32_t gpu_vram_pad(uint32_t slot) { return 1u << ((slot >> 24) & 7); }
+static inline void gpu_vram_block(uint32_t w, uint32_t h, uint32_t slot, uint32_t* bw, uint32_t* bh) {
+    uint32_t pad = gpu_vram_pad(slot), mask = (1u << ((slot >> 24) & 7)) - 1;
+    *bw = (w + 2 * pad + mask) & ~mask;
+    *bh = (h + 2 * pad + mask) & ~mask;
+}
 
 // How a draw's vertices are projected.
 enum {
@@ -82,12 +98,14 @@ typedef struct {
 static volatile uint32_t* gpu_next;
 static uint32_t gpu_commands, gpu_vertices;
 static uint32_t gpu_passes;   // passes 1-15 this list uses, one bit each, for the submit word
+static uint32_t gpu_uploads;  // GPU_SUBMIT_UPLOADS if the list has uploads
 
 static inline void gpu_begin(void) {
     gpu_next = (volatile uint32_t*)GPU_COMMANDS;
     gpu_commands = 0;
     gpu_vertices = 0;
     gpu_passes = 0;
+    gpu_uploads = 0;
 }
 
 // Notes the pass of a fragment mode, so the submit word can tell the host which to draw.
@@ -167,13 +185,29 @@ static inline void gpu_draw(const gpu_vertex* vertices, uint32_t count, uint32_t
     c[10] = key;
 }
 
+// Copies a texture into the VRAM at `slot` (GPU_VRAM_SLOT): `kind` GPU_FRAGMENT_TEXTURE, _INDEXED or _RGB24, with
+// GPU_FRAGMENT_KEYED for texels equal to `key` to be holes; `palette` 0 for the display's, `row` 0 for rows of `w`.
+static inline void gpu_upload(const void* pixels, uint32_t kind, uint32_t w, uint32_t h, uint32_t slot, uint32_t key,
+                              const uint32_t* palette, uint32_t row) {
+    volatile uint32_t* c = gpu_command(GPU_UPLOAD, 6);
+    c[1] = (uint32_t)pixels;
+    c[2] = kind;
+    c[4] = w;
+    c[5] = h;
+    c[6] = slot;
+    c[7] = key;
+    c[8] = (uint32_t)palette;
+    c[9] = row;
+    gpu_uploads = GPU_SUBMIT_UPLOADS;
+}
+
 // Hands the list to the GPU and waits until it has been drawn. `how` is GPU_SUBMIT_DRAW,
 // optionally with GPU_SUBMIT_WRITEBACK.
 static inline void gpu_submit_as(uint32_t how) {
     uint32_t before = GPU_FRAMES;
     GPU_LIST = GPU_COMMANDS;
     GPU_COUNT = gpu_commands;
-    GPU_SUBMIT = how | (gpu_passes << 8);   // drawn once the host draws every pass used
+    GPU_SUBMIT = how | (gpu_passes << 8) | gpu_uploads;   // drawn once the host draws every pass used
     do {
         cpu_wait();   // the list is drawn between frames
     } while (GPU_FRAMES == before);

@@ -363,6 +363,8 @@ public static partial class ShaderEmuBuilder
         pointsBlitMat.SetTexture("_AmpRank", machine.rankTexture);
         gpuBlitMat.SetTexture("_State", machine.state);
         gpuBlitMat.SetTexture("_AmpRank", machine.rankTexture);
+        machine.vram = Vram();
+        gpuBlitMat.SetTexture("_GpuVram", machine.vram);
         machine.gatherBlitMaterial = gatherBlitMat;
         machine.pointsBlitMaterial = pointsBlitMat;
         machine.gpuBlitMaterial = gpuBlitMat;
@@ -778,12 +780,30 @@ public static partial class ShaderEmuBuilder
         return rt;
     }
 
+    // The GPU's VRAM (docs/machine/gpu.md, "VRAM"): 4096 x 4096 RGBA8, linear, with mip levels EmuMachine makes when a list
+    // asks (GenerateMips), not after every blit into it: the uploads are blitted into it every frame a list is drawn.
+    static RenderTexture Vram()
+    {
+        RenderTexture rt = LoadOrCreate(Generated + "/GpuVram.renderTexture",
+            () => new RenderTexture(4096, 4096, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.Linear));
+        rt.Release();
+        rt.width = rt.height = 4096;
+        rt.antiAliasing = 1;
+        rt.useMipMap = true;
+        rt.autoGenerateMips = false;
+        rt.filterMode = FilterMode.Trilinear;
+        rt.wrapMode = TextureWrapMode.Clamp;
+        EditorUtility.SetDirty(rt);
+        return rt;
+    }
+
     // The volume display's material (docs/world/volume.md): the guest's 3D frame as geometry. Its wall
     // screen is gone; the holodecks draw the same lists (ShaderEmuHolodeck.cs takes the state from here).
     static Material Volume(RenderTexture state)
     {
         Material sceneMat = Mat("GpuVolume", "ShaderEmu/GpuVolume");
         sceneMat.SetTexture("_State", state);
+        sceneMat.SetTexture("_GpuVram", Vram());
         sceneMat.SetVector("_ScreenSize", new Vector4(1.28f, 0.8f, 0, 0));
         return sceneMat;
     }

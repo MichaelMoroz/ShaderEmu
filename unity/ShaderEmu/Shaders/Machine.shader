@@ -150,7 +150,9 @@ Shader "ShaderEmu/Machine"
             // The GPU's camera draws every pass every frame: 0-9, 12 and 13 (GpuDrawPass.cginc). At 0xff a list with a
             // pass of the destination's alpha (8, 9, 12, 13: Jedi Outcast's menu) was never taken back, and the
             // window system and every program waited on the GPU.
-            #define _GpuPasses 0x33ffu
+            // Bit 16 (GPU_UPLOADED): EmuMachine made the VRAM's mip levels this frame, which a list with SUBMIT_UPLOADS waits for.
+            uniform uint _GpuUploaded;
+            #define _GpuPasses (0x33ffu | _GpuUploaded)
             // the console's input (docs/machine/console.md): up to four characters, in two halves
             uniform uint _UartInLo, _UartInHi, _UdonUARTInTag;
             #define CON_IN_TAG _UdonUARTInTag

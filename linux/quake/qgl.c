@@ -84,7 +84,7 @@ static inline uint32_t coord_bits(float s, float t) {
 // GPU memory holds the ones being drawn: the one drawn longest ago makes room for a new one.
 enum { NONE, INDEXED, WORDS, POSE };
 #define NOWHERE 0xffffffffu
-typedef struct { uint8_t* host; uint32_t at, bytes, drawn; int width, height, kind, holes, stays, smooth; } texture;
+typedef struct { uint8_t* host; uint32_t at, bytes, drawn; int width, height, kind, holes, stays, smooth, in_vram; } texture;
 typedef struct { uint32_t at, size; int owner; } block;   // of the pool, in order; owner -1: free
 static texture textures[MAX_TEXTURES];
 static struct { const void* model; int pose; } pose_of[POSES];   // whose pose a pose slot holds
@@ -97,6 +97,19 @@ static uint8_t* pool;
 static uint32_t pool_size, pool_used, host_bytes, evictions, frame = 1;
 static GLuint bound, ramp_name = MAX_TEXTURES - 1;
 static uint32_t uploads;   // goes up when a texture's pixels or kind may be others: a kept command's words are then stale
+// The VRAM (docs/machine/gpu.md, "VRAM"; QUAKE_VRAM=0 the way before): a texture but a light map and a model's pose is copied
+// from its memory here into the VRAM once, with mip levels, and drawn from there; the pool is then the light maps' and poses'.
+static int vram_on;
+static inline int vram_kind(const texture* t) { return vram_on && (t->kind == INDEXED || (t->kind == WORDS && t->width != LIGHT_BLOCK)); }
+// The texture's pixels were written: copied into the VRAM again when it is there.
+static void vram_again(int name) {
+    texture* t = &textures[name];
+    if (!t->in_vram) return;
+    GLuint was = bound;
+    glBindTexture(GL_TEXTURE_2D, name);
+    seglTextureChanged();
+    glBindTexture(GL_TEXTURE_2D, was);
+}
 
 // gpu_shaderemu.c: a draw made again from its command's words, and the modelview as rows
 unsigned qgpuCommands(void);
@@ -187,6 +200,18 @@ static int resident(int name) {
     uint32_t at;
     if (t->kind == NONE || t->kind == POSE) return 0;
     t->drawn = frame;
+    if (vram_kind(t)) {
+        if (!t->in_vram) {
+            // (read by the upload from where it is: the program's memory, which stays until the texture is made anew)
+            glBindTexture(GL_TEXTURE_2D, name);
+            seglTexturePointer(t->host, t->width, t->height, t->kind == INDEXED ? GL_COLOR_INDEX8_EXT : GL_RGBA);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, t->smooth ? GL_LINEAR : GL_NEAREST);
+            seglTextureChanged();
+            glBindTexture(GL_TEXTURE_2D, bound);
+            t->in_vram = 1;
+        }
+        return 1;
+    }
     if (head_made && t->at != NOWHERE) head_texture(name);
     if (t->at != NOWHERE) return 1;
     if ((at = pool_room(t->bytes, name, 0)) == NOWHERE) return 0;
@@ -226,6 +251,7 @@ static uint8_t* texture_memory(int width, int height, int kind) {
     uint32_t bytes = (uint32_t)width * height * (kind == INDEXED ? 1 : 4);
     if (t->kind != kind || t->width != width || t->height != height) {
         if (t->at != NOWHERE) pool_give(bound);
+        if (t->in_vram) seglSettle(), t->in_vram = 0;   // (made into the VRAM again from the new memory when next drawn)
         host_bytes -= t->kind == NONE ? 0 : t->bytes;
         t->host = realloc(t->host, bytes ? bytes : 1);
         t->kind = t->host ? kind : NONE;
@@ -320,9 +346,11 @@ void qglTexImage8(const GLubyte* pixels, GLsizei width, GLsizei height, int hole
     uploads++;
     if (!to) return;
     t->holes = holes;
+    if (t->in_vram) seglSettle();
     if (pixels) memcpy(to, pixels, t->bytes);
     else memset(to, 0, t->bytes);
     if (t->at != NOWHERE) seglSettle(), memcpy(pool + t->at, to, t->bytes);
+    vram_again(bound);
 }
 
 // Rows of a texture of words from the RGBA bytes Quake uploads.
@@ -380,9 +408,11 @@ void qglTexImage2D(GLenum target, GLint level, GLint internal, GLsizei width, GL
     uploads++;
     if (!to) return;
     t->holes = 0;
+    if (t->in_vram) seglSettle();
     if (pixels) words(to, pixels, width * height, format);
     else memset(to, 0, t->bytes);
     if (t->at != NOWHERE) seglSettle(), memcpy(pool + t->at, to, t->bytes);
+    vram_again(bound);
 }
 
 void qglTexSubImage2D(GLenum target, GLint level, GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type,
@@ -391,11 +421,13 @@ void qglTexSubImage2D(GLenum target, GLint level, GLint x, GLint y, GLsizei widt
     texture* t = &textures[bound];
     if (level != 0 || format != GL_RGBA || t->kind != WORDS || x < 0 || y < 0 || x + width > t->width || y + height > t->height) return;
     int step = 4;
+    if (t->in_vram) seglSettle();
     for (int row = 0; row < height; row++) {
         uint32_t at = (uint32_t)((y + row) * t->width + x) * 4;
         words((uint32_t*)(t->host + at), (const uint8_t*)pixels + row * width * step, width, format);
         if (t->at != NOWHERE) seglSettle(), memcpy(pool + t->at + at, t->host + at, (size_t)width * 4);
     }
+    vram_again(bound);
 }
 
 // ---- state ----
@@ -1195,6 +1227,11 @@ int qglOpen(unsigned int nano_x_window, const unsigned char* palette) {
     for (int i = 0; i < 256; i++, palette += 3)
         words256[i] = (unsigned int)palette[0] << 16 | (unsigned int)palette[1] << 8 | palette[2];
     glColorKeySE(KEY);
+    {
+        const char* v = getenv("QUAKE_VRAM");
+        vram_on = !(v && !strcmp(v, "0"));
+        seglVram(vram_on ? 4 : -1);
+    }
     // the ramp a model's shading is looked up in, which stays; the rest is the textures' pool
     uint32_t* ramp = seglMemory(256 * 4);
     if (!ramp) return -1;

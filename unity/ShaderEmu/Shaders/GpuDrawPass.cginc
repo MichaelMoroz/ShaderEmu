@@ -13,7 +13,11 @@ Texture2D<float4> _Data_ROM;   // the ROM: a 16-byte texel a pixel, read by its 
 float _StateRow;
 #define GPU_STATE_ROW ((uint)(int)_StateRow)
 #define GPU_PASS_UNIFORMS
-#define _GpuPasses 0x33ffu   // (every pass drawn every frame: 0-9, 12 and 13)
+// (every pass drawn every frame: 0-9, 12 and 13; bit 16, GPU_UPLOADED, when EmuMachine made the VRAM's levels this frame)
+uniform uint _GpuUploaded;
+#define _GpuPasses (0x33ffu | _GpuUploaded)
+// the VRAM (docs/machine/gpu.md, "VRAM"): textures CMD_UPLOAD copied there, with mip levels
+#define GPU_VRAM
 // the picture is 1280x720 at most here
 #define GPU_TARGET_W 1280.0
 #define GPU_TARGET_H 720.0
@@ -82,7 +86,11 @@ void geom(point gpu_point i[1], inout TriangleStream<gpu_varyings> stream) {
 #endif
 
 float4 frag(gpu_varyings i) : SV_Target {
+#ifdef GPU_UPLOAD_PASS
+    return gpu_upload_fragment(i);   // (GpuDrawBlit.shader's GPUUpload, into the VRAM)
+#else
     return gpu_fragment(i);
+#endif
 }
 
 #endif

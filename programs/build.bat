@@ -25,3 +25,9 @@ rem copytest too: the parallel copy over the shader machine's chunk (docs\machin
 "%LLVM_BIN%\clang.exe" %CFLAGS:common\link.ld=lazy\link.ld% common\start.S copytest\copytest.c -o build\copytest.elf || exit /b 1
 "%LLVM_BIN%\llvm-objcopy.exe" -O binary build\copytest.elf bin\copytest.bin || exit /b 1
 echo built bin\copytest.bin
+rem gpubench0-8: the GPU's fragment cost a mode, in the kernel's place too (docs\machine\gpu.md, "VRAM")
+for %%M in (0 1 2 3 4 5 6 7 8) do (
+    "%LLVM_BIN%\clang.exe" %CFLAGS:common\link.ld=lazy\link.ld% -DMODE=%%M common\start.S gpubench\gpubench.c -o build\gpubench%%M.elf || exit /b 1
+    "%LLVM_BIN%\llvm-objcopy.exe" -O binary build\gpubench%%M.elf bin\gpubench%%M.bin || exit /b 1
+)
+echo built bin\gpubench0-8.bin

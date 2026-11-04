@@ -76,6 +76,7 @@ mesh order.
 | 3 | draw | count | 1: vertex buffer, 2: count, 4: vertex mode, 5: fragment mode, 6: uniforms address, 7-9: texture address, width, height, 10: key, 11: colour (compact vertices), 12-15: where a laid texture lies |
 | 4 | text | 6 a character | 1: colour, 2: font table, 4-5: x, y of the string's top left, 6: characters, 7: address of the string, 8: fragment word (its pass; mode 7 for glyphs of coverage, 8 for distance fields; `0x100`: words 9-11 are there), 9: a scale (16.16; 0: none), 10: a slant in 256ths of a pixel a row, and from bit 16 the row that stays where it is, 11: what the table's bitmap addresses are counted from, 12 (mode 8): the distance range in pixels before the scale (16.16). Drawn at the near plane |
 | 5 | sprites | 6 a record | 1: the records, 2: how many, 4: the passes it is drawn in (bit p: pass p), 5: the first record's place in the order, 6: a palette (256 words) or 0, 7 and 8: the two remaps a picture's green counts (256 bytes each). See "Sprites of a paletted picture" |
+| 6 | upload | 6 | 1: the texture's address (RAM or the ROM), 2: its kind (fragment mode 1, 2 or 4, with `0x100` for the key's texels to be holes), 4-5: width, height, 6: its slot in the VRAM, 7: the key, 8: a palette's address (0: the display's), 9: its row's length in pixels (0: the width). See "VRAM" |
 
 A string for command 4 is a word a character: the glyph's number in its low half and, in the
 high half, how many pixels right of x the character starts (the program adds the widths up;
@@ -400,6 +401,56 @@ the ROM to read textures and vertices from when it is not `build\images\linux`'s
 before snapshotting. The card's rasteriser is not bit-exact with the model: expect agreement
 away from triangle edges except for single-pixel shifts where a nearest-sampled texture changes
 texel.
+
+## VRAM
+
+The GPU has a texture of its own, 4096 x 4096 colours of four bytes (RGBA8, linear) with mip levels: the VRAM. Command 6
+copies a texture into it from RAM or the ROM, through the palette if it is paletted, and a draw, a rectangle or a light map
+gives the texture's slot in place of its address: an address with its top two bits clear (no RAM or ROM address has them)
+is a slot (`VRAM_IS` in `shader_vm/src/gpu.h`). The fragment shader then samples it with the card's sampler, the four
+texels round the point of a level, or two levels weighed (trilinear), in one instruction, where the same texture in RAM
+is four loads of a 16-byte texel each and a light map four more.
+
+A slot is `x | y << 12 | L << 24 | flags`: (x, y) is the texture's texel (0, 0), L (0 to 4) the most a sample is minified,
+2^L, and so how many of the VRAM's levels are its own. The texture lies in a block padded with 2^L of its own texels each
+way, as it repeats (`0x10000000`, clamped: its edge's, for a light map), the block's corner and size whole multiples of
+2^L (`vram_block`); a level up to L of the whole VRAM is then the texture's own, and its padding, a texel or more at every
+such level, is what the sampler weighs past an edge. `0x08000000`: uploaded with a key, its colours times alpha and the
+key's texels 0; a sample there is divided by its alpha and nothing is drawn where it is under a half (as the weighed
+texels of RAM's keyed path). A sample's level comes from the texture coordinates' derivatives, taken before any branch.
+
+The host draws a list's uploads into the VRAM's level 0 before its passes, every frame a list is drawn (GPUUpload; in the
+world GpuDrawBlit's pass 13), and makes the levels of the whole VRAM only when asked (`GenerateMips`): the submit word's
+bit 3, `SUBMIT_UPLOADS`, says the list has an upload of a texture with levels, and such a list waits, submitted and drawn
+by no pass, until a frame whose passes word has bit 16 (`GPU_UPLOADED`): the host saw it in a readback, made the levels
+and drew the list in that frame. An upload of a texture with no levels (a light map made again) waits for nothing. A
+host's snapshot keeps the VRAM's level 0 beside it (`FILE.vram`, 64 MB, when it is not all zeros).
+
+The VRAM belongs to the program that draws with the GPU's memory (`/dev/gpu`'s DRAW): the GL library gives slots out
+(`seglVram(L)`, `seglTextureChanged()`, `seglVramPalette()` in `programs/linux/include/GLES/segl.h`), on shelves of whole
+16 texels, and a texture deleted leaves its block to the next of its size. It is off by default, for a 2D program's
+pictures to stay those of GPU memory to the pixel, and on in Quake (`QUAKE_VRAM=0` the way before) and Doom (`DOOM_VRAM=0`;
+its palette's flashes, which the VRAM's colours do not take, are a rectangle over the view: `doom_tint`). A texture whose
+memory the program writes as it runs (a screen, a film's frame) stays where it is unless the program says it changed.
+
+`programs/gpubench` (a program in the kernel's place: `tools\make_lazy_image.py DIR --program gpubenchN`) covers a 1280 x
+720 picture eight times in one fragment mode. The GPU's draw (`RVC_PASS_PROF=1`, "gpu draw"), RTX 5090, 4 November 2026:
+
+| mode | ms |
+|---|---|
+| no list | 0.036 |
+| colour (0) | 0.055 |
+| words, nearest (1) | 0.055 |
+| words, four texels (2) | 0.104 |
+| paletted, nearest (3) | 0.075 |
+| paletted, four texels (4) | 0.14 |
+| three bytes, four texels (5) | 0.22 |
+| compact quads, words and a light map (6) | 0.174 |
+| 2 from the VRAM, trilinear (7) | 0.053 |
+| 6 from the VRAM, its light map too (8) | 0.062 |
+
+A texture from the VRAM costs what a colour does; what is left, 0.055 ms, is the vertex shader's: every pass runs all
+196,608 vertices, each finding its command by a binary search.
 
 ## Cost
 

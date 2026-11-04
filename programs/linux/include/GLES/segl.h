@@ -36,6 +36,19 @@ void* seglMemory(unsigned int bytes);
 // Makes the bound texture those pixels, with no copy: GL_COLOR_INDEX8_EXT bytes or GL_RGBA
 // words (0xTTRRGGBB, T being transparency), rows top to bottom.
 void seglTexturePointer(const void* pixels, GLsizei width, GLsizei height, GLenum internal);
+// Textures made from now on by glTexImage2D are copied into the VRAM (docs/machine/gpu.md, "VRAM") and drawn from
+// there, with mip levels down to 2^`lod` times smaller (at most 4; 0 the texture alone, no levels; -1 off: drawn from
+// GPU memory, as before). A paletted one takes the palette as it is when the list is next submitted, and its key's
+// (glColorKeySE) texels are holes. Off by default; SEGL_VRAM=N in the environment overrides it. For 3D programs:
+// a 2D one's pictures stay those of GPU memory to the pixel.
+void seglVram(int lod);
+// The bound texture's pixels changed (its memory, written by the program): copied into the VRAM again, or the first
+// time with seglVram on. The memory is read when the next list is drawn: it may be anywhere (the program's own), and
+// must stay as it is until then (seglSettle).
+void seglTextureChanged(void);
+// The palette paletted textures are uploaded with from now on (256 words, 0x00RRGGBB, memory the program keeps), not
+// the display's: a program whose display palette flashes (Doom) uploads with its plain one. NULL: the display's.
+void seglVramPalette(const unsigned int* words);
 // The 256-word palette of paletted textures (0x00RRGGBB), for writing directly.
 unsigned int* seglPalette(void);
 // How many bytes seglMemory() still has to give.

@@ -50,6 +50,7 @@ Shader "ShaderEmu/gpu"
             #ifndef GPU_NO_EDGE
             #define GPU_EDGE   // the clear cut at the picture's edge (gpu_varyings; --define GPU_NO_EDGE: drawn past it)
             #endif
+            #define GPU_VRAM   // textures uploaded into the VRAM (docs/machine/gpu.md, "VRAM")
             #include "src/gpu.h"
 
             // In Unity the mesh carries its vertex number; here SV_VertexID is the same thing.
@@ -58,6 +59,34 @@ Shader "ShaderEmu/gpu"
             }
             float4 frag(gpu_varyings i) : SV_Target {
                 return gpu_fragment(i);
+            }
+            ENDCG
+        }
+
+        Pass
+        {
+            // The list's uploads (CMD_UPLOAD) into the VRAM, before its passes; the host then makes the VRAM's mip levels.
+            Name "GPUUpload"
+            ZTest Off
+            ZWrite Off
+
+            CGPROGRAM
+            #pragma target 5.0
+            #pragma vertex vert
+            #pragma fragment frag
+
+            Texture2D<uint4> _State;
+            Texture2D<float4> _Data_ROM;
+            #define GPU_ROM
+            #define GPU_STATE _State
+            #define GPU_UPLOAD_PASS
+            #include "src/gpu.h"
+
+            gpu_varyings vert(uint id : SV_VertexID) {
+                return gpu_vertex(id);
+            }
+            float4 frag(gpu_varyings i) : SV_Target {
+                return gpu_upload_fragment(i);
             }
             ENDCG
         }

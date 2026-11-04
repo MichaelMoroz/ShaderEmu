@@ -8,6 +8,7 @@ Shader "ShaderEmu/GpuHolodeckHud"
     {
         _State ("Machine state texture", 2D) = "black" {}
         _Data_ROM ("ROM, a 16-byte texel a pixel (RGBAFloat, read by its bits)", 2D) = "black" {}
+        _GpuVram ("The GPU's VRAM: textures the guest uploaded, with mip levels", 2D) = "black" {}
         _HudFlip ("1: the picture's top at the quad's top; -1 turned over", Float) = 1
     }
     SubShader
