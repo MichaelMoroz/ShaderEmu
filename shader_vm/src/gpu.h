@@ -52,6 +52,7 @@
 #define VERTEX_POINTS 0x8000     // flag (compact, modelview): a vertex a triangle, which faces the eye; words 12-14 its size, growth and from where
 #define VERTEX_FACING 0x20000    // flag (tagged): word 11 is the address of a table of the ways a vertex faces, and it is lit from word 13's three texels
 #define VERTEX_MOVED 0x10000     // flag: word 15 is the address of two rows of three numbers the texture coordinates are turned and moved by
+#define VERTEX_BONES 0x40000     // flag (floats, not compact): a skinned model's vertex, made from its indices, vertices, bones and light (words 1, 12-15; gpu.md)
 
 // How fragments are coloured (low byte), plus flags.
 #define FRAGMENT_COLOUR 0     // interpolated colour
@@ -177,6 +178,95 @@ void gpu_compact_vertex(uint base, uint4 head, uint4 how, uint4 more, uint k, ou
         float3 facing = asfloat(ram(texel_of(more.a) + (t.a >> 24))).xyz;
         uint light = texel_of(ram(base + 3).g);
         colour = float4(saturate(asfloat(ram(light + 2)).rgb + max(dot(facing, asfloat(ram(light)).xyz), 0.0) * asfloat(ram(light + 1)).rgb), 1.0);
+    }
+}
+
+// Vertex k of a skinned draw (VERTEX_BONES; docs/machine/gpu.md, "A skinned model"), as Jedi Outcast's Ghoul2 makes
+// its vertices (rd-vanilla's RB_SurfaceGhoul and RB_CalcDiffuseColor): word 1 is the triangles' indices, a word each
+// (the drawn vertex k is the model's vertex of index word k); word 12 its vertices of 32 bytes, on 4 bytes: the normal
+// and x, then y, z, the bone references (5 bits each, the count less one in bits 30-31, the weights' top two bits in
+// pairs from bit 12) and the weights' low bytes; word 13 the bones, three texels of a row of four floats each, by the
+// vertex's references; word 14 the texture coordinates, two floats a vertex; word 15, when not 0, three texels of light
+// (from where, its colour and the light from everywhere, 0 to 255; each texel's fourth a channel's multiplier): the
+// colour is then the light by the normal (turned by the first bone), and word 11's alpha; else word 11. The weights are
+// tenths of 1,023, the last one 1 less the others. The operations are RB_SurfaceGhoul's, in its order and not fused
+// (precise): the positions are the bits the CPU's skinning makes, so a picture is the CPU's drawing's to the pixel.
+float gpu_bone_row(float4 r, float4 at) {
+    precise float d = r.x * at.x + r.y * at.y;
+    precise float e = d + r.z * at.z;
+    precise float f = e + r.w;
+    return f;
+}
+float gpu_bone_turn(float4 r, float3 n) {   // (a normal: DotProduct's order, no translation)
+    precise float d = r.x * n.x + r.y * n.y;
+    precise float e = d + r.z * n.z;
+    return e;
+}
+float3 gpu_bone(uint bone, float4 at) {
+    return float3(gpu_bone_row(asfloat(ram(bone)), at), gpu_bone_row(asfloat(ram(bone + 1)), at), gpu_bone_row(asfloat(ram(bone + 2)), at));
+}
+float gpu_bone_weight(uint refs, uint low, uint j) {
+    precise float w = (float)(((low >> (8 * j)) & 0xff) | ((refs >> (12 + 2 * j)) & 0x300)) * (1.0f / 1023.0f);
+    return w;
+}
+void gpu_bones_vertex(uint4 head, uint4 more, uint4 words, uint k, out float4 pos, out float2 uv, out float4 colour) {
+    uint index = ram_word(head.g + 4 * k);
+    // (the vertices on 4 bytes: a model's as its file lies; 32 bytes a vertex, so the draw's every vertex is as far
+    // into its texel, and the branches below are the draw's)
+    uint v = texel_of(words.r) + 2 * index, shift = (words.r >> 2) & 3;
+    uint4 t0 = ram(v), t1 = ram(v + 1), b;
+    float4 a;
+    [branch]
+    if (shift == 0) {
+        a = asfloat(t0), b = t1;
+    } else {
+        uint4 t2 = ram(v + 2);
+        if (shift == 1) a = asfloat(uint4(t0.yzw, t1.x)), b = uint4(t1.yzw, t2.x);
+        else if (shift == 2) a = asfloat(uint4(t0.zw, t1.xy)), b = uint4(t1.zw, t2.xy);
+        else a = asfloat(uint4(t0.w, t1.xyz)), b = uint4(t1.w, t2.xyz);
+    }
+    float4 at = float4(a.w, asfloat(b.x), asfloat(b.y), 1.0);
+    uint refs = b.z, low = b.w, count = (refs >> 30) + 1, bones = texel_of(words.g);
+    uint first = bones + 3 * (refs & 31);
+    precise float3 x = gpu_bone(first, at);
+    [branch]
+    if (count == 2) {
+        // w (t1 - t2) + t2, RB_SurfaceGhoul's two weights
+        precise float w = gpu_bone_weight(refs, low, 0);
+        precise float3 second = gpu_bone(bones + 3 * ((refs >> 5) & 31), at);
+        precise float3 apart = x - second;
+        precise float3 by = w * apart;
+        x = by + second;
+    } else if (count > 2) {
+        precise float total = gpu_bone_weight(refs, low, 0);
+        x = total * x;
+        [loop]
+        for (uint j = 1; j + 1 < count; j++) {
+            precise float w = gpu_bone_weight(refs, low, j);
+            total = total + w;
+            precise float3 by = w * gpu_bone(bones + 3 * ((refs >> (5 * j)) & 31), at);
+            x = x + by;
+        }
+        precise float last = 1.0f - total;
+        precise float3 by = last * gpu_bone(bones + 3 * ((refs >> (5 * (count - 1))) & 31), at);
+        x = x + by;
+    }
+    pos = float4(x, 1.0);
+    // (in 1,024ths, as a compact vertex has them: the picture is a compact draw's of the CPU's skinning)
+    uv = floor(asfloat(uint2(ram_word(words.b + 8 * index), ram_word(words.b + 8 * index + 4))) * 1024.0) / 1024.0;
+    colour = colour_of(more.a);
+    [branch]
+    if (words.a) {
+        // RB_CalcDiffuseColor (and RB_CalcDiffuseEntityColor, by the multipliers): the normal by the first bone's rows
+        float4 l0 = asfloat(ram(texel_of(words.a))), l1 = asfloat(ram(texel_of(words.a) + 1)), l2 = asfloat(ram(texel_of(words.a) + 2));
+        precise float3 n = float3(gpu_bone_turn(asfloat(ram(first)), a.xyz), gpu_bone_turn(asfloat(ram(first + 1)), a.xyz),
+                                  gpu_bone_turn(asfloat(ram(first + 2)), a.xyz));
+        precise float in0 = n.x * l0.x + n.y * l0.y;
+        precise float incoming = in0 + n.z * l0.z;
+        precise float3 toward = incoming * l1.rgb;
+        precise float3 j = incoming > 0.0 ? l2.rgb + toward : l2.rgb;
+        precise float3 by = min(j, 255.0) * float3(l0.w, l1.w, l2.w);
+        colour.rgb = floor(by) / 255.0;
     }
 }
 
@@ -353,7 +443,9 @@ gpu_varyings gpu_vertex_sized(uint id, uint base, uint4 head, float2 size) {
             uint corner = 0;
             if (how.r & VERTEX_POINTS) { corner = k % 3; k = k / 3; }
             [branch]
-            if (how.r & VERTEX_COMPACT) {
+            if (how.r & VERTEX_BONES) {
+                gpu_bones_vertex(head, more, ram(base + 3), k, pos, o.uv, o.colour);
+            } else if (how.r & VERTEX_COMPACT) {
                 gpu_compact_vertex(base, head, how, more, k, pos, o.uv, o.colour);
             } else {
                 uint v = texel_of(head.g) + 4 * k;

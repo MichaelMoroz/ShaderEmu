@@ -42,7 +42,7 @@ Spot-check the claim that matters most: run the sum, read the log, `git show` th
    - **`.profile`, `openttd.profile.gz`**: take one; a function changed since has no counts, which is harmless. Remake after large changes.
    - **`AGENTS.md`**: keep both bullets; check they do not contradict.
    - **Docs' figures**: the later measure, with the merged tree's run.
-   - **`shader_vm/warp_ok`**: sources changed, so the stamp is void. Run the WARP check again and `--mark-ok`.
+   - **`shader_vm/warp_ok`**: sources changed, so the stamp is void. Run `python tools/warp_stamp.py` again (42 s).
 3. Two branches can merge cleanly and still be wrong together: statics move in another layout (races only in one link's layout), and two "faster" changes may not add up. Rebuild and test the merge, not the parts.
 
 ## 4. Rebuild and test the merge

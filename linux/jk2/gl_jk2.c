@@ -482,6 +482,52 @@ static int fast_triangles(int count, const uint32_t* idx) {
     drawn_vertices += (uint32_t)count;
     return 1;
 }
+// A Ghoul2 surface skinned by the GPU's vertex stage (gpu.h's VERTEX_BONES; docs/games/jk2.md, "Ghoul2 on the GPU"):
+// the model's own triangles, vertices and texture coordinates where they lie (memory of the program's, which the GPU
+// reads where it is: no MMU), its bone references' matrices and the entity's light copied into the frame's memory, the
+// state the GL has (texture, pass, blend) as fast_triangles takes it. `rgba` is the stage's colour (with a light, its
+// alpha alone), `light` twelve floats (from where and the red multiplier, its colour and the green one, the light from
+// everywhere and the blue one: gpu.h's three texels) or 0. 0: not drawn so, the caller skins it on this core.
+#define GPU_BONES 0x40000u
+int jk2glSkinned(const void* tris, int count, const void* verts, const void* coords, const float* bones, int nbones,
+                 const float* light, uint32_t rgba) {
+    if (!on || count < 3 || ((uintptr_t)verts & 3) || ((uintptr_t)coords & 3) || ((uintptr_t)tris & 3)) return 0;
+    SETTLE();
+    if (offsetting && offset_pull != 0) return 0;
+    fast_ok();   // (fast_passes asked)
+    gpu_state s;
+    if (!draw_state(&s)) return 1;   // (its texture not in GPU memory: not drawn, as fast_triangles)
+    if (!fast_passes) {   // (3D: what 2D comes after it goes on top)
+        float m[16];
+        seglGetMatrix(GL_PROJECTION, m);
+        if (m[10] == -2.0f && m[14] == -1.0f && m[11] == 0.0f && m[15] == 1.0f) return 0;
+        depth_seen = 1;
+    }
+    uint32_t keep = blending && blend_src == GL_ONE && blend_dst == GL_ONE ? 0x00ffffffu : 0xffffffffu;
+    uint32_t word = ((255u - (rgba >> 24)) << 24 | (rgba & 0xff) << 16 | (rgba & 0xff00) | (rgba >> 16 & 0xff)) & keep;
+    if (replace && (s.fragment & 0xff) != GPU_COLOUR) word = 0x00ffffffu, light = 0;
+    unsigned bytes = (unsigned)nbones * 48u + (light ? 48u : 0u);
+    float* room = gpuFrameMemory(bytes);
+    if (!room) return 1;
+    memcpy(room, bones, (size_t)nbones * 48);
+    uint32_t light_at = 0;
+    if (light) {
+        float* l = room + nbones * 12;
+        memcpy(l, light, 48);
+        light_at = gpuAddress(l);
+    }
+    s.vertex = GPU_BONES, s.colour = word;
+    s.more[0] = (uint32_t)(uintptr_t)verts, s.more[1] = gpuAddress(room), s.more[2] = (uint32_t)(uintptr_t)coords, s.more[3] = light_at;
+    uint32_t* c = gpuDrawAt(&s, (uint32_t)(uintptr_t)tris, count);
+    if (!c) return 1;
+    c[4] &= ~0x400u;   // (not compact: gpuDrawAt's draws are)
+    drawn_vertices += (uint32_t)count;
+    if (gl_log_at > 0 && gl_log_at == gl_frames)
+        printf("jk2gl: skinned %d indices, %d bones, texture %d, pass %u, colour %08x, lit %d\n", count, nbones,
+               texturing ? (int)bound : -1, s.fragment >> 16 & 15, word, light != 0);
+    return 1;
+}
+
 #undef WORD_OF
 
 void jk2_glDrawElements(GLenum m, GLsizei count, GLenum type, const void* indices) {

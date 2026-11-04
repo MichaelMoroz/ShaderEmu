@@ -2043,6 +2043,75 @@ index d105742d..b3819598 100644
  	unzClose(thepak->handle);
  	Z_Free(thepak->buildBuffer);
  	Z_Free(thepak);
+diff --git a/code/qcommon/ojk_saved_game.cpp b/code/qcommon/ojk_saved_game.cpp
+index d58e2322..cab2c6ae 100644
+--- a/code/qcommon/ojk_saved_game.cpp
++++ b/code/qcommon/ojk_saved_game.cpp
+@@ -171,11 +171,20 @@ void SavedGame::close()
+ 	saved_io_buffer_offset_ = 0;
+ 
+ 	rle_buffer_.clear();
++#ifdef SHADEREMU
++	// (ShaderEmu: given back, not kept for the next save: after the autosave they held 6.4 MB of the game's memory)
++	Buffer().swap(io_buffer_);
++	Buffer().swap(saved_io_buffer_);
++	Buffer().swap(rle_buffer_);
++#endif
+ 
+ 	is_readable_ = false;
+ 	is_writable_ = false;
+ }
+ 
++#ifdef SHADEREMU
++#define SE_SAVE_ROOM ( 2u * 1024 * 1024 - 4096 )	// (a 2 MB block with musl's head)
++#endif
+ bool SavedGame::read_chunk(
+ 	const uint32_t chunk_id)
+ {
+@@ -663,6 +672,13 @@ bool SavedGame::write(
+ 
+ 	const std::size_t new_buffer_size = io_buffer_offset_ + src_size;
+ 
++#ifdef SHADEREMU
++	// (ShaderEmu: without an MMU a block over 2 MB is a 4 MB block of contiguous memory, which a long game no longer has:
++	// the level's chunk, LVLC, is 1.96 MB, and the vector's doubling made it 2.5 MB. Up to 2 MB less a page it grows to
++	// there at once; docs/games/jk2.md, "The autosave's memory")
++	if ( new_buffer_size > io_buffer_.capacity() && new_buffer_size > 1024 * 1024 && new_buffer_size < SE_SAVE_ROOM )
++		io_buffer_.reserve( SE_SAVE_ROOM );
++#endif
+ 	io_buffer_.resize(
+ 		new_buffer_size);
+ 
+@@ -829,13 +845,29 @@ void SavedGame::compress(
+ {
+ 	const int src_size = static_cast<int>(src_buffer.size());
+ 
++#ifdef SHADEREMU
++	// (ShaderEmu: twice the source was the level chunk's 3.9 MB, a 4 MB block of contiguous memory the machine without an
++	// MMU no longer had at the autosave; std::bad_alloc ended the game. A step writes at most 128 bytes: the room grows
++	// before one that may not fit. The bytes are the same.)
++	dst_buffer.resize(static_cast<std::size_t>(src_size) / 16 + 1024);
++#else
+ 	dst_buffer.resize(2 * src_size);
++#endif
+ 
+ 	int src_count = 0;
+ 	int dst_index = 0;
+ 
+ 	while (src_count < src_size)
+ 	{
++#ifdef SHADEREMU
++		if (static_cast<std::size_t>(dst_index) + 130 > dst_buffer.size())
++		{
++			std::size_t room = dst_buffer.size() + dst_buffer.size() / 2;
++			if (room > SE_SAVE_ROOM && dst_buffer.size() + 130 < SE_SAVE_ROOM)
++				room = SE_SAVE_ROOM;
++			dst_buffer.resize(room);
++		}
++#endif
+ 		int src_index = src_count;
+ 		uint8_t b = src_buffer[src_index++];
+ 
 diff --git a/code/qcommon/q_shared.cpp b/code/qcommon/q_shared.cpp
 index 6eb1a670..7db52912 100644
 --- a/code/qcommon/q_shared.cpp
@@ -3206,7 +3275,7 @@ index c67c5d0a..10b93d2f 100644
  		{
  			for ( int x=0; x<*piWidth; x++ )
 diff --git a/code/rd-vanilla/tr_ghoul2.cpp b/code/rd-vanilla/tr_ghoul2.cpp
-index 5062daf5..9216301e 100644
+index 5062daf5..d94dec4b 100644
 --- a/code/rd-vanilla/tr_ghoul2.cpp
 +++ b/code/rd-vanilla/tr_ghoul2.cpp
 @@ -723,6 +723,56 @@ CRenderableSurface *AllocRS()
@@ -3266,11 +3335,14 @@ index 5062daf5..9216301e 100644
  /*
  
  All bones should be an identity orientation to display the mesh exactly
-@@ -2768,6 +2818,191 @@ void G2_ConstructGhoulSkeleton( CGhoul2Info_v &ghoul2,const int frameNum,bool ch
+@@ -2768,6 +2818,195 @@ void G2_ConstructGhoulSkeleton( CGhoul2Info_v &ghoul2,const int frameNum,bool ch
  RB_SurfaceGhoul
  ==============
  */
 +#ifdef SHADEREMU
++int SE_GhoulGPUWanted( void );
++qboolean SE_GhoulOnGPU( const mdxmSurface_t *surface, const float *bones );
++void SE_GhoulGPULog( void );
 +// A Ghoul2 surface's vertices skinned into X and N (STRIDE floats a vertex): RB_SurfaceGhoul's own loop, the same
 +// operations in the same order, for the drawing's worker or a helper worker (docs/games/jk2.md, "The drawing on a worker")
 +static void se_skin( const CRenderableSurface *surf, float *X, float *N, int stride )
@@ -3413,6 +3485,7 @@ index 5062daf5..9216301e 100644
 +		jk2Touch( se_skin_done, sizeof( se_skin_done ) );
 +	}
 +	static int set;
++	SE_GhoulGPULog();
 +	jk2SkinJoin();		// (the helpers of the frame before: done, as the drawing that waited for them is)
 +	set ^= 1;
 +	const unsigned stamp = ++se_skin_stamp[set];
@@ -3425,7 +3498,7 @@ index 5062daf5..9216301e 100644
 +		if ( RSStorage[i].seBones )
 +			total += RSStorage[i].surfaceData->numVerts;
 +	}
-+	if ( !se_skin_on || total < 2000 )
++	if ( !se_skin_on || total < 2000 || SE_GhoulGPUWanted() )	// (the GPU skins them: what it does not, the drawing's worker)
 +		return;
 +	const int share = total / SE_SKIN_JOBS + 1;
 +	int job = 0, in_job = 0;
@@ -3458,7 +3531,32 @@ index 5062daf5..9216301e 100644
  void RB_SurfaceGhoul( CRenderableSurface *surf )
  {
  #ifdef G2_PERFORMANCE_ANALYSIS
-@@ -2989,10 +3224,32 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
+@@ -2901,6 +3140,24 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
+ 	mdxmSurface_t	*surface = surf->surfaceData;
+ 
+ 	CBoneCache *bones = surf->boneCache;
++#ifdef SHADEREMU
++	// (skinned by the GPU's vertex stage when its shader allows: docs/games/jk2.md, "Ghoul2 on the GPU"; the bones as
++	// the frame was given to the drawing's worker, or the cache's when the drawing is this core's)
++	if ( SE_GhoulGPUWanted() && surface->numBoneReferences <= 32 )
++	{
++		static float se_core_bones[32 * 12] __attribute__(( aligned( 16 ) ));
++		const float *b = surf->seBones;
++		if ( !b )
++		{
++			piBoneReferences = (int *) ((byte *)surface + surface->ofsBoneReferences);
++			for ( int r = 0 ; r < surface->numBoneReferences ; r++ )
++				memcpy( se_core_bones + r * 12, &bones->Eval( piBoneReferences[r] ), 12 * sizeof( float ) );
++			b = se_core_bones;
++		}
++		if ( SE_GhoulOnGPU( surface, b ) )
++			return;
++	}
++#endif
+ 
+ 	// first up, sanity check our numbers
+ 	RB_CheckOverflow( surface->numVerts, surface->numTriangles );
+@@ -2989,10 +3246,32 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
  		float t2;
  		const mdxaBone_t *bone;
  		const mdxaBone_t *bone2;
@@ -3492,7 +3590,7 @@ index 5062daf5..9216301e 100644
  #else
  			bone = &bones->EvalRender(piBoneReferences[G2_GetVertBoneIndex( v, 0 )]);
  #endif // JK2_MODE
-@@ -3013,7 +3270,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
+@@ -3013,7 +3292,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
  				if (iNumWeights==2)
  				{
  #ifdef JK2_MODE
@@ -3501,7 +3599,7 @@ index 5062daf5..9216301e 100644
  #else
  					bone2 = &bones->EvalRender(piBoneReferences[G2_GetVertBoneIndex( v, 1 )]);
  #endif // JK2_MODE
-@@ -3046,7 +3303,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
+@@ -3046,7 +3325,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
  					for (k=1; k < iNumWeights-1 ; k++)
  					{
  #ifdef JK2_MODE
@@ -3510,7 +3608,7 @@ index 5062daf5..9216301e 100644
  #else
  						bone = &bones->EvalRender(piBoneReferences[G2_GetVertBoneIndex( v, k )]);
  #endif // JK2_MODE
-@@ -3060,7 +3317,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
+@@ -3060,7 +3339,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
  					}
  
  #ifdef JK2_MODE
@@ -3519,7 +3617,7 @@ index 5062daf5..9216301e 100644
  #else
  					bone = &bones->EvalRender(piBoneReferences[G2_GetVertBoneIndex( v, k )]);
  #endif // JK2_MODE
-@@ -3075,6 +3332,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
+@@ -3075,6 +3354,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
  			tess.texCoords[baseVertex][0][0] = pTexCoords[j].texCoords[0];
  			tess.texCoords[baseVertex][0][1] = pTexCoords[j].texCoords[1];
  		}
@@ -4254,6 +4352,176 @@ index a6d5bc7b..bcfc3f67 100644
  	static CachedModels_t singleton;	// sorry vv, your dynamic allocation was a (false) memory leak
  	CachedModels = &singleton;
  
+diff --git a/code/rd-vanilla/tr_shade.cpp b/code/rd-vanilla/tr_shade.cpp
+index 48f3ed13..04c53884 100644
+--- a/code/rd-vanilla/tr_shade.cpp
++++ b/code/rd-vanilla/tr_shade.cpp
+@@ -2047,6 +2047,165 @@ static void RB_IterateStagesGeneric( shaderCommands_t *input )
+ /*
+ ** RB_StageIteratorGeneric
+ */
++#ifdef SHADEREMU
++// ---- Ghoul2 skinned by the GPU's vertex stage (docs/games/jk2.md, "Ghoul2 on the GPU") ----
++// A surface whose shader and entity the GPU can draw as rd-vanilla draws them is not skinned into tess: each of its
++// stages is a draw of the model's own triangles and vertices with its bone references' matrices (gl_jk2.c's
++// jk2glSkinned, gpu.h's VERTEX_BONES), the stage's colour as ComputeColors makes it for a vertex and, for rgbGen
++// lightingDiffuse, the entity's light, which the GPU applies by the skinned normal as RB_CalcDiffuseColor does.
++// Anything else (deforms, polygon offset, fog, dynamic lights, texture coordinates made or moved, colours a vertex of
++// their own, multitexture, surface sprites, effects of the entity's) goes the CPU's way. JK2_SKIN=helpers or drawing:
++// never (the skinning on helper workers, or on the drawing's).
++extern "C" int jk2glSkinned( const void *tris, int count, const void *verts, const void *coords, const float *bones, int nbones,
++	const float *light, unsigned rgba );
++static int se_gpu_skin = -1;
++int SE_GhoulGPUWanted( void )
++{
++	if ( se_gpu_skin < 0 )
++	{
++		const char *k = getenv( "JK2_SKIN" );
++		se_gpu_skin = !( k && ( !strcmp( k, "drawing" ) || !strcmp( k, "helpers" ) ) );
++	}
++	return se_gpu_skin;
++}
++static unsigned se_gpu_counts[2];
++static unsigned se_gpu_why[16];	// (JK2_SKIN_LOG=1: why surfaces went the CPU's way)
++#define SE_WHY( n ) ( se_gpu_why[n]++, 0 )
++static int SE_StageOnGPU( const shaderStage_t *p )
++{
++	if ( p->bundle[1].image || ( p->ss && p->ss->surfaceSpriteType ) || p->bundle[0].isLightmap || p->bundle[0].vertexLightmap )
++		return SE_WHY( 10 );
++	if ( p->bundle[0].tcGen != TCGEN_TEXTURE )
++		return SE_WHY( 11 );
++	if ( p->bundle[0].numTexMods )
++		return SE_WHY( 12 );
++	switch ( p->rgbGen )
++	{
++	case CGEN_IDENTITY: case CGEN_IDENTITY_LIGHTING: case CGEN_LIGHTING_DIFFUSE: case CGEN_LIGHTING_DIFFUSE_ENTITY:
++	case CGEN_ENTITY: case CGEN_ONE_MINUS_ENTITY: case CGEN_CONST: case CGEN_WAVEFORM:
++		break;
++	default:
++		return SE_WHY( 13 );
++	}
++	switch ( p->alphaGen )
++	{
++	case AGEN_SKIP: case AGEN_IDENTITY: case AGEN_CONST: case AGEN_WAVEFORM: case AGEN_ENTITY: case AGEN_ONE_MINUS_ENTITY:
++		return 1;
++	default:
++		return SE_WHY( 14 );
++	}
++}
++// (core 0, at the give: the counts since the last print, every 100 frames)
++void SE_GhoulGPULog( void )
++{
++	static int on = -1, frames;
++	if ( on < 0 )
++		on = getenv( "JK2_SKIN_LOG" ) && atoi( getenv( "JK2_SKIN_LOG" ) );
++	if ( !on || ++frames % 100 )
++		return;
++	ri.Printf( PRINT_ALL, "jk2skin: gpu %u cpu %u; deforms %u offset %u multitexture %u dlight %u fog %u fading %u special %u renderfx %u "
++		"align %u; stage: bundle %u tcgen %u texmods %u rgbgen %u alphagen %u; refused %u\n", se_gpu_counts[0], se_gpu_counts[1],
++		se_gpu_why[1], se_gpu_why[2], se_gpu_why[3], se_gpu_why[4], se_gpu_why[5], se_gpu_why[6], se_gpu_why[7], se_gpu_why[8],
++		se_gpu_why[9], se_gpu_why[10], se_gpu_why[11], se_gpu_why[12], se_gpu_why[13], se_gpu_why[14], se_gpu_why[15] );
++	memset( se_gpu_why, 0, sizeof( se_gpu_why ) );
++	se_gpu_counts[0] = se_gpu_counts[1] = 0;
++}
++void SE_GhoulGPUCounts( unsigned *gpu, unsigned *cpu )
++{
++	*gpu = se_gpu_counts[0], *cpu = se_gpu_counts[1];
++	se_gpu_counts[0] = se_gpu_counts[1] = 0;
++}
++extern "C" int jk2glOn( void );
++qboolean SE_GhoulOnGPU( const mdxmSurface_t *surface, const float *bones )
++{
++	if ( !jk2glOn() )
++		return qfalse;	// (no window, the sums' runs: the draws as they always were)
++	shader_t *sh = tess.shader;
++	trRefEntity_t *ent = backEnd.currentEntity;
++	const mdxmVertex_t *verts = (const mdxmVertex_t *)( (const byte *)surface + surface->ofsVerts );
++	int why = !sh || !ent ? 7 : sh->numDeforms ? 1 : sh->polygonOffset ? 2 : sh->multitextureEnv ? 3 : tess.dlightBits ? 4 :
++		( tess.fogNum && sh->fogPass ) ? 5 : tess.fading ? 6 : sh == tr.shadowShader || sh == tr.projectionShadowShader ||
++		sh == tr.distortionShader || g_bRenderGlowingObjects || r_lightmap->integer ? 7 :
++		( ent->e.renderfx & ( RF_DISINTEGRATE1 | RF_DISINTEGRATE2 | RF_VOLUMETRIC | RF_DISTORTION | RF_FORCE_ENT_ALPHA ) ) ? 8 :
++		( (size_t)verts & 3 ) || surface->numTriangles <= 0 ? 9 : 0;
++	if ( why )
++	{
++		se_gpu_why[why]++;
++		se_gpu_counts[1]++;
++		return qfalse;
++	}
++	for ( int stage = 0; stage < sh->numUnfoggedPasses; stage++ )
++	{
++		if ( !tess.xstages[stage].active )
++			break;
++		if ( !SE_StageOnGPU( &tess.xstages[stage] ) )
++		{
++			se_gpu_counts[1]++;
++			return qfalse;
++		}
++	}
++	// (the same shader's surfaces before it, drawn first: as RB_CheckOverflow)
++	if ( tess.numIndexes )
++	{
++		shader_t *s = tess.shader;
++		int fog = tess.fogNum;
++		RB_EndSurface();
++		RB_BeginSurface( s, fog );
++	}
++	const int *tris = (const int *)( (const byte *)surface + surface->ofsTriangles );
++	const mdxmVertexTexCoord_t *coords = (const mdxmVertexTexCoord_t *)&verts[surface->numVerts];
++	// (from where, its colour, the light from everywhere, each with a channel's multiplier: 1, or the entity's colour for
++	// lightingDiffuseEntity, as RB_CalcDiffuseEntityColor makes it)
++	float light[12] = { ent->lightDir[0], ent->lightDir[1], ent->lightDir[2], 1.0f, ent->directedLight[0], ent->directedLight[1],
++			    ent->directedLight[2], 1.0f, ent->ambientLight[0], ent->ambientLight[1], ent->ambientLight[2], 1.0f };
++	GL_Cull( sh->cullType );
++	for ( int stage = 0; stage < sh->numUnfoggedPasses; stage++ )
++	{
++		shaderStage_t *pStage = &tess.xstages[stage];
++		if ( !pStage->active )
++			break;
++		int stateBits = pStage->stateBits;
++		alphaGen_t forceAlphaGen = (alphaGen_t)0;
++		colorGen_t forceRGBGen = (colorGen_t)0;
++		if ( ( ent->e.renderfx & RF_ALPHA_FADE ) && ent->e.shaderRGBA[3] < 255 )
++		{
++			stateBits = GLS_SRCBLEND_SRC_ALPHA | GLS_DSTBLEND_ONE_MINUS_SRC_ALPHA;
++			forceAlphaGen = AGEN_ENTITY;
++		}
++		if ( ent->e.renderfx & RF_RGB_TINT )
++			forceRGBGen = CGEN_ENTITY;
++		// the stage's colour, as ComputeColors makes it for one vertex (that faces no light: the light is the GPU's)
++		tess.numVertexes = 1;
++		VectorClear( tess.xyz[0] );
++		VectorClear( tess.normal[0] );
++		ComputeColors( pStage, forceAlphaGen, forceRGBGen );
++		tess.numVertexes = 0;
++		const colorGen_t gen = forceRGBGen ? forceRGBGen : pStage->rgbGen;
++		const byte *c = tess.svars.colors[0];
++		unsigned rgba = c[0] | c[1] << 8 | c[2] << 16 | (unsigned)c[3] << 24;
++		const int lit = gen == CGEN_LIGHTING_DIFFUSE || gen == CGEN_LIGHTING_DIFFUSE_ENTITY;
++		if ( lit )
++		{
++			const int tint = gen == CGEN_LIGHTING_DIFFUSE_ENTITY;
++			light[3] = tint ? ent->e.shaderRGBA[0] / 255.0f : 1.0f;
++			light[7] = tint ? ent->e.shaderRGBA[1] / 255.0f : 1.0f;
++			light[11] = tint ? ent->e.shaderRGBA[2] / 255.0f : 1.0f;
++			rgba = 0x00ffffffu | (unsigned)c[3] << 24;
++		}
++		R_BindAnimatedImage( &pStage->bundle[0] );
++		GL_State( stateBits );
++		if ( !jk2glSkinned( tris, surface->numTriangles * 3, verts, coords, bones, surface->numBoneReferences, lit ? light : NULL, rgba ) &&
++			 stage == 0 )
++		{
++			se_gpu_counts[1]++, se_gpu_why[15]++;
++			return qfalse;	// (nothing drawn: the CPU's way; what refuses does so for every stage)
++		}
++	}
++	se_gpu_counts[0]++;
++	return qtrue;
++}
++#endif
++
+ void RB_StageIteratorGeneric( void )
+ {
+ 	shaderCommands_t *input;
 diff --git a/code/rd-vanilla/tr_shader.cpp b/code/rd-vanilla/tr_shader.cpp
 index 89910449..d75fc01c 100644
 --- a/code/rd-vanilla/tr_shader.cpp

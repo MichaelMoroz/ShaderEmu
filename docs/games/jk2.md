@@ -669,6 +669,57 @@ shut down or registers anew: the mix overlaps the server's frame, which reads of
 (`gi.VoiceVolume`, a frame old now). Only with the card: the sums' runs mix on core 0 as before. The walk 704 to 655 passes
 a frame (core 0 5.24 to 4.67 million); the march is bound by the drawing's worker and did not move.
 
+### Ghoul2 on the GPU
+
+Since 4 November 2026 (`JK2_SKIN=helpers` is the way before, the helpers of "The drawing on a worker"; `JK2_SKIN=drawing`
+the drawing's worker alone). A Ghoul2 surface is not skinned into rd-vanilla's tessellation buffer: `RB_SurfaceGhoul`
+asks `SE_GhoulOnGPU` (`tr_shade.cpp`) first, which draws each of the surface's stages as one GPU draw of the model as it
+lies in memory (`jk2glSkinned` in `gl_jk2.c`, the GPU's `VERTEX_BONES` in `shader_vm/src/gpu.h`, `docs/machine/gpu.md`,
+"A skinned model"): the model's own triangles as the indices, its 32-byte vertices (on 4 bytes in the file: the GPU
+reads three texels and shifts, the same for all of a draw), its texture coordinates, and copied into the frame's memory
+only the surface's bone references' matrices (`SE_RSBones`' set, or the bone cache's with `JK2_RENDER=core`) and the
+entity's light. The stage's colour is `ComputeColors`' for one vertex, the state (texture, blend, pass) the GL's as
+`fast_triangles` takes it; `rgbGen lightingDiffuse` and `lightingDiffuseEntity` are made by the GPU from the skinned
+normal as `RB_CalcDiffuseColor` and `RB_CalcDiffuseEntityColor` make them (the entity's multipliers given as the CPU's
+floats). The GPU does `RB_SurfaceGhoul`'s operations in its order, unfused (`precise`), and the texture coordinates in
+1,024ths as a compact vertex has them: the picture is the CPU drawing's to the pixel. `linux/jk2/skintest.c`
+(`JK2_SKINTEST=1 linux/jk2/build.sh`, not in the image) draws one mesh both ways, the vertices at all four
+misalignments, lit, unlit and tinted, one to four weights: under `rvc_harness --cpu --warp`, `SKINTEST=cpu` and
+`SKINTEST=gpu` are the same pixels (0 differ, 4 November 2026). A surface goes the CPU's way when its shader has
+deforms, a polygon offset, fog, dynamic lights, multitexture, surface sprites, texture coordinates made or moved, or
+colours of a vertex's own, or its entity a disintegration, distortion or forced alpha; with no window (the sums' runs)
+nothing changes. `JK2_SKIN_LOG=1` prints every 100 frames how many surfaces went which way and why: in the demo's
+start every one goes to the GPU. The helpers skin nothing while the GPU is asked.
+
+What it gave (`rvc_cpu`, the card's calibrated clock, `game_par.py`'s workloads in calls of under a minute from
+`--save`s; the shared image of 4 November 2026 against a private one with this program; `RVC_RACES` with
+`RVC_RACES_NEAR=4` 0 undone on the walk and the march; `test_all.py jk2 jk2-sums jk2-install jk2-cleanup jk2-pointer
+jk2-resize jk2-seat --long` pass on the image, in sections; a run's passes move with its threads, so each pair is one
+setting, `RVC_THREADS=16` to 32):
+
+| | before | after |
+|---|---|---|
+| The walk (1,500 to 1,700) | 607 passes a frame, 1.12 frames a second; core 0 3.18 million, the drawing's worker 2.76, all cores 9.27 | 472, 1.43; core 0 3.18, the drawing's worker 1.81, all cores 6.74 |
+| The march (1,250 to 1,450) | 714, 0.96; core 0 3.87, the drawing's worker 3.31, all cores 10.73 | 544, 1.24; core 0 3.85, the drawing's worker 2.46, all cores 8.33 |
+| The load (`+map demo`, the game's start to `client state 7`) | 173,966 passes, core 0 0.882 billion | 173,880, 0.881 (nothing of it changed) |
+| The menu (100 to 300; its drawing is core 0's) | 106.0 passes a frame, 7.2 frames a second | 106.1, 7.2 |
+
+Before it the drawing's worker was the walk's chain: core 0 rested 36% of the passes waiting for it, whose passes ended
+mostly on a full write cache (`RB_SurfaceGhoul`'s copy of the helpers' vertices into tess, 35 thousand passes in 200
+frames, `fast_triangles`' copy of a vertex an index, 17 thousand). Now the walk's 472 passes are near core 0's own
+(3.18 million at 5.49 million a second is 389 passes): what is left is core 0's chain ("What bounds it").
+
+### The autosave's memory
+
+On the image of 4 November 2026 the walk died at the autosave (frame 1,460 or so, the guest's 00:20:19): `nommu:
+Allocation of length 3928064 ... failed` and `std::bad_alloc`. The saved game's level chunk (`LVLC`) is 1,962,740 bytes;
+`SavedGame::compress` sized its output at twice its input, and the vector's doubling made the chunk's own buffer 2.5 MB:
+without an MMU a block over 2 MB is a 4 MB block of contiguous memory, which a long game no longer has (an earlier image
+had it by chance). Now (`ojk_saved_game.cpp`, `SE_SAVE_ROOM`) the buffer grows to 2 MB less a page at once past 1 MB, the
+compress's room grows as it writes (a step writes at most 128 bytes; the bytes are the same), and both are given back
+when the file is closed (they held 6.4 MB of the game's memory after the autosave). The walk then plays on to its
+death and the autosave's load.
+
 ### What bounds it
 
 After both rounds (3 November 2026, calibrated, `game_par.py`): the walk 655 passes a frame (1.1 frames a second), the
@@ -687,6 +738,9 @@ march 1,004 (0.7), the menu 96.5 (7.1). 15 frames a second is 44 passes, about 3
   game's Ghoul2 instances' bones and bolts (`G2API_GetBoltMatrix` on the shared caches); about 640 entities are in use. A
   game frame beside the client's would need copies of all that at each handover (about 1 MB of entities and the Ghoul2
   instances' vectors), or a check of every read: not done.
+- **Since Ghoul2 on the GPU** (4 November 2026) the walk is 472 passes a frame against core 0's 389 busy ones, the
+  march 544 against 471: core 0's chain is now most of the frame, and what pays is off core 0 (its game, its client's
+  game, its front end), not the drawing.
 - **Even with the game's frame and the front end off core 0 at no cost**, the client's game (about 2.2 million) would stay
   on core 0's chain: about 270 passes, at most 2 frames a second; and the drawing's worker would have to come down from
   1,000 passes to 44, which its stores alone forbid while every vertex's words are made by a core (Ghoul2 skinned by the
@@ -701,8 +755,9 @@ The owner chose on 2 November 2026 to go on past step 1's gate. Steps 2 and 4 ha
 1. **A renderer of our own** (step 2's real form): `tr_shaderemu`'s method behind `refexport_t`, the level kept in GPU
    memory as kept draws, keeping rd-vanilla's Ghoul2 (`G2_*.cpp`, `tr_ghoul2.cpp`'s bones: the game traces against
    them), models, skins and fonts (the back end is on a worker since 3 November, "The drawing on a worker").
-2. **Ghoul2 skinned by the GPU's vertex shader** ("Ghoul2"): a draw kind of four weights a vertex and a bone table, in
-   `gpu.shader` and Unity's copy, measured on the card.
+2. **Ghoul2 skinned by the GPU's vertex shader**: done on 4 November 2026 ("Ghoul2 on the GPU"), measured on
+   `rvc_cpu`'s calibrated clock; on the card and in the world not yet (Unity's `gpu.cginc` takes it at "Sync shader
+   sources").
 3. **The game's own 30 million instructions a second** ("What bounds it"): NPCs' behaviours, traces and Ghoul2 bolts
    made cheaper; it cannot simply go to a worker.
 4. **Sound effects** as voices of the card (the decoded sounds and the MP3s' 14.5 MB of decoder states out of RAM), films.
@@ -732,7 +787,7 @@ to its end, accepted, the bar to the end, the pak's CRC-32.
 
 ## Not done
 
-The renderer of our own, Ghoul2 on the GPU, sound by voices, music and films (skipped: a film says it could not be
+The renderer of our own, sound by voices, music and films (skipped: a film says it could not be
 opened, in red at the top of the picture), the HUD and the first person's weapon seen, depth ranges, mirrors and
 portals, shadows, the glow; `ui_single_instance`, the holodeck's seat; pictures decoded on workers; `RVC_RACES` (no workers are used: `HLGL_WORKERS=0`);
 OpenJK's `alloc-dealloc-mismatch` in `strip.cpp` at shutdown (upstream's, seen under AddressSanitizer). The renderer's

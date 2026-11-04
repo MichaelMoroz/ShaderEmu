@@ -93,4 +93,10 @@ void jk2RenderGo(void) {}
 int jk2SkinPost(unsigned (*fn)(unsigned, unsigned), unsigned a0, unsigned a1) { (void)fn; (void)a0; (void)a1; return 0; }
 void jk2SkinJoin(void) {}
 void jk2Touch(void *memory, unsigned bytes) { (void)memory; (void)bytes; }
-void jk2WaitPass(void) {}
+void jk2WaitPass(void) {}/* Ghoul2 on the GPU (gl_jk2.c's): never on the build computer, which has no window */
+int jk2glOn(void) { return 0; }
+int jk2glSkinned(const void *tris, int count, const void *verts, const void *coords, const float *bones, int nbones,
+                 const float *light, unsigned rgba) {
+    (void)tris; (void)count; (void)verts; (void)coords; (void)bones; (void)nbones; (void)light; (void)rgba;
+    return 0;
+}

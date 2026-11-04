@@ -286,7 +286,9 @@ the end of each (`--save-state`) and resumed by the next, until its `--until` or
 
 The card runs a processor folder only when its `warp_ok` holds the folder's stamp, its sources hashed
 (`rvc_harness --stamp`; the devices' folder too when another); otherwise
-`rvc_harness` says so and exits 3. `--warp` runs the cases on WARP, D3D11's software device, and with
-`--mark-ok` writes the stamp when every case passed: `python tools/test_card.py mctest-3 --warp --parts
---max-wall 240 --mark-ok`. WARP is some 300 thousand instructions a second: `mctest 3` took 313 s in parts on
-28 October 2026 (`steptest` did not end in 240). The stamp is of the sources only: a define (`--define`) is the same tick checked. `--cpu` is not the card's tick and needs none.
+`rvc_harness` says so and exits 3. The stamp is `python tools/warp_stamp.py` (4 November 2026, 42 s): the image
+booted on the processor, the machine saved at three moments chosen at random of mctest's cores and glxgears' draws,
+and each snapshot run 6 s on WARP, D3D11's software device; all three going on with no fault in the console write the
+stamp. `tools/test_card.py --warp --mark-ok` still writes it after whole cases, for what a case's own lines must say,
+but WARP is some 300 thousand instructions a second: `mctest 3` took 313 s in parts on 28 October 2026 (`steptest` did
+not end in 240). The stamp is of the sources only: a define (`--define`) is the same tick checked. `--cpu` is not the card's tick and needs none.

@@ -275,5 +275,13 @@ EOF
     mkdir -p "$OUT/usr/share"
     echo "Games/Jedi Outcast (demo)=jk2" > "$OUT/usr/share/nxapps.77-jk2"
     ls -l "$OUT/usr/bin/jk2.bin"
+    # JK2_SKINTEST=1: skintest, the GPU's skinned draws against this core's (skintest.c; a test, not in the image)
+    if [ "${JK2_SKINTEST:-}" = 1 ]; then
+        step "skintest"
+        $CC $WF -ffp-contract=off -DSEGL_FLOAT -idirafter $PROGRAMS/linux/include -I$MW/src/include -I$PROGRAMS/linux -I$REPO/linux/quake3 \
+            -o "$BUILD/skintest" "$HERE/skintest.c" "$BUILD/window/quake3_gpu_shaderemu.o" "$BUILD/window/mc_mcw.o" \
+            $MW/src/lib/libnano-X.a -lm
+        cp "$BUILD/skintest" "$OUT/usr/bin/skintest"
+    fi
 fi
 step done
