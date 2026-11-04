@@ -55,10 +55,11 @@ def wall_unit(b):
     for i in range(boards):
         w = wide / boards
         b.box((x0 + (i + 0.5) * w, 1.75, HALF_D - 0.02), (w - 0.006, 2.0, 0.04), "WoodOak", bevel=0.004, segs=1, grain=1)
+    # the shelf on the two uprights, the ledge between them, the boards between those
     b.box((0, 2.775, HALF_D - 0.07), (7.72, 0.05, 0.14), "WoodDark", bevel=0.008, grain=0)
-    b.box((0, 0.735, HALF_D - 0.03), (7.72, 0.03, 0.06), "WoodDark", bevel=0.006, grain=0)
+    b.box((0, 0.735, HALF_D - 0.03), (7.60, 0.03, 0.06), "WoodDark", bevel=0.006, grain=0)
     for x in (-3.83, 3.83):
-        b.box((x, 1.75, HALF_D - 0.035), (0.06, 2.06, 0.07), "WoodDark", bevel=0.008, grain=1)
+        b.box((x, 1.735, HALF_D - 0.035), (0.06, 2.03, 0.07), "WoodDark", bevel=0.008, grain=1)
 
     b.obj("Screen housings")
     housing(b, TERMINAL, chin=0.07)
@@ -341,7 +342,7 @@ def clutter(b):
     b.asset("alarm_clock_01", (-1.3, top, 5.2), rot=(0, 190, 0), size=(None, 0.13, None), parts=("=alarm_clock_01",),
             hands=((0, 0, 0.065), ("hour", "houd_hand"), ("minute", "minute_hand"), ("second", "second_hand")))
     # (clear of the console, whose cheek is at -3.10)
-    furniture.pile(b, ["byte_1993_03", "pc_computing_magazine_v10i6", "computer_gaming_world_issue_140"], (-3.29, top, 4.80), (-10, 4, -3))
+    furniture.pile(b, ["byte_1993_03", "pc_computing_magazine_v10i6", "computer_gaming_world_issue_140"], (-3.29, top, 4.80), [furniture.TOP_AWAY + t for t in (-10, 4, -3)])
     # at its right end, behind the controllers: games in their boxes
     for i, (x, turn, game) in enumerate(((0.87, -9, "doom"), (1.08, 6, "quake"))):
         furniture.leaning_box(b, x, top, HALF_D - 0.04, turn, 11 + 3 * i, game)

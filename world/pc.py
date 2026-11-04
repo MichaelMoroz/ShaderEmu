@@ -653,13 +653,13 @@ def keyboard(b):
             with b.at((0, 0, -CAPS_AT)):
                 b.mesh(floor_v, floor_f, floor_uv, "Keyboard", normal=floor_n)   # the well, and each key's foot out of it
             loft(b, [at_z(rrect(kw + 0.03, kh + 0.03 + TRAY_BACK, 0.01, cy=back), TRAY_LOW), at_z(rrect(kw + 0.03, kh + 0.03 + TRAY_BACK, 0.012, cy=back), -0.006),
-                     at_z(rrect(kw + 0.022, kh + 0.022 + TRAY_BACK, 0.012, cy=back), -0.0105), at_z(rrect(kw + 0.008, kh + 0.008, 0.006), -0.0104)], "PlasticBeige",
+                     at_z(rrect(kw + 0.022, kh + 0.022 + TRAY_BACK, 0.012, cy=back), -0.0105), at_z(rrect(kw + 0.008, kh + 0.008, 0.0005), -0.0104)], "PlasticBeige",   # (square inside, as the well's floor is)
                  first=True, normal='out')
         # the three lamps over the number pad and their names under them, all on the rim's flat top
         rim = kh / 2 + 0.004   # where the well ends: the flat is from here to rim + 0.007 + TRAY_BACK
         for i, mat in enumerate(("LampGreen", "PlasticDark", "PlasticDark")):   # (unlit: a lamp that glowed on a machine that was off)
-            b.box((kw / 2 - 0.02 - i * 0.012, rim + 0.016, -0.0108), (0.006, 0.002, 0.0008), mat)
-        b.quad((kw / 2 - 0.032, rim + 0.0085, -0.0107), (0.04, 0.005), "Details", decal="kb_lamps")
+            b.box((kw / 2 - 0.02 - i * 0.012, rim + 0.016, -0.0109), (0.006, 0.002, 0.0008), mat)   # on the flat
+        b.quad((kw / 2 - 0.032, rim + 0.0085, -0.0109), (0.04, 0.005), "Details", decal="kb_lamps")   # 0.4 mm over it
         # where the lead leaves, behind: a sleeve moulded on the tray's back
         b.box((LEAD_X, kh / 2 + 0.015 + TRAY_BACK + 0.004, 0.001), (0.016, 0.01, 0.01), "PlasticCase", bevel=0.002, segs=1)
 
@@ -714,10 +714,10 @@ def mouse_body(b):
         with b.chart("mouse", unrolled):
             loft(b, [section(t) for t in steps], "PlasticBeige", first=True, last=True, normal='out', tile=0.2)
         # the seams are ribbons a hair over the skin: across behind the buttons, and between them
-        near, far = section(0.535, 0.0003), section(0.548, 0.0003)
+        near, far = section(0.535, 0.0004), section(0.548, 0.0004)
         n = len(near)
         top = n // 2   # the ring's point over its middle
-        ridge = [section(t, 0.0003)[top] for t in (0.548, 0.63, 0.72, 0.80, 0.87, 0.93, 0.965, 0.988)]
+        ridge = [section(t, 0.0004)[top] for t in (0.548, 0.63, 0.72, 0.80, 0.87, 0.93, 0.965, 0.988)]
         left = [(-0.0006, y, z) for x, y, z in ridge]
         right = [(0.0006, y, z) for x, y, z in ridge]
         with b.chart("mouse seams", unrolled):
@@ -738,7 +738,7 @@ def office_chair(b):
             b.cyl((0, 0.078, 0.305), 0.02, 0.046, "MetalBlack", segs=14, bevel=0.005)
             b.cyl((0, 0.056, 0.305), 0.006, 0.02, "MetalSteel", segs=8)
             with b.at((0, 0, 0.305), (0, 25 + i * 31, 0)):   # each caster trails its own way
-                b.box((0, 0.044, 0.012), (0.03, 0.012, 0.05), "PlasticDark", bevel=0.005, segs=2)        # the fork's bridge
+                b.box((0, 0.045, 0.012), (0.03, 0.014, 0.05), "PlasticDark", bevel=0.005, segs=2)        # the fork's bridge, over its cheeks
                 b.prism((0, 0, 0), [(-0.012, 0.05), (0.04, 0.05), (0.052, 0.034), (0.046, 0.022), (0.0, 0.03)], 0.012, "PlasticDark", plane='zy', bevel=0.002)
                 for side in (-1, 1):
                     b.cyl((side * 0.016, 0.026, 0.024), 0.026, 0.014, "Rubber", segs=18, bevel=0.004, rot=(0, 0, 90))

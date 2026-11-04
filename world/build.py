@@ -54,6 +54,11 @@ def main():
         json.dump(report, open(os.path.join(HERE, "..", "build", "world_triangles.json"), "w"), indent=1)
     if bpy.app.background:
         bpy.ops.wm.save_as_mainfile(filepath=os.path.abspath(os.path.join(HERE, "..", "build", "world.blend")))
+    if not args:   # faces that fight and parts that cross (world/check_overlap.py): none may be left
+        sys.modules.pop("check_overlap", None)
+        import check_overlap
+        if check_overlap.main([], leave=False):
+            print("BUILT with faults: world/check_overlap.py lists them")
 
 
 main()
