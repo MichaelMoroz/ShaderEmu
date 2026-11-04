@@ -874,6 +874,38 @@ death and the autosave's load.
   the drawing and 46 to 74 in joins, mostly the players' wave (9 players a frame, all on workers in one wave). The
   drawing's worker is 1.73 million a frame. At 5.49 million instructions a second, 5 frames a second is 1.1 million a
   frame on each: the server's frame alone is about that on core 0.
+- **Since** (the steps above it, 4 November 2026; the walk with the card's sound): 2.16 frames a second, 311.8 passes a
+  frame; core 0 1.97 million a frame (the server's frame about 1.0 of it, `G_RunFrame` 0.93), the drawing's worker 1.49;
+  core 0 waits 34 to 35 passes a frame for the drawing and 13 to 24 in joins.
+
+### The game's frame apart (4 November 2026, the first stage)
+
+The game's frame (`G_RunFrame`, about a million instructions a frame of play) is core 0's and in order, and the client's
+game reads and writes the game's entities directly: so core 0 cannot be under the game's frame plus the client's. The way
+out is the client's frame on a copy, made when it begins, so that the game's next frame can be made beside it; the
+build computer's program is built with `-DSHADEREMU` too, so a change of order made there is in both sums.
+
+The first stage, on one core (`JK2_SPLIT=copy`, `=check`; unset is as before):
+- **The copy** (`SE_GameGive` in `g_main.cpp`, from `CL_Frame`'s start): the 1,024 entities (1.26 MB, one `memcpy`,
+  the machine's copy), each one's client and NPC, every pointer to an entity in them moved into the copy (the savegame's
+  fields, `savefields_gEntity`, `savefields_gClient`, `savefields_gNPC`, and `gNPC_t`'s `watchTarget`). The client's game's
+  files are compiled with `-DSE_CG_UNIT` (`build.sh`), and there `g_entities` is `se_cg_gents` (`g_shared.h`), the copy
+  while the client's frame is out and the game's own otherwise; `cg_entities[i].gent` is moved with it
+  (`SE_CGEntitiesAt`). The game hands the engine its two functions at its first frame (`SE_GameHooks` in `cl_main.cpp`):
+  its module keeps its names.
+- **What the client's frame wrote** goes back to the game's entities when it ends (`SE_GameTake`): by difference with
+  the copy as given, a pointer into the copy made the game's again. `JK2_SPLIT=check` counts each word's place
+  (`jk2split:` lines). Over the sums' 4,000 frames that is: of an entity, `disconnectDebounceTime`, `setTime` and
+  `lightLevel`; of its client, one word of the player's state, the three facial timers and `renderInfo` from its 188th
+  byte to its end (the eye, head and feet the drawing found); of an NPC, nothing; and no word pointing into the copy
+  outside the lists.
+- **Checked**: `test_all.py jk2-split` (the sums with `JK2_SPLIT=check`) gives `jk2-sums`'s sums at frames 3200 and 3600.
+
+Still to come, in order: the give-back as that list of fields, not a difference (the difference is about a million
+instructions a frame); the Ghoul2 instances the client's game poses, which the game traces against and animates; the
+engine's zone, console and snapshot ring used by both; then the game's next frame on a worker beside the client's,
+what the client wrote given back a frame later on both computers. Even so core 0 stays at about the game's frame, 1.0
+million a frame (about 4.5 frames a second at most), and the drawing's worker, 1.3 to 1.5 million, is then the bound.
 
 ### What bounds it
 

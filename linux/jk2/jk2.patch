@@ -335,7 +335,7 @@ index 94051760..57e8ac87 100644
  	if ( cl.viewangles[PITCH] - oldAngles[PITCH] > 90 ) {
  		cl.viewangles[PITCH] = oldAngles[PITCH] + 90;
 diff --git a/code/client/cl_main.cpp b/code/client/cl_main.cpp
-index 1a5c2446..c449bdea 100644
+index 1a5c2446..204949cf 100644
 --- a/code/client/cl_main.cpp
 +++ b/code/client/cl_main.cpp
 @@ -145,6 +145,7 @@ void CL_FlushMemory( void ) {
@@ -354,14 +354,29 @@ index 1a5c2446..c449bdea 100644
  		// clear nextmap so the cinematic shutdown doesn't execute it
  		Cvar_Set( "nextmap", "" );
  		CL_Disconnect();
-@@ -761,8 +763,14 @@ CL_Frame
+@@ -761,8 +763,29 @@ CL_Frame
  extern cvar_t	*cl_newClock;
  static unsigned int frameCount;
  float avgFrametime=0.0;
 +#ifdef SHADEREMU
 +void SE_MixSettle( void );
-+#endif
++static void CL_Frame_( int msec, float fractionMsec );
++// (the client's frame reads the copy the game gives it: codeJK2/game/g_main.cpp, "The game's frame apart"; the game
++// hands its two functions over at its first frame, as its module keeps its names)
++static void ( *se_game_give )( void ), ( *se_game_take )( void );
++void SE_GameHooks( void ( *give )( void ), void ( *take )( void ) ) { se_game_give = give, se_game_take = take; }
++void CL_Frame( int msec, float fractionMsec ) {
++	SE_MixSettle();
++	if ( se_game_give )
++		se_game_give();
++	CL_Frame_( msec, fractionMsec );
++	if ( se_game_take )
++		se_game_take();
++}
++static void CL_Frame_( int msec, float fractionMsec ) {
++#else
  void CL_Frame ( int msec,float fractionMsec ) {
++#endif
  
 +#ifdef SHADEREMU
 +	SE_MixSettle();	// (the mix painted on a worker during the game's frame: done before the client's sounds)
@@ -369,7 +384,7 @@ index 1a5c2446..c449bdea 100644
  	if ( !com_cl_running->integer ) {
  		return;
  	}
-@@ -1127,6 +1135,9 @@ void CL_InitRef( void ) {
+@@ -1127,6 +1150,9 @@ void CL_InitRef( void ) {
  	RIT(CM_DeleteCachedMap);
  	RIT(CM_DrawDebugSurface);
  	RIT(CM_PointContents);
@@ -8737,7 +8752,7 @@ index dd1a72ec..60f4f652 100644
  
  	if ( !cg_freeLocalEntities ) {
 diff --git a/codeJK2/cgame/cg_main.cpp b/codeJK2/cgame/cg_main.cpp
-index 9be003e9..2ff22402 100644
+index 9be003e9..9d6eff81 100644
 --- a/codeJK2/cgame/cg_main.cpp
 +++ b/codeJK2/cgame/cg_main.cpp
 @@ -743,6 +743,20 @@ static void CG_RegisterSounds( void ) {
@@ -8761,6 +8776,21 @@ index 9be003e9..2ff22402 100644
  
  	for ( i = 1 ; i < MAX_SOUNDS ; i++ ) {
  		soundName = CG_ConfigString( CS_SOUNDS+i );
+@@ -1502,6 +1516,14 @@ void CG_LinkCentsToGents(void)
+ 		cg_entities[i].gent = &g_entities[i];
+ 	}
+ }
++#ifdef SHADEREMU
++// (g_main.cpp's SE_GameGive and SE_GameTake: the entities the client's game reads, the copy or the game's own)
++void SE_CGEntitiesAt( gentity_t *base )
++{
++	for ( int i = 0 ; i < MAX_GENTITIES ; i++ )
++		cg_entities[i].gent = &base[i];
++}
++#endif
+ 
+ /*
+ ======================
 diff --git a/codeJK2/cgame/cg_marks.cpp b/codeJK2/cgame/cg_marks.cpp
 index f4bcfa8d..69d7b6ba 100644
 --- a/codeJK2/cgame/cg_marks.cpp
@@ -9175,10 +9205,170 @@ index 221cf26d..f87c9246 100644
  void WriteInUseBits(void);
  void ReadInUseBits(void);
 diff --git a/codeJK2/game/g_main.cpp b/codeJK2/game/g_main.cpp
-index 671b309a..ba34c9e6 100644
+index 671b309a..db987fcf 100644
 --- a/codeJK2/game/g_main.cpp
 +++ b/codeJK2/game/g_main.cpp
-@@ -74,12 +74,14 @@ void ClearInUse(gentity_t *ent)
+@@ -28,6 +28,159 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
+ #include "Q3_Interface.h"
+ #include "g_nav.h"
+ #include "g_roff.h"
++#ifdef SHADEREMU
++// ---- The game's frame apart (docs/games/jk2.md): the client's game reads a copy of the game's entities, their clients
++// and NPCs, made when its frame begins (SE_GameGive), its pointers to them moved to the copy (the savegame's fields,
++// savefields_gEntity and the like); what the client's frame writes there is given back when it ends (SE_GameTake). So
++// the game's next frame may be made while the client's is out. JK2_SPLIT=copy: the copy, its writes given back by
++// difference; =check: and the difference's places counted (jk2split: lines); unset: the game's own entities.
++#include <stddef.h>
++gentity_t *se_cg_gents = g_entities;
++static unsigned char se_sh_buf[sizeof( gentity_t ) * MAX_GENTITIES] __attribute__(( aligned( 16 ) ));
++static unsigned char se_gv_buf[sizeof( gentity_t ) * MAX_GENTITIES] __attribute__(( aligned( 16 ) ));
++#define se_sh ( (gentity_t *)se_sh_buf )
++#define se_gv ( (gentity_t *)se_gv_buf )
++static gclient_t *se_sh_cl[MAX_GENTITIES], *se_gv_cl[MAX_GENTITIES], *se_live_cl[MAX_GENTITIES];
++static gNPC_t *se_sh_npc[MAX_GENTITIES], *se_gv_npc[MAX_GENTITIES], *se_live_npc[MAX_GENTITIES];
++static int se_split = -1, se_given, se_game_up;
++static const unsigned short se_ent_ptrs[] = { offsetof( gentity_t, owner ), offsetof( gentity_t, nextTrain ),
++	offsetof( gentity_t, prevTrain ), offsetof( gentity_t, chain ), offsetof( gentity_t, enemy ), offsetof( gentity_t, activator ),
++	offsetof( gentity_t, teamchain ), offsetof( gentity_t, teammaster ), offsetof( gentity_t, lastEnemy ) };
++static const unsigned short se_cl_ptrs[] = { offsetof( gclient_t, team_leader ), offsetof( gclient_t, leader ),
++	offsetof( gclient_t, follower ), offsetof( gclient_t, formationGoal ) };
++static const unsigned short se_npc_ptrs[] = { offsetof( gNPC_t, touchedByPlayer ), offsetof( gNPC_t, aimingBeam ),
++	offsetof( gNPC_t, eventOwner ), offsetof( gNPC_t, coverTarg ), offsetof( gNPC_t, tempGoal ), offsetof( gNPC_t, goalEntity ),
++	offsetof( gNPC_t, lastGoalEntity ), offsetof( gNPC_t, eventualGoal ), offsetof( gNPC_t, captureGoal ),
++	offsetof( gNPC_t, defendEnt ), offsetof( gNPC_t, greetEnt ), offsetof( gNPC_t, watchTarget ) };
++#define SE_COUNT( a ) ( sizeof( a ) / sizeof( a[0] ) )
++static inline gentity_t *se_to_copy( gentity_t *p ) { return p >= g_entities && p < g_entities + MAX_GENTITIES ? se_sh + ( p - g_entities ) : p; }
++static inline gentity_t *se_to_game( gentity_t *p ) { return p >= se_sh && p < se_sh + MAX_GENTITIES ? g_entities + ( p - se_sh ) : p; }
++static void se_move_ptrs( void *s, const unsigned short *offs, int n )
++{
++	for ( int k = 0 ; k < n ; k++ ) {
++		gentity_t **f = (gentity_t **)( (char *)s + offs[k] );
++		*f = se_to_copy( *f );
++	}
++}
++// the counts of JK2_SPLIT=check: of each struct, a word's place written by the client's frame
++static unsigned se_ent_at[sizeof( gentity_t ) / 4 + 1], se_cl_at[sizeof( gclient_t ) / 4 + 1], se_npc_at[sizeof( gNPC_t ) / 4 + 1];
++static unsigned se_leaked, se_frames;
++// what the client's frame changed of one struct (now, against given), into the game's (to): a pointer field back to the
++// game's entities; any other word that points into the copy is a field the lists miss (counted)
++static void se_give_back( const void *now, const void *given, void *to, size_t bytes, const unsigned short *offs, int n, unsigned *at )
++{
++	const uint32_t *a = (const uint32_t *)now, *b = (const uint32_t *)given;
++	uint32_t *t = (uint32_t *)to;
++	for ( size_t w = 0 ; w < bytes / 4 ; w++ ) {
++		if ( a[w] == b[w] )
++			continue;
++		uint32_t v = a[w];
++		int is_ptr = 0;
++		for ( int k = 0 ; k < n ; k++ )
++			if ( offs[k] == w * 4 )
++				is_ptr = 1;
++		if ( is_ptr || ( v >= (uint32_t)(uintptr_t)se_sh && v < (uint32_t)(uintptr_t)( se_sh + MAX_GENTITIES ) ) ) {
++			if ( !is_ptr )
++				se_leaked++;
++			v = (uint32_t)(uintptr_t)se_to_game( (gentity_t *)(uintptr_t)v );
++		}
++		t[w] = v;
++		if ( at )
++			at[w]++;
++	}
++	const size_t tail = bytes & 3;
++	if ( tail && memcmp( (const char *)now + bytes - tail, (const char *)given + bytes - tail, tail ) )
++		memcpy( (char *)to + bytes - tail, (const char *)now + bytes - tail, tail );
++}
++void SE_CGEntitiesAt( gentity_t *base );
++void SE_GameGive( void );
++void SE_GameTake( void );
++void SE_GameHooks( void ( *give )( void ), void ( *take )( void ) );	// (cl_main.cpp's: the game module keeps its names)
++void SE_GameDown( void ) { se_game_up = 0, se_given = 0, se_cg_gents = g_entities; SE_GameHooks( NULL, NULL ); }
++void SE_GameUp( void ) { if ( !se_game_up ) SE_GameHooks( SE_GameGive, SE_GameTake ); se_game_up = 1; }
++void SE_GameGive( void )
++{
++	if ( se_split < 0 ) {
++		const char *e = getenv( "JK2_SPLIT" );
++		se_split = !e ? 0 : !strcmp( e, "check" ) ? 2 : !strcmp( e, "copy" ) ? 1 : 0;
++	}
++	if ( !se_split || !se_game_up || se_given )
++		return;
++	memcpy( se_sh, g_entities, sizeof( gentity_t ) * MAX_GENTITIES );
++	for ( int i = 0 ; i < MAX_GENTITIES ; i++ ) {
++		gentity_t *g = &g_entities[i], *s = &se_sh[i];
++		se_live_cl[i] = g->client, se_live_npc[i] = g->NPC;
++		if ( g->client ) {
++			if ( !se_sh_cl[i] ) {
++				se_sh_cl[i] = (gclient_t *)malloc( sizeof( gclient_t ) );
++				se_gv_cl[i] = (gclient_t *)malloc( sizeof( gclient_t ) );
++			}
++			memcpy( (void *)se_sh_cl[i], (const void *)g->client, sizeof( gclient_t ) );
++			se_move_ptrs( se_sh_cl[i], se_cl_ptrs, SE_COUNT( se_cl_ptrs ) );
++			s->client = se_sh_cl[i];
++		}
++		if ( g->NPC ) {
++			if ( !se_sh_npc[i] ) {
++				se_sh_npc[i] = (gNPC_t *)malloc( sizeof( gNPC_t ) );
++				se_gv_npc[i] = (gNPC_t *)malloc( sizeof( gNPC_t ) );
++			}
++			memcpy( (void *)se_sh_npc[i], (const void *)g->NPC, sizeof( gNPC_t ) );
++			se_move_ptrs( se_sh_npc[i], se_npc_ptrs, SE_COUNT( se_npc_ptrs ) );
++			s->NPC = se_sh_npc[i];
++		}
++		se_move_ptrs( s, se_ent_ptrs, SE_COUNT( se_ent_ptrs ) );
++	}
++	memcpy( se_gv, se_sh, sizeof( gentity_t ) * MAX_GENTITIES );
++	for ( int i = 0 ; i < MAX_GENTITIES ; i++ ) {
++		if ( se_live_cl[i] )
++			memcpy( (void *)se_gv_cl[i], (const void *)se_sh_cl[i], sizeof( gclient_t ) );
++		if ( se_live_npc[i] )
++			memcpy( (void *)se_gv_npc[i], (const void *)se_sh_npc[i], sizeof( gNPC_t ) );
++	}
++	se_cg_gents = se_sh;
++	SE_CGEntitiesAt( se_sh );
++	se_given = 1;
++}
++void SE_GameTake( void )
++{
++	if ( !se_given )
++		return;
++	se_given = 0;
++	se_cg_gents = g_entities;
++	SE_CGEntitiesAt( g_entities );
++	const int check = se_split == 2;
++	for ( int i = 0 ; i < MAX_GENTITIES ; i++ ) {
++		gentity_t *s = &se_sh[i], *v = &se_gv[i], *g = &g_entities[i];
++		if ( se_live_cl[i] ) {
++			se_give_back( se_sh_cl[i], se_gv_cl[i], se_live_cl[i], sizeof( gclient_t ), se_cl_ptrs, SE_COUNT( se_cl_ptrs ), check ? se_cl_at : NULL );
++			s->client = v->client = se_live_cl[i];	// (as the game's: the word is the same both ways)
++		}
++		if ( se_live_npc[i] ) {
++			se_give_back( se_sh_npc[i], se_gv_npc[i], se_live_npc[i], sizeof( gNPC_t ), se_npc_ptrs, SE_COUNT( se_npc_ptrs ), check ? se_npc_at : NULL );
++			s->NPC = v->NPC = se_live_npc[i];
++		}
++		se_give_back( s, v, g, sizeof( gentity_t ), se_ent_ptrs, SE_COUNT( se_ent_ptrs ), check ? se_ent_at : NULL );
++	}
++	if ( check && ++se_frames % 100 == 0 ) {
++		char line[1024];
++		const struct { const char *name; unsigned *at; size_t words; } kinds[3] = {
++			{ "gentity", se_ent_at, sizeof( gentity_t ) / 4 }, { "gclient", se_cl_at, sizeof( gclient_t ) / 4 }, { "gNPC", se_npc_at, sizeof( gNPC_t ) / 4 } };
++		for ( int k = 0 ; k < 3 ; k++ ) {
++			int n = 0;
++			line[0] = 0;
++			for ( size_t w = 0 ; w < kinds[k].words ; w++ )
++				if ( kinds[k].at[w] ) {
++					n += snprintf( line + n, sizeof line - n, " %u:%u", (unsigned)( w * 4 ), kinds[k].at[w] );
++					if ( n > (int)sizeof line - 24 )
++						break;
++				}
++			gi.Printf( "jk2split: %s words written%s\n", kinds[k].name, line );
++			memset( kinds[k].at, 0, ( kinds[k].words + 1 ) * sizeof( unsigned ) );
++		}
++		gi.Printf( "jk2split: %u frames, %u words pointing into the copy not in the lists\n", se_frames, se_leaked );
++	}
++}
++#endif
+ #include "g_navigator.h"
+ #include "b_local.h"
+ #include "anims.h"
+@@ -74,12 +227,14 @@ void ClearInUse(gentity_t *ent)
  	g_entityInUseBits[entNum/32]&=~(((unsigned int)1)<<(entNum&0x1f));
  }
  
@@ -9193,7 +9383,28 @@ index 671b309a..ba34c9e6 100644
  
  qboolean PInUse2(gentity_t *ent)
  {
-@@ -1482,8 +1484,84 @@ void G_RunFrame( int levelTime ) {
+@@ -736,6 +891,10 @@ ShutdownGame
+ =================
+ */
+ void ShutdownGame( void ) {
++#ifdef SHADEREMU
++	extern void SE_GameDown( void );
++	SE_GameDown();
++#endif
+ 	gi.Printf ("==== ShutdownGame ====\n");
+ 
+ 	gi.Printf ("... ICARUS_Shutdown\n");
+@@ -1256,6 +1415,9 @@ void G_RunFrame( int levelTime ) {
+ 	int			i;
+ 	gentity_t	*ent;
+ 	int			ents_inuse=0; // someone's gonna be pissed I put this here...
++#ifdef SHADEREMU
++	SE_GameUp();
++#endif
+ #if	AI_TIMERS
+ 	AITime = 0;
+ 	navTime = 0;
+@@ -1482,8 +1644,84 @@ void G_RunFrame( int levelTime ) {
  		ValidateInUseBits();
  	}
  #endif
@@ -9212,13 +9423,13 @@ index 671b309a..ba34c9e6 100644
 +{
 +	h ^= (unsigned)v;
 +	return h * 16777619u;
- }
- 
++}
++
 +static int se_eighth( float f )
 +{
 +	return (int)( f * 8.0f + ( f < 0 ? -0.5f : 0.5f ) );
-+}
-+
+ }
+ 
 +extern "C" unsigned se_rand_state;    // (linux/jk2/se_rand.c)
 +extern "C" uint32_t SE_Holdrand( void );    // (q_math.c)
 +
@@ -9495,6 +9706,23 @@ index 024b3fad..f4347db4 100644
  
  	gi.FS_Write( &id, sizeof (id), file );
  
+diff --git a/codeJK2/game/g_shared.h b/codeJK2/game/g_shared.h
+index 2077d65b..8b40f7d0 100644
+--- a/codeJK2/game/g_shared.h
++++ b/codeJK2/game/g_shared.h
+@@ -1630,6 +1630,12 @@ Ghoul2 Insert End
+ #endif //#ifdef GAME_INCLUDE
+ 
+ extern	gentity_t		g_entities[MAX_GENTITIES];
++#if defined( SHADEREMU ) && defined( SE_CG_UNIT )
++// (the client's game's files: the entities the game gave it, a copy while the client's frame is out, docs/games/jk2.md,
++// "The game's frame apart"; the game's own otherwise)
++extern	gentity_t		*se_cg_gents;
++#define g_entities se_cg_gents
++#endif
+ extern	game_import_t	gi;
+ 
+ // each WP_* weapon enum has an associated weaponInfo_t
 diff --git a/codeJK2/game/g_spawn.cpp b/codeJK2/game/g_spawn.cpp
 index 660e571a..6c2b8cb1 100644
 --- a/codeJK2/game/g_spawn.cpp
