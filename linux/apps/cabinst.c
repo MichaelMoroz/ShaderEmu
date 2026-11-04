@@ -14,7 +14,8 @@
  *			/persistence is kept. The files are unpacked every session all the same
  *	--installed DIR	the installer decoded already, in the ROM (the image's data.py, 4 November 2026): the licence is
  *			read from DIR/NAME and asked as from the installer, and then every file of DIR is linked into DEST
- *			(folders made), with nothing unpacked
+ *			(folders made), with nothing unpacked; DEST - links nothing (a game whose files lie in place
+ *			already, Half-Life's: only its licence asked)
  *
  * Exit 0: the files are there (or were this session: DEST/.unpacked); 1: the licence was declined; 2: failed,
  * and a line says why. Without a window system the licence is printed and asked on the terminal.
@@ -626,11 +627,16 @@ main(int argc, char **argv)
 	}
 
 	if (installed) {	/* nothing to unpack: the decoded files linked into place */
-		int n = link_tree(installed, dest);
+		int n = strcmp(dest, "-") ? link_tree(installed, dest) : 0;
 		FILE *m;
 
 		if (windowed)
 			GrClose();
+		if (!strcmp(dest, "-")) {
+			printf("cabinst: %s: licence accepted, nothing to link\n", title);
+			fflush(stdout);
+			return 0;
+		}
 		if (n < 0) {
 			fprintf(stderr, "cabinst: %s into %s: %s\n", installed, dest, strerror(errno));
 			return 2;

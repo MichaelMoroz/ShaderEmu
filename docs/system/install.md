@@ -20,6 +20,12 @@ files above and `eula.txt`; Jedi Outcast's pak and licence by its own reader, ch
 end, the registry's key), and then every file of `DIR` is linked into `DEST`, nothing unpacked and no RAM taken for the
 files. The installer's way below is kept for an image made before.
 
+**Half-Life: Uplink's licence (4 November 2026).** Uplink's Wise installer showed Sierra's licence before it installed
+(`TEMP/EULAFILE`, 8,678 bytes, CRC-32 `8676e153`), which the image had not kept. `linux/halflife/data.sh` keeps it as
+`eula.txt`, `data.py` puts it in `/usr/share/halflife/licence`, and the `halflife` starter asks it the same way, with
+`cabinst --installed /usr/share/halflife/licence -` (DEST `-`: the game's files lie in place, nothing is linked) and the
+registry's key `halflife.eula`; `halflife --licence` does only that. `test_all.py halflife-licence` holds it.
+
 `WANTED` is `NAME[=PATH]` (a file of the cabinet, `/` or `\` between folders, any case), `*` or `*.ext`. The starters
 (`aoe`, `jk2`) call it first; `aoe --unpack` and `jk2 --unpack` do only that.
 

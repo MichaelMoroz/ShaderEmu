@@ -226,7 +226,7 @@ GAMES.update({
         frames=AOE_LAT_FRAMES, rate=AOE_LAT_RATE),
     'halflife': dict(
         what='hldemo1, standing where it starts, the fight at 31 to 45 s of the level (docs/games/halflife.md, "Speed")',
-        cmd='nano-X -p & sleep 2; HL_MARK=${HL_MARK:-31,45} halflife +map hldemo1', wall=600,
+        cmd='echo yes | halflife --licence > /dev/null; nano-X -p & sleep 2; HL_MARK=${HL_MARK:-31,45} halflife +map hldemo1', wall=600,
         mark='hlmark: begins', until='hlmark: ends', frames=lambda log: int(re.search(r'hlmark: ends, (\d+) frames', log)[1])),
     # Jedi Outcast's demo, on a private image with its installer (docs/games/jk2.md, "Speed"): its pak unpacked first, the
     # licence answered on the terminal; the menu as it starts, and the start played by test_all's keys under fixedtime 50

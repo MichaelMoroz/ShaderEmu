@@ -76,6 +76,9 @@ assert re.search(rb'bind\s+TAB\s+\+use', text), 'default.cfg: no TAB +use to mov
 open(cfg, 'wb').write(re.sub(rb'bind(\s+)TAB(\s+)\+use', rb'bind\1e\2+use', text))
 shutil.copy(os.path.join(U, 'delta.lst'), G)
 shutil.copy(os.path.join(U, 'readme.txt'), G)
+# Sierra's licence, shown and asked by the starter before the game (cabinst --installed ... -: docs/system/install.md)
+os.makedirs(os.path.join(G, '..', 'licence'), exist_ok=True)
+shutil.copy(os.path.join(U, 'eula.txt'), os.path.join(G, '..', 'licence', 'eula.txt'))
 # the launcher's splash while the engine loads (vid_shaderemu.c), as a picture the window system draws
 Image.open(os.path.join(U, 'logo.bmp')).convert('RGB').save(os.path.join(G, '..', 'logo.ppm'))
 # the films: the opening one (StartupVids.txt) with its sound in one piece, the menu's logo; the order page

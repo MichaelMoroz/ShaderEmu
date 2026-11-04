@@ -47,6 +47,8 @@ KINDS_T = ('mkdir -p /tmp/t; cd /tmp/t; cp "/root/Music/Grieg - Hall of the Moun
 # Age of Empires' trial unpacked from its installer in the ROM before the window system starts: its licence asked on the terminal,
 # answered (docs/system/install.md); the game reads the files in /tmp/aoe
 AOE_UNPACK = 'if [ -d /usr/share/aoe/installed ]; then echo yes | aoe --unpack > /dev/null; fi; '
+# Half-Life's licence answered on the terminal before the window system starts (docs/system/install.md): then the game starts at once
+HL_LICENCE = 'if [ -f /usr/share/halflife/licence/eula.txt ]; then echo yes | halflife --licence > /dev/null; fi; '
 AOE_640 = '3000 click 320 196;3000 click 320 138;3000 click 190 454;2000 click 289 58;1000 rclick 425 110;1000 click 290 155;1000 click 163 388'
 
 
@@ -390,6 +392,14 @@ CASES = [
          has=[r'^(cabinst: licence Disk1/Install/license\.txt: 3529 bytes, CRC-32 4361c574|JK2-NO-DATA)', r'^(cabinst: licence shown, \d+ lines|JK2-NO-DATA)',
               r'^(cabinst: accept refused: the licence is not read to its end|JK2-NO-DATA)', r'^(cabinst: licence at line \d+ of \d+, its end|JK2-NO-DATA)',
               r'^(cabinst: accepted|JK2-NO-DATA)', r'^(cabinst: Jedi Outcast \(demo\): \d+ files linked from /usr/share/jk2/installed|JK2-NO-DATA)', r'^(INSTALL=0|JK2-NO-DATA)']),
+    # Half-Life's licence (docs/system/install.md): Sierra's, as Uplink's installer showed it, in a window before the game, Accept refused
+    # until it is read to its end, then accepted; nothing to link (the game's files lie in place)
+    case('halflife-licence', 'games halflife desktop', X + 'if [ -f /usr/share/halflife/licence/eula.txt ]; then (sleep 6; nxkey a; sleep 1; '
+         'nxkey pagedown; sleep 1; nxkey end; sleep 1; nxkey tab enter) & CABINST_PRINT=1 halflife --licence; echo LICENCE=$?; else echo HL-NO-DATA; fi',
+         True, wall=300,
+         has=[r'^(cabinst: licence eula\.txt: 8678 bytes, CRC-32 8676e153|HL-NO-DATA)', r'^(cabinst: licence shown, \d+ lines|HL-NO-DATA)',
+              r'^(cabinst: accept refused: the licence is not read to its end|HL-NO-DATA)', r'^(cabinst: accepted|HL-NO-DATA)',
+              r'^(cabinst: Half-Life: Uplink: licence accepted, nothing to link|HL-NO-DATA)', r'^(LICENCE=0|HL-NO-DATA)']),
     # the starters delete what they unpacked when the game ends (docs/system/install.md): 34 and 64 MB of RAM
     case('aoe-cleanup', 'games aoe', AOE_UNPACK + X + 'if [ -f /tmp/aoe/Empires.dat ]; then AOE_TICK_MS=33 AOE_SCRIPT="3000 quit" aoe > /dev/null; '
          'echo AOE=$?; ls -d /tmp/aoe 2>&1; else echo AOE-NO-DATA; fi', True, wall=300,
@@ -872,14 +882,14 @@ CASES = [
          has=[r'(seat: 2 aim .* move 127 0 0|JK2-NO-DATA)', r'(volume_frames: exit 0|JK2-NO-DATA)']),
     # Half-Life from the seat (an image with Uplink's data): the menu at the level's second 10 (flat) closed by Escape at the guest's
     # 125 s, a kill at 20, a new level at 30 (HL_SCRIPT; the script's text split so that the shell's echo is not the marks it waits for)
-    case('halflife-seated', 'games halflife holodeck', X + 'if [ -f /usr/share/halflife/valve/pak0.PAK ]; then S=10:togglemenu; '
+    case('halflife-seated', 'games halflife holodeck', HL_LICENCE + X + 'if [ -f /usr/share/halflife/valve/pak0.PAK ]; then S=10:togglemenu; '
          'S="$S|20:kill|30:map hl"; HL_SCRIPT="${S}demo2|40:echo SEAT-$((1+1))" halflife -dev 1 +map hldemo1; else echo HL-NO-$((0))DATA; echo SEAT-$((1+1)); fi',
          True, until='SEAT-2', wall=900, volume=True,
          more=['--host', '00000112,0,0,0,0,00007f00,0,0', '--input-event', '125,80000001', '--input-event', '125.3,1'],
          has=[r'(Spawn Server: hldemo2|HL-NO-0DATA)', r'(script 20\.\d+: kill|HL-NO-0DATA)', r'(volume_frames: .*flat screen|HL-NO-0DATA)',
               r'(volume_frames: exit 0|HL-NO-0DATA)']),
     # Half-Life (an image with Uplink's data; else HL-NO-DATA): the hands' buttons as its keys, A the jump and B the use (HL_PAD_LOG)
-    case('pad-halflife', 'games halflife', X + 'if [ -f /usr/share/halflife/valve/pak0.PAK ]; then HL_PAD_LOG=1 halflife -dev 1 +map hldemo1 & '
+    case('pad-halflife', 'games halflife', HL_LICENCE + X + 'if [ -f /usr/share/halflife/valve/pak0.PAK ]; then HL_PAD_LOG=1 halflife -dev 1 +map hldemo1 & '
          'sleep 150; killall halflife.bin; else echo HL-NO-DATA; fi', True, wall=900, more=['--pointer-button', '0x18080,120,120.5'],
          has=[r'(halflife: pad down 18080|HL-NO-DATA)']),
     case('pad-quake3', 'games quake3', X + 'QUAKE3_PAD_LOG=1 ' + Q3, True, until='pad down 10080', wall=400,
