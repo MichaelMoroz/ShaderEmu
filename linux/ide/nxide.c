@@ -37,7 +37,7 @@ enum {
 	C_NONE, C_NEW, C_OPEN, C_SAVE, C_SAVE_AS, C_EXIT, C_UNDO, C_REDO, C_CUT, C_COPY, C_PASTE, C_DELETE, C_FIND, C_FIND_NEXT, C_GOTO,
 	C_ALL, C_LINE, C_WORD, C_INDENT, C_UNINDENT, C_COMMENT, C_PANEL, C_NUMBERS, C_CHECKING, C_BUILD, C_RUN, C_DEBUG, C_STOP,
 	C_OVER, C_INTO, C_OUT, C_MARK, C_UNMARK_ALL, C_KEYS, C_ABOUT, C_CLOSE, C_NEXT_TAB, C_PREV_TAB, C_TREE, C_TREE_HERE,
-	C_REPLACE, C_FIND_PREV, C_SAVE_ALL, C_PROJECT_OPEN, C_PROJECT_CLOSE,
+	C_REPLACE, C_FIND_PREV, C_SAVE_ALL, C_PROJECT_OPEN, C_PROJECT_CLOSE, C_ZOOM_IN, C_ZOOM_OUT, C_ZOOM_RESET,
 	C_EXAMPLE	/* C_EXAMPLE + n: the nth example */
 };
 enum { P_OUTPUT, P_PROBLEMS, P_VARIABLES, P_STACK, PANELS };
@@ -209,13 +209,25 @@ resized(int w, int h)
 	width = w, height = h;
 	tree_on = project[0] && tree_wanted;	/* (a tree is a project's, or there is none) */
 	ex = tree_on ? TREE_W + 3 : 0;
-	gutter = ex + (numbers_on ? 5 * ui_fw + 16 : 16);
-	rows = (panel_y() - editor_y()) / ui_fh;
-	columns = (width - UI_SCROLL_W - gutter - 4) / ui_fw;
+	gutter = ex + (numbers_on ? 5 * UI_ZW + 16 : 16);
+	rows = (panel_y() - editor_y()) / UI_ZH;
+	columns = (width - UI_SCROLL_W - gutter - 4) / UI_ZW;
 	if (rows < 1)
 		rows = 1;
 	if (columns < 8)
 		columns = 8;
+}
+
+/* The editor's text a step larger or smaller (Ctrl +, Ctrl -, Ctrl and the wheel; Ctrl 0 the first size), kept. */
+static void
+zoom_to(int step)
+{
+	if (!ui_zoom_set(step))
+		return;
+	reg_set_int("nxide.zoom", ui_zoom);
+	(GrSetGCFont)(text_gc, UI_ZFONT);
+	resized(width, height);
+	draw_all();
 }
 
 /* ---- colours: a line's kinds need to know whether it begins inside a comment ---- */
@@ -447,7 +459,7 @@ ink(GR_COLOR colour)
 static void
 write_at(int x, int y, const char *text, int count)
 {
-	GrText(window, text_gc, x, y + ui_fixed_dy, (void *)text, count, GR_TFASCII | GR_TFTOP);
+	GrText(window, text_gc, x, y + UI_ZDY, (void *)text, count, GR_TFASCII | GR_TFTOP);
 }
 
 /* A line's number at the right of four places, or of as many as it has. */
@@ -481,7 +493,7 @@ draw_pieces(const struct shown *e, int y, int kind, int from)
 			for (skip = from - first; piece[PIECE_HEAD + skip] == ' '; skip++)
 				continue;
 		ink(piece[0] == SX_KINDS ? WHITE : sx_colours[(unsigned char)piece[0]]);
-		write_at(x + (first + skip) * ui_fw, y, piece + PIECE_HEAD + skip, count - skip);
+		write_at(x + (first + skip) * UI_ZW, y, piece + PIECE_HEAD + skip, count - skip);
 	}
 }
 
@@ -493,7 +505,7 @@ draw_bar(int line, int y)
 		bar_line = -1;
 	if (line != tx_y || tx_x < left || tx_x > left + columns)
 		return;
-	GrFillRect(window, bar_gc, gutter + 3 + (tx_x - left) * ui_fw, y, 2, ui_fh);
+	GrFillRect(window, bar_gc, gutter + 3 + (tx_x - left) * UI_ZW, y, 2, UI_ZH);
 	bar_line = line, bar_x = tx_x - left;
 }
 
@@ -564,7 +576,7 @@ match_box(int k)
 	if (line < top || line >= top + rows || c < left || c >= left + columns)
 		return;
 	GrSetGCForeground(ui_gc, MWRGB(140, 140, 140));
-	GrRect(window, ui_gc, gutter + 2 + (c - left) * ui_fw, editor_y() + (line - top) * ui_fh, ui_fw + 2, ui_fh);
+	GrRect(window, ui_gc, gutter + 2 + (c - left) * UI_ZW, editor_y() + (line - top) * UI_ZH, UI_ZW + 2, UI_ZH);
 }
 
 static void
@@ -625,21 +637,21 @@ draw_signs(int line, int y, int here)
 
 	if (dbg_marked(line + 1)) {
 		GrSetGCForeground(ui_gc, MWRGB(200, 20, 20));
-		GrFillEllipse(window, ui_gc, ex + 7, y + ui_fh / 2, 4, 4);
+		GrFillEllipse(window, ui_gc, ex + 7, y + UI_ZH / 2, 4, 4);
 	}
 	if (here) {
 		ink(BLACK);
 		write_at(ex + 2, y, ">", 1);
 	}
 	if ((wrong = problem_at(line)) != 0)
-		ui_fill(window, gutter - 3, y, 3, ui_fh, wrong & 2 ? MWRGB(220, 0, 0) : MWRGB(230, 150, 0));
+		ui_fill(window, gutter - 3, y, 3, UI_ZH, wrong & 2 ? MWRGB(220, 0, 0) : MWRGB(230, 150, 0));
 }
 
 /* A line of the text; `cleared`: its ground is drawn already (draw_editor_from). */
 static void
 draw_line_on(int line, int cleared)
 {
-	int y = editor_y() + (line - top) * ui_fh, from = 0, to = 0, picking;
+	int y = editor_y() + (line - top) * UI_ZH, from = 0, to = 0, picking;
 	int here = stop_on(line);
 	struct shown *e;
 
@@ -648,9 +660,9 @@ draw_line_on(int line, int cleared)
 	if (line - top < ROWS_KEPT)
 		row_line[line - top] = -1;
 	if (!cleared)
-		ui_fill(window, ex, y, gutter - ex, ui_fh, ED_GUTTER);
+		ui_fill(window, ex, y, gutter - ex, UI_ZH, ED_GUTTER);
 	if (!cleared || here)
-		ui_fill(window, gutter, y, width - UI_SCROLL_W - gutter, ui_fh, here ? MWRGB(255, 255, 150) : WHITE);
+		ui_fill(window, gutter, y, width - UI_SCROLL_W - gutter, UI_ZH, here ? MWRGB(255, 255, 150) : WHITE);
 	if (line >= tx_count) {
 		draw_bar(line, y);
 		return;
@@ -660,7 +672,7 @@ draw_line_on(int line, int cleared)
 	draw_signs(line, y, here);
 	picking = selected_in(line, &from, &to);
 	if (picking) {
-		ui_fill(window, gutter + 3 + from * ui_fw, y, (to - from) * ui_fw, ui_fh, UI_SELECTED);
+		ui_fill(window, gutter + 3 + from * UI_ZW, y, (to - from) * UI_ZW, UI_ZH, UI_SELECTED);
 		starts_upto(line);
 		kinds_of(line, sx_starts[line]);
 		shown_make(e = &picked.head, line, from, to);
@@ -684,7 +696,7 @@ draw_line(int line)
 static void
 draw_line_tail(int line, int from)
 {
-	int y = editor_y() + (line - top) * ui_fh, x, a, b;
+	int y = editor_y() + (line - top) * UI_ZH, x, a, b;
 
 	if (line < top || line >= top + rows)
 		return;
@@ -697,9 +709,9 @@ draw_line_tail(int line, int from)
 	}
 	if (bar_line == line && (line != tx_y || bar_x != tx_x - left) && bar_x < from)
 		from = bar_x;
-	x = gutter + 3 + from * ui_fw;
+	x = gutter + 3 + from * UI_ZW;
 	if (from < 1 << 20 && x < width - UI_SCROLL_W) {
-		GrFillRect(window, ground_gc, x, y, width - UI_SCROLL_W - x, ui_fh);
+		GrFillRect(window, ground_gc, x, y, width - UI_SCROLL_W - x, UI_ZH);
 		draw_pieces(shown_kept(line), y, -1, from);
 	}
 	match_boxes_on(line);
@@ -725,10 +737,10 @@ draw_editor_from(int line)
 
 	/* the lines' ground in two pieces, not two a line */
 	first = line = line < top ? top : line;
-	y = editor_y() + (line - top) * ui_fh;
+	y = editor_y() + (line - top) * UI_ZH;
 	if (line < top + rows) {
-		ui_fill(window, ex, y, gutter - ex, (top + rows - line) * ui_fh, ED_GUTTER);
-		ui_fill(window, gutter, y, width - UI_SCROLL_W - gutter, (top + rows - line) * ui_fh, WHITE);
+		ui_fill(window, ex, y, gutter - ex, (top + rows - line) * UI_ZH, ED_GUTTER);
+		ui_fill(window, gutter, y, width - UI_SCROLL_W - gutter, (top + rows - line) * UI_ZH, WHITE);
 	}
 	/* a line with something selected or the stop on it is drawn by itself; the others together,
 	 * a colour after a colour: a colour changed is a request too, and was three a line */
@@ -743,7 +755,7 @@ draw_editor_from(int line)
 		if (bar_line == line)
 			bar_line = -1;
 	}
-#define EACH_PLAIN for (line = first, y = editor_y() + (line - top) * ui_fh; line < top + rows; line++, y += ui_fh) \
+#define EACH_PLAIN for (line = first, y = editor_y() + (line - top) * UI_ZH; line < top + rows; line++, y += UI_ZH) \
 	if (line - top < ROWS_KEPT && row_line[line - top] == line)
 	if (numbers_on)
 		EACH_PLAIN
@@ -758,7 +770,7 @@ draw_editor_from(int line)
 	EACH_PLAIN
 		draw_bar(line, y);
 #undef EACH_PLAIN
-	ui_fill(window, ex, editor_y() + rows * ui_fh, width - UI_SCROLL_W - ex, panel_y() - editor_y() - rows * ui_fh, WHITE);
+	ui_fill(window, ex, editor_y() + rows * UI_ZH, width - UI_SCROLL_W - ex, panel_y() - editor_y() - rows * UI_ZH, WHITE);
 	draw_scroll_bar();
 }
 
@@ -1265,7 +1277,7 @@ draw_all(void)
 {
 	if (ui_restyle()) {	/* (Settings changed the look: a word of memory read) */
 		ui_menu_restyle();
-		(GrSetGCFont)(text_gc, ui_fixed);	/* (ui_restyle made it again) */
+		(GrSetGCFont)(text_gc, UI_ZFONT);	/* (ui_restyle made it again) */
 		layout();
 	}
 	draw_menu_bar();
@@ -1328,7 +1340,7 @@ view_moved(int was)
 		draw_editor_from(top);
 		return;
 	}
-	GrCopyArea(window, ui_gc, ex, y + (by < 0 ? -by * ui_fh : 0), width - UI_SCROLL_W - ex, stay * ui_fh, window, ex, y + (by > 0 ? by * ui_fh : 0),
+	GrCopyArea(window, ui_gc, ex, y + (by < 0 ? -by * UI_ZH : 0), width - UI_SCROLL_W - ex, stay * UI_ZH, window, ex, y + (by > 0 ? by * UI_ZH : 0),
 		   MWROP_COPY);
 	memmove(row_line + (by < 0 ? -by : 0), row_line + (by > 0 ? by : 0), (size_t)stay * sizeof row_line[0]);
 	/* (the bar the cursor left behind goes first: a line drawn with the cursor on it forgets it) */
@@ -2369,11 +2381,12 @@ static const struct ui_menu_item selection_items[] = {
 	{ "Select all   Ctrl+A", -1, C_ALL }, { "Select the line   Ctrl+L", -1, C_LINE }, { "Select the word   Ctrl+D", -1, C_WORD },
 	{ "Indent   Tab", -1, C_INDENT, NULL, 0, UI_MENU_LINE }, { "Unindent   Shift+Tab", -1, C_UNINDENT }, { "Comment or uncomment   Ctrl+/", -1, C_COMMENT },
 };
-#define VIEW_ITEMS 6
+#define VIEW_ITEMS 9
 static const struct ui_menu_item view_items[VIEW_ITEMS] = {
 	{ "The project's tree   Ctrl+B", -1, C_TREE }, { "The panel below", -1, C_PANEL }, { "Line numbers", -1, C_NUMBERS },
 	{ "Check while typing", -1, C_CHECKING }, { "Next tab   Ctrl+Tab", -1, C_NEXT_TAB, NULL, 0, UI_MENU_LINE },
 	{ "Tab before   Ctrl+Shift+Tab", -1, C_PREV_TAB },
+	{ "Larger text   Ctrl++", -1, C_ZOOM_IN, NULL, 0, UI_MENU_LINE }, { "Smaller text   Ctrl+-", -1, C_ZOOM_OUT }, { "Normal size   Ctrl+0", -1, C_ZOOM_RESET },
 };
 static const struct ui_menu_item run_items[] = {
 	{ "Build   F7", -1, C_BUILD }, { "Run   Ctrl+F5 or F6", -1, C_RUN }, { "Debug, or go on   F5", -1, C_DEBUG }, { "Stop   Shift+F5", -1, C_STOP },
@@ -2887,6 +2900,9 @@ command_done(int id)
 		resized(width, height);
 		draw_all();
 		return;
+	case C_ZOOM_IN: case C_ZOOM_OUT: case C_ZOOM_RESET:
+		zoom_to(id == C_ZOOM_RESET ? 0 : ui_zoom + (id == C_ZOOM_IN ? 1 : -1));
+		return;
 	case C_NUMBERS:
 		numbers_on = !numbers_on;
 		resized(width, height);
@@ -3040,6 +3056,10 @@ key(int ch, int modifiers)
 
 	if (asking) {
 		ask_key(ch);
+		return;
+	}
+	if ((n = ui_zoom_key(ch, modifiers)) != 2) {
+		zoom_to(n ? ui_zoom + n : 0);
 		return;
 	}
 	/* (Ctrl+H's control code is Backspace's) */
@@ -3226,7 +3246,7 @@ key(int ch, int modifiers)
 static void
 place(int px, int py, int *x, int *y)
 {
-	int line = top + (py - editor_y()) / ui_fh, column = left + (px - gutter - 3 + ui_fw / 2) / ui_fw;
+	int line = top + (py - editor_y()) / UI_ZH, column = left + (px - gutter - 3 + UI_ZW / 2) / UI_ZW;
 
 	line = line < 0 ? 0 : line >= tx_count ? tx_count - 1 : line;
 	column = column < 0 ? 0 : column > (int)strlen(tx_lines[line]) ? (int)strlen(tx_lines[line]) : column;
@@ -3318,6 +3338,11 @@ pressed(GR_EVENT *event)
 
 	if (ui_wheel(event)) {
 		int by = 3 * ui_wheel_sum(event);
+
+		if ((event->button.modifiers & MWKMOD_CTRL) && x >= ex && y >= editor_y() && y < panel_y()) {
+			zoom_to(ui_zoom - by / 3);
+			return;
+		}
 
 		if (tree_on && x < TREE_W && y >= side_y() && y < panel_y()) {
 			tree_top += by;
@@ -3679,7 +3704,8 @@ main(int argc, char **argv)
 	ui_init();
 	text_gc = GrNewGC(), ground_gc = GrNewGC(), bar_gc = GrNewGC();
 	GrSetGCUseBackground(text_gc, GR_FALSE);
-	(GrSetGCFont)(text_gc, ui_fixed);
+	ui_zoom_set(reg_int("nxide.zoom", 0));
+	(GrSetGCFont)(text_gc, UI_ZFONT);
 	(GrSetGCForeground)(ground_gc, WHITE);
 	(GrSetGCForeground)(bar_gc, BLACK);
 	clean_load();

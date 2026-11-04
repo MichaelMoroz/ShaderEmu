@@ -1,4 +1,5 @@
 # The desktop's photographs, from Unsplash (unsplash.com/license): a name for the Settings
 # list, the photo's id (what its address ends in) and who took it. tools/make_wallpaper.py
-# fetches them; none are kept in this repository. The first is the desktop a new image shows.
+# fetches them; none are kept in this repository. A new image shows wallpaper-photo-1544627836.jpg
+# (UI_WALLPAPER_DEFAULT in ui.h), which is in linux/prebuilt/root.
 fox xUUZcpQlqpM   # brown fox on snow field, as its page is titled

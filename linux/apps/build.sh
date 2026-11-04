@@ -61,14 +61,14 @@ failed=0
 for pid in "${pids[@]}"; do wait $pid || failed=1; done
 [ $failed = 0 ] || { echo "a program did not build"; exit 1; }
 # the Start menu lists what the nxapps.* files name (linux/nanox/nxbar.c)
-printf '%s\n' "Utilities/Editor=nxedit" "Utilities/Files=nxfiles" "Utilities/Paint=nxpaint" "Other/Web=nxweb" "Utilities/Monitor=nxmon" "Utilities/Network=nxnet" "Utilities/Settings=nxsettings" > "$OUT/share/nxapps.20-apps"
+printf '%s\n' "Utilities/Editor=nxedit" "Utilities/Files=nxfiles" "Utilities/Paint=nxpaint" "Other/Web=nxweb" "Settings=nxsettings" "Monitor=nxmon" "Network=nxnet" > "$OUT/share/nxapps.20-apps"
 # the card game among the games of linux/nanox/build.sh's list (after Pinball)
 echo "Games/Solitaire=nxsolitaire" > "$OUT/share/nxapps.11-solitaire"
 printf '%s\n' "Games/2048=nx2048" "Games/Life=nxlife" > "$OUT/share/nxapps.12-tiles"
 # two pictures for the viewer and for its test (tools/make_test_pictures.py made them)
 cp "$HERE"/pictures/picture-*.png "$HERE"/pictures/picture-*.jpg "$OUT/share/" 2>/dev/null || true
-# the Start menu's last folder: the desktop over again, and the machine stopped
-printf '%s\n' "System/Restart the desktop=setsid nx restart ask" "System/Save and shut down=setsid nxoff save" "System/Shut down=setsid nxoff" > "$OUT/share/nxapps.90-system"
+# the Start menu's last rows, in no folder: the desktop over again, and the machine stopped
+printf '%s\n' "Restart the desktop=setsid nx restart ask" "Save and shut down=setsid nxoff save" "Shut down=setsid nxoff" > "$OUT/share/nxapps.90-system"
 cp "$HERE/nxoff" "$OUT/bin/nxoff"
 chmod +x "$OUT/bin/nxoff"
 # what opens what (open.c, docs/system/open.md): a kind a line, its endings, its first bytes, its program;

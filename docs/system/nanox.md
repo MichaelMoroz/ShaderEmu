@@ -171,9 +171,16 @@ The Windows key opens and closes the menu from anywhere (a key the bar grabs wit
 line, or `Folder/Label=command` for a program in a folder (a folder may be in a folder:
 `A/B/Label=command`), so a program gets into it by having its build put such a file in the
 image: `linux/nanox/build.sh` writes `nxapps.10-nanox`, `doom.sh` writes `nxapps.50-doom`. The
-folders are Games, Utilities, Other and System, in the order the files first name them. A
+folders are Games, Utilities, Other and Programming, in the order the files first name them. A
 folder's programs open in a menu of their own to its side, when the pointer is on it or with
-Right or Enter. `NXBAR_SHOW=1` (or `=Games`) starts the bar with the menu open (and that
+Right or Enter. Its first level is made each time it opens (`start_compose`): "Recently used"
+(the registry's `start.recent`, the last five programs started from the menu or the bar, the
+last first), then the programs of `start.first` (commands parted by commas; Files, Editor,
+Terminal, Web and Calculator in a new image), then the folders, then the programs of no folder:
+Settings, Monitor, Network and the system's rows. The right button on any program of the menu
+gives its own menu (`show_start_menu`): Open, show it on the first level or take it off, pin it
+to the bar or unpin it, take it off Recently used. `NXBAR_PRINT=1` prints the first level's rows
+as it opens (`nxbar: start ...`). `NXBAR_SHOW=1` (or `=Games`) starts the bar with the menu open (and that
 folder's beside it), for a test without a pointer: each level is a layer of its own.
 
 The player's name (`$USER`, docs/system/persist.md) is in a box before the speed's when the desktop's
@@ -513,16 +520,19 @@ and smooth unless it says otherwise) before the desktop starts (`nxbar --look`).
 - **Buttons under the pointer** are lit (`ui_hot_*` in `ui.h`): every button `ui_button` or `ui_button_seven` draws is kept
   with its window (64 at most), and such a window is asked for the pointer's coming and going and, while the pointer is over
   it, for its latest place (`GR_EVENT_MASK_MOUSE_POSITION`: one such event waits at most, where every move is one with
-  `MOUSE_MOTION`). The button under it gets an edge in the accent, drawn over its own (Windows 7: the dark line and two rings
+  `MOUSE_MOTION`); where the pointer is is asked (`GrQueryPointer`) when the window's first button is drawn and when the
+  pointer comes, since a window opened under the pointer is told no coming. A Windows 7 button with a label is drawn
+  again whole in Windows 7's lit face (paler than a pressed one's), any other button gets an edge in the accent, drawn over its own (Windows 7: the dark line and two rings
   inside; classic: the ring inside the bevel), so what the program drew in it stays; the edge is put back when the pointer
   leaves. `ui.h` wraps `GrSelectEvents`, `GrGetNextEvent`, `GrGetNextEventTimeout`, `GrCheckNextEvent`, `GrPeekEvent`,
   `GrServiceSelect`, `GrFillRect`, `GrClearArea` and `GrDestroyWindow` by their names: the events a program did not ask
   for never reach it, and a fill or a clear that covers a kept button forgets it (a button not drawn again is not lit).
   A button drawn into a pixmap and copied is not lit. `UI_HOVER=0` turns it off.
 - **The caption's boxes** take more than their pictures of 18 pixels (`wm_on_caption_box` in `wmaction.c`): each the
-  caption's whole height and the gap on its left, the close box the frame's corner too, and a press's release counts 8
-  pixels round its box. A beam in VRChat or a pad's pointer shakes between the press and the release: the release had to
-  be in the same 18 pixels, and 5 of the corner's were no box.
+  caption's whole height and the gap on its left, the close box the frame's corner too and, on a window that cannot be
+  maximised, the maximise box's empty place; a press's release counts 20 pixels round its box (`WM_BOX_SLACK`). A beam
+  in VRChat turns as the trigger is pulled, and a pad's pointer shakes, between the press and the release: the release
+  had to be in the same 18 pixels, and 5 of the corner's were no box (8 pixels of slack still missed in the world).
 - With the smooth font, text is drawn a pixel higher (`ui_text`): Selawik 12's ascent is 12
   where the bitmap font's is 11, and the baseline stays where layouts expect it.
 - The fixed font (`ui_fixed`: the editor's and the IDE's text, nxcalc's, nxperf's) is Liberation
@@ -783,7 +793,7 @@ A program that takes clicks must check `ui_wheel` first, or a notch is a click t
 
 | Program | What it does |
 |---|---|
-| `nxedit [FILE...]` | a text editor, a file a tab (up to 16; Ctrl+Page Up and Down go between them, since Ctrl+Tab is the window manager's; the tab's cross or the middle button closes one), with File, Edit, Search and View menus (Alt+letter or F10; the right button brings Undo to Select all). Tabs and bytes are kept as they are, and so are CR LF and a missing last newline; a file is read in 256 KB blocks and its lines stay there until edited. Undo keeps 40,000 changes, a command's changes undone together. Find and Replace is a window that stays open (match case, whole word, wrap around, previous, replace all as one change, count); Ctrl+G goes to a line, Ctrl+B to the matching brace; Edit's Lines duplicate, move, indent, sort and trim. View has word wrap, line numbers, spaces and tabs shown, the cursor's line lit, colours for C (off for a file over 1 MB) and the tab width, kept in the registry (`nxedit.*`, with six recent files). Ctrl+Insert copies, Shift+Insert pastes, Shift+Delete cuts; a file is saved to a new file beside it and renamed over it. A text with changes is asked about before it is let go. View's Read (Ctrl+R) shows a Markdown file as a page, laid out by the browser's engine, links followed (below, "The editor's reader"); a file of the documentation opens so, `--read` opens any `.md` so |
+| `nxedit [FILE...]` | a text editor, a file a tab (up to 16; Ctrl+Page Up and Down go between them, since Ctrl+Tab is the window manager's; the tab's cross or the middle button closes one), with File, Edit, Search and View menus (Alt+letter or F10; the right button brings Undo to Select all). Tabs and bytes are kept as they are, and so are CR LF and a missing last newline; a file is read in 256 KB blocks and its lines stay there until edited. Undo keeps 40,000 changes, a command's changes undone together. Find and Replace is a window that stays open (match case, whole word, wrap around, previous, replace all as one change, count); Ctrl+G goes to a line, Ctrl+B to the matching brace; Edit's Lines duplicate, move, indent, sort and trim. View has word wrap, line numbers, spaces and tabs shown, the cursor's line lit, colours for code (C and C++, JavaScript, Python and HLSL by the file's ending, the IDE's own `syntax.h`; off for a file over 1 MB), the tab width and the text's size (Ctrl +, Ctrl -, Ctrl 0 and Ctrl with the wheel: the ROM's Liberation Mono from 10 to 32, as in the IDE), kept in the registry (`nxedit.*`, with six recent files). Ctrl+Insert copies, Shift+Insert pastes, Shift+Delete cuts; a file is saved to a new file beside it and renamed over it. A text with changes is asked about before it is let go. View's Read (Ctrl+R) shows a Markdown file as a page, laid out by the browser's engine, links followed (below, "The editor's reader"); a file of the documentation opens so, `--read` opens any `.md` so |
 | `nxfiles [FOLDER]` | the file explorer (and with `--desktop` the desktop, above): a tile with an icon for every entry (a name too long for one line goes on in a second, broken at a space when one is near, and only then is cut with two dots), or a list with sizes and kinds (View). Two clicks (or Enter) open: a folder, a shortcut's program, anything else through `open`. Ctrl and Shift with a click, Shift with the arrows and Ctrl+A select several; the selected entries are dragged onto a folder, into another Files window or onto the desktop (Ctrl held: copied). The right button, the Menu key or Shift+F10 bring a menu: Open, Edit, Cut, Copy, Paste, Rename (typed over the name, "A new name" above), Delete, Save to persistence, Shortcut on the desktop, Properties (a window of its own, `nxfiles --properties PATH`: the icon, the kind, where it is, its size or how much a folder holds, when it changed (the ROM keeps no dates: the image builder writes each file's into `/usr/share/rom-dates`, a line a file, and a file of the image has its date from there; `NXFILES_PRINT=1` prints the window's lines), what may be done with it, what a shortcut starts); on a folder also Paste into it and Terminal in it; on no entry View, Refresh, Select all, Paste, New (a folder, a text file), Terminal here (`nxterm` with its shell in the folder shown; on the desktop too), Properties. In the list a click on a column's heading puts the entries in that order (Name, Size largest first, Kind). Entries dragged to a folder that has one of the same name stay where they are: nothing is replaced unasked. Back, Forward, Up, Home, View, New folder and Terminal (a terminal in the folder shown) are keys with signs (`ui_glyph.h`; greyed when there is nowhere to go), with the folder's path beside them: a click on the path, or Ctrl+L, and another is typed there (Enter goes, Escape leaves). Down the left side are the places (Home, Desktop, Pictures, Music, Videos, Computer, and Network, which starts `nxnet`), the one shown picked out. The status line says how much can still be written. Keys: arrows, Page Up and Down, Home, End, letters typed one after another for the entry that starts so, Space to select, Backspace or Alt+Up for the folder above, Alt+Left and Alt+Right back and forward, F2, Delete (asked about first: "Delete these 3 entries?"; a folder goes with everything in it), F5, Ctrl+C, Ctrl+X, Ctrl+V (the entries are remembered in `/tmp/clipboard.files`, for any Files window), Escape. It reads the folder again when something else changes it. A name may have 127 letters and a folder 512 entries: what is over is counted in the status line ("3 more are not shown"), not shown cut short as an entry that cannot be opened |
 | `nxweb [ADDRESS]` | the browser (`docs/apps/web.md`): pages with their style sheets, in the ROM's fonts and any script, tables and boxes side by side, forms that search; the page is drawn into a pixmap in strips ahead of the view, by worker cores, and scrolled as a copy. Menus (File, Edit, View, Go with the session's pages, Bookmarks, Help), a bar with Back, Forward, Reload or Stop, Home, Bookmark and the address, a status line, wheel and scroll bar; options and bookmarks in the registry. Keys: arrows and the paging keys scroll, Tab goes from link to link (its address in the status line) and Enter follows, Backspace or Alt+Left goes back, Alt+Right forward, Alt+Home home, F5 reloads, Escape stops, Ctrl+L or F6 opens the address, Ctrl+D bookmarks, Ctrl+F finds and F3 again, Ctrl+O, Ctrl+S, Ctrl+U open a file, save the page, show its source, F10 opens the menus |
 | `nxpaint [FILE]` | the paint program (below, "Paint"): ten tools, a flood fill, a selection that is moved, copied and cropped to, pictures of any size up to 1,600 x 1,200, zoom, every change taken back and made again. Opens every kind libmedia reads (`docs/system/media.md`); saves PNG, JPEG, BMP or PPM by the name's ending, encoded on the worker cores |
@@ -834,7 +844,7 @@ terminal reads and writes the same file): one piece of text that is there after 
 that left it has gone. The window system's own selections are a conversation between two
 programs that both have to be running.
 
-**The Start menu's System folder** (`nxapps.90-system`, written by `linux/apps/build.sh`) has
+**The Start menu's last rows** (`nxapps.90-system`, written by `linux/apps/build.sh`, in no folder) are
 "Restart the desktop" (`nx restart ask`) and "Shut down" (`nxoff`): both ask first (`nxask`),
 then ask the open programs to close (`nxask --closing`), so that a text or a picture with
 changes is asked about and not lost; Cancel in either leaves everything as it was. Settings'
@@ -858,7 +868,7 @@ and beside it are its twins cut to the common screens, `wallpaper-NAME@800x600.j
 machine's own), `@1280x720` and `@1920x1080` (Settings does not list them). `--from-ppm` makes
 the JPEGs of an older build's PPM pictures; `--twins` makes the twins missing from the pictures
 there. Run it before `make_linux_image.py`. The choice is the registry's
-`desktop.wallpaper` (`ui_wallpaper` in `ui.h`); a new image shows `wallpaper-fox.jpg`, and a
+`desktop.wallpaper` (`ui_wallpaper` in `ui.h`); a new image shows `wallpaper-photo-1544627836.jpg` (in `linux/prebuilt/root`) with the Graphite colour (`UI_TINT_DEFAULT`), and a
 choice of an image's PPM that is now a JPEG is that JPEG. Settings keeps the picture file
 itself, never a decoded copy: its chooser lists every kind libmedia decodes (JPEG, PNG, GIF,
 BMP, TGA and the PNM family), a file that is not one is refused with libmedia's reason, a path
