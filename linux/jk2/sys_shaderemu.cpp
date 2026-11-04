@@ -309,6 +309,8 @@ void WIN_Present( window_t *window )
 			Cvar_VariableIntegerValue( "cl_paused" ) ? ", paused" : "", Cvar_VariableIntegerValue( "sv_paused" ) ? ", server paused" : "" );
 		se_window_start = now;
 		se_window_instructions = ins;
+		extern void CM_SE_TraceMemoStats( void );	// (cm_trace.cpp's kept traces)
+		CM_SE_TraceMemoStats();
 #ifdef SE_WINDOW
 		if ( jk2glOn() ) {     // the GPU's memory: textures in it, and how many found no room; vertices drawn since
 			unsigned in_gpu, size, left_out, vertices, gives, settles, gl_settles, waits;
@@ -1353,6 +1355,8 @@ int SE_PictureGive( const void *raw, int raw_len, int method, void *plain, int l
 
 // The rest of this pass given up, a picture waiting for a worker with nothing to do (mcw_rest: the kernel's idle work)
 void SE_PicturesRest( void ) { mcw_rest(); }
+// The rest of this pass given up, waiting for the views the drawing's worker makes (rd-vanilla's tr_main.cpp, R_SE_FrontWait)
+extern "C" void SE_FrontRest( void ) { mcw_rest(); }
 
 // Whether a given picture is through; its answer (1 decoded, 32 + se_prepare's decoded and prepared, 2 not), waited for
 int SE_PictureReady( int given ) { return mcw_ready( se_pictures[given - 1].handle ); }
@@ -1822,7 +1826,17 @@ int SE_PictureJPG( const void *data, int size, int shrink, int *width, int *heig
 	mcw_touch( pic, (unsigned)( w * h * 4 ) );   // (stored to by this core first: the workers write it)
 	return m_jpeg_decode_shrunk( (const uint8_t *)data, (uint32_t)size, &out, se_load_workers(), s ) ? -1 : 0;
 }
+// Which table of a core's own this core uses (cm_trace.cpp's kept traces): 0 the first core; -1 one with none (a
+// worker, the drawing's on its own stack too)
+extern "C" int jk2RenderWorkerHere( void );
+extern "C" int jk2MixWorkerHere( void );
+extern "C" int SE_CoreSlot( void )
+{
+	const int s = SE_Slot();
+	return s ? s : mcw_on_worker() || jk2RenderWorkerHere() || jk2MixWorkerHere() ? -1 : 0;
+}
 #else
+extern "C" int SE_CoreSlot( void ) { return SE_Slot(); }
 int SE_SoundMP3( const void *data, int size, void *out, int bytes, int rate, int channels ) { return -1; }
 int SE_PictureJPG( const void *data, int size, int shrink, int *width, int *height, unsigned char *pic ) { return -1; }
 int SE_PicturesOn( void ( *tga )( const void *file, unsigned char *rgba ),
@@ -1848,6 +1862,7 @@ int SE_PictureJoin( int given ) { return 2; }
 int SE_FileGive( const void *raw, int raw_len, void *out, int len ) { return 0; }
 int SE_FileJoin( int given ) { return 0; }
 void SE_PicturesRest( void ) {}
+extern "C" void SE_FrontRest( void ) {}
 extern "C" int SE_PakInflate( const void *in, unsigned in_size, void *out, unsigned out_size, unsigned *crc ) { return -1; }
 int SE_MixWorker( void ) { return 0; }
 void SE_MixGive( void ( *fn )( void ) ) { fn(); }
@@ -1857,3 +1872,89 @@ int SE_MusicGive( const void *track, int bytes, int pos, int want, float volume,
 void SE_MusicForget( const void *track ) {}
 void SE_MusicRound( int sound_time, int muted ) {}
 #endif
+
+// ---- the players made ahead (docs/games/jk2.md, "The players on workers"; shared/qcommon/se_slot.h): a job slot's
+// stack, the jobs, what ends one, and what a job must not do (allocate, free)
+#include <setjmp.h>
+#include "qcommon/se_slot.h"
+unsigned char se_slot_stacks[SE_SLOTS * SE_SLOT_STACK] __attribute__(( aligned( 16 ) ));
+int se_recording0 __attribute__(( aligned( 16 ) ));
+struct seAbort_t { jmp_buf *jb; int why, unused[2]; } __attribute__(( aligned( 16 ) ));
+extern "C" { seAbort_t se_abort[SE_SLOTS + 1]; }
+extern "C" void SE_SlotAbort( int why )
+{
+	const int s = SE_Slot();
+	if ( !se_abort[s].jb ) {
+		fprintf( stderr, "jk2: a player made ahead ended with nowhere to go back to (%d)\n", why );
+		abort();
+	}
+	se_abort[s].why = why;
+	longjmp( *se_abort[s].jb, 1 );
+}
+// 0: JK2_PLAYERS=core (every entity in its turn, as before); 1: ahead on this core (=inline, or no workers); 2: on workers
+#ifdef SE_WINDOW
+extern "C" int jk2RenderWorkerHere( void );
+extern "C" int jk2MixWorkerHere( void );
+extern "C" int SE_OnFirstCore( void ) { return !SE_Slot() && !mcw_on_worker() && !jk2RenderWorkerHere() && !jk2MixWorkerHere(); }
+extern "C" uint32_t jk2_call_on_stack( uint32_t ( *fn )( uint32_t ), uint32_t arg, void *stack_top );
+struct seSlotJob_t { void ( *fn )( void * ); void *arg; int slot, unused; } __attribute__(( aligned( 16 ) ));
+static seSlotJob_t se_slot_jobs[SE_SLOTS + 1];
+static uint32_t se_slot_body( uint32_t a0 )
+{
+	const seSlotJob_t *j = (const seSlotJob_t *)(uintptr_t)a0;
+	j->fn( j->arg );
+	return 1;
+}
+static uint32_t se_slot_run( uint32_t a0, uint32_t a1 )
+{
+	(void)a1;
+	const seSlotJob_t *j = (const seSlotJob_t *)(uintptr_t)a0;
+	return jk2_call_on_stack( se_slot_body, a0, se_slot_stacks + (uint32_t)j->slot * SE_SLOT_STACK );
+}
+extern "C" int SE_SlotMode( void )
+{
+	static int mode = -1;
+	if ( mode < 0 ) {
+		const char *e = getenv( "JK2_PLAYERS" );
+		mode = e && !strcmp( e, "core" ) ? 0 : e && !strcmp( e, "inline" ) ? 1 : 2;
+		if ( mode == 2 && se_wide_workers() <= 0 )
+			mode = 1;
+		if ( mode == 2 ) {
+			mcw_touch( se_slot_stacks, sizeof se_slot_stacks );	// (stored to by this core first: the jobs' stacks)
+			mcw_touch( se_slot_jobs, sizeof se_slot_jobs );
+		}
+	}
+	return mode;
+}
+extern "C" int SE_SlotGive( int slot, void ( *fn )( void * ), void *arg )
+{
+	if ( slot < 1 || slot > SE_SLOTS || SE_SlotMode() != 2 )
+		return 0;
+	seSlotJob_t *j = &se_slot_jobs[slot];
+	j->fn = fn, j->arg = arg, j->slot = slot;
+	return mcw_try_call( se_slot_run, (uint32_t)(uintptr_t)j, 0 );
+}
+extern "C" void SE_SlotJoin( int handle ) { se_join( handle ); }
+#else
+extern "C" int SE_OnFirstCore( void ) { return !SE_Slot(); }
+extern "C" int SE_SlotMode( void )
+{
+	static int mode = -1;
+	if ( mode < 0 ) {
+		const char *e = getenv( "JK2_PLAYERS" );
+		mode = e && !strcmp( e, "core" ) ? 0 : 1;
+	}
+	return mode;
+}
+extern "C" int SE_SlotGive( int slot, void ( *fn )( void * ), void *arg ) { return 0; }
+extern "C" void SE_SlotJoin( int handle ) {}
+#endif
+// (the link's --wrap: build.sh) A player made ahead neither allocates nor frees: its job ends there instead
+extern "C" void *__real_malloc( size_t );
+extern "C" void *__real_calloc( size_t, size_t );
+extern "C" void *__real_realloc( void *, size_t );
+extern "C" void __real_free( void * );
+extern "C" void *__wrap_malloc( size_t n ) { SE_NOT_AHEAD( SE_WHY_MALLOC ); return __real_malloc( n ); }
+extern "C" void *__wrap_calloc( size_t n, size_t m ) { SE_NOT_AHEAD( SE_WHY_MALLOC ); return __real_calloc( n, m ); }
+extern "C" void *__wrap_realloc( void *p, size_t n ) { SE_NOT_AHEAD( SE_WHY_MALLOC ); return __real_realloc( p, n ); }
+extern "C" void __wrap_free( void *p ) { SE_NOT_AHEAD( SE_WHY_MALLOC ); __real_free( p ); }

@@ -20,13 +20,16 @@ COMMIT=260c59c2907187af555a676fe0cc798893bf7757
 JOBS=${JK2_JOBS:-4}
 T0=$(date +%s); step() { echo "== [$(( $(date +%s) - T0 )) s] $*"; }
 
+# (a player made ahead neither allocates nor frees: sys_shaderemu.cpp's __wrap_malloc and the rest; docs/games/jk2.md,
+# "The players on workers")
+SE_WRAP="-Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc -Wl,--wrap=free"
 if [ "${JK2_HOST:-}" = 1 ]; then
     WORK=${JK2_WORK:-$HOME/jk2-host}
     mkdir -p "$WORK"
     CC=gcc; CXX=g++; LD=ld; OBJCOPY=objcopy; NM=nm; ARCH=x86_64
     # the machine's float flags (below), so that the game computes the same: its sums are compared
     OPT="-O2 -g -fno-strict-aliasing -fno-math-errno -fsingle-precision-constant -ffp-contract=off ${JK2_CFLAGS:-}"
-    LIBS="-lm ${JK2_LINK:-}"
+    LIBS="-lm $SE_WRAP ${JK2_LINK:-}"
     BUILD=$WORK/build
     OUT=$WORK
 else
@@ -237,7 +240,7 @@ if [ "${JK2_HOST:-}" != 1 ]; then
             --set-section-alignment '.sbss*=16' "$o"
     done
     # (every strtod and atof through sys_shaderemu.cpp's __wrap_strtod and __wrap_atof: musl's parses in software long doubles)
-    MACHINE="$BUILD/window/*.o $MW/src/lib/libnano-X.a $MEDIA -Wl,--wrap=strtod -Wl,--wrap=atof"
+    MACHINE="$BUILD/window/*.o $MW/src/lib/libnano-X.a $MEDIA -Wl,--wrap=strtod -Wl,--wrap=atof $SE_WRAP"
 fi
 
 step "the program"

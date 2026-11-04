@@ -753,3 +753,9 @@ void jk2_glVertex3f(GLfloat x, GLfloat y, GLfloat z) { ON_THEN(s_glVertex3f(x, y
 void jk2_glVertex3fv(const GLfloat* v) { ON_THEN(s_glVertex3fv(v)); }
 void jk2_glVertexPointer(GLint size, GLenum type, GLsizei stride, const void* p) { ON_THEN(s_glVertexPointer(size, type, stride, p)); }
 void jk2_glViewport(GLint x, GLint y, GLsizei w, GLsizei h) { ON_THEN(s_glViewport(x, y, w, h)); }
+
+// (the mix's worker runs on a stack of its own, where mcw_on_worker() is false: sys_shaderemu.cpp's SE_OnFirstCore asks)
+int jk2MixWorkerHere(void) {
+    char here;
+    return (uint8_t*)&here >= mix_stack && (uint8_t*)&here < mix_stack + MIX_STACK;
+}
