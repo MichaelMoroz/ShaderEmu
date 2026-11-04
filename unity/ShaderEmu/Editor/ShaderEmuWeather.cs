@@ -14,12 +14,20 @@ using VRCLightVolumes;
 public static partial class ShaderEmuBuilder
 {
 
+    // The outside's own light at night, against what it was (4 November 2026): a third. Not its lit
+    // windows and lamps, not lightning: City.shader, Sky.shader and Rain.shader keep those apart.
+    const float Night = 1f / 3f;
+
+    // the window probe's picture as a flash of lightning of 1 lights the city (WindowProbe)
+    const string LightningPath = Generated + "/Reflection probe window lightning.cubemap";
+
     static void WeatherMaterials(Dictionary<string, Material> made)
     {
         made["Glass"] = GlassMaterial();
 
         Material rain = Mat("Rain", "ShaderEmu/Rain");
         rain.mainTexture = WorldTexture("RainStreaks");
+        rain.SetFloat("_Bright", 0.05f * Night);   // (the city's light on it; lightning's as it was)
         made["Rain"] = rain;
     }
 
@@ -30,6 +38,7 @@ public static partial class ShaderEmuBuilder
         Material glass = Mat("Glass", "ShaderEmu/WindowRain");
         glass.shaderKeywords = new string[0];
         glass.SetTexture("_Sky", AssetDatabase.LoadAssetAtPath<Cubemap>(Generated + "/Reflection probe window picture.cubemap"));   // (WindowProbe makes it again)
+        glass.SetTexture("_SkyFlash", AssetDatabase.LoadAssetAtPath<Cubemap>(LightningPath));
         // every number set here: a material keeps another shader's numbers of the same names (Fake Glass's _IOR of 1 bent nothing)
         // Heartfelt's drops (WindowRain.shader: BigWings's, CC BY-NC-SA 3.0), on the pane in metres
         glass.SetFloat("_Scale", 0.48f);   // (as tuned in the editor)
@@ -38,7 +47,6 @@ public static partial class ShaderEmuBuilder
         glass.SetFloat("_IOR", 1.333f);
         glass.SetColor("_Clear", new Color(0.93f, 0.96f, 1f, 1f));
         glass.SetFloat("_Rim", 0.738f);
-        glass.SetFloat("_Flash", 2f);
         glass.SetFloat("_Debug", 0f);
         glass.renderQueue = -1;
         glass.globalIlluminationFlags = MaterialGlobalIlluminationFlags.EmissiveIsBlack;
@@ -117,13 +125,34 @@ public static partial class ShaderEmuBuilder
         foreach (Renderer renderer in Object.FindObjectsOfType<Renderer>())
             if (renderer.enabled && (city == null || !renderer.transform.IsChildOf(city))) { renderer.enabled = false; hidden.Add(renderer); }
         Color[][] cityOnly = CaptureHdr(camera, faces);
+        // and the city and the sky as a flash of 1 lights them (_UdonWeatherFlash, EmuWeather): the
+        // drops show lightning as the window does. Everything lightning lights is linear in the flash,
+        // so the glass mixes the two pictures by the flash and has what any flash shows
+        int flashId = Shader.PropertyToID("_UdonWeatherFlash");
+        float flashWas = Shader.GetGlobalFloat(flashId);
+        Shader.SetGlobalFloat(flashId, 1f);
+        Color[][] cityLit = CaptureHdr(camera, faces);
+        Shader.SetGlobalFloat(flashId, flashWas);
         foreach (Renderer renderer in hidden) renderer.enabled = true;
+        Cubemap lightning = AssetDatabase.LoadAssetAtPath<Cubemap>(LightningPath);
+        if (lightning == null)
+        {
+            lightning = new Cubemap(256, TextureFormat.RGBAHalf, true);
+            AssetDatabase.CreateAsset(lightning, LightningPath);
+        }
         for (int f = 0; f < 6; f++)
         {
-            Color[] outside = cityOnly[f];
-            for (int i = 0; i < outside.Length; i++) outside[i] = Color.LerpUnclamped(outside[i], whole[f][i], RoomInGlass);
+            Color[] outside = cityOnly[f], lit = cityLit[f];
+            for (int i = 0; i < outside.Length; i++)
+            {
+                outside[i] = Color.LerpUnclamped(outside[i], whole[f][i], RoomInGlass);
+                lit[i] = Color.LerpUnclamped(lit[i], whole[f][i], RoomInGlass);
+            }
             picture.SetPixels(outside, faces[f]);
+            lightning.SetPixels(lit, faces[f]);
         }
+        lightning.Apply(true);
+        EditorUtility.SetDirty(lightning);
         Object.DestroyImmediate(camera.gameObject);
         if (rain != null) rain.gameObject.SetActive(rainOn);
         picture.Apply(true);
@@ -131,6 +160,7 @@ public static partial class ShaderEmuBuilder
         probe.mode = ReflectionProbeMode.Custom;
         probe.customBakedTexture = picture;
         probe.boxProjection = false;   // (a direction's colour: the city is far)
+        glass.SetTexture("_SkyFlash", lightning);
         glass.SetTexture("_Sky", picture);   // what the drops bend (WindowRain.shader takes it itself: the probe Unity binds did not reach it)
         EditorUtility.SetDirty(glass);
 
@@ -225,8 +255,9 @@ public static partial class ShaderEmuBuilder
         Material sky = Mat("NightSky", "ShaderEmu/Sky");
         sky.SetTexture("_MainTex", WorldTexture("NightSky"));
         sky.SetTexture("_Clouds", WorldTexture("CloudNoise", false, false));
-        sky.SetFloat("_Exposure", 0.5f);
+        sky.SetFloat("_Exposure", 0.5f * Night);
         sky.SetFloat("_Cover", 0.8f);
+        sky.SetFloat("_CityGlow", Night);   // (lightning in the clouds as it was)
         RenderSettings.skybox = sky;
 
         // ---- rain's sound at the window, thunder from over the city

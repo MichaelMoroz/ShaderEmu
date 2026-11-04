@@ -299,8 +299,12 @@ public static partial class ShaderEmuBuilder
         {
             Material m = Mat(city, "ShaderEmu/City");
             m.mainTexture = WorldTexture(city == "CityGlow" ? "White" : city);
-            m.SetColor("_Haze", new Color(0.040f, 0.036f, 0.048f));
+            // the night's own light a third (Night): the haze and all that is not a bright light; a
+            // bright light and what lightning lights (_HazeFlash, the haze as it was) as they were
+            m.SetColor("_Haze", new Color(0.040f, 0.036f, 0.048f) * Night);
+            m.SetColor("_HazeFlash", new Color(0.040f, 0.036f, 0.048f));
             m.SetFloat("_Dark", city == "CityStreet" ? 0.8f : 0.6f);
+            m.SetFloat("_Night", Night);
             m.SetFloat("_Bright", city == "CityStreet" ? 3f : 5f);
             made[city] = m;
         }

@@ -18,13 +18,13 @@ Shader "ShaderEmu/WindowRain"
     Properties
     {
         _Sky ("The city at infinity (the window probe's picture)", CUBE) = "black" {}
+        _SkyFlash ("The same as a flash of lightning of 1 lights it", CUBE) = "black" {}
         _Scale ("Metres of glass a unit of Heartfelt's picture", Float) = 0.48
         _Rain ("Heartfelt's rain amount", Range(0,1)) = 0.672
         _Height ("The water's height where Heartfelt's value is 1 (mm)", Float) = 0.83
         _IOR ("Water's index", Float) = 1.333
         _Clear ("The water's own tint", Color) = (0.93, 0.96, 1.0, 1)
         _Rim ("What the inside reflection keeps", Range(0,1)) = 0.738
-        _Flash ("Lightning in the drops", Float) = 2.0
         [HideInInspector] _Footprint ("A pixel's footprint times this (tests: a supersampled picture as a plain one's)", Float) = 1
         _Debug ("Debug: 1 the sky straight, 2 the slope, 3 cover, 4 the drops' value, 5 the mip, 9 no water", Float) = 0
     }
@@ -43,8 +43,8 @@ Shader "ShaderEmu/WindowRain"
             #pragma target 3.0
             #include "UnityCG.cginc"
 
-            samplerCUBE _Sky;
-            float4 _Layers; float _Widen, _Footprint, _Scale, _Rain, _Height, _IOR, _Rim, _Flash, _Debug;
+            samplerCUBE _Sky, _SkyFlash;
+            float4 _Layers; float _Widen, _Footprint, _Scale, _Rain, _Height, _IOR, _Rim, _Debug;
             float4 _Clear;
             float _UdonWeatherFlash;   // lightning (EmuWeather)
 
@@ -180,7 +180,13 @@ Shader "ShaderEmu/WindowRain"
             // gradient: a drop's steep side turns the ray a lot a pixel, and takes the city in blurred)
             float3 Sky(float3 d, float part) {   // (part: the share of a pixel this ray stands for, across)
                 float k = part * (_Layers.w > 0 ? _Layers.w : 1.0);   // (_Layers.w: a test's scale)
-                return texCUBEgrad(_Sky, d, ddx(d) * k, ddy(d) * k).rgb * (1.0 + _Flash * _UdonWeatherFlash);
+                float3 gx = ddx(d) * k, gy = ddy(d) * k;
+                float3 c = texCUBEgrad(_Sky, d, gx, gy).rgb;
+                // lightning: the picture as a flash of 1 lights the city, mixed by the flash (what it lights is
+                // linear in it). The flash is one value for the whole draw: the branch costs nothing between
+                [branch] if (_UdonWeatherFlash > 0.0)
+                    c = lerp(c, texCUBEgrad(_SkyFlash, d, gx, gy).rgb, _UdonWeatherFlash);
+                return c;
             }
 
             // the ray out of the water where its surface slopes so (the ray the eye sends, the pane's normal towards the eye)

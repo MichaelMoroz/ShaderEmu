@@ -25,6 +25,7 @@ public static class ShaderEmuGlass
     public const string ProbeName = "Reflection probe window";
     const string Generated = "Assets/ShaderEmu/Generated";
     const string PicturePath = Generated + "/" + ProbeName + " picture.cubemap";
+    const string FlashPath = Generated + "/" + ProbeName + " lightning.cubemap";   // (the same lit by a flash of 1)
     const string GlassPath = Generated + "/Glass.mat";
     const string GlassShader = "ShaderEmu/WindowRain";
 
@@ -65,6 +66,7 @@ public static class ShaderEmuGlass
                      || AssetDatabase.GetAssetPath(watchedProbe.customBakedTexture) != PicturePath;
         Material glassNow = AssetDatabase.LoadAssetAtPath<Material>(GlassPath);
         wrong |= glassNow != null && glassNow.HasProperty("_Sky") && (glassNow.GetTexture("_Sky") == null || AssetDatabase.GetAssetPath(glassNow.GetTexture("_Sky")) != PicturePath);
+        wrong |= glassNow != null && glassNow.HasProperty("_SkyFlash") && AssetDatabase.LoadAssetAtPath<Cubemap>(FlashPath) != null && glassNow.GetTexture("_SkyFlash") != AssetDatabase.LoadAssetAtPath<Cubemap>(FlashPath);
         foreach (MeshRenderer pane in watched)
         {
             if (pane == null) { watched = null; return; }
@@ -128,6 +130,13 @@ public static class ShaderEmuGlass
             glass.SetTexture("_Sky", picture);   // (what the drops bend: WindowRain.shader takes the picture itself)
             EditorUtility.SetDirty(glass);
             fixes.Add("the drops' sky");
+        }
+        Cubemap flashed = AssetDatabase.LoadAssetAtPath<Cubemap>(FlashPath);
+        if (glass != null && flashed != null && glass.HasProperty("_SkyFlash") && glass.GetTexture("_SkyFlash") != flashed)
+        {
+            glass.SetTexture("_SkyFlash", flashed);   // (lightning in the drops)
+            EditorUtility.SetDirty(glass);
+            fixes.Add("the drops' lightning");
         }
         foreach (MeshRenderer pane in panes)
         {
@@ -206,6 +215,8 @@ public static class ShaderEmuGlass
             problems.Add("the window probe does not show " + PicturePath + " (ShaderEmu/Give the windows' glass its rain again)");
         if (glass != null && (!glass.HasProperty("_Sky") || glass.GetTexture("_Sky") == null || AssetDatabase.GetAssetPath(glass.GetTexture("_Sky")) != PicturePath))
             problems.Add("the glass's drops have no sky (" + PicturePath + ")");
+        if (glass != null && glass.HasProperty("_SkyFlash") && (glass.GetTexture("_SkyFlash") == null || AssetDatabase.GetAssetPath(glass.GetTexture("_SkyFlash")) != FlashPath))
+            problems.Add("the glass's drops have no lightning (" + FlashPath + ")");
         foreach (MeshRenderer pane in panes)
         {
             string was = Wrong(pane, probe, glass);

@@ -207,7 +207,10 @@ lightmap, which shows a line wherever two pieces of a wall meet and at every cor
   taken on a 3 x 3 lattice across the pixel and its four quarters shaded and averaged, each lookup's mip
   from its ray's screen gradient. Measured against an 8 x 8 supersampled picture (`_Footprint`, `_Widen`,
   `_Layers` are that test's) it is still not clean: the error is 0.3 of the drops' own light at a metre
-  and 0.8 to 0.9 far away (4 November 2026). The material sets every number of its own: a value left from
+  and 0.8 to 0.9 far away (4 November 2026). Lightning reaches the drops as a second picture of the city lit by a flash of 1 (`_SkyFlash`),
+  mixed by the flash. The outside's own light is a third of what it was (`Night`, 4 November 2026): City.shader's
+  `_Night` takes what is under a quarter of blooming to a third and leaves what blooms (1 and above), the
+  haze, the sky and the rain sheets are a third, and lightning lights each as before (`_HazeFlash`, `_CityGlow`). The material sets every number of its own: a value left from
   another shader of the same name (Fake Glass's `_IOR` of 1) bent nothing. Anything of the
   room's on a pane makes its drops white paint: a lightmap, light probes, the room's probe. A pane
   is held, not set once (`ShaderEmuGlass.cs`): every pane named `Window glass…` (Blender adds
