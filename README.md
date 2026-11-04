@@ -85,6 +85,7 @@ menu lists those with a window; the machine's own reader has these docs at `/usr
 | Pinball (`nxpinball`) | a table of our own | `docs/apps/pinball.md` |
 | Solitaire (`nxsolitaire`) | Klondike, cards drawn by us, played by clicks or drags | `docs/apps/solitaire.md` |
 | Tetris, Mines (`nxtetris`, `nxmine`) | small games on the desktop | `docs/system/nanox.md` |
+| 2048, Life (`nx2048`, `nxlife`) | sliding tiles; Conway's Game of Life, each generation made on 63 worker cores straight into the window (31 a second against 0.9 on the first core) | `linux/apps/nx2048.c`, `linux/apps/nxlife.c` |
 | Network (`nxgame`) | Quake, Quake III, OpenTTD and Doom hosted and joined between machines | `docs/system/lan.md` |
 
 ### The desktop's programs

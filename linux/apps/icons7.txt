@@ -11,6 +11,8 @@ nxcalc                  apps/accessories-calculator
 nxclock                 apps/clock
 nxtetris                nxtetris
 nxmine                  nxmine
+nx2048                  nx2048
+nxlife                  nxlife
 nxchess                 nxchess
 nxsolitaire             nxsolitaire
 nxpinball               nxpinball

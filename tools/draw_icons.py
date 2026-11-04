@@ -407,11 +407,42 @@ def gauge():
     return picture
 
 
+def tiles_2048():
+    """Four tiles of the sliding game, their faces in nx2048's colours, the largest marked with a bar (nx2048)."""
+    picture, draw = canvas()
+    u = UP
+    draw.rounded_rectangle((1 * u, 1 * u, 63 * u, 63 * u), radius=6 * u, fill=(150, 160, 180, 255), outline=INK, width=2 * u)
+    faces = [((236, 240, 246), 1), ((160, 205, 245), 2), ((110, 175, 240), 3), ((245, 130, 70), 5)]
+    for k, (colour, bars) in enumerate(faces):
+        x, y = 5 + (k % 2) * 28, 5 + (k // 2) * 28
+        draw.rounded_rectangle((x * u, y * u, (x + 26) * u, (y + 26) * u), radius=3 * u, fill=colour + (255,),
+                               outline=INK, width=u)
+        for b in range(bars):   # (numbers do not read at 16 pixels: as many bars as the tile is large)
+            bx = x + 13 - bars * 2 + b * 4
+            draw.rectangle((bx * u, (y + 9) * u, (bx + 2) * u, (y + 17) * u), fill=(60, 60, 80, 255) if k < 2 else (255, 255, 255, 255))
+    return picture
+
+
+def life():
+    """A glider of living cells, coloured by age as nxlife colours them, on its dark grid (nxlife)."""
+    picture, draw = canvas()
+    u = UP
+    draw.rectangle((2 * u, 2 * u, 62 * u, 62 * u), fill=(16, 20, 28, 255), outline=INK, width=2 * u)
+    for k in range(1, 4):
+        draw.line(((2 + 15 * k) * u, 4 * u, (2 + 15 * k) * u, 60 * u), fill=(40, 48, 64, 255), width=u)
+        draw.line((4 * u, (2 + 15 * k) * u, 60 * u, (2 + 15 * k) * u), fill=(40, 48, 64, 255), width=u)
+    glider = {(1, 0): (255, 245, 150), (2, 1): (130, 230, 110), (0, 2): (60, 200, 210), (1, 2): (130, 230, 110), (2, 2): (50, 120, 230)}
+    for (cx, cy), colour in glider.items():
+        x, y = 5 + 15 * cx, 5 + 15 * cy
+        draw.rectangle((x * u, y * u, (x + 12) * u, (y + 12) * u), fill=colour + (255,))
+    return picture
+
+
 DRAWN = (('glxgears', gears), ('nxeyes', eyes), ('halflife', lambda_ring), ('jk2', light_sword),
          ('nxtetris', tetris), ('nxmine', mine), ('nxpinball', pinball), ('nxgame', network_game), ('nxphys', physics),
          ('nxray', ray_sphere), ('nxpath', teapot), ('imdemo', imgui_window), ('nxsolitaire', solitaire), ('nxide', ide),
          ('nes', cartridge), ('nxplay', music), ('nxvideo', film), ('nxview', framed_picture),
-         ('nxperf', gauge))
+         ('nxperf', gauge), ('nx2048', tiles_2048), ('nxlife', life))
 
 if __name__ == '__main__':
     import sys

@@ -885,6 +885,17 @@ CASES = [
          more=['--pointer-button', '0x80,5,20', '--pointer-button', '0x100,8,8.5', '--pointer-button', '0x400,9,9.5', '--pointer-button', '0x10000,10,11'],
          has=[r'^nxpinball: left flipper held', r'^nxpinball: left flipper let go', r'^nxpinball: right flipper held', r'^nxpinball: plunger held',
               r'^nxpinball: plunger let go']),
+    # 2048 played by itself, then by keys (linux/apps/nx2048.c); Life's generations on the workers and on the first core
+    # alone, which must come to the same grid (linux/apps/nxlife.c)
+    case('nx2048', 'desktop games', X + 'NX2048_PRINT=1 NX2048_SEED=3 NX2048_AUTO=60 nx2048 & sleep 4; nxkey left 300 up 300 right; sleep 2; '
+         'killall nx2048', wall=120,
+         has=[r'^nx2048: auto 60 moves: score \d+, tile \d+, free \d+, sum [0-9a-f]{8}$', r'^nx2048: left: score', r'^nx2048: up: score']),
+    # (ten generations: on the first core alone one is about 2.4 million instructions, a second of the machine's)
+    case('nxlife', 'desktop games', X + 'NXLIFE_SEED=7 NXLIFE_GENS=10 nxlife & sleep 8; killall nxlife', True, wall=120,
+         has=[r'^nxlife: 10 generations, population \d+, sum [0-9a-f]{8}, [1-9]\d* workers']),
+    case('nxlife-core0', 'desktop games', X + 'NXLIFE_CORES=0 NXLIFE_SEED=7 NXLIFE_GENS=10 nxlife & sleep 25; killall nxlife', wall=120,
+         has=[r'^nxlife: 10 generations, .* 0 workers'],
+         same=[(r'^nxlife: 10 generations, (population \d+, sum [0-9a-f]{8})', 'nxlife')]),
     case('pad-mines', 'desktop games', X + 'NXMINE_PRINT=1 NXMINE_SEED=5 nxmine & sleep 11; killall nxmine', wall=120,
          more=['--pointer-sweep', '0', '--pointer-circle', '120,150,0', '--pointer-button', '0x80,5,20', '--scroll', '8,lx,2', '--scroll', '8.3,ly,-1',
                '--pointer-button', '0x10000,9,9.3'],
