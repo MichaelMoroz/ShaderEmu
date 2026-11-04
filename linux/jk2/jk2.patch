@@ -6467,7 +6467,7 @@ index da619736..1fc1620d 100644
 +#endif
 \ No newline at end of file
 diff --git a/code/rd-vanilla/tr_marks.cpp b/code/rd-vanilla/tr_marks.cpp
-index 2da2512a..bf5820c6 100644
+index 2da2512a..158708ac 100644
 --- a/code/rd-vanilla/tr_marks.cpp
 +++ b/code/rd-vanilla/tr_marks.cpp
 @@ -45,8 +45,14 @@ Out must have space for two more vertexes than in
@@ -6550,7 +6550,34 @@ index 2da2512a..bf5820c6 100644
  			list[*listlength] = (surfaceType_t *) surf->data;
  			(*listlength)++;
  		}
-@@ -274,8 +303,26 @@ int R_MarkFragments( int numPoints, const vec3_t *points, const vec3_t projectio
+@@ -253,6 +282,26 @@ void R_AddMarkFragments(int numClipPoints, vec3_t clipPoints[2][MAX_VERTS_ON_POL
+ 	(*returnedFragments)++;
+ }
+ 
++#ifdef SHADEREMU
++// A triangle wholly behind one of the mark's planes by more than a quarter unit gives no fragment: R_ChopPolyBehindPlane
++// keeps a point only 0.5 in front, and what earlier planes leave of the triangle lies within it (docs/games/jk2.md,
++// "Marks"). So it is not chopped (nor its normal made): the same fragments. JK2_MARKS=chop: every triangle chopped.
++static int se_mark_chop = -1;
++static inline int se_mark_outside( const float *a, const float *b, const float *c, int numPlanes, const vec3_t *normals, const float *dists )
++{
++	if ( se_mark_chop )
++		return 0;
++	for ( int p = 0 ; p < numPlanes ; p++ ) {
++		const float d = dists[p] + 0.25f;
++		if ( DotProduct( a, normals[p] ) < d && DotProduct( b, normals[p] ) < d && DotProduct( c, normals[p] ) < d )
++			return 1;
++	}
++	return 0;
++}
++#define SE_MARK_OUTSIDE( a, b, c ) se_mark_outside( a, b, c, numPlanes, normals, dists )
++#else
++#define SE_MARK_OUTSIDE( a, b, c ) 0
++#endif
+ /*
+ =================
+ R_MarkFragments
+@@ -274,8 +323,30 @@ int R_MarkFragments( int numPoints, const vec3_t *points, const vec3_t projectio
  	vec3_t			projectionDir;
  	vec3_t			v1, v2;
  
@@ -6567,6 +6594,10 @@ index 2da2512a..bf5820c6 100644
 +				se_mark_count[k][0] = 1;
 +			}
 +			se_mark_world = tr.world, se_mark_surfaces = tr.world->numsurfaces;
++			if ( se_mark_chop < 0 ) {
++				const char *e = getenv( "JK2_MARKS" );
++				se_mark_chop = e && !strcmp( e, "chop" );
++			}
 +		}
 +		se_mark_count[se_slot][0]++;	// (this search's count, for double check prevention)
 +	}
@@ -6577,6 +6608,41 @@ index 2da2512a..bf5820c6 100644
  
  	//
  	VectorNormalize2( projection, projectionDir );
+@@ -349,6 +420,11 @@ int R_MarkFragments( int numPoints, const vec3_t *points, const vec3_t projectio
+ 
+ 					const drawVert_t * const dv = cv->verts + m * cv->width + n;
+ 
++#if MARKER_OFFSET == 0
++					if ( SE_MARK_OUTSIDE( dv[0].xyz, dv[cv->width].xyz, dv[1].xyz ) &&
++						 SE_MARK_OUTSIDE( dv[1].xyz, dv[cv->width].xyz, dv[cv->width+1].xyz ) )
++						continue;
++#endif
+ 					VectorCopy(dv[0].xyz, clipPoints[0][0]);
+ 					VectorMA(clipPoints[0][0], MARKER_OFFSET, dv[0].normal, clipPoints[0][0]);
+ 					VectorCopy(dv[cv->width].xyz, clipPoints[0][1]);
+@@ -409,6 +485,11 @@ int R_MarkFragments( int numPoints, const vec3_t *points, const vec3_t projectio
+ 			const int * const indexes = (int *)( (byte *)surf + surf->ofsIndices );
+ 
+ 			for ( k = 0 ; k < surf->numIndices ; k += 3 ) {
++#if MARKER_OFFSET == 0
++				if ( SE_MARK_OUTSIDE( surf->points[0] + VERTEXSIZE * indexes[k], surf->points[0] + VERTEXSIZE * indexes[k+1],
++									  surf->points[0] + VERTEXSIZE * indexes[k+2] ) )
++					continue;
++#endif
+ 				for ( j = 0 ; j < 3 ; j++ ) {
+ 					const float	* const v = surf->points[0] + VERTEXSIZE * indexes[k+j];
+ 					VectorMA( v, MARKER_OFFSET, surf->plane.normal, clipPoints[0][j] );
+@@ -434,6 +515,10 @@ int R_MarkFragments( int numPoints, const vec3_t *points, const vec3_t projectio
+ 				int i1=surf->indexes[k];
+ 				int i2=surf->indexes[k+1];
+ 				int i3=surf->indexes[k+2];
++#if MARKER_OFFSET == 0
++				if ( SE_MARK_OUTSIDE( surf->verts[i1].xyz, surf->verts[i2].xyz, surf->verts[i3].xyz ) )
++					continue;
++#endif
+ 				VectorSubtract(surf->verts[i1].xyz,surf->verts[i2].xyz, v1);
+ 				VectorSubtract(surf->verts[i3].xyz,surf->verts[i2].xyz, v2);
+ 				CrossProduct(v1, v2, normal);
 diff --git a/code/rd-vanilla/tr_mesh.cpp b/code/rd-vanilla/tr_mesh.cpp
 index c9aa9fa0..be904729 100644
 --- a/code/rd-vanilla/tr_mesh.cpp
@@ -8144,7 +8210,7 @@ index 63add3c3..41e7273b 100644
  	CPoly *pol = FX_AddPoly(p, uv, 4,			// verts, ST, vertCount
  			vel, accel,				// motion
 diff --git a/codeJK2/cgame/cg_ents.cpp b/codeJK2/cgame/cg_ents.cpp
-index bad8c736..4145c507 100644
+index bad8c736..8eb9fd4b 100644
 --- a/codeJK2/cgame/cg_ents.cpp
 +++ b/codeJK2/cgame/cg_ents.cpp
 @@ -118,7 +118,12 @@ Also called by event processing code
@@ -8170,7 +8236,7 @@ index bad8c736..4145c507 100644
 +extern "C" void SE_CGRandEnd( void );
 +static void CG_AddCEntity_( centity_t *cent );
 +// (a player draws from a random state of its own, made from its number and the frame's time: cg_rand.c)
- static void CG_AddCEntity( centity_t *cent )
++static void CG_AddCEntity( centity_t *cent )
 +{
 +	if ( cent->currentState.eType != ET_PLAYER || !SE_SlotMode() ) {
 +		CG_AddCEntity_( cent );
@@ -8182,12 +8248,12 @@ index bad8c736..4145c507 100644
 +}
 +static void CG_AddCEntity_( centity_t *cent )
 +#else
-+static void CG_AddCEntity( centity_t *cent )
+ static void CG_AddCEntity( centity_t *cent )
 +#endif
  {
  	// event-only entities will have been dealt with already
  	if ( cent->currentState.eType >= ET_EVENTS ) {
-@@ -2162,6 +2186,231 @@ CG_AddPacketEntities
+@@ -2162,6 +2186,251 @@ CG_AddPacketEntities
  
  ===============
  */
@@ -8237,7 +8303,7 @@ index bad8c736..4145c507 100644
 +static seLook_t se_look[MAX_GENTITIES];	// what a player made after another read of it: the frame before's
 +static unsigned se_counts[SE_WHY_COUNT + 4];	// [0] players, [1] made ahead, [2] by workers, [3] waited on an ended one, 4.. why
 +static int se_frames_logged;
-+static unsigned long long se_ran[3];	// the longest player's instructions summed over the frames, all players', frames
++static unsigned long long se_ran[5];	// the longest player's instructions summed over the frames, all players', frames, each wave's longest summed, waves
 +static int se_ahead_frame;		// cg.time of the players made ahead (CG_SE_LookPoint asks within it)
 +
 +unsigned long long SE_Instructions( void );
@@ -8320,6 +8386,15 @@ index bad8c736..4145c507 100644
 +		const int at = se_order[ri->lookTarget];
 +		if ( !look->gent || at < 0 )
 +			continue;
++		// (a look at the player in the first person is at cg.refdef's eye, made before the entities: CG_PlayerHeadExtension
++		// reads nothing of the player's turn then, so this player waits for none; JK2_PLAYERS_WAVE=all: it does)
++		static int wave_all = -1;
++		if ( wave_all < 0 ) {
++			const char *e = getenv( "JK2_PLAYERS_WAVE" );
++			wave_all = e && !strcmp( e, "all" );
++		}
++		if ( !wave_all && ri->lookTarget == 0 && !cg.renderingThirdPerson )
++			continue;
 +		if ( !look->gent->client ) {
 +			// (an entity placed in its turn before this player's: placed now, as again in its turn; one after: the
 +			// frame before's, kept)
@@ -8371,14 +8446,23 @@ index bad8c736..4145c507 100644
 +			break;
 +	}
 +	{
-+		unsigned longest = 0, all = 0;
++		unsigned longest = 0, all = 0, wl[SE_PLAYERS] = { 0 };
++		int waves = 0;
 +		for ( int i = 0; i < se_nplayers; i++ ) {
 +			const unsigned r = (unsigned)se_players[i].out.ran;
 +			all += r;
 +			if ( r > longest )
 +				longest = r;
++			const int w = se_players[i].wave;
++			if ( w >= 0 && w < SE_PLAYERS && r > wl[w] )
++				wl[w] = r;
++			if ( w + 1 > waves )
++				waves = w + 1;
 +		}
 +		se_ran[0] += longest, se_ran[1] += all, se_ran[2]++;
++		for ( int w = 0; w < waves && w < SE_PLAYERS; w++ )
++			se_ran[3] += wl[w];
++		se_ran[4] += waves;
 +	}
 +	for ( int i = 0; i < se_nplayers; i++ ) {
 +		se_counts[0]++;
@@ -8400,9 +8484,11 @@ index bad8c736..4145c507 100644
 +			if ( se_counts[4 + k] )
 +				Q_strcat( why, sizeof why, va( " %s %u", names[k], se_counts[4 + k] ) );
 +		Com_Printf( "jk2players: %u players, %u made ahead, %u on workers, %u waited on one in its turn; in its turn:%s; "
-+			"a frame the longest %uk, all %uk\n", se_counts[0], se_counts[1], se_counts[2], se_counts[3], why,
-+			se_ran[2] ? (unsigned)( se_ran[0] / se_ran[2] / 1000 ) : 0, se_ran[2] ? (unsigned)( se_ran[1] / se_ran[2] / 1000 ) : 0 );
-+		se_ran[0] = se_ran[1] = se_ran[2] = 0;
++			"a frame the longest %uk, all %uk, the waves' longest %uk in %u.%02u waves\n", se_counts[0], se_counts[1], se_counts[2], se_counts[3], why,
++			se_ran[2] ? (unsigned)( se_ran[0] / se_ran[2] / 1000 ) : 0, se_ran[2] ? (unsigned)( se_ran[1] / se_ran[2] / 1000 ) : 0,
++			se_ran[2] ? (unsigned)( se_ran[3] / se_ran[2] / 1000 ) : 0, se_ran[2] ? (unsigned)( se_ran[4] / se_ran[2] ) : 0,
++			se_ran[2] ? (unsigned)( se_ran[4] * 100 / se_ran[2] % 100 ) : 0 );
++		se_ran[0] = se_ran[1] = se_ran[2] = se_ran[3] = se_ran[4] = 0;
 +		memset( se_counts, 0, sizeof se_counts );
 +	}
 +}
@@ -8419,7 +8505,7 @@ index bad8c736..4145c507 100644
  void CG_AddPacketEntities( void ) {
  	int					num;
  	centity_t			*cent;
-@@ -2209,10 +2458,29 @@ void CG_AddPacketEntities( void ) {
+@@ -2209,10 +2478,29 @@ void CG_AddPacketEntities( void ) {
  //	CG_AddCEntity( cent );					//
  
  	// add each entity sent over by the server

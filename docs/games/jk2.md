@@ -806,6 +806,16 @@ death and the autosave's load.
   `SE_WxScene` (a settle is allowed there, not at the give). `JK2_WEATHER_WORDS=drawing` is the way before. The walk
   with `JK2_SOUND=mix`: the drawing's worker 1.54 to 1.37 million a frame; captured at frame 1450, the same pixels but
   the dials.
+- **The players in one wave** (`CG_SE_PlayersAhead`): a player looking at the player in the first person looks at
+  `cg.refdef`'s eye, made before the entities, so it does not wait for the player's job; the walk's NPCs all did, and the
+  players were two waves, the longest of each in turn (407 to 431 thousand instructions a frame). `JK2_PLAYERS_WAVE=all`
+  is the way before. `JK2_PLAYERS_LOG` prints the waves' longest summed and how many waves.
+- **Marks** (`R_MarkFragments`, `se_mark_outside` in `tr_marks.cpp`): a triangle wholly behind one of the mark's planes
+  by more than a quarter unit gives no fragment, as `R_ChopPolyBehindPlane` keeps a point only 0.5 in front and what
+  earlier planes leave of the triangle lies within it: it is not chopped, nor its normal made. A moving player's blob
+  shadow was 147 thousand instructions. `JK2_MARKS=chop` is the way before. With the wave above, the walk with
+  `JK2_SOUND=mix` (4 November 2026): 503 to 466 passes a frame, the longest player 270 to 165 thousand, core 0's joins
+  46 to 69 passes a frame to 17 to 41; captured at frame 1450, the same pixels as both ways before but the dials.
 - **The particles and the sky drawn from arrays** (`CParticleCloud::Render`, `DrawSkySide`): one `glDrawElements` of
   triangles, cut as the shim cuts quads and strips, not a call a vertex. `JK2_WEATHER_DRAW=begin` and
   `JK2_SKY_DRAW=begin` are the ways before.
