@@ -798,7 +798,7 @@ index 5055b65..9ad212e 100644
  qpic_t *Draw_PicFromWad (char *name);
  qpic_t *Draw_CachePic (char *path);
 diff --git a/WinQuake/gl_draw.c b/WinQuake/gl_draw.c
-index 25a8007..278fd06 100644
+index 25a8007..5e8d9ea 100644
 --- a/WinQuake/gl_draw.c
 +++ b/WinQuake/gl_draw.c
 @@ -74,6 +74,13 @@ void GL_Bind (int texnum)
@@ -926,7 +926,35 @@ index 25a8007..278fd06 100644
  
  	if (lines > y)
  		Draw_Pic(0, lines - vid.height, conback);
-@@ -838,8 +909,25 @@ void GL_Set2D (void)
+@@ -728,6 +799,27 @@ void Draw_TileClear (int x, int y, int w, int h)
+ {
+ 	glColor3f (1,1,1);
+ 	GL_Bind (*(int *)draw_backtile->data);
++#ifdef SHADEREMU
++	{	// in pieces of the 64-pixel tile, each a picture (qglPicture, which does not repeat a texture): so the 2D
++		// screen a worker's frame records keeps it (glBegin spoils a recording, and the status bar's sides are
++		// this tile whenever the screen is wider than 320: a large window had no status bar)
++		int	px, py, pw, ph, first = 1;
++		float	st[4];
++
++		for (py = y; py < y + h; py += ph)
++			for (px = x, ph = ((py & ~63) + 64 < y + h ? (py & ~63) + 64 : y + h) - py; px < x + w; px += pw)
++			{
++				pw = ((px & ~63) + 64 < x + w ? (px & ~63) + 64 : x + w) - px;
++				st[0] = (px & 63) / 64.0f, st[1] = (py & 63) / 64.0f;
++				st[2] = ((px & 63) + pw) / 64.0f, st[3] = ((py & 63) + ph) / 64.0f;
++				if (!qglPicture (px, py, pw, ph, st) && first)
++					goto whole;
++				first = 0;
++			}
++		return;
++	}
++whole:
++#endif
+ 	glBegin (GL_QUADS);
+ 	glTexCoord2f (x/64.0, y/64.0);
+ 	glVertex2f (x, y);
+@@ -838,8 +930,25 @@ void GL_Set2D (void)
  	glViewport (glx, gly, glwidth, glheight);
  
  	glMatrixMode(GL_PROJECTION);
@@ -952,7 +980,7 @@ index 25a8007..278fd06 100644
  
  	glMatrixMode(GL_MODELVIEW);
      glLoadIdentity ();
-@@ -1124,6 +1212,10 @@ void GL_Upload8_EXT (byte *data, int width, int height,  qboolean mipmap, qboole
+@@ -1124,6 +1233,10 @@ void GL_Upload8_EXT (byte *data, int width, int height,  qboolean mipmap, qboole
  	if (scaled_height > gl_max_size.value)
  		scaled_height = gl_max_size.value;
  
@@ -963,7 +991,7 @@ index 25a8007..278fd06 100644
  	if (scaled_width * scaled_height > sizeof(scaled))
  		Sys_Error ("GL_LoadTexture: too big");
  
-@@ -1190,6 +1282,17 @@ static	unsigned	trans[640*480];		// FIXME, temporary
+@@ -1190,6 +1303,17 @@ static	unsigned	trans[640*480];		// FIXME, temporary
  	int			p;
  
  	s = width*height;
@@ -981,7 +1009,7 @@ index 25a8007..278fd06 100644
  	// if there are no transparent pixels, make it a 3 component
  	// texture even if it was specified as otherwise
  	if (alpha)
-@@ -1250,10 +1353,10 @@ int GL_LoadTexture (char *identifier, int width, int height, byte *data, qboolea
+@@ -1250,10 +1374,10 @@ int GL_LoadTexture (char *identifier, int width, int height, byte *data, qboolea
  			}
  		}
  	}
