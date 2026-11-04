@@ -268,6 +268,15 @@ shown. A window brought forward shows its desktop.
 first, shown after 150 ms or a second Tab (a quick press goes to the last window with nothing drawn); letting the key go goes there.
 Shift goes backward.
 
+**Games open maximised.** What the bar starts from the Start menu's Games (a pinned program that is one of them too), and
+a desktop shortcut with a line `game=1` (the image's for every game: `desktop_shortcuts` in `make_linux_image.py`), is named
+to the window manager by `GR_WMC_MAXIMISE` with its process (`ui_launch_maximise` in `ui_launch.h`, sent by
+`ui_launch_started`). Every window of that process, or of a process it started (a starter script, an installer before the
+game: the window manager walks `/proc/N/stat` up six parents), opens maximised while it runs (`maximise_wanted` in
+`wmclients.c`); a window that cannot resize (`cabinst`'s licence, Mines) opens as it asked. Put back goes to where the
+window was kept (below), or where it was made. `wm.maximise_games` 0, or Settings' Look tab, turns it off. Test:
+`test_all.py wm-game`.
+
 **Where a window was.** A window moved, resized or tiled by hand writes `wm.place.PROGRAM` =
 `asked width,asked height,x,y,width,height,zone` in the registry, and the first window of that program with the same asked
 size opens there (`place_found` in `wmclients.c`); a window that asks for a place (`GR_WM_PROPS_NOAUTOMOVE`) keeps it, a window that
@@ -469,7 +478,13 @@ buttons then change only that. `nxsettings look seven|classic [smooth|classic]` 
 from a script. The choice is the registry's `desktop.style` and `desktop.font` and, for the
 running session, one word of the window manager's page of GPU memory (word 24 of `WM_OFFSET`,
 `0x81001860`; `/dev/gpu` at offset `0x01001000` + `0x860`): `0x4c4b0000 | smooth << 8 | style`,
-style 1 for Windows 7. 0 there (nobody set it) is the classic style with the smooth text, as a
+style 1 for Windows 7. **The windows' colour** is the word after it (`WM_TINT`, word 25, `0x864`): `0x01RRGGBB`, or 0
+for the look's own blue, the registry's `desktop.color` (`RRGGBB` or `default`) and Settings' swatches (`nxsettings color
+RRGGBB|default` from a script). An active frame is painted from it (`tint_mix`, `tint_caption` in `nxpaintnc.c`): the
+classic caption in 16 bands from the colour darkened to lightened (its white text stays readable), the Windows 7 frame's
+edges and its caption in bands of the colour mixed with white (black text). Inactive frames keep the look's grey. The bar takes it too (`bar_tint`, `tint_mix` in `nxbar.c`,
+read with the look once a second): Windows 7's bar in bands of the colour darkened, its buttons' glass and the lit desktop
+cell of it; the classic bar's face the colour lightened, its bevels and black text as they were. 0 there (nobody set it) is the classic style with the smooth text, as a
 bare `nano-X` for a test has it (`ui_look_read`, and `LOOK_SMOOTH` for the captions: the bitmap
 font only when Settings chose it, 4 November 2026); `nx` writes the registry's look (Windows 7
 and smooth unless it says otherwise) before the desktop starts (`nxbar --look`).

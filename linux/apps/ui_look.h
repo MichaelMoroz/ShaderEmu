@@ -21,6 +21,10 @@
 #define UI_LOOK_FONT	"/usr/share/font-ui-12.sef"
 #define UI_LOOK_FONT_BOLD "/usr/share/font-ui-b-12.sef"
 #define UI_LOOK_FIXED	"/usr/share/font-mono-10.sef"	/* the fixed font's stand-in: 6 pixels a character, as X6x13 */
+/* The windows' colour: the registry's "RRGGBB" (hex) or "default", and the next word of the page,
+ * 0x01RRGGBB or 0 for the look's own (the window manager's frames: nx_tint in nxpaintnc.c). */
+#define UI_TINT		"desktop.color"
+#define UI_TINT_SET	0x01000000u
 
 enum { UI_STYLE_CLASSIC, UI_STYLE_SEVEN };
 
@@ -77,11 +81,52 @@ ui_look_set(int style, int smooth)
 		*word = UI_LOOK_MAGIC | (unsigned)(smooth ? 1 : 0) << 8 | (unsigned)style;
 }
 
+/* The windows' colour as it is now: 0xRRGGBB | UI_TINT_SET, or 0 for the look's own. */
+static unsigned
+ui_tint_now(void)
+{
+	volatile uint32_t *word = ui_look_word();
+	unsigned tint = word ? word[1] : 0;
+
+	return (tint >> 24) == 1 ? tint : 0;
+}
+
+/* `tint`: 0xRRGGBB | UI_TINT_SET, or 0 for the look's own. */
+static void
+ui_tint_set(unsigned tint)
+{
+	volatile uint32_t *word = ui_look_word();
+
+	if (word)
+		word[1] = tint & UI_TINT_SET ? tint & 0x01ffffffu : 0;
+}
+
+/* The registry's text for a colour into the word's form ("default", or anything not six hex digits: 0). */
+static unsigned
+ui_tint_parse(const char *text)
+{
+	unsigned rgb = 0;
+	int n;
+
+	for (n = 0; n < 6; n++) {
+		char c = text[n];
+
+		if (c >= '0' && c <= '9')
+			rgb = rgb << 4 | (unsigned)(c - '0');
+		else if ((c | 32) >= 'a' && (c | 32) <= 'f')
+			rgb = rgb << 4 | (unsigned)((c | 32) - 'a' + 10);
+		else
+			return 0;
+	}
+	return text[6] ? 0 : UI_TINT_SET | rgb;
+}
+
 /* The registry's look into the word, at the desktop's start (Windows 7 and Selawik unless it says otherwise). */
 static void
 ui_look_from_registry(void)
 {
 	ui_look_set(strcmp(reg_get(UI_LOOK_STYLE, "seven"), "classic") ? UI_STYLE_SEVEN : UI_STYLE_CLASSIC,
 		strcmp(reg_get(UI_LOOK_TEXT, "smooth"), "classic") != 0);
+	ui_tint_set(ui_tint_parse(reg_get(UI_TINT, "default")));
 }
 #endif

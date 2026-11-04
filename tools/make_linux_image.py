@@ -242,8 +242,10 @@ def desktop_shortcuts(extra):
             path, _, run = line.partition('=')
             folder, _, label = path.rpartition('/')
             if run and label and folder != 'System':
+                # a game's opens it maximised (game=1: start_shortcut in nxfiles.c, ui_launch.h)
+                game = 'game=1\n' if (folder + '/').startswith('Games/') else ''
                 folder = '' if run.split()[0] in WITH_PLACES else folder or 'Other'
-                columns.setdefault(folder, []).append((label, 'name=%s\nrun=%s\n' % (label, run)))
+                columns.setdefault(folder, []).append((label, 'name=%s\n%srun=%s\n' % (label, game, run)))
     # the documentation (documentation()) in a column of its own, the last: no other icon moves for it
     columns.setdefault(' docs', []).append(('Docs', 'name=Docs\nicon=documents\nrun=nxfiles %s\n' % DOCS))
     # 7 icons down a column: what an 800 x 600 screen has room for above its bar. A folder goes on

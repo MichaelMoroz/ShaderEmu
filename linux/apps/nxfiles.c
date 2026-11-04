@@ -1081,7 +1081,9 @@ start_shortcut(const struct entry *e)
 	FILE *file = fopen(e->name, "r");
 
 	while (file && fgets(line, sizeof line, file))
-		if (!strncmp(line, "run=", 4)) {
+		if (!strncmp(line, "game=1", 6))
+			ui_launch_maximise = 1;	/* (a line before run=: a game opens maximised, ui_launch.h) */
+		else if (!strncmp(line, "run=", 4)) {
 			line[strcspn(line, "\r\n")] = 0;
 			fclose(file);
 			return run_command(line + 4);

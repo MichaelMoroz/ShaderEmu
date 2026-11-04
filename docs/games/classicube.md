@@ -329,7 +329,8 @@ version 7, by the game itself (`linux/classicube/Lan_ShaderEmu.c`, hooked into t
 its chat in `classicube.patch`): a joiner is the stock client, `classicube NAME lan 10.0.0.N 25565`. The pause menu has
 "Host on the LAN" and "Join a LAN game"; the second listens 1.5 s for a host's beacon (UDP broadcast to port 25566, four a
 second) and runs the client against the first heard, as `PlayerN` (N the machine's number). `CLASSICUBE_LAN=host` hosts
-from the start.
+from the start. The desktop has both too: the Start menu's Games, Network, "ClassiCube: host a game" and "ClassiCube: join
+a game" (`nxgame classicube host|join`, `docs/system/lan.md`), and their shortcuts.
 
 - **A joiner's level** is the world's blocks gzipped by libmedia's deflate on the worker cores (`media_gzip`, pieces of
   64 KB deflated apart and joined as one stream), sent in the protocol's 1,024-byte chunks. It is gzipped again only after

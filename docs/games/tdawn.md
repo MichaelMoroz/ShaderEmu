@@ -5,7 +5,8 @@ the portable version of the game's released source, as a Nano-X client. The GPU 
 terrain, objects, shadows and the shroud ("The map on the GPU", below). The game still draws
 its sidebar, its text and its menus itself, on its own 320x200 screen, which the GPU shows on top.
 The window is the largest whole multiple of that the display has room for: 960x600 on the
-desktop's 1280x720, which costs the game nothing (the GPU does the stretching).
+desktop's 1280x720, which costs the game nothing (the GPU does the stretching); another size is shown scaled by one factor
+("The window's size").
 
     wsl -- bash linux/nommu/build.sh nanox/build.sh     (once)
     wsl -- bash linux/nommu/build.sh tdawn/build.sh     (a minute when a file changed; the first time it also fetches)
@@ -487,11 +488,19 @@ Tiberian Dawn's movies are 320 x 200 in 4x2 blocks (`UnVQ_4x2`; Red Alert's are 
 
 ## The window's size
 
-Since 4 November 2026 the game is laid out again at the window's size (`TDAWN_LAYOUT=stretch` is the way before: the 320 x 200
-screen stretched over any window). A second after the window's last change of size the screen is made the window's size at the
-first window's whole scale (2 on the 800 x 600 desktop), in whole 8s across, from 320 x 200 up to 640 x 400 (the game's view port):
-maximised, 392 x 272. The demo's art is the 320 kind and stays so (`ShaderEmu_Low_Res`, set with the first video mode, where the game
-tested the screen's width being 320 in 30 places). What is done, between two turns of `Main_Loop` (`ShaderEmu_Relayout` in `conquer.cpp`):
+The screen is shown in the window scaled by one factor, as large as fits, in the middle, black round it (4 November 2026, the second
+form; `TDAWN_LAYOUT=stretch` is the way before either: the 320 x 200 screen stretched over any window). A second after the window's last
+change of size the screen is laid out again at the first screen's height (200 rows) and as wide as the window's shape wants at that
+height, in whole 8s, from 320 up to 640 (the game's view port): a window wider than 8:5 gets more map to the left of the sidebar, the
+sidebar, the tabs and the text growing with the window by the same factor; a window narrower (a maximised one on the 800 x 600
+desktop, 792 x 544) keeps 320 x 200, shown 792 x 495 with 24 black rows above and below. The height stays because the sidebar's,
+the tabs' and the menus' art has 200 rows: the first form (the window's size at the first whole scale, up to 640 x 400) left the
+playfield at 1:1 and the sidebar's picture short with black below it, and the credits tab where a 320 screen has it, 160 pixels from
+the left, under nothing (`TabClass::Draw_Credits_Tab` now goes by the right edge, as the credits do). Every place of the pointer, its
+words and a button's event alike, goes through the same scaling (`picture_point` in `host.c`, as Age of Empires' `aoe_win_map`): a
+place in the black is the screen's edge. The demo's art is the 320 kind and stays so (`ShaderEmu_Low_Res`, set with the first video
+mode, where the game tested the screen's width being 320 in 30 places). What is done, between two turns of `Main_Loop`
+(`ShaderEmu_Relayout` in `conquer.cpp`):
 
 - the two pages made again at the new size (`ShaderEmu_Pages` in `shaderemu.cpp`, `host_relayout` in `host.c`: more GPU memory only
   when the pages have less), the view ports attached again, `ScreenWidth`, `WindowList`;
@@ -500,13 +509,16 @@ tested the screen's width being 320 in 30 places). What is done, between two tur
   `Map.Init_IO()` (the sidebar's Repair, Sell and Map go by the sidebar's place, not by fixed numbers), and everything drawn again.
 
 The map on the GPU needs nothing: every place `host.c` gives the GPU is a fraction of the first screen's size, and the window's matrix
-scales that to the screen's size now, so the kept cells, rectangles and page parts stay as they are. The game's state is untouched but for
-the view's place, which `Set_View_Dimensions` keeps inside the map. `test_all.py tdawn-window`: Tab opens the sidebar, the window
-maximised is laid out at 392 x 272 (the view 312 x 264), a click on a unit selects it, a click where Repair now is presses it
-(`TDAWN_INPUT_LOG=1` says both), and put back it is 320 x 200 again (the view 240 x 192) with Repair where it always was. The
-default size's sums are as before (`tdawn-*`), and `tdawn-window` under `RVC_RACES` is 0 undone. Captures (`rvc_harness --cpu`,
-`--save-state`, `tools/snapshot_screen.py`) show the maximised screen with the sidebar at its right edge and more of the map, and the
-put-back one as before. The counts were made again after the change (`tdawn.profile`: missions 1, 3 and 5, 1,200 frames, the recipe of "What the compiler is told"); at the default size `game_par.py tdawn --calibrated --runs 3` gives 71.5 guest frames a second (9.01 passes a frame) against 71.5 (9.00) for the tree before the layout work built here and 71.6 (8.99) for `linux/prebuilt`'s program. The larger screen's speed is not measured.
+scales that to the screen's size now, its viewport the screen's place in the window (`whole_window`, `picture_place`), so the kept cells,
+rectangles and page parts stay as they are. The game's state is untouched but for the view's place, which `Set_View_Dimensions` keeps
+inside the map. `test_all.py tdawn-window`: the window made 792 x 300 (`TDAWN_RESIZE`) is laid out at 528 x 200 (the view 528 x 192),
+Tab opens the sidebar, the window maximised is 320 x 200 again (the view 240 x 192), a click on a unit through the scaling selects it,
+a click where Repair is presses it (`TDAWN_INPUT_LOG=1` says both), and put back it is 528 x 200 (the view 448 x 192) with Repair at the
+right edge. The default size's sums are as before (`tdawn-*`). Captures (`rvc_harness --cpu --warp`, `--save-state`,
+`tools/snapshot_screen.py`): wide, the sidebar and the credits at the right edge, the tab under the credits, more of the map; maximised,
+the whole screen with black above and below; the default 640 x 400 window as before.
+
+The counts were made again after the first form (`tdawn.profile`: missions 1, 3 and 5, 1,200 frames, the recipe of "What the compiler is told"); at the default size `game_par.py tdawn --calibrated --runs 3` gives 71.5 guest frames a second (9.01 passes a frame) against 71.5 (9.00) for the tree before the layout work built here and 71.6 (8.99) for `linux/prebuilt`'s program. The larger screen's speed is not measured.
 ## A mission won
 
 `TDAWN_WIN=N` wins the mission at frame N (once) and prints a line at each step, as Red Alert's `RALERT_WIN` (`docs/games/ralert.md`, "A mission won"). Tiberian Dawn's demo goes from mission 1 to 10 by its own code, and its score screen makes no table of colours: mission 10 is then played with its state at frame 300 `325b1830` (`tdawn-won` in `tools/test_all.py`). Half of that screen's instructions are `Linear_Blit_To_Linear`, the page copied whole at each of its steps; not changed. The table and the doubled rows (`common/interpal.cpp`, `host_for`) are shared, for the screens that use them.

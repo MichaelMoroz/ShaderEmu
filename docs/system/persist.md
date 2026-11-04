@@ -56,6 +56,8 @@ the session only when the folder is saved.
 | `desktop.wallpaper`, `desktop.size` | Settings, the desktop, the `nx` script | a picture's path or `#RRGGBB`; `WIDTHxHEIGHT` |
 | `sound.volume` | Settings, the `nx` script | 0 to 100 |
 | `wm.place.PROGRAM`, `wm.remember` | the window manager | where a program's first window opens (`docs/system/nanox.md`, "The window manager and the bar"); 0: not kept |
+| `wm.maximise_games` | Settings (Look), the bar, the desktop | 0: a game started from the Start menu's Games or its desktop shortcut opens as it asks, not maximised (default 1) |
+| `desktop.style`, `desktop.font`, `desktop.color` | Settings (Look), the `nx` script | the windows' style, the text, and the windows' colour (`RRGGBB` or `default`: `docs/system/nanox.md`, "Looks") |
 | `files.details`, `files.order` | Files | the list or the icons; the list's order |
 | `rays.width`, `rays.height`, `rays.turns`, `rays.shadows` | `nxray` | its bar's settings (a test with `RAY_FRAMES` takes none of them) |
 | `pathtrace.detail`, `.samples`, `.turns`, `.background`, `.background.colour`, `.live` | `nxpath` | the picture's settings |

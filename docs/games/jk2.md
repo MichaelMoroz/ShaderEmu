@@ -718,7 +718,7 @@ modified files, no derivative works" (above). An image holds the installer uncha
 The starter runs `cabinst` (`docs/system/install.md`) before the game: `Disk1\Install\license.txt` read out of the
 installer and shown in a window (on the terminal without a window system), Accept only once it has been scrolled to its
 end, the registry's `jk2.eula` keeping an acceptance; then the pak, 64,001,989 bytes, unpacked on the workers into a
-tmpfs file mapped in place, `/tmp/jk2/base/assets0.pk3`, every session, and the game started with `fs_basepath /tmp/jk2`.
+tmpfs file mapped in place, `/tmp/jk2/base/assets0.pk3`, at every start, and the game started with `fs_basepath /tmp/jk2`; the starter deletes `/tmp/jk2` when it ends.
 `jk2 --unpack` does only that. On the card (2 November 2026): the licence 0.89 s, the pak 6.69 s (the folder's 74.2 MB
 inflated, 255 workers), `jk2 --unpack` from the command to its end 12.3 s. Its CRC-32 is 7-Zip's, `239abc19`.
 

@@ -6,6 +6,9 @@ software and compares.
 
     python tools/gpu_reference.py SNAPSHOT TARGET.bmp [--png PREFIX] [--size WIDTHxHEIGHT] [--rom ROOTFS.BIN]
 
+SNAPSHOT may also be rvc_cpu's --save-ram (the 288 MB of RAM from 0x80000000), and TARGET `-`: then
+there is no card's picture to compare, and --png PREFIX writes the model's alone (PREFIX_model.png).
+
 The real picture comes from the graphics card's rasteriser, so this is not bit-exact: pixels
 on triangle edges can fall either way, and colours can differ by a rounding step. The report
 separates interior agreement from edge pixels.
@@ -15,10 +18,15 @@ import numpy as np
 
 f32 = np.float32
 TARGET = 2048
+RAM_BYTES = 288 << 20
 
 
 class Machine:
     def __init__(self, path):
+        self.rom_words = None
+        if os.path.getsize(path) == RAM_BYTES:   # rvc_cpu --save-ram: RAM alone, from 0x80000000
+            self.words = np.memmap(path, dtype=np.uint32, mode='r')
+            return
         rows = int(np.fromfile(path, dtype=np.uint32, count=4)[3])   # the header's height
         tex = np.memmap(path, dtype=np.uint32, mode='r', offset=32).reshape(rows, 2048, 4)
         self.words = tex[64:].reshape(-1)
@@ -466,6 +474,11 @@ def main():
     m = Machine(sys.argv[1])
     want, edge, stats = draw(m)
     height, width, _ = want.shape
+    if sys.argv[2] == '-':
+        print('picture %dx%d, %d commands, %d triangles on screen' % (width, height, stats['commands'], stats['triangles']))
+        if '--png' in sys.argv:
+            write_png(sys.argv[sys.argv.index('--png') + 1] + '_model.png', want)
+        return
     got = read_bmp(sys.argv[2])[:height, :width]
     d = np.abs(got.astype(int) - want.astype(int)).max(axis=2)
     inner = ~edge

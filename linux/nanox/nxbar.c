@@ -261,8 +261,48 @@ bevel(GR_WINDOW_ID w, int x, int y, int width, int height, int pressed)
 	GrLine(w, gc, x + width - 1, y, x + width - 1, y + height - 1);
 }
 
+/* The windows' colour Settings chose (ui_look.h: 0x01RRGGBB, 0 for the look's own), as the bar was last drawn in it. */
+static unsigned bar_tint;
+
+/* The colour a share k/16 of the way from the tint (k 0) to white (k 16), or to black (k -16): nxpaintnc.c's tint_mix. */
+static GR_COLOR
+tint_mix(int k)
+{
+	int c[3] = { bar_tint >> 16 & 255, bar_tint >> 8 & 255, bar_tint & 255 }, i;
+
+	for (i = 0; i < 3; i++)
+		c[i] = k >= 0 ? c[i] + (255 - c[i]) * k / 16 : c[i] * (16 + k) / 16;
+	return MWRGB(c[0], c[1], c[2]);
+}
+
+/* Part of the bar's ground, x on for width: Windows 7's strip (bar7.ppm), or with a windows' colour
+ * that colour darkened in bands down the bar, lighter at its top edge as the strip is; classic: the face. */
+static void
+bar_strip(int x, int width)
+{
+	int band;
+
+	if (!ui_seven) {
+		GrSetGCForeground(gc, bar_tint ? tint_mix(11) : FACE);
+		GrFillRect(bar, gc, x, 0, width, BAR_HEIGHT);
+		return;
+	}
+	if (!bar_tint) {
+		GrSetGCForeground(gc, MWRGB(36, 52, 74));
+		GrFillRect(bar, gc, x, 0, width, BAR_HEIGHT);
+		GrDrawImageFromFile(bar, gc, x, 0, width, BAR_HEIGHT, "/usr/share/bar7.ppm", 0);
+		return;
+	}
+	GrSetGCForeground(gc, tint_mix(-1));
+	GrFillRect(bar, gc, x, 0, width, 1);
+	for (band = 1; band < BAR_HEIGHT; band += 2) {
+		GrSetGCForeground(gc, tint_mix(-5 - 5 * band / BAR_HEIGHT));
+		GrFillRect(bar, gc, x, band, width, band + 2 > BAR_HEIGHT ? 1 : 2);
+	}
+}
+
 /* Windows 7's button on the bar: a lighter glass box with rounded corners; brighter for the
- * window in front, none for one put away. */
+ * window in front, none for one put away. In the windows' colour when one is chosen. */
 static void
 glass(int x, int y, int width, int height, int how)
 {
@@ -271,6 +311,18 @@ glass(int x, int y, int width, int height, int how)
 
 	if (how < 0)
 		return;
+	if (bar_tint) {
+		GrSetGCForeground(gc, tint_mix(how ? 2 : -4));
+		GrFillRect(bar, gc, x + 1, y + 1, width - 2, height / 2 - 1);
+		GrSetGCForeground(gc, tint_mix(how ? -2 : -7));
+		GrFillRect(bar, gc, x + 1, y + height / 2, width - 2, height - height / 2 - 1);
+		GrSetGCForeground(gc, tint_mix(how ? 7 : 1));
+		GrLine(bar, gc, x + 1, y, x + width - 2, y);
+		GrLine(bar, gc, x + 1, y + height - 1, x + width - 2, y + height - 1);
+		GrLine(bar, gc, x, y + 1, x, y + height - 2);
+		GrLine(bar, gc, x + width - 1, y + 1, x + width - 1, y + height - 2);
+		return;
+	}
 	GrSetGCForeground(gc, top[how]);
 	GrFillRect(bar, gc, x + 1, y + 1, width - 2, height / 2 - 1);
 	GrSetGCForeground(gc, bottom[how]);
@@ -416,9 +468,9 @@ draw_speed(void)
 
 	if (ui_seven) {
 		/* (the bar's own strip behind it again, this part of it) */
-		GrDrawImageFromFile(bar, gc, x, 0, SPEED_WIDTH, BAR_HEIGHT, "/usr/share/bar7.ppm", 0);
+		bar_strip(x, SPEED_WIDTH);
 	} else {
-		GrSetGCForeground(gc, FACE);
+		GrSetGCForeground(gc, bar_tint ? tint_mix(11) : FACE);
 		GrFillRect(bar, gc, x, 3, SPEED_WIDTH, BAR_HEIGHT - 6);
 		bevel(bar, x, 3, SPEED_WIDTH, BAR_HEIGHT - 6, 1);
 	}
@@ -505,10 +557,8 @@ draw_bar(void)
 
 	make_buttons();
 	width = task_width();
-	GrSetGCForeground(gc, ui_seven ? MWRGB(36, 52, 74) : FACE);
-	GrFillRect(bar, gc, 0, 0, screen.cols, BAR_HEIGHT);
+	bar_strip(0, screen.cols);
 	if (ui_seven) {
-		GrDrawImageFromFile(bar, gc, 0, 0, screen.cols, BAR_HEIGHT, "/usr/share/bar7.ppm", 0);
 		GrDrawImageFromFile(bar, gc, 3, 1, 24, 24, LOOK7_SHEET_BAR, GR_IMAGE_CELL(24, open ? 9 : 8));
 	} else {
 		GrSetGCForeground(gc, WHITE);
@@ -566,7 +616,8 @@ draw_bar(void)
 
 		for (j = 0; j < task_count; j++)
 			some |= tasks[j].desk == i;
-		GrSetGCForeground(gc, i == desktop ? (ui_seven ? MWRGB(118, 150, 192) : WHITE) : (ui_seven ? MWRGB(44, 58, 80) : FACE));
+		GrSetGCForeground(gc, i == desktop ? (ui_seven ? (bar_tint ? tint_mix(4) : MWRGB(118, 150, 192)) : WHITE) :
+			(ui_seven ? (bar_tint ? tint_mix(-9) : MWRGB(44, 58, 80)) : bar_tint ? tint_mix(11) : FACE));
 		GrFillRect(bar, gc, x, 5, PAGER_CELL - 1, BAR_HEIGHT - 10);
 		GrSetGCForeground(gc, ui_seven ? MWRGB(20, 28, 40) : SHADOW);
 		GrRect(bar, gc, x, 5, PAGER_CELL - 1, BAR_HEIGHT - 10);
@@ -600,9 +651,9 @@ draw_bar(void)
 	}
 	/* the strip that shows the desktop */
 	if (ui_seven) {
-		GrSetGCForeground(gc, MWRGB(20, 28, 40));
+		GrSetGCForeground(gc, bar_tint ? tint_mix(-12) : MWRGB(20, 28, 40));
 		GrLine(bar, gc, DESK_X, 0, DESK_X, BAR_HEIGHT - 1);
-		GrSetGCForeground(gc, MWRGB(104, 124, 152));
+		GrSetGCForeground(gc, bar_tint ? tint_mix(-2) : MWRGB(104, 124, 152));
 		GrLine(bar, gc, DESK_X + 1, 0, DESK_X + 1, BAR_HEIGHT - 1);
 	} else
 		bevel(bar, DESK_X, 3, DESK_W - 2, BAR_HEIGHT - 6, desk_hidden_count > 0);
@@ -1057,6 +1108,18 @@ ui_launch_any_window(pid_t pid)
 	return shown;
 }
 
+/* Whether the Start menu has this command under Games (a pinned one, the desktop's icon too). */
+static int
+is_game(const char *command)
+{
+	int i;
+
+	for (i = 0; i < item_count; i++)
+		if (!strncmp(items[i].path, "Games/", 6) && !strcmp(items[i].command, command))
+			return 1;
+	return 0;
+}
+
 /* Starts a command for a click: the note says so until a window comes (ui_launch.h), and a
  * failure is reported. */
 static void
@@ -1070,6 +1133,7 @@ start(const char *label, const char *command)
 	ui_launch_will_run(command);
 	ui_launch_begin(label, &icon, GR_EVENT_MASK_CHLD_UPDATE);
 	child = launch(command);
+	ui_launch_maximise = is_game(command);
 	ui_launch_started(child);
 	if (child > 0 && !ui_exec_errno)
 		starting_add(child, label, &icon);
@@ -2208,6 +2272,7 @@ main(int argc, char **argv)
 	gc = GrNewGC();
 	GrSetGCUseBackground(gc, GR_FALSE);
 	restyle();
+	bar_tint = ui_tint_now();	/* (the windows' colour: the bar in it too) */
 	load_items();
 	load_pinned();
 
@@ -2323,6 +2388,10 @@ main(int argc, char **argv)
 			watch_focus();
 		}
 		i = restyle();	/* (a word of memory: Settings may have changed the look) */
+		if (ui_tint_now() != bar_tint) {	/* (or the windows' colour) */
+			bar_tint = ui_tint_now();
+			draw_bar();
+		}
 		if (i) {	/* its icons: the menu's, the pinned programs', the windows' */
 			row_count = 0;
 			top_count = build("", &top);
