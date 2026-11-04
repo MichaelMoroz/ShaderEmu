@@ -798,7 +798,7 @@ index 5055b65..9ad212e 100644
  qpic_t *Draw_PicFromWad (char *name);
  qpic_t *Draw_CachePic (char *path);
 diff --git a/WinQuake/gl_draw.c b/WinQuake/gl_draw.c
-index 25a8007..1d07424 100644
+index 25a8007..278fd06 100644
 --- a/WinQuake/gl_draw.c
 +++ b/WinQuake/gl_draw.c
 @@ -74,6 +74,13 @@ void GL_Bind (int texnum)
@@ -904,7 +904,29 @@ index 25a8007..1d07424 100644
  	glBegin (GL_QUADS);
  	glTexCoord2f (gl->sl, gl->tl);
  	glVertex2f (x, y);
-@@ -838,8 +894,25 @@ void GL_Set2D (void)
+@@ -708,6 +764,21 @@ Draw_ConsoleBackground
+ void Draw_ConsoleBackground (int lines)
+ {
+ 	int y = (vid.height * 3) >> 2;
++#ifdef SHADEREMU
++	/* the screen's size follows the window's (vid_shaderemu.c): the picture covers it, as tall as 4:3
++	   stretches it at most, the rest of it cut off at both sides (a tall window) or at the top and bottom
++	   (a wide one) */
++	glpic_t	*gl = (glpic_t *)conback->data;
++	float	shape = (float)vid.width / vid.height;
++
++	conback->width = vid.width;
++	conback->height = vid.height;
++	gl->sl = 0, gl->sh = 1, gl->tl = 0, gl->th = 1;
++	if (shape > 1.6f)
++		gl->tl = 0.5f - 0.8f / shape, gl->th = 0.5f + 0.8f / shape;
++	else if (shape < 4.0f / 3)
++		gl->sl = 0.5f - shape * 0.375f, gl->sh = 0.5f + shape * 0.375f;
++#endif
+ 
+ 	if (lines > y)
+ 		Draw_Pic(0, lines - vid.height, conback);
+@@ -838,8 +909,25 @@ void GL_Set2D (void)
  	glViewport (glx, gly, glwidth, glheight);
  
  	glMatrixMode(GL_PROJECTION);
@@ -930,7 +952,7 @@ index 25a8007..1d07424 100644
  
  	glMatrixMode(GL_MODELVIEW);
      glLoadIdentity ();
-@@ -1124,6 +1197,10 @@ void GL_Upload8_EXT (byte *data, int width, int height,  qboolean mipmap, qboole
+@@ -1124,6 +1212,10 @@ void GL_Upload8_EXT (byte *data, int width, int height,  qboolean mipmap, qboole
  	if (scaled_height > gl_max_size.value)
  		scaled_height = gl_max_size.value;
  
@@ -941,7 +963,7 @@ index 25a8007..1d07424 100644
  	if (scaled_width * scaled_height > sizeof(scaled))
  		Sys_Error ("GL_LoadTexture: too big");
  
-@@ -1190,6 +1267,17 @@ static	unsigned	trans[640*480];		// FIXME, temporary
+@@ -1190,6 +1282,17 @@ static	unsigned	trans[640*480];		// FIXME, temporary
  	int			p;
  
  	s = width*height;
@@ -959,7 +981,7 @@ index 25a8007..1d07424 100644
  	// if there are no transparent pixels, make it a 3 component
  	// texture even if it was specified as otherwise
  	if (alpha)
-@@ -1250,10 +1338,10 @@ int GL_LoadTexture (char *identifier, int width, int height, byte *data, qboolea
+@@ -1250,10 +1353,10 @@ int GL_LoadTexture (char *identifier, int width, int height, byte *data, qboolea
  			}
  		}
  	}
@@ -2563,7 +2585,7 @@ index 11b5a01..14133c6 100644
  }
  
 diff --git a/WinQuake/gl_screen.c b/WinQuake/gl_screen.c
-index 8a0c096..c6cc8f2 100644
+index 8a0c096..ab8ec17 100644
 --- a/WinQuake/gl_screen.c
 +++ b/WinQuake/gl_screen.c
 @@ -21,6 +21,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
@@ -2603,7 +2625,25 @@ index 8a0c096..c6cc8f2 100644
  	strncpy (scr_centerstring, str, sizeof(scr_centerstring)-1);
  	scr_centertime_off = scr_centertime.value;
  	scr_centertime_start = cl.time;
-@@ -444,7 +449,7 @@ SCR_DrawNet
+@@ -328,6 +333,17 @@ static void SCR_CalcRefdef (void)
+ 
+ 	r_refdef.fov_x = scr_fov.value;
+ 	r_refdef.fov_y = CalcFov (r_refdef.fov_x, r_refdef.vrect.width, r_refdef.vrect.height);
++#ifdef SHADEREMU
++	/* A screen of another shape than 4:3 (a window of any size: vid_shaderemu.c): the view's height sees
++	   what it would on a 4:3 screen as tall, and its width what the window has beside (Hor+), not the
++	   width's 90 degrees squeezed into less height or stretched over more. */
++	if (vid.width * 3 != vid.height * 4) {
++		float	across = r_refdef.vrect.width * (vid.height * 4.0f / 3) / vid.width;
++
++		r_refdef.fov_y = CalcFov (r_refdef.fov_x, across, r_refdef.vrect.height);
++		r_refdef.fov_x = CalcFov (r_refdef.fov_y, r_refdef.vrect.height, r_refdef.vrect.width);
++	}
++#endif
+ 
+ 	scr_vrect = r_refdef.vrect;
+ }
+@@ -444,7 +460,7 @@ SCR_DrawNet
  */
  void SCR_DrawNet (void)
  {
@@ -2612,7 +2652,7 @@ index 8a0c096..c6cc8f2 100644
  		return;
  	if (cls.demoplayback)
  		return;
-@@ -671,7 +676,7 @@ void SCR_BeginLoadingPlaque (void)
+@@ -671,7 +687,7 @@ void SCR_BeginLoadingPlaque (void)
  	scr_drawloading = false;
  
  	scr_disabled_for_loading = true;
@@ -2621,7 +2661,7 @@ index 8a0c096..c6cc8f2 100644
  	scr_fullupdate = 0;
  }
  
-@@ -818,11 +823,72 @@ WARNING: be very careful calling this from elsewhere, because the refresh
+@@ -818,11 +834,72 @@ WARNING: be very careful calling this from elsewhere, because the refresh
  needs almost the entire 256k of stack space!
  ==================
  */
@@ -2694,7 +2734,7 @@ index 8a0c096..c6cc8f2 100644
  	if (block_drawing)
  		return;
  
-@@ -833,7 +899,7 @@ void SCR_UpdateScreen (void)
+@@ -833,7 +910,7 @@ void SCR_UpdateScreen (void)
  
  	if (scr_disabled_for_loading)
  	{
@@ -2703,7 +2743,7 @@ index 8a0c096..c6cc8f2 100644
  		{
  			scr_disabled_for_loading = false;
  			Con_Printf ("load failed.\n");
-@@ -871,8 +937,15 @@ void SCR_UpdateScreen (void)
+@@ -871,8 +948,15 @@ void SCR_UpdateScreen (void)
  //
  	SCR_SetUpToDrawConsole ();
  	
@@ -2719,7 +2759,7 @@ index 8a0c096..c6cc8f2 100644
  	GL_Set2D ();
  
  	//
-@@ -911,6 +984,9 @@ void SCR_UpdateScreen (void)
+@@ -911,6 +995,9 @@ void SCR_UpdateScreen (void)
  		SCR_DrawTurtle ();
  		SCR_DrawPause ();
  		SCR_CheckDrawCenterString ();
@@ -2729,7 +2769,7 @@ index 8a0c096..c6cc8f2 100644
  		Sbar_Draw ();
  		SCR_DrawConsole ();	
  		M_Draw ();
-@@ -921,3 +997,61 @@ void SCR_UpdateScreen (void)
+@@ -921,3 +1008,61 @@ void SCR_UpdateScreen (void)
  	GL_EndRendering ();
  }
  
@@ -3215,10 +3255,52 @@ index b5506e2..5731930 100644
  float	anglemod(float a);
  
 diff --git a/WinQuake/menu.c b/WinQuake/menu.c
-index c3c7ebd..bcf8c4e 100644
+index c3c7ebd..fba19c7 100644
 --- a/WinQuake/menu.c
 +++ b/WinQuake/menu.c
-@@ -507,7 +507,7 @@ void M_Load_Draw (void)
+@@ -109,9 +109,16 @@ M_DrawCharacter
+ Draws one solid graphics character
+ ================
+ */
++#ifdef SHADEREMU
++/* the menus' 320 x 200 in the middle of a screen of any shape (vid_shaderemu.c), across and down */
++#define M_DOWN	((vid.height - 200) >> 1)
++#else
++#define M_DOWN	0
++#endif
++
+ void M_DrawCharacter (int cx, int line, int num)
+ {
+-	Draw_Character ( cx + ((vid.width - 320)>>1), line, num);
++	Draw_Character ( cx + ((vid.width - 320)>>1), line + M_DOWN, num);
+ }
+ 
+ void M_Print (int cx, int cy, char *str)
+@@ -136,12 +143,12 @@ void M_PrintWhite (int cx, int cy, char *str)
+ 
+ void M_DrawTransPic (int x, int y, qpic_t *pic)
+ {
+-	Draw_TransPic (x + ((vid.width - 320)>>1), y, pic);
++	Draw_TransPic (x + ((vid.width - 320)>>1), y + M_DOWN, pic);
+ }
+ 
+ void M_DrawPic (int x, int y, qpic_t *pic)
+ {
+-	Draw_Pic (x + ((vid.width - 320)>>1), y, pic);
++	Draw_Pic (x + ((vid.width - 320)>>1), y + M_DOWN, pic);
+ }
+ 
+ byte identityTable[256];
+@@ -174,7 +181,7 @@ void M_BuildTranslationTable(int top, int bottom)
+ 
+ void M_DrawTransPicTranslate (int x, int y, qpic_t *pic)
+ {
+-	Draw_TransPicTranslate (x + ((vid.width - 320)>>1), y, pic, translationTable);
++	Draw_TransPicTranslate (x + ((vid.width - 320)>>1), y + M_DOWN, pic, translationTable);
+ }
+ 
+ 
+@@ -507,7 +514,7 @@ void M_Load_Draw (void)
  		M_Print (16, 32 + 8*i, m_filenames[i]);
  
  // line cursor
@@ -3227,7 +3309,7 @@ index c3c7ebd..bcf8c4e 100644
  }
  
  
-@@ -523,7 +523,7 @@ void M_Save_Draw (void)
+@@ -523,7 +530,7 @@ void M_Save_Draw (void)
  		M_Print (16, 32 + 8*i, m_filenames[i]);
  
  // line cursor
@@ -3236,7 +3318,7 @@ index c3c7ebd..bcf8c4e 100644
  }
  
  
-@@ -732,13 +732,13 @@ void M_Setup_Draw (void)
+@@ -732,13 +739,13 @@ void M_Setup_Draw (void)
  	M_BuildTranslationTable(setup_top*16, setup_bottom*16);
  	M_DrawTransPicTranslate (172, 72, p);
  
@@ -3253,7 +3335,7 @@ index c3c7ebd..bcf8c4e 100644
  }
  
  
-@@ -1232,7 +1232,7 @@ void M_Options_Draw (void)
+@@ -1232,7 +1239,7 @@ void M_Options_Draw (void)
  #endif
  
  // cursor
@@ -3262,7 +3344,7 @@ index c3c7ebd..bcf8c4e 100644
  }
  
  
-@@ -1439,7 +1439,7 @@ void M_Keys_Draw (void)
+@@ -1439,7 +1446,7 @@ void M_Keys_Draw (void)
  	if (bind_grab)
  		M_DrawCharacter (130, 48 + keys_cursor*8, '=');
  	else
@@ -3271,7 +3353,7 @@ index c3c7ebd..bcf8c4e 100644
  }
  
  
-@@ -1828,10 +1828,10 @@ void M_SerialConfig_Draw (void)
+@@ -1828,10 +1835,10 @@ void M_SerialConfig_Draw (void)
  		M_Print (basex+8, serialConfig_cursor_table[5], "OK");
  	}
  
@@ -3284,7 +3366,7 @@ index c3c7ebd..bcf8c4e 100644
  
  	if (*m_return_reason)
  		M_PrintWhite (basex, 148, m_return_reason);
-@@ -2043,24 +2043,24 @@ void M_ModemConfig_Draw (void)
+@@ -2043,24 +2050,24 @@ void M_ModemConfig_Draw (void)
  	M_DrawTextBox (basex, modemConfig_cursor_table[1]+4, 16, 1);
  	M_Print (basex+8, modemConfig_cursor_table[1]+12, modemConfig_clear);
  	if (modemConfig_cursor == 1)
@@ -3313,7 +3395,7 @@ index c3c7ebd..bcf8c4e 100644
  }
  
  
-@@ -2253,13 +2253,13 @@ void M_LanConfig_Draw (void)
+@@ -2253,13 +2260,13 @@ void M_LanConfig_Draw (void)
  		M_Print (basex+8, lanConfig_cursor_table[1], "OK");
  	}
  
@@ -3330,7 +3412,7 @@ index c3c7ebd..bcf8c4e 100644
  
  	if (*m_return_reason)
  		M_PrintWhite (basex, 148, m_return_reason);
-@@ -2527,7 +2527,7 @@ int	startepisode;
+@@ -2527,7 +2534,7 @@ int	startepisode;
  int	startlevel;
  int maxplayers;
  qboolean m_serverInfoMessage = false;
@@ -3339,7 +3421,7 @@ index c3c7ebd..bcf8c4e 100644
  
  void M_Menu_GameOptions_f (void)
  {
-@@ -2648,11 +2648,11 @@ void M_GameOptions_Draw (void)
+@@ -2648,11 +2655,11 @@ void M_GameOptions_Draw (void)
     }
  
  // line cursor
@@ -3353,7 +3435,7 @@ index c3c7ebd..bcf8c4e 100644
  		{
  			x = (320-26*8)/2;
  			M_DrawTextBox (x, 138, 24, 4);
-@@ -2682,7 +2682,7 @@ void M_NetStart_Change (int dir)
+@@ -2682,7 +2689,7 @@ void M_NetStart_Change (int dir)
  		{
  			maxplayers = svs.maxclientslimit;
  			m_serverInfoMessage = true;
@@ -3362,7 +3444,7 @@ index c3c7ebd..bcf8c4e 100644
  		}
  		if (maxplayers < 2)
  			maxplayers = 2;
-@@ -2837,7 +2837,7 @@ void M_GameOptions_Key (int key)
+@@ -2837,7 +2844,7 @@ void M_GameOptions_Key (int key)
  /* SEARCH MENU */
  
  qboolean	searchComplete = false;
@@ -3371,7 +3453,7 @@ index c3c7ebd..bcf8c4e 100644
  
  void M_Menu_Search_f (void)
  {
-@@ -2872,7 +2872,7 @@ void M_Search_Draw (void)
+@@ -2872,7 +2879,7 @@ void M_Search_Draw (void)
  	if (! searchComplete)
  	{
  		searchComplete = true;
@@ -3380,7 +3462,7 @@ index c3c7ebd..bcf8c4e 100644
  	}
  
  	if (hostCacheCount)
-@@ -2882,7 +2882,7 @@ void M_Search_Draw (void)
+@@ -2882,7 +2889,7 @@ void M_Search_Draw (void)
  	}
  
  	M_PrintWhite ((320/2) - ((22*8)/2), 64, "No Quake servers found");
@@ -3389,7 +3471,7 @@ index c3c7ebd..bcf8c4e 100644
  		return;
  
  	M_Menu_LanConfig_f ();
-@@ -2945,7 +2945,7 @@ void M_ServerList_Draw (void)
+@@ -2945,7 +2952,7 @@ void M_ServerList_Draw (void)
  			sprintf(string, "%-15.15s %-15.15s\n", hostcache[n].name, hostcache[n].map);
  		M_Print (16, 32 + 8*n, string);
  	}

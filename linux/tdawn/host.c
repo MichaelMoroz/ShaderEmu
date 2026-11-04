@@ -21,6 +21,9 @@
 #define REG_INPUT	0x20
 #define REG_CLOCK	0x34
 #define REG_SUBMIT	0x10
+#define FRAME_R		(ONE * 40 / 255)	/* the frame round a picture that is not the window's shape (picture_place) */
+#define FRAME_G		(ONE * 44 / 255)
+#define FRAME_B		(ONE * 52 / 255)
 
 static GR_WINDOW_ID window;
 static int screen_w, screen_h;
@@ -243,8 +246,10 @@ host_cycles(void)
 
 #ifdef SHADEREMU_RA
 #define TITLE "Red Alert"	/* (Red Alert is built with this file too: linux/ralert) */
+#define LOG_NAME "ralert"
 #else
 #define TITLE "Tiberian Dawn"
+#define LOG_NAME "tdawn"
 #endif
 
 /* GPU memory for the large pieces: the display's own framebuffer while nothing uses it (segl.h), else our share. */
@@ -269,7 +274,7 @@ int
 host_open(int width, int height)
 {
 	GR_SCREEN_INFO info;
-	int page, scale;
+	int page, scale, window_w, window_h;
 
 	if (GrOpen() < 0) {
 		fprintf(stderr, "tdawn: no Nano-X server (start one: nano-X -p &)\n");
@@ -283,7 +288,19 @@ host_open(int width, int height)
 	GrGetScreenInfo(&info);
 	for (scale = 4; scale > 1 && (width * scale > info.cols || height * scale > info.rows); scale--)
 		;
-	window = GrNewWindowEx(GR_WM_PROPS_APPWINDOW, TITLE, GR_ROOT_WINDOW_ID, -1, -1, width * scale, height * scale, 0);
+	window_w = width * scale, window_h = height * scale;
+	{
+		/*
+		 * Started maximised (the desktop's SE_MAXIMISED=WxH, the client area of a maximised window): the window is made
+		 * that size, which the window manager maximises with no resize, and a mission is laid out for it from its first
+		 * frame (host_relayout_now; docs/games/tdawn.md, "The window's size").
+		 */
+		const char *max = getenv("SE_MAXIMISED"), *x = max ? strchr(max, 'x') : NULL;
+
+		if (x && atoi(max) > 0 && atoi(x + 1) > 0)
+			window_w = atoi(max), window_h = atoi(x + 1);
+	}
+	window = GrNewWindowEx(GR_WM_PROPS_APPWINDOW, TITLE, GR_ROOT_WINDOW_ID, -1, -1, window_w, window_h, 0);
 	open_scale = scale;
 	/* (not the pointer's moves: pointer_read()) */
 	GrSelectEvents(window, GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_KEY_UP | GR_EVENT_MASK_BUTTON_DOWN |
@@ -304,6 +321,12 @@ host_open(int width, int height)
 	}
 	screen_w = unit_w = width;
 	screen_h = unit_h = height;
+	if (getenv("SE_MAXIMISED") || getenv("TDAWN_INPUT_LOG")) {
+		int w, h;
+
+		seglSize(&w, &h);
+		fprintf(stderr, "%s: the window opened at %dx%d\n", LOG_NAME, w, h);
+	}
 	screen_bytes = 2 * width * height;
 	screen = big_memory(screen_bytes);
 	cursor = seglMemory(CURSOR_MAX * CURSOR_MAX);
@@ -346,29 +369,69 @@ stretched(void)
 }
 
 /*
- * The size the window asks the screen to be laid out at (docs/games/tdawn.md, "The window's size"): a second after its last
- * change of size, the first screen's height (Tiberian Dawn's 200 rows, Red Alert's 400: the sidebar's and the menus' art has
- * no more) and as wide as the window's shape wants at that height, in whole 8s, from the first screen's width up to twice it
- * (Tiberian Dawn's largest view port, 640; Red Alert's 1,280). The screen is then shown scaled by one factor (picture_place):
- * the UI and the controls grow with the window, the map gains columns on a wide window, and a window taller than the game's
- * shape has black above and below. 1 and the size when that is not the screen's now; TDAWN_LAYOUT=stretch: never (the
+ * The size a window wants the screen laid out at (docs/games/tdawn.md, "The window's size"): the window's shape at the
+ * first screen's scale or larger. The scale is the window over the first screen's size (Tiberian Dawn's 320 x 200, Red
+ * Alert's 640 x 400) in the direction where that is the smaller, so the screen has the first one's width or height and
+ * is longer the other way: a wider window gets more map to the left of the sidebar, a taller one more map rows and a
+ * longer sidebar. The width is in whole 8s, the height in whole 2s, and the screen is shown over the whole window
+ * (picture_place: stretched by the rounding, under 1%). At most twice the first width (Tiberian Dawn's largest view port)
+ * and three times its height: a window of a stranger shape is shown scaled by one factor in a frame.
+ */
+static void
+layout_for(int window_w, int window_h, int *width, int *height)
+{
+	int w = unit_w, h = unit_h;
+
+	if (window_w > 0 && window_h > 0) {
+		if ((long long)window_w * unit_h <= (long long)window_h * unit_w)
+			h = (int)(((long long)window_h * unit_w + window_w) / (2LL * window_w)) * 2;
+		else
+			w = (int)(((long long)window_w * unit_h + 4LL * window_h) / (8LL * window_h)) * 8;
+	}
+	*width = w < unit_w ? unit_w : w > 2 * unit_w ? 2 * unit_w : w;
+	*height = h < unit_h ? unit_h : h > 3 * unit_h ? 3 * unit_h : h;
+}
+
+static int
+window_layout(int *width, int *height)
+{
+	int window_w, window_h;
+
+	seglSize(&window_w, &window_h);
+	layout_for(window_w, window_h, width, height);
+	return *width != screen_w || *height != screen_h;
+}
+
+/*
+ * The size the window asks the screen to be laid out at (layout_for), in a mission: 1 and the size when that is not the
+ * screen's size now. While the window is being resized the answer waits for a second after its last change; otherwise it
+ * is at once (a mission begun after a screen of the first size: host_relayout_now). TDAWN_LAYOUT=stretch: never (the
  * picture stretched over the window, the way before).
  */
 int
 host_relayout_wanted(int *width, int *height)
 {
-	int w, h;
-
-	if (stretched() || !sized_at || (int)(host_ms() - sized_at) < 1000)
+	if (stretched() || !screen || (sized_at && (int)(host_ms() - sized_at) < 1000))
 		return 0;
 	sized_at = 0;
-	if (sized_w <= 0 || sized_h <= 0)
+	return window_layout(width, height);
+}
+
+/* The same, now: as a mission begins, before its first frame (the window's size is known from its start: SE_MAXIMISED). */
+int
+host_relayout_now(int *width, int *height)
+{
+	if (stretched() || !screen)
 		return 0;
-	h = unit_h;
-	w = (sized_w * unit_h / sized_h + 4) & ~7;
-	w = w < unit_w ? unit_w : w > 2 * unit_w ? 2 * unit_w : w;
-	*width = w, *height = h;
-	return w != screen_w || h != screen_h;
+	sized_at = 0;
+	return window_layout(width, height);
+}
+
+/* The first screen's size, for what is drawn at it whatever the window (the menus, the score, the movies). */
+void
+host_first_size(int *width, int *height)
+{
+	*width = unit_w, *height = unit_h;
 }
 
 /* The pages at another size, cleared (the game draws them again whole): GPU memory for them when the pages have less. */
@@ -577,9 +640,9 @@ whole_window(int origin_x, int origin_y)
 	seglSize(&width, &height);
 	picture_place();
 	if (pic_w != width || pic_h != height) {
-		/* black round the picture: its viewport's draws reach only its own part */
+		/* a plain frame round the picture, in every list (its viewport's draws reach only its own part) */
 		glViewport(0, 0, width, height);
-		glClearColorx(0, 0, 0, ONE);
+		glClearColorx(FRAME_R, FRAME_G, FRAME_B, ONE);
 		glClear(GL_COLOR_BUFFER_BIT);
 	}
 	/* (GL's rows count from the bottom) */
@@ -1278,8 +1341,10 @@ host_scene_begin(int origin_x, int origin_y)
 	whole_window(origin_x, origin_y);
 	seglKeptMatrices();
 	glLoadIdentity();
-	glClearColorx(0, 0, 0, ONE);
-	glClear(GL_COLOR_BUFFER_BIT);
+	if (pic_x == 0 && pic_y == 0) {	/* (else whole_window cleared it to the frame's colour) */
+		glClearColorx(0, 0, 0, ONE);
+		glClear(GL_COLOR_BUFFER_BIT);
+	}
 	glColorKeySE(0);
 	scene_built = 1;
 }
@@ -1914,22 +1979,40 @@ window_origin(void)
 	origin_y = y;
 }
 
-/* The screen's place in the window now (pic_x, pic_y, pic_w, pic_h): scaled by one factor, as large as fits, in the middle. */
+/*
+ * The screen's place in the window now (pic_x, pic_y, pic_w, pic_h): the whole window when the screen is laid out for it
+ * (layout_for); a screen of the first size (a menu, the score, a movie: pictures of one size) stretched over the window too
+ * when the window's shape is within a fifth of its own; otherwise scaled by one factor, as large as fits, in the middle,
+ * a plain frame round it (whole_window: for the second while a mission waits to be laid out again after a resize, and
+ * for those pictures in a window of another shape).
+ */
 static void
 picture_place(void)
 {
-	int width, height;
+	int width, height, w, h;
 
 	seglSize(&width, &height);
 	width = width > 0 ? width : 1, height = height > 0 ? height : 1;
 	if (stretched() || !screen_w || !screen_h) {
 		pic_x = pic_y = 0, pic_w = width, pic_h = height;
-	} else if (width * screen_h <= height * screen_w) {	/* (a window and a screen are far below 32,768 a side) */
+		return;
+	}
+	layout_for(width, height, &w, &h);
+	if (w == screen_w && h == screen_h) {
+		pic_x = pic_y = 0, pic_w = width, pic_h = height;
+		return;
+	}
+	if (screen_w == unit_w && screen_h == unit_h && 5LL * width * screen_h <= 6LL * height * screen_w &&
+		5LL * height * screen_w <= 6LL * width * screen_h) {
+		pic_x = pic_y = 0, pic_w = width, pic_h = height;
+		return;
+	}
+	if ((long long)width * screen_h <= (long long)height * screen_w) {
 		pic_w = width;
-		pic_h = width * screen_h / screen_w;
+		pic_h = (int)((long long)width * screen_h / screen_w);
 	} else {
 		pic_h = height;
-		pic_w = height * screen_w / screen_h;
+		pic_w = (int)((long long)height * screen_w / screen_h);
 	}
 	pic_w = pic_w > 0 ? pic_w : 1, pic_h = pic_h > 0 ? pic_h : 1;
 	pic_x = (width - pic_w) / 2;

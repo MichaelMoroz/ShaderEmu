@@ -28,7 +28,7 @@
 #define SAVED "/persistence/micropolis"	/* kept by the host when asked (docs/system/persist.md) */
 #define BAR 22			/* the menus along the top */
 #define STATUS 40		/* two lines at the bottom: the city's numbers and the last message */
-#define PANEL 80		/* the tools, left of the map */
+#define PANEL panel		/* the tools, left of the map: 80 wide unless the window is too low for two columns (lay_out) */
 #define TILE 16
 #define RING 64			/* cells of the map layer each way: 1,024 pixels, which wraps */
 #define ONE 65536
@@ -268,11 +268,22 @@ clamp_scroll(void)
 
 /* The window's parts for its size (docs/games/micropolis.md, "The windows"): the map area grows with the window up to
  * MAP_MOST each way, the menus above it and the two lines under it as wide as the window. */
+static int panel = 80, tool_columns = 2, demand_right;	/* the tools' panel: its width, its columns, the demand beside them */
+
 static void
 lay_out(int w, int h)
 {
-	wide = w < 400 ? 400 : w, high = h < 300 ? 300 : h;
+	wide = w < 200 ? 200 : w, high = h < 160 ? 160 : h;
 	view_w = wide, view_h = high - BAR - STATUS;
+	/* the tools two to a row with the demand under them when the map is tall enough (6 + 8 rows of 36, and 116 for the
+	 * demand), else in more columns with the demand beside them: every tool is in the window at any height */
+	for (tool_columns = 2; tool_columns < MP_TOOLS; tool_columns++) {
+		int tools_h = 6 + (MP_TOOLS + tool_columns - 1) / tool_columns * 36;
+
+		if ((demand_right = tools_h + 116 > view_h) == 0 || tools_h <= view_h - 6)
+			break;
+	}
+	panel = 8 + tool_columns * 36 + (demand_right ? 66 : 0);
 	view_w = view_w > PANEL + MAP_MOST ? PANEL + MAP_MOST : view_w;
 	view_h = view_h > MAP_MOST ? MAP_MOST : view_h;
 	map_w = view_w - PANEL, map_h = view_h;
@@ -364,20 +375,24 @@ tool_at(int x, int y)
 {
 	int column = (x - 6) / 36, row = (y - 6) / 36;
 
-	if (x < 6 || y < 6 || column > 1 || row >= MP_TOOLS / 2 || (x - 6) % 36 >= 32 || (y - 6) % 36 >= 32)
+	if (x < 6 || y < 6 || column >= tool_columns || row * tool_columns + column >= MP_TOOLS || (x - 6) % 36 >= 32 || (y - 6) % 36 >= 32)
 		return -1;
-	return row * 2 + column;
+	return row * tool_columns + column;
 }
 
 static void
 draw_panel(void)
 {
 	static const unsigned colours[3] = {0x00C000, 0x4060FF, 0xE0C000};
-	int demand[3] = {shown.residential, shown.commercial, shown.industrial}, t, k, middle = 6 + MP_TOOLS / 2 * 36 + 60;
+	int demand[3] = {shown.residential, shown.commercial, shown.industrial}, t, k;
+	int middle = 6 + (MP_TOOLS + tool_columns - 1) / tool_columns * 36 + 60, left = 0, most = 50;
 
+	if (demand_right)	/* beside the tools, in the middle of the panel's height */
+		left = 8 + tool_columns * 36, middle = view_h / 2, most = view_h / 2 - 8 < 50 ? view_h / 2 - 8 : 50;
 	rect(0, 0, PANEL, view_h, 0xC0C0C0);
 	for (t = 0; t < MP_TOOLS; t++) {
-		int x = 6 + t % 2 * 36, y = 6 + t / 2 * 36, lit = t == tool, texels[4] = {0, (2 * t + lit) * 32, 1024, (2 * t + lit + 1) * 32};
+		int x = 6 + t % tool_columns * 36, y = 6 + t / tool_columns * 36, lit = t == tool;
+		int texels[4] = {0, (2 * t + lit) * 32, 1024, (2 * t + lit + 1) * 32};
 		GLfixed box[4];
 
 		box_of(x, y, x + 32, y + 32, box);
@@ -386,11 +401,11 @@ draw_panel(void)
 			outline(x - 2, y - 2, x + 34, y + 34, 0x000080);
 	}
 	/* residential, commercial and industrial demand: up from the line is wanted */
-	rect(8, middle, PANEL - 8, middle + 1, 0x404040);
+	rect(left + 8, middle, left + 72, middle + 1, 0x404040);
 	for (k = 0; k < 3; k++) {
-		int h = demand[k] * 50 / 2000, x = 14 + k * 20;
+		int h = demand[k] * most / 2000, x = left + 14 + k * 20;
 
-		h = h > 50 ? 50 : h < -50 ? -50 : h;
+		h = h > most ? most : h < -most ? -most : h;
 		if (h > 0)
 			rect(x, middle - h, x + 12, middle, colours[k]);
 		else if (h < 0)
@@ -1282,6 +1297,13 @@ main(int argc, char **argv)
 	screen_w = info.cols, screen_h = info.rows;
 	wide = info.cols - 20 < 880 ? info.cols - 20 : 880;
 	high = info.rows - 70 < 640 ? info.rows - 70 : 640;
+	/* the desktop starts it maximised (linux/apps/ui_launch.h): the window at that size from the start, laid out for it */
+	if ((text = getenv("SE_MAXIMISED")) != NULL) {
+		int w, h;
+
+		if (sscanf(text, "%dx%d", &w, &h) == 2 && w >= 200 && h >= 160)
+			wide = w, high = h;
+	}
 	lay_out(wide, high);
 	ui_init();
 	/* (resizable: a larger window shows more of the map, lay_out) */
@@ -1331,7 +1353,8 @@ main(int argc, char **argv)
 		int x, y;
 
 		ui_window_origin(window, &x, &y);
-		printf("nxmicropolis: window at %d,%d, the map at %d,%d; %d sounds\n", x, y, x + PANEL, y + BAR, sound_count);
+		printf("nxmicropolis: window at %d,%d, the map at %d,%d; %d sounds; opened %dx%d\n", x, y, x + PANEL, y + BAR, sound_count,
+		       wide, high);
 		fflush(stdout);
 	}
 	next_tick = report_at = now_ms();

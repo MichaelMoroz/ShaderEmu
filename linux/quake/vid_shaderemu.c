@@ -342,6 +342,36 @@ static void gamma_palette (unsigned char *palette)
 	}
 }
 
+static int	given_conwidth, given_conheight;	/* -conwidth, -conheight */
+
+/*
+ * The 2D screen for a window of width x height: half the window's size from 640 across, so that its text can
+ * be read, never under 320 x 200 (the menus' and the status bar's), and always the window's shape, so nothing
+ * is stretched: a short wide window has a wider screen to be 200 high, a tall one a taller screen to be 320
+ * wide. The view is the window's shape too, its field of view the height's of a 4:3 screen (gl_screen.c).
+ * Made when the window opens and again when its size changes (Sys_SendKeyEvents).
+ */
+static void screen_size (int width, int height)
+{
+	int	w = given_conwidth ? given_conwidth : width >= 640 ? width / 2 : width;
+
+	if (height < 1 || width < 1)
+		return;
+	if (!given_conwidth && w * height < 200 * width)
+		w = (200 * width + height - 1) / height;
+	w &= 0xfff8;
+	if (w < 320)
+		w = 320;
+	vid.conwidth = w;
+	vid.conheight = given_conheight ? given_conheight : vid.conwidth * height / width;
+	if (vid.conheight < 200)
+		vid.conheight = 200;
+	vid.width = vid.conwidth;
+	vid.height = vid.conheight;
+	vid.aspect = ((float)vid.height / (float)vid.width) * (320.0 / 240.0);
+	vid.recalc_refdef = 1;
+}
+
 void VID_Init (unsigned char *palette)
 {
 	GR_SCREEN_INFO	info;
@@ -360,6 +390,14 @@ void VID_Init (unsigned char *palette)
 	if (GrOpen () < 0)
 		Sys_Error ("no Nano-X server (start one: nano-X -p &)");
 	GrGetScreenInfo (&info);
+	/* the desktop starts it maximised (SE_MAXIMISED, linux/apps/ui_launch.h): the window is made at that
+	   size and the screen laid out for it from the first frame, so the maximise changes nothing */
+	if (!COM_CheckParm ("-width") && !COM_CheckParm ("-height") && (s = getenv ("SE_MAXIMISED")) != NULL) {
+		int	w, h;
+
+		if (sscanf (s, "%dx%d", &w, &h) == 2 && w >= 160 && h >= 120)
+			width = w, height = h;
+	}
 	if ((i = COM_CheckParm ("-width")) != 0)
 		width = atoi (com_argv[i + 1]);
 	if ((i = COM_CheckParm ("-height")) != 0)
@@ -387,22 +425,11 @@ void VID_Init (unsigned char *palette)
 		Sys_Error ("this machine has no GPU");
 	opened = 1;
 
-	/* the 2D screen is half the window's size from 640 across, so that its text can be read */
 	if ((i = COM_CheckParm ("-conwidth")) != 0)
-		vid.conwidth = Q_atoi (com_argv[i + 1]);
-	else
-		vid.conwidth = width >= 640 ? width / 2 : width;
-	vid.conwidth &= 0xfff8;
-	if (vid.conwidth < 320)
-		vid.conwidth = 320;
-	vid.conheight = vid.conwidth * height / width;
+		given_conwidth = Q_atoi (com_argv[i + 1]);
 	if ((i = COM_CheckParm ("-conheight")) != 0)
-		vid.conheight = Q_atoi (com_argv[i + 1]);
-	if (vid.conheight < 200)
-		vid.conheight = 200;
-	vid.width = vid.conwidth;
-	vid.height = vid.conheight;
-	vid.aspect = ((float)vid.height / (float)vid.width) * (320.0 / 240.0);
+		given_conheight = Q_atoi (com_argv[i + 1]);
+	screen_size (width, height);
 	vid.numpages = 2;
 
 	if ((s = getenv ("QUAKE_HOLD")) != NULL)
@@ -417,6 +444,7 @@ void VID_Init (unsigned char *palette)
 	gamma_palette (palette);
 	VID_SetPalette (palette);
 	Con_SafePrintf ("Video mode %dx%d initialized.\n", width, height);
+	Con_SafePrintf ("quake: the window opened %dx%d: the screen %dx%d\n", width, height, vid.width, vid.height);
 	vid.recalc_refdef = 1;
 }
 
@@ -519,9 +547,13 @@ void Sys_SendKeyEvents (void)
 			break;
 		case GR_EVENT_TYPE_UPDATE:
 			if (e.update.utype == GR_UPDATE_SIZE) {
+				int	w = 0, h = 0;
+
 				SE_SceneOwn ();
 				seglWindowChanged ();
-				vid.recalc_refdef = 1;
+				seglSize (&w, &h);
+				screen_size (w, h);	/* the 2D screen and the view the window's new shape */
+				Con_Printf ("quake: the window is %dx%d: the screen %dx%d\n", w, h, vid.width, vid.height);
 			}
 			break;
 		case GR_EVENT_TYPE_BUTTON_DOWN:

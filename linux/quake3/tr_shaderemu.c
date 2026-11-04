@@ -431,7 +431,9 @@ static void window_open (void)
 	if (GrOpen () < 0)
 		ri.Error (ERR_FATAL, "no Nano-X server (start one: nano-X -p &)");
 	GrGetScreenInfo (&info);
-	if ((s = getenv ("QUAKE3_SIZE")) != NULL)
+	/* the desktop starts it maximised (SE_MAXIMISED, linux/apps/ui_launch.h): the window is made at that size and
+	   the game's screen with it (RE_BeginRegistration), so the maximise changes nothing; QUAKE3_SIZE says more */
+	if ((s = getenv ("QUAKE3_SIZE")) != NULL || (s = getenv ("SE_MAXIMISED")) != NULL)
 		sscanf (s, "%dx%d", &width, &height);
 	if (width > info.cols)
 		width = info.cols;

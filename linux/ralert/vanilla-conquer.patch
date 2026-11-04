@@ -1,5 +1,5 @@
 diff --git a/common/fading.cpp b/common/fading.cpp
-index 690e0d1..5873763 100644
+index b755585..c21f7f7 100644
 --- a/common/fading.cpp
 +++ b/common/fading.cpp
 @@ -35,6 +35,25 @@ void* Build_Fading_Table(void const* palette, void* dest, int color, int frac)
@@ -89,7 +89,7 @@ index 690e0d1..5873763 100644
          const unsigned char* fade = pal + 3; // Skip first entry.
          unsigned matchcolor = color;
          unsigned matchvalue = (unsigned)(-1);
-@@ -80,6 +153,7 @@ void* Build_Fading_Table(void const* palette, void* dest, int color, int frac)
+@@ -86,6 +159,7 @@ void* Build_Fading_Table(void const* palette, void* dest, int color, int frac)
              }
          }
  
@@ -98,10 +98,10 @@ index 690e0d1..5873763 100644
      }
  
 diff --git a/common/mixfile.h b/common/mixfile.h
-index 109c35f..29e2ec5 100644
+index ba5543f..1d29b2d 100644
 --- a/common/mixfile.h
 +++ b/common/mixfile.h
-@@ -620,7 +620,12 @@ template <class T, class TCRC> bool MixFileClass<T, TCRC>::Cache(Buffer const* b
+@@ -650,7 +650,12 @@ template <class T, class TCRC> bool MixFileClass<T, TCRC>::Cache(Buffer const* b
          **	stream so that the actual SHA can be compared with the attached one.
          */
          SHAStraw sha;
@@ -115,7 +115,7 @@ index 109c35f..29e2ec5 100644
              sha.Get_From(fstraw);
              straw = &sha;
          }
-@@ -651,7 +656,7 @@ template <class T, class TCRC> bool MixFileClass<T, TCRC>::Cache(Buffer const* b
+@@ -681,7 +686,7 @@ template <class T, class TCRC> bool MixFileClass<T, TCRC>::Cache(Buffer const* b
          **	compare it to the generated digest. If they don't match, then
          **	return with the "failure to cache" error code.
          */
@@ -125,7 +125,7 @@ index 109c35f..29e2ec5 100644
              char digest2[20];
              sha.Result(digest2);
 diff --git a/common/vector.h b/common/vector.h
-index cd86400..1a64467 100644
+index ff271fd..00f0da9 100644
 --- a/common/vector.h
 +++ b/common/vector.h
 @@ -355,6 +355,15 @@ public:
@@ -145,7 +145,7 @@ index cd86400..1a64467 100644
      void Set(void);
  
 diff --git a/common/vqadrawer.cpp b/common/vqadrawer.cpp
-index cd3b404..37e96ad 100644
+index f0d1108..684871c 100644
 --- a/common/vqadrawer.cpp
 +++ b/common/vqadrawer.cpp
 @@ -9,6 +9,12 @@
@@ -230,7 +230,7 @@ index cd3b404..37e96ad 100644
  
      vqabuf->Drawer.LastFrameNum = curframe->FrameNum;
      vqabuf->Flipper.CurFrame = curframe;
-@@ -304,6 +353,12 @@ int VQA_SelectFrame(VQAHandle* handle)
+@@ -376,6 +425,12 @@ int VQA_SelectFrame(VQAHandle* handle)
                      config->DrawerCallback(nullptr, curframe->FrameNum);
                  }
  
@@ -243,7 +243,7 @@ index cd3b404..37e96ad 100644
                  curframe->Flags = 0;
                  curframe = curframe->Next;
                  vqabuf->Drawer.CurFrame = curframe;
-@@ -342,4 +397,10 @@ void VQA_PrepareFrame(VQAData* vqabuf)
+@@ -414,4 +469,10 @@ void VQA_PrepareFrame(VQAData* vqabuf)
          LCW_Uncompress(&curframe->Pointers[curframe->PtrOffset], curframe->Pointers, vqabuf->MaxPtrSize);
          curframe->Flags &= ~0x10;
      }
@@ -890,7 +890,7 @@ index a29eb2b..a3a94a5 100644
  #endif
 \ No newline at end of file
 diff --git a/redalert/conquer.cpp b/redalert/conquer.cpp
-index 4825ba4..09eadc5 100644
+index 4825ba4..0e27754 100644
 --- a/redalert/conquer.cpp
 +++ b/redalert/conquer.cpp
 @@ -125,6 +125,569 @@ bool Map_Edit_Loop(void);
@@ -1463,7 +1463,7 @@ index 4825ba4..09eadc5 100644
  #ifdef CHEAT_KEYS
  void Dump_Heap_Pointers(void);
  void Error_In_Heap_Pointers(char* string);
-@@ -1705,6 +2268,42 @@ static void Sync_Delay(void)
+@@ -1705,6 +2268,68 @@ static void Sync_Delay(void)
  extern void Check_For_Focus_Loss(void);
  void Reallocate_Big_Shape_Buffer(void);
  
@@ -1475,7 +1475,9 @@ index 4825ba4..09eadc5 100644
 +*/
 +extern bool ShaderEmu_Pages(int w, int h);
 +extern "C" int host_relayout_wanted(int* width, int* height);
-+static void ShaderEmu_Relayout(int w, int h)
++extern "C" int host_relayout_now(int* width, int* height);
++extern "C" void host_first_size(int* width, int* height);
++static void ShaderEmu_Relayout(int w, int h, bool mission = true)
 +{
 +    int old_w = SeenBuff.Get_Width(), old_h = SeenBuff.Get_Height();
 +
@@ -1496,17 +1498,41 @@ index 4825ba4..09eadc5 100644
 +    WindowList[0][WINDOWWIDTH] = SeenBuff.Get_Width();
 +    WindowList[0][WINDOWHEIGHT] = SeenBuff.Get_Height();
 +    Map.ShaderEmu_Layout();
-+    Map.Init_IO();
++    if (mission) {
++        Map.Init_IO();
++    }
 +    Map.Flag_To_Redraw(true);
 +    Show_Mouse();
 +    fprintf(stderr, "ralert: the screen laid out at %dx%d (the view %dx%d)\n", w, h, WindowList[WINDOW_TACTICAL][WINDOWWIDTH],
 +            WindowList[WINDOW_TACTICAL][WINDOWHEIGHT]);
 +}
 +
++/*
++** ShaderEmu: a mission is laid out at the window's size from its first frame (the end of Start_Scenario), and what is drawn
++** at the first screen's size whatever the window (the main menu, the score, a movie: Select_Game, Do_Win, Do_Lose, Play_Movie)
++** goes back to that size first (docs/games/ralert.md, "The window's size"). Neither does anything at the default size.
++*/
++void ShaderEmu_Mission_Size(void)
++{
++    int w, h;
++    if (host_relayout_now(&w, &h)) {
++        ShaderEmu_Relayout(w, h);
++    }
++}
++
++void ShaderEmu_First_Size(void)
++{
++    int w, h;
++    host_first_size(&w, &h);
++    if (SeenBuff.Get_Width() != w || SeenBuff.Get_Height() != h) {
++        ShaderEmu_Relayout(w, h, false);
++    }
++}
++
  bool Main_Loop()
  {
      KeyNumType input; // Player input.
-@@ -1712,6 +2311,22 @@ bool Main_Loop()
+@@ -1712,6 +2337,22 @@ bool Main_Loop()
      int y;
      int framedelay;
  
@@ -1529,7 +1555,7 @@ index 4825ba4..09eadc5 100644
      Mono_Set_Cursor(0, 0);
  
      if (!GameActive)
-@@ -1759,7 +2374,12 @@ bool Main_Loop()
+@@ -1759,7 +2400,12 @@ bool Main_Loop()
      **	If there is no theme playing, but it looks like one is required, then start one
      **	playing. This is usually the symptom of there being no transition score.
      */
@@ -1542,7 +1568,7 @@ index 4825ba4..09eadc5 100644
          Theme.Queue_Song(THEME_PICK_ANOTHER);
      }
  
-@@ -1790,18 +2410,42 @@ bool Main_Loop()
+@@ -1790,18 +2436,42 @@ bool Main_Loop()
              FrameTimer = Options.GameSpeed + (PlayerPtr->Difficulty == DIFF_EASY ? 1 : 0);
          }
      }
@@ -1586,7 +1612,7 @@ index 4825ba4..09eadc5 100644
          }
      }
  
-@@ -1826,7 +2470,19 @@ bool Main_Loop()
+@@ -1826,7 +2496,19 @@ bool Main_Loop()
      /*
      **	AI logic operations are performed here.
      */
@@ -1607,7 +1633,7 @@ index 4825ba4..09eadc5 100644
      TimeQuake = false;
  #ifdef FIXIT_CSII //	checked - ajw 9/28/98
      if (!PendingTimeQuake) {
-@@ -1839,8 +2495,24 @@ bool Main_Loop()
+@@ -1839,8 +2521,24 @@ bool Main_Loop()
      **	a message has expired & been removed, and the entire map must be updated.
      */
      if (Session.Messages.Manage()) {
@@ -1634,7 +1660,7 @@ index 4825ba4..09eadc5 100644
      }
  
      //
-@@ -1893,6 +2565,9 @@ bool Main_Loop()
+@@ -1893,6 +2591,9 @@ bool Main_Loop()
          PlayerRestarts = false;
          Map.Help_Text(TXT_NONE);
          Set_Video_Cursor_Clip(false);
@@ -1644,7 +1670,18 @@ index 4825ba4..09eadc5 100644
          Do_Restart();
          Set_Video_Cursor_Clip(true);
          return (!GameActive);
-@@ -2442,6 +3117,25 @@ void Play_Movie(char const* name, ThemeType theme, bool clrscrn, bool immediate)
+@@ -2389,6 +3090,10 @@ void Play_Movie(char const* name, ThemeType theme, bool clrscrn, bool immediate)
+ #ifdef CHEAT_KEYS
+ // Mono_Printf("b\n");
+ #endif // CHEAT_KEYS
++#ifdef SHADEREMU
++    void ShaderEmu_First_Size(void);
++    ShaderEmu_First_Size();
++#endif
+ 
+     if (name) {
+         char fullname[_MAX_FNAME + _MAX_EXT];
+@@ -2442,6 +3147,25 @@ void Play_Movie(char const* name, ThemeType theme, bool clrscrn, bool immediate)
              AnimControl.ImageBuf = (unsigned char*)SysMemPage.Get_Offset();
          }
  #endif
@@ -1670,7 +1707,7 @@ index 4825ba4..09eadc5 100644
  
          if (!Debug_Quiet && Get_Digi_Handle() != -1) {
              AnimControl.OptionFlags |= VQAOPTF_AUDIO;
-@@ -2465,8 +3159,30 @@ void Play_Movie(char const* name, ThemeType theme, bool clrscrn, bool immediate)
+@@ -2465,8 +3189,30 @@ void Play_Movie(char const* name, ThemeType theme, bool clrscrn, bool immediate)
                  // Set_Palette(BlackPalette);
                  SysMemPage.Clear();
                  InMovie = true;
@@ -1701,7 +1738,7 @@ index 4825ba4..09eadc5 100644
                  // Resume_Audio_Thread();
                  InMovie = false;
  #ifdef MOVIE640
-@@ -2863,6 +3579,70 @@ void CC_Draw_Pip(const ObjectClass* object,
+@@ -2863,6 +3609,70 @@ void CC_Draw_Pip(const ObjectClass* object,
   * HISTORY:                                                                                    *
   *   02/21/1995 JLB : Created.                                                                 *
   *=============================================================================================*/
@@ -1772,7 +1809,7 @@ index 4825ba4..09eadc5 100644
  void CC_Draw_Shape(void const* shapefile,
                     int shapenum,
                     int x,
-@@ -2885,6 +3665,22 @@ void CC_Draw_Shape(void const* shapefile,
+@@ -2885,6 +3695,22 @@ void CC_Draw_Shape(void const* shapefile,
      if ((flags & SHAPE_FADING) && (!fadingdata)) {
          fadingdata = DisplayClass::FadingShade;
      }
@@ -1795,7 +1832,7 @@ index 4825ba4..09eadc5 100644
  
      static unsigned char* _xbuffer = 0;
  
-@@ -3044,6 +3840,38 @@ Rect const Shape_Dimensions(void const* shapedata, int shapenum)
+@@ -3044,6 +3870,38 @@ Rect const Shape_Dimensions(void const* shapedata, int shapenum)
      int width = Get_Build_Frame_Width(shapedata);
      int height = Get_Build_Frame_Height(shapedata);
  
@@ -1834,7 +1871,7 @@ index 4825ba4..09eadc5 100644
      rect.X = 0;
      rect.Y = 0;
      int xlimit = width - 1;
-@@ -3185,6 +4013,9 @@ extern GraphicBufferClass VQ640;
+@@ -3185,6 +4043,9 @@ extern GraphicBufferClass VQ640;
  extern bool IsVQ640;
  int VQ_Call_Back(unsigned char*, int)
  {
@@ -1844,7 +1881,7 @@ index 4825ba4..09eadc5 100644
  #ifdef REMASTER_BUILD
      return 0;
  #else
-@@ -3194,6 +4025,11 @@ int VQ_Call_Back(unsigned char*, int)
+@@ -3194,6 +4055,11 @@ int VQ_Call_Back(unsigned char*, int)
          Keyboard->Clear();
      }
      Check_VQ_Palette_Set();
@@ -1856,7 +1893,7 @@ index 4825ba4..09eadc5 100644
  #ifdef MOVIE640
      if (IsVQ640) {
          VQ640.Blit(SeenBuff);
-@@ -3204,6 +4040,9 @@ int VQ_Call_Back(unsigned char*, int)
+@@ -3204,6 +4070,9 @@ int VQ_Call_Back(unsigned char*, int)
      Interpolate_2X_Scale(&SysMemPage, &SeenBuff, NULL);
  #endif
      Frame_Limiter();
@@ -1866,7 +1903,7 @@ index 4825ba4..09eadc5 100644
  
      if ((BreakoutAllowed || Debug_Flag) && key == KN_ESC) {
          Keyboard->Clear();
-@@ -4501,6 +5340,21 @@ void Shake_The_Screen(int shakes, HousesType house)
+@@ -4501,6 +5370,21 @@ void Shake_The_Screen(int shakes, HousesType house)
      }
  #else
      shakes += shakes;
@@ -3568,7 +3605,7 @@ index 708451b..d30fb8d 100644
  
      // Factory controls.
 diff --git a/redalert/init.cpp b/redalert/init.cpp
-index b6b00d7..d28dac0 100644
+index b6b00d7..3b08f40 100644
 --- a/redalert/init.cpp
 +++ b/redalert/init.cpp
 @@ -57,6 +57,9 @@
@@ -3581,7 +3618,18 @@ index b6b00d7..d28dac0 100644
  #include "language.h"
  #include "msgbox.h"
  #include "loaddlg.h"
-@@ -600,6 +603,13 @@ bool Select_Game(bool fade)
+@@ -430,6 +433,10 @@ bool Init_Game(int, char*[])
+  *=============================================================================================*/
+ bool Select_Game(bool fade)
+ {
++#ifdef SHADEREMU
++    void ShaderEmu_First_Size(void);
++    ShaderEmu_First_Size();
++#endif
+     //	Enums in Select_Game() must match order of buttons in Main_Menu().
+ #ifdef FIXIT_VERSION_3
+     enum
+@@ -600,6 +607,13 @@ bool Select_Game(bool fade)
              /*
              **	Display menu and fetch selection from player.
              */
@@ -3595,7 +3643,7 @@ index b6b00d7..d28dac0 100644
              if (Special.IsFromInstall)
                  selection = SEL_START_NEW_GAME;
  
-@@ -758,7 +768,13 @@ bool Select_Game(bool fade)
+@@ -758,7 +772,13 @@ bool Select_Game(bool fade)
                      } else {
  #endif
  #ifdef FIXIT_VERSION_3
@@ -3609,7 +3657,7 @@ index b6b00d7..d28dac0 100644
                          case 2:
                              Scen.Set_Scenario_Name("SCU01EA.INI");
                              break;
-@@ -1827,6 +1843,12 @@ void Init_Random(void)
+@@ -1827,6 +1847,12 @@ void Init_Random(void)
          /*
          ** Set the optional user-specified seed
          */
@@ -4531,10 +4579,21 @@ index 36a2e3c..962ee56 100644
      **	The Map.
      */
 diff --git a/redalert/scenario.cpp b/redalert/scenario.cpp
-index 3738c61..c3034b0 100644
+index 3738c61..b4442d0 100644
 --- a/redalert/scenario.cpp
 +++ b/redalert/scenario.cpp
-@@ -862,8 +862,24 @@ void Clear_Scenario(void)
+@@ -409,6 +409,10 @@ bool Start_Scenario(char* name, bool briefing)
+         Play_Movie(Scen.ActionMovie, Scen.TransitTheme);
+     }
+ 
++#ifdef SHADEREMU
++    void ShaderEmu_Mission_Size(void);
++    ShaderEmu_Mission_Size(); // (docs/games/ralert.md, "The window's size")
++#endif
+     if (Scen.TransitTheme == THEME_NONE) {
+         Theme.Queue_Song(THEME_FIRST);
+     }
+@@ -862,8 +866,28 @@ void Clear_Scenario(void)
   *   08/05/1992 JLB : Created.                                                                 *
   *   01/01/1995 JLB : Carries money forward into next scenario.                                *
   *=============================================================================================*/
@@ -4549,6 +4608,10 @@ index 3738c61..c3034b0 100644
  void Do_Win(void)
  {
 +#ifdef SHADEREMU
++    void ShaderEmu_First_Size(void);
++    ShaderEmu_First_Size();
++#endif
++#ifdef SHADEREMU
 +    SHADEREMU_STAGE("Do_Win begins");
 +    struct Auto /* TDAWN_AUTO presses Return on these screens too */
 +    {
@@ -4559,7 +4622,7 @@ index 3738c61..c3034b0 100644
      Map.Set_Default_Mouse(MOUSE_NORMAL);
      Hide_Mouse();
      Theme.Queue_Song(THEME_QUIET);
-@@ -912,6 +928,7 @@ void Do_Win(void)
+@@ -912,6 +936,7 @@ void Do_Win(void)
              Call_Back();
              Frame_Limiter();
          }
@@ -4567,7 +4630,7 @@ index 3738c61..c3034b0 100644
      }
  
      /*
-@@ -931,6 +948,9 @@ void Do_Win(void)
+@@ -931,6 +956,9 @@ void Do_Win(void)
          return;
      }
  
@@ -4577,7 +4640,7 @@ index 3738c61..c3034b0 100644
      Hide_Mouse();
      VisiblePage.Clear();
      Show_Mouse();
-@@ -938,6 +958,7 @@ void Do_Win(void)
+@@ -938,6 +966,7 @@ void Do_Win(void)
      Play_Movie(Scen.WinMovie2);
      Play_Movie(Scen.WinMovie3);
      Play_Movie(Scen.WinMovie4);
@@ -4585,7 +4648,7 @@ index 3738c61..c3034b0 100644
  
      Keyboard->Clear();
  
-@@ -957,7 +978,18 @@ void Do_Win(void)
+@@ -957,7 +986,18 @@ void Do_Win(void)
          if (!Scen.IsSkipScore) {
              Score.Presentation();
          }
@@ -4604,7 +4667,7 @@ index 3738c61..c3034b0 100644
          if (Scen.IsOneTimeOnly) {
              GameActive = false;
              Show_Mouse();
-@@ -1108,7 +1140,9 @@ void Do_Win(void)
+@@ -1108,7 +1148,9 @@ void Do_Win(void)
      ** Generate a new scenario filename
      */
      //	Scen.Set_Scenario_Name(Scen.Scenario, Scen.ScenPlayer, Scen.ScenDir, Scen.ScenVar);
@@ -4614,6 +4677,17 @@ index 3738c61..c3034b0 100644
  
      /*
      **	If the mission timer is to be inheriteded from the previous scenario then do it now.
+@@ -1144,6 +1186,10 @@ void Do_Win(void)
+  *=============================================================================================*/
+ void Do_Lose(void)
+ {
++#ifdef SHADEREMU
++    void ShaderEmu_First_Size(void);
++    ShaderEmu_First_Size();
++#endif
+     Map.Set_Default_Mouse(MOUSE_NORMAL);
+     Hide_Mouse();
+ 
 diff --git a/redalert/score.cpp b/redalert/score.cpp
 index 6357462..adec18b 100644
 --- a/redalert/score.cpp

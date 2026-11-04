@@ -250,27 +250,69 @@ video_show(bitmap_t *bmp, int num_dirties, rect_t *dirty_rects)
 	frame_counted(frames_emulated, skip + 1, picture);
 }
 
-/* The picture in the window at the console's shape, as large as fits, centred, the rest black (docs/games/nes.md,
- * "The window"): a window made wider or taller shows more black, not a picture pulled out of shape. NES_STRETCH=1 fills
- * it as before. The console's 256 x 240 is shown at 8:7 pixels, a television's 4:3 less its overscan: 292 x 240. */
+static GLuint bezel, rim;	/* the frame's colours (nes_viewport), made by the first core at the start */
+
+/* A colour as a texture of one texel (glTexImage2D's RGBA). */
+static GLuint
+solid(unsigned rgb)
+{
+	GLuint name;
+	unsigned char texel[4] = {(unsigned char)(rgb >> 16), (unsigned char)(rgb >> 8), (unsigned char)rgb, 255};
+
+	glGenTextures(1, &name);
+	glBindTexture(GL_TEXTURE_2D, name);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, texel);
+	return name;
+}
+
+/* A rectangle of the window (pixels, top down) in one texture, under the matrices of a whole window. */
+static void
+window_rect(int width, int height, int x0, int y0, int x1, int y1, GLuint of)
+{
+	static const GLfixed uv[8] = {0, 0, ONE, 0, ONE, ONE, 0, ONE};
+	GLfixed xyz[12];
+	int i;
+
+	for (i = 0; i < 4; i++) {
+		xyz[i * 3] = (GLfixed)(((long long)(i == 1 || i == 2 ? x1 : x0) << 16) / width);
+		xyz[i * 3 + 1] = (GLfixed)(((long long)(i >= 2 ? y1 : y0) << 16) / height);
+		xyz[i * 3 + 2] = 0;
+	}
+	seglQuad(xyz, uv, of, 255, 255, 0);
+}
+
+/* The picture in the window at the console's shape, as large as fits, centred (docs/games/nes.md, "The window"): a
+ * console's picture has one shape, so a window of another shows it in a frame, a dark bezel with a lighter rim round the
+ * picture, as a television's, never black bars nor a picture pulled out of shape. NES_STRETCH=1 fills it, as before 3
+ * November 2026. The console's 256 x 240 is shown at 8:7 pixels, a television's 4:3 less its overscan: 292 x 240. */
 static void
 nes_viewport(int width, int height)
 {
+	static const GLfixed whole[16] = {2 * ONE, 0, 0, 0, 0, -2 * ONE, 0, 0, 0, 0, -ONE, 0, -ONE, ONE, 0, ONE};
 	static int stretch = -1;
-	int w = width, h = height;
+	int w = width, h = height, x, y, edge;
 
 	if (stretch < 0)
 		stretch = getenv("NES_STRETCH") != NULL;
 	glViewport(0, 0, width, height);
 	if (stretch)
 		return;
-	glClearColor(0, 0, 0, 1);
-	glClear(GL_COLOR_BUFFER_BIT);
 	if (w * 240 > h * 292)
 		w = h * 292 / 240;
 	else
 		h = w * 240 / 292;
-	glViewport((width - w) / 2, (height - h) / 2, w, h);
+	x = (width - w) / 2, y = (height - h) / 2;
+	if (w < width || h < height) {
+		glMatrixMode(GL_PROJECTION);
+		glLoadMatrixx(whole);
+		glMatrixMode(GL_MODELVIEW);
+		glLoadIdentity();
+		glDisable(GL_DEPTH_TEST);
+		edge = width < 400 || height < 300 ? 2 : 3;
+		window_rect(width, height, 0, 0, width, height, bezel);
+		window_rect(width, height, x - edge, y - edge, x + w + edge, y + h + edge, rim);
+	}
+	glViewport(x, height - y - h, w, h);
 }
 
 /* The GPU draws a picture over the whole window. Without `wait` the list is only submitted:
@@ -1942,7 +1984,8 @@ int
 osd_init(void)
 {
 	GR_SCREEN_INFO screen;
-	int scale;
+	const char *size;
+	int scale, width, height, w, h;
 
 	log_chain_logfunc(log_line);
 	if (GrOpen() < 0) {
@@ -1952,7 +1995,11 @@ osd_init(void)
 	GrGetScreenInfo(&screen);
 	for (scale = 3; scale > 1 && (WIDTH * scale + 8 > screen.cols || HEIGHT * scale + 60 > screen.rows); scale--)
 		;
-	window = GrNewWindowEx(GR_WM_PROPS_APPWINDOW, "NES", GR_ROOT_WINDOW_ID, -1, -1, WIDTH * scale, HEIGHT * scale, 0);
+	width = WIDTH * scale, height = HEIGHT * scale;
+	/* the desktop starts it maximised (linux/apps/ui_launch.h): the window at that size from the start */
+	if ((size = getenv("SE_MAXIMISED")) && sscanf(size, "%dx%d", &w, &h) == 2 && w >= 64 && h >= 60)
+		width = w, height = h;
+	window = GrNewWindowEx(GR_WM_PROPS_APPWINDOW, "NES", GR_ROOT_WINDOW_ID, -1, -1, width, height, 0);
 	GrSelectEvents(window, GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_KEY_UP | GR_EVENT_MASK_CLOSE_REQ | GR_EVENT_MASK_UPDATE |
 		GR_EVENT_MASK_BUTTON_DOWN);
 	{
@@ -1971,6 +2018,7 @@ osd_init(void)
 	glGenTextures(1, &texture);
 	glBindTexture(GL_TEXTURE_2D, texture);
 	seglTexturePointer(picture, WIDTH, HEIGHT, GL_COLOR_INDEX8_EXT);
+	bezel = solid(0x202328), rim = solid(0x5c626c);
 	cycles_then = cycles();
 	ms_then = milliseconds();
 	return 0;
