@@ -14,7 +14,14 @@ extern "C" void aoe_shot(void);
 #undef fopen
 
 static int window_open;
-extern "C" int aoe_start_width(void) { const char* e = getenv("AOE_SIZE"); return e && atoi(e) == 800 ? 800 : 640; }
+extern "C" int aoe_start_width(void) {
+    const char* e = getenv("AOE_SIZE");
+    if (e) return atoi(e) == 800 ? 800 : 640;
+    // started maximised (SE_MAXIMISED, linux/apps/ui_launch.h): the layout the window's size wants from the start (aoe_win_layout's)
+    int w, h;
+    if ((e = getenv("SE_MAXIMISED")) && sscanf(e, "%dx%d", &w, &h) == 2 && w >= 760 && h >= 540) return 800;
+    return 640;
+}
 extern "C" int aoe_scroll_edges(void) { const char* e = getenv("AOE_SCROLL"); return e && !strcmp(e, "edge"); }
 unsigned long aoe_clock_ms(void) {
     if (window_open) return aoe_win_clock();
@@ -229,12 +236,15 @@ static unsigned long chat_at;
 extern unsigned long aoe_updates, aoe_world_ms;
 extern "C" int aoe_layout_waiting(void);
 extern "C" int aoe_layout_remakes(const char* name);
+extern "C" int aoe_layout_height_wrong(const char* name);
 void aoe_panel_changed(const char* n) {
     step_from = timeGetTime();
     if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: panel %s at %lu, frame %ld\n", n, step_from, frames);
     // a layout that waited at a menu (port/aoe_layout.cpp): made where the next message is handled
     int waiting = aoe_layout_waiting();
     if (waiting && (!strcmp(n, "Game Screen") || aoe_layout_remakes(n))) aoe_post(AOE_WM_LAYOUT, waiting, 0);
+    // the game screen in the window's shape, a remade menu at 4:3 (aoe_layout_switch): the height changes going between them
+    else if ((!strcmp(n, "Game Screen") || aoe_layout_remakes(n)) && aoe_layout_height_wrong(n)) aoe_post(AOE_WM_LAYOUT, aoe_w, 0);
 }
 static int mark_read, mark_a, mark_b;
 void aoe_view_check_draw(int whole);
@@ -242,7 +252,6 @@ static unsigned checks, checks_bad;
 static void aoe_view_check(int quiet) {
     if (!page) return;
     int top = 20, bottom = aoe_h - 126;   // (the view's rows at 640 x 480 in the window; 800: 20 to 474)
-    if (aoe_w == 800) bottom = 474;
     unsigned bytes = aoe_w * (bottom - top);
     static unsigned char* drawn;
     if (!drawn) drawn = (unsigned char*) malloc(bytes);

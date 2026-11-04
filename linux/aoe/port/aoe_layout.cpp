@@ -65,14 +65,27 @@ static void remake_menu(void)
     if (f) { fprintf(f, "%ld\n", (long) rge_base_game->draw_area->Width); fclose(f); rename("/tmp/aoe-layout.part", "/tmp/aoe-layout"); }
 }
 
+// The height a layout WIDTH wide has at the panel NAME: the game screen the window's shape, anything else 4:3.
+static int height_at(const char* name, int width)
+{
+    return !strcmp(name, "Game Screen") ? aoe_win_game_height(width) : width * 3 / 4;
+}
+
+extern "C" int aoe_layout_height_wrong(const char* name)
+{
+    if (!rge_base_game || !rge_base_game->draw_area) return 0;
+    long w = rge_base_game->draw_area->Width;
+    return w > 0 && rge_base_game->draw_area->Height != height_at(name, (int) w);
+}
+
 extern "C" void aoe_layout_switch(int width)
 {
     if (!rge_base_game || !rge_base_game->draw_system || !rge_base_game->draw_area) return;
     if (width == 1) { remake_menu(); return; }   // (posted below: done at the next message)
-    int height = width * 3 / 4;
     TPanel* panel = panel_system.currentPanel();
     const char* name = panel ? panel->panelName() : "";
-    if (rge_base_game->draw_area->Width == width) { waiting = 0; return; }
+    int height = height_at(name, width);
+    if (rge_base_game->draw_area->Width == width && rge_base_game->draw_area->Height == height) { waiting = 0; return; }
     int menu = remakes(name);
     if (strcmp(name, "Game Screen") && !menu) {
         if (!waiting) fprintf(stderr, "aoe: layout %d x %d waits for the next panel (at %s)\n", width, height, name);

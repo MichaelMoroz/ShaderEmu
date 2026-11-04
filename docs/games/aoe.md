@@ -416,6 +416,15 @@ and the view's job finished first. The window's page is kept for each size (`aoe
 more GPU memory. `test_all.py aoe-layout` plays to the game, maximises the window (794 x 545: 800 x 600 at the game screen), clicks its
 middle (400, 299 of the picture), puts it back (640 x 480) and clicks again (320, 240): 41 to 43 world updates every 5 s throughout.
 
+The game screen in the window's shape (4 November 2026). Stretched, the layout was up to 9% off its shape in a maximised
+window (800 x 600 over 794 x 545). The 800 layout's game screen now has the window's height for its width (`aoe_win_game_height`
+in `port/window.c`: in whole 2s, from 9:16 of the width to the width; 800 x 548 maximised), so the picture is scaled by one
+factor: in `TRIBE_Screen_Game::handle_size` everything below the top band is placed from the bottom, `dy` rows from 800 x 600's,
+and the view takes what is between (aoe.patch, scr_game.cpp; the 800 pictures are chosen from 440 rows up). The menus stay 4:3,
+their pictures being 800 x 600: going between a remade menu and the game screen changes the height (`aoe_layout_height_wrong`,
+`aoe_panel_changed`), and four pages are kept. The 640 layout stays 4:3. Started maximised from the desktop (`SE_MAXIMISED`), the
+game starts in the 800 layout at once (`aoe_start_width`). `AOE_LAYOUT=43` is 4:3 always.
+
 The menus (4 November 2026). A menu is laid out once, when it is made (`TEasy_Panel` scales its places from 640 x 480 to the size
 then), and given another size it kept its places on the larger page, so a click went to the button below. So a menu that holds nothing
 chosen is made again at the new size, as the game makes it when it goes there from another menu: the main menu, the single player menu
