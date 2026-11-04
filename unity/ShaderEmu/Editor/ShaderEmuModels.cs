@@ -61,7 +61,10 @@ public static partial class ShaderEmuBuilder
         S("CableBlue", null, 0.08f, 0.20f, 0.50f, 0.55f),
         S("CableYellow", null, 0.78f, 0.60f, 0.08f, 0.55f),
         S("Books", "Books", 1f, 1f, 1f, 1f, false),
-        S("GameBoxes", "GameBoxes", 1f, 1f, 1f, 1f, false),   // world/gameboxes.py
+        // world/gameboxes.py: scans of boxes and magazines, fetched when the world is made (Textures/Fetched is not in git)
+        S("GameBoxes", "Fetched/GameBoxes", 1f, 1f, 1f, 1f, false),
+        S("GameBoxes2", "Fetched/GameBoxes2", 1f, 1f, 1f, 1f, false),
+        S("Magazines", "Fetched/Magazines", 1f, 1f, 1f, 1f, false),
         S("Keyboard", "Keyboard", 1f, 1f, 1f, 1f, false),
         S("Rug", "Rug", 1f, 1f, 1f, 1f, true, true),
         S("RoundRug", "RoundRug", 1f, 1f, 1f, 1f, false, true),
@@ -69,6 +72,7 @@ public static partial class ShaderEmuBuilder
         S("RedPaint", null, 0.62f, 0.05f, 0.04f, 0.35f),
         S("PlasticCase", "Plastic", 0.74f, 0.71f, 0.62f, 1f),
         // the holodecks' corridor and seats
+        S("HoloPanel", "HoloPanel", 1f, 1f, 1f, 1f, false),   // a holodeck's panels; the bars between them are HoloLine
         S("SciPanel", "Plastic", 0.70f, 0.68f, 0.63f, 1f),
         S("SciTrim", "Plastic", 0.30f, 0.31f, 0.34f, 1f),
         S("SciCarpet", "Linen", 0.47f, 0.51f, 0.64f, 1f, true, true),
@@ -96,7 +100,8 @@ public static partial class ShaderEmuBuilder
 
     static Texture2D WorldTexture(string name, bool normal = false, bool colour = true)
     {
-        return ImportedTexture(WorldTextures + "/" + name + ".png", colour && !normal, normal, name.StartsWith("City") ? 4 : 8);
+        string path = name.StartsWith("Fetched/") ? Root + "/Textures/" + name + ".png" : WorldTextures + "/" + name + ".png";   // (world/gameboxes.py's)
+        return ImportedTexture(path, colour && !normal, normal, name.StartsWith("City") ? 4 : 8);
     }
 
     static void Transparent(Material m, Color colour, float smooth)
@@ -272,6 +277,7 @@ public static partial class ShaderEmuBuilder
         made["HoloGrid"] = Surfaced("HoloGrid", Color.white, WorldTexture("HoloGrid"), null, WorldTexture("HoloGrid_p", false, false), 0f, 0.5f, false,
                                false, false, WorldTexture("HoloGrid_e"), 2.5f);
         made["HoloMask"] = Mat("VolumeMask", "ShaderEmu/VolumeMask");
+        made["HoloLine"] = Emitter("HoloLine", new Color(1f, 0.72f, 0.10f), 2.5f, true);   // the holodecks' grid: lit bars, which light the panels in the bake
         Material tube = Mat("TubeGlass", "ShaderEmu/CRT");   // a station's glass until Stations() gives each its own
         tube.SetVector("_Size", Vector4.zero);
         made["TubeGlass"] = tube;
@@ -397,7 +403,8 @@ public static partial class ShaderEmuBuilder
             foreach (MeshRenderer renderer in instance.GetComponentsInChildren<MeshRenderer>())
             {
                 GameObject go = renderer.gameObject;
-                if (city || go.name == "Window glass")
+                // (any pane: built in another order Blender names the room's "Window glass.001", and lit by the lightmap its drops were white paint)
+                if (city || go.name.StartsWith("Window glass"))
                 {
                     renderer.shadowCastingMode = ShadowCastingMode.Off;
                     renderer.receiveShadows = false;

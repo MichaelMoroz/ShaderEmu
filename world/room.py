@@ -77,8 +77,8 @@ def shell(b):
         wainscot(b, 3.87, HALF_W)
     with on_wall(b, "left"):    # nor behind the bookshelf, which is at -3.6 to -1.6 along this wall
         wainscot(b, -HALF_D, -3.63)
-        wainscot(b, -1.57, HOLO_Z - HOLO_WIDE / 2 - 0.22)
-        wainscot(b, HOLO_Z + HOLO_WIDE / 2 + 0.22, HALF_D)
+        wainscot(b, -1.57, HOLO_Z - HOLO_WIDE / 2 - 0.09)
+        wainscot(b, HOLO_Z + HOLO_WIDE / 2 + 0.09, HALF_D)
     with on_wall(b, "right"):
         wainscot(b, -HALF_D, HALF_D)
     with on_wall(b, "back"):
@@ -184,18 +184,14 @@ def door_casing(b, w=DOOR_WIDE, h=DOOR_HIGH):
 
 
 def holo_door(b):
-    """The holodeck's doorway from the den: a heavy frame of dark metal with a lit head."""
+    """The holodecks' doorway from the den: an open doorway in a casing, as the den's own door
+    (world/annex.py has the corridor beyond it, as plain as the one by the lift)."""
     w, h = HOLO_WIDE, HOLO_HIGH
     with on_wall(b, "left"):
         with b.at((HOLO_Z, 0, 0)):
             b.obj("Holodeck door")
-            reveal(b, -w / 2, w / 2, h, "RackSteel", sill="MetalBlack")
-            for k in (-1, 1):
-                b.box((k * (w / 2 + 0.1), h / 2, -0.05), (0.2, h, 0.1), "RackSteel", bevel=0.012, grain=1)
-                b.box((k * (w / 2 + 0.1), h * 0.5, -0.103), (0.05, h - 0.5, 0.008), "MetalBlack", bevel=0.003, segs=1)
-            b.prism((0, h, -0.06), [(-w / 2 - 0.2, 0), (w / 2 + 0.2, 0), (w / 2 + 0.06, 0.3), (-w / 2 - 0.06, 0.3)], 0.12, "RackSteel",
-                    plane='xy', bevel=0.012)
-            b.box((0, h + 0.13, -0.123), (w - 0.3, 0.05, 0.008), "Amber", bevel=0.002, segs=1)
+            door_casing(b, w, h)
+            reveal(b, -w / 2, w / 2, h, "WoodDark")
 
 
 def door(b):

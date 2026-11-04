@@ -916,6 +916,19 @@ def holo_grid():
     save("HoloGrid_e", line[..., None] * np.array([1.0, 0.72, 0.10]))
 
 
+def holo_panel():
+    """A panel of the holodeck's wall, 0.6 m (world/shell.py lays one a cell; the lines between
+    them are world/annex.py's bars): a grey-blue plate, darker in a band inside its rim, a faint
+    mottle, and its edge a little worn lighter where the bars meet it."""
+    n = 256
+    y, x = np.mgrid[0:n, 0:n]
+    edge = np.minimum(np.minimum(x, n - 1 - x), np.minimum(y, n - 1 - y)).astype(float)
+    rim = np.clip((edge - 6.0) / 4.0, 0, 1) * np.clip((22.0 - edge) / 4.0, 0, 1)
+    worn = np.clip(1.0 - edge / 5.0, 0, 1)
+    base = (0.33 + 0.025 * (unit(noise(n, 1.5, 82)) - 0.5)) * (1 - 0.30 * rim) + 0.06 * worn
+    save("HoloPanel", base[..., None] * np.array([0.88, 0.94, 1.05]), 0.52 - 0.12 * rim + 0.05 * unit(noise(n, 2.0, 83)))
+
+
 def carpet():
     """A corridor's carpet: short loops in dark red, a small repeat woven into it."""
     n = 1024
@@ -952,7 +965,7 @@ def frame_art():
 def main():
     os.makedirs(OUT, exist_ok=True)
     # walls, floor, wood and cloth are Poly Haven's (world/fetch.py)
-    for make in (plastic, metal, cardboard, rug, round_rug, books, atlas, prop_screen, city_street, night_sky, cloud_noise, rain_streaks, ui, keyboard, holo_grid, carpet, smudges):
+    for make in (plastic, metal, cardboard, rug, round_rug, books, atlas, prop_screen, city_street, night_sky, cloud_noise, rain_streaks, ui, keyboard, holo_grid, holo_panel, carpet, smudges):
         make()
     city_windows("CityOffice", 100, "office")
     city_windows("CityFlats", 101, "flats")

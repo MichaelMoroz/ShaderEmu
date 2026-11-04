@@ -1,10 +1,25 @@
 # The holodecks
 
-Through the den's left doorway is a corridor 2 m wide and 15.4 m long with eight rooms of grid off
-it, four a side, each 3.6 m square and 3 m high, with a seat. While a 3D program runs on the
+Through the den's left doorway is a corridor 2 m wide and 15.4 m long, as plain as the one by the lift
+(plaster, oak panelling, a carpet, lamps on rods, pictures, a side table and a bench), with eight rooms
+of grid off it, four a side, each 3.6 m square and 3 m high, with a seat. While a 3D program runs on the
 machine of whoever sits there, its last frame is a world round the seat: the command list the
 volume display drew (`docs/world/volume.md`, the words at `0x81000300`), seen from the sitter's own
 eyes. Games and their controllers are here and nowhere else in the world.
+
+## The rooms' model
+
+A room is one welded mesh (`holo_room` in `world/shell.py`): its walls one strip round it with the
+doorway (1.2 by 2.4 m) cut out, its floor and its ceiling, every face a whole panel of 0.6 m
+(`annex.GRID`: 6 by 5 a wall), so that no panel is cut at a corner or by the doorway. Its lightmap
+is the strip unrolled from the door wall's corner at +x, so three of its four upright corners are
+inside a chart, and the floor and the ceiling are charts under it (`check_shell.py` checks it). The
+doorway's reveal is the corridor's plaster. The lines between the panels are lit bars
+(`grid_bars` in `world/annex.py`, `HoloLine`): 8 mm proud on the walls (7 across them, so no two
+faces of a crossing lie in one plane), 3 on the floor, and a 30 mm bar along each of the room's
+twelve edges. The mask is 20 mm inside the panels (`MASK_IN`), in front of every bar, so the
+program's world is not crossed by them. The corridor's furniture is in `holodeck.json`
+(`furniture`), which `ShaderEmuHolodeck.cs` makes colliders of.
 
 ## What a visitor does
 

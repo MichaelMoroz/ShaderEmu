@@ -10,18 +10,25 @@ from room import (DOOR_HIGH, DOOR_WIDE, DOOR_X, HALF_D, HALF_W, HOLO_HIGH, HOLO_
 from furniture import pot
 import pc
 
-# The holodecks (docs/world/holodeck.md): a corridor from the den's left doorway, and eight rooms of
-# grid off it, four a side, a seat in each. Room k is on the north side (towards +z) when k is
+# The holodecks (docs/world/holodeck.md): a corridor from the den's left doorway, as plain as the one
+# by the lift, and eight rooms of grid off it, four a side, a seat in each. Room k is on the north side (towards +z) when k is
 # even; a room's own frame has its door behind it and the room towards +z.
 ROOMS = 8
 ROOM, ROOM_HIGH = 3.6, 3.0
-ROOM_DOOR_WIDE, ROOM_DOOR_HIGH = 1.2, 2.2
+ROOM_DOOR_WIDE, ROOM_DOOR_HIGH = 1.2, 2.4
+GRID = 0.6         # a panel of a room's grid: a room is 6 by 5 of them a wall, its doorway 2 by 4
+MASK_IN = 0.02     # the mask's faces inside the grid's: in front of its bars (grid_bars), which stand 15 mm proud at most
 HC_WIDE, HC_HIGH = 2.0, 2.8
 HC_X1 = -HALF_W - WALL_THICK                 # its east end: the den's wall from behind
 ROOM_PITCH = ROOM + WALL_THICK
 HC_LONG = (ROOMS // 2) * ROOM_PITCH + WALL_THICK
 HC_X0 = HC_X1 - HC_LONG
 HC_Z0, HC_Z1 = HOLO_Z - HC_WIDE / 2, HOLO_Z + HC_WIDE / 2
+HOLO_LAMPS = [HC_X1 - 1.2 - i * (HC_LONG - 2.4) / 3 for i in range(4)]
+# what stands in the holodecks' corridor and stops a visitor: x0, x1, z0, z1 and the height of its top
+# (as Blender measured the models standing there: the table's top is 0.761, the bench's seat 0.651)
+FURNITURE = {"table": [HC_X1 - 1.05, HC_X1 - 0.65, HC_Z0 + 0.02, HC_Z0 + 0.42, 0.761],
+             "bench": [HC_X0 + 0.02, HC_X0 + 0.52, HOLO_Z - 0.59, HOLO_Z + 0.59, 0.651]}
 # in a room's frame: the seat, the screen before it (its middle, wide, high), and the stand at
 # the seat's right hand with the room's controls and the two controllers
 SEAT_Z = 0.9
@@ -130,31 +137,130 @@ def grid_shell(b, mat, inset):
 
 
 def holo_room(b, k):
-    """What stands in room k: its doorway's frame on the corridor's side, the seat, and the
-    console at its right hand."""
+    """What stands in room k: the doorway's casing and the room's name plate on the corridor's
+    side, the grid's bars, the seat, and the console at its right hand."""
     x, z, turn = room_place(k)
     w, h = ROOM_DOOR_WIDE, ROOM_DOOR_HIGH
     with b.at((x, 0, z), (0, turn, 0)):
         b.obj("Holo doors")
-        # the doorway through the wall: jambs, head and sill, then a heavy frame with a lit head
-        with b.at((0, 0, -WALL_THICK)):
-            b.quad((-w / 2, h / 2, WALL_THICK / 2), (WALL_THICK, h), "RackSteel", rot=(0, -90, 0))
-            b.quad((w / 2, h / 2, WALL_THICK / 2), (WALL_THICK, h), "RackSteel", rot=(0, 90, 0))
-            b.quad((0, h, WALL_THICK / 2), (w, WALL_THICK), "RackSteel", rot=(-90, 0, 0))
-            b.quad((0, 0.001, WALL_THICK / 2), (w, WALL_THICK), "MetalBlack", rot=(90, 0, 0))
-            for side in (-1, 1):
-                b.box((side * (w / 2 + 0.09), h / 2, -0.04), (0.18, h, 0.08), "RackSteel", bevel=0.012, grain=1)
-            b.prism((0, h, -0.045), [(-w / 2 - 0.18, 0), (w / 2 + 0.18, 0), (w / 2 + 0.05, 0.26), (-w / 2 - 0.05, 0.26)], 0.09, "RackSteel",
-                    plane='xy', bevel=0.012)
-            b.box((0, h + 0.11, -0.092), (w - 0.3, 0.04, 0.006), "Amber", bevel=0.002, segs=1)
-            # where the room's name plate is, beside the door
-            b.box((w / 2 + 0.42, 1.45, -0.006), (0.34, 0.2, 0.012), "RackSteel", bevel=0.005)
+        with b.at((0, 0, -WALL_THICK)):   # the corridor's face of the wall, the corridor towards -z, as a wall's own space
+            door_casing(b, w, h)
+            # where the room's name plate is (ShaderEmuHolodeck.cs puts its words there): a board
+            b.box((w / 2 + 0.42, 1.45, -0.006), (0.36, 0.22, 0.012), "WoodDark", bevel=0.004, segs=2, grain=0)   # (its face 2 mm behind the words)
+        b.obj("Holo grid")
+        grid_bars(b)
         b.obj("Holo seats")
         with b.at((0, 0, SEAT_Z), (0, 0, 0)):
             command_chair(b)
         b.obj("Holo consoles")   # (an object of their own: with the seats they were a mesh Unity's unwrapper gave up on)
         with b.at((STAND[0], 0, STAND[1]), (0, CONSOLE_TURN, 0)):
             console(b)
+
+
+def grid_bars(b):
+    """The grid's lines in a room's frame: a lit bar along every line between two panels of the
+    shell (world/shell.py's holo_room), and a heavier one along each of the room's twelve edges,
+    so that no panel ends at a corner unframed. The walls' bars stand 8 mm proud (those across
+    7, so that no two faces of a crossing lie in one plane), the floor's 3 and 2, the corners'
+    15: the mask that lets the program's world through is in front of all of them (MASK_IN)."""
+    s, t, g = ROOM, ROOM_HIGH, GRID
+    n, m = round(s / g), round(t / g)
+    dw, dh = round(ROOM_DOOR_WIDE / g), round(ROOM_DOOR_HIGH / g)
+    d0 = (n - dw) // 2
+    bar, mat = 0.022, "HoloLine"
+    walls = [((s / 2, 0.0), (-1, 0), (0, 1)), ((-s / 2, 0.0), (0, 1), (1, 0)), ((-s / 2, s), (1, 0), (0, -1)), ((s / 2, s), (0, -1), (-1, 0))]
+
+    def run(p, q, inward, proud, wide=bar):
+        """A bar from p to q (a line on a face), standing `proud` off it towards `inward`."""
+        mid = [(a + c) / 2 + i * proud / 2 for a, c, i in zip(p, q, inward)]
+        size = [abs(c - a) + (wide if abs(c - a) < 1e-6 else 0) for a, c in zip(p, q)]
+        size = [proud if abs(i) > 0.5 else v for v, i in zip(size, inward)]
+        b.box(tuple(mid), tuple(size), mat, bevel=0.002, segs=1)
+    for w, ((sx, sz), (ax, az), (ix, iz)) in enumerate(walls):
+        at = lambda a, y: (sx + ax * a, y, sz + az * a)
+        for i in range(1, n):   # upright lines
+            low = dh * g if w == 0 and d0 < i < d0 + dw else 0.0
+            run(at(i * g, low), at(i * g, t), (ix, 0, iz), 0.008)
+        for j in range(1, m):   # level lines
+            spans = [(0.0, s)] if w != 0 or j >= dh else [(0.0, d0 * g), ((d0 + dw) * g, s)]
+            for a, c in spans:
+                run(at(a, j * g), at(c, j * g), (ix, 0, iz), 0.007)
+    for i in range(1, n):   # the floor's lines, and the ceiling's
+        for y, up, proud in ((0.0, 1, 0.003), (t, -1, 0.008)):
+            run((-s / 2 + i * g, y, 0.0), (-s / 2 + i * g, y, s), (0, up, 0), proud)
+            run((-s / 2, y, i * g), (s / 2, y, i * g), (0, up, 0), proud - 0.001)
+    # the twelve edges: a square bar along each, half on either face (the door wall's floor edge either side of the doorway)
+    edge = 0.03
+    for (x0, z0) in ((-s / 2, 0.0), (s / 2, 0.0), (-s / 2, s), (s / 2, s)):
+        b.box((x0, t / 2, z0), (edge, t, edge), mat, bevel=0.003, segs=1)
+    for y in (0.0, t):
+        b.box((-s / 2, y, s / 2), (edge, edge, s), mat, bevel=0.003, segs=1)
+        b.box((s / 2, y, s / 2), (edge, edge, s), mat, bevel=0.003, segs=1)
+        b.box((0.0, y, s), (s, edge, edge), mat, bevel=0.003, segs=1)
+    b.box((0.0, t, 0.0), (s, edge, edge), mat, bevel=0.003, segs=1)
+    side = (s - dw * g) / 2
+    for k in (-1, 1):
+        b.box((k * (s / 2 - side / 2), 0.0, 0.0), (side, edge, edge), mat, bevel=0.003, segs=1)
+
+
+def corridor_fittings(b):
+    """The holodecks' corridor as the one by the lift: oak panelling to the hand's height, a cove
+    under the ceiling, a casing round every doorway, lamps hanging on rods, and a few things
+    along its walls (where they stand is FURNITURE: ShaderEmuHolodeck.cs stops visitors there)."""
+    high, wide, long = HC_HIGH, HC_WIDE, HC_LONG
+    mid_x = (HC_X0 + HC_X1) / 2
+    b.obj("Holo corridor trim")
+    half = long / 2
+    for side, (z, turn) in enumerate(((HC_Z1, 0), (HC_Z0, 180))):
+        with b.at((mid_x, 0, z), (0, turn, 0)):
+            doors = sorted((room_place(k)[0] - mid_x) * (1 if turn == 0 else -1) for k in range(side, ROOMS, 2))
+            edges = [-half] + [x + q * (ROOM_DOOR_WIDE / 2 + 0.09) for x in doors for q in (-1, 1)] + [half]
+            for i in range(0, len(edges), 2):
+                wainscot(b, edges[i], edges[i + 1])
+    with b.at((HC_X0, 0, HOLO_Z), (0, -90, 0)):   # the far end
+        wainscot(b, -wide / 2, wide / 2)
+    with b.at((HC_X1, 0, HOLO_Z), (0, 90, 0)):    # the den's wall from behind: its doorway in a casing
+        wainscot(b, -wide / 2, -HOLO_WIDE / 2 - 0.09)
+        wainscot(b, HOLO_WIDE / 2 + 0.09, wide / 2)
+        door_casing(b, HOLO_WIDE, HOLO_HIGH)
+    cove = [(0, 0), (0.05, 0), (0.05, -0.01), (0.03, -0.016), (0.014, -0.034), (0.01, -0.055), (0, -0.055)]
+    b.sweep(cove, [(HC_X0, high, HC_Z1), (HC_X1, high, HC_Z1), (HC_X1, high, HC_Z0), (HC_X0, high, HC_Z0)], "TrimWhite", closed=True)
+
+    for x in HOLO_LAMPS:   # as the lift's corridor: hanging lamps, drawn up short of a tall visitor's head
+        b.asset("modern_ceiling_lamp_01", (x, high - 0.6, HOLO_Z), size=(None, 0.6, None))
+    b.obj("Holo corridor things")
+    # between the doors, a picture each side; by the den's end a side table with magazines, at the far end a bench
+    # (no plant: one is 30 to 38 thousand triangles)
+    gaps = [HC_X1 - WALL_THICK - (i + 1) * ROOM_PITCH + WALL_THICK / 2 for i in range(ROOMS // 2 - 1)]   # between two rooms' doors
+    for i, x in enumerate(gaps):
+        with b.at((x, 0, HC_Z1)):
+            b.asset("hanging_picture_frame_0%d" % (1 + i % 2), (0, 1.45, -0.02), rot=(0, 180, 0))
+        with b.at((x, 0, HC_Z0), (0, 180, 0)):
+            b.asset("hanging_picture_frame_0%d" % (2 - i % 2), (0, 1.45, -0.02), rot=(0, 180, 0))
+    (tx0, tx1, tz0, tz1), (bx0, bx1, bz0, bz1) = FURNITURE["table"][:4], FURNITURE["bench"][:4]
+    table = b.asset("side_table_tall_01", ((tx0 + tx1) / 2, 0, (tz0 + tz1) / 2), rot=(0, 0, 0))
+    bench = b.asset("painted_wooden_bench", ((bx0 + bx1) / 2, 0, (bz0 + bz1) / 2), rot=(0, 90, 0))
+    import furniture
+    furniture.pile(b, ["computer_gaming_world_issue_148", "bytevolume20number12", "pc_computing_1998_05"],
+                   ((tx0 + tx1) / 2 - 0.02, FURNITURE["table"][4], (tz0 + tz1) / 2 + 0.01), (-8, 5, 21))
+    furniture.pile(b, ["computer_gaming_world_issue_116"], ((bx0 + bx1) / 2 + 0.05, FURNITURE["bench"][4], (bz0 + bz1) / 2 - 0.35), (82,))
+    furniture.pile(b, ["linuxjournalissue58", "bytevol21no11"], ((bx0 + bx1) / 2 - 0.02, FURNITURE["bench"][4], (bz0 + bz1) / 2 + 0.3), (95, 70))
+
+
+def holodecks(b):
+    corridor_fittings(b)
+    # what marks where the program's world may show: one room's faces, inside the grid's bars
+    b.obj("Holodeck mask")
+    grid_shell(b, "HoloMask", MASK_IN)
+    for k in range(ROOMS):
+        holo_room(b, k)
+    here = os.path.dirname(os.path.abspath(__file__))
+    # for ShaderEmuHolodeck.cs, beside the models (rooms: x, z and turn of each, one after another;
+    # furniture: x0, x1, z0, z1 and height of each thing a visitor walks round)
+    json.dump({"rooms": [v for k in range(ROOMS) for v in room_place(k)], "room": [ROOM, ROOM_HIGH], "door": [ROOM_DOOR_WIDE, ROOM_DOOR_HIGH],
+               "corridor": [HC_X0, HC_X1, HC_Z0, HC_Z1, HC_HIGH], "seat": SEAT_Z, "screen": list(SCREEN), "screenTurn": list(SCREEN_TURN), "panel": list(console_point(KEYS_UP, 0.0, 0.004)),
+               "stand": list(STAND), "lamps": HOLO_LAMPS, "furniture": [v for name in ("table", "bench") for v in FURNITURE[name]]},
+              open(os.path.join(here, "..", "unity", "ShaderEmu", "Models", "holodeck.json"), "w"), indent=1)
 
 
 def command_chair(b):
@@ -189,59 +295,6 @@ def command_chair(b):
     b.box((0, 0.485, 0.01), (0.50, 0.09, 0.48), "SciSeat", bevel=0.04, segs=5)           # the seat's cushion
     # a foot rail before the pedestal
     b.tube([(-0.15, 0.03, 0.17), (-0.14, 0.11, 0.33), (0.14, 0.11, 0.33), (0.15, 0.03, 0.17)], 0.011, "MetalSteel", segs=10, smooth=4)
-
-
-def corridor_fittings(b):
-    """The holodecks' corridor as a starship's: ribs that lean in to a beam at each bay, a dark
-    band at the hand's height, lit strips under the ceiling and along the floor, and the
-    ceiling's lamps let into dark housings."""
-    high, wide, long = HC_HIGH, HC_WIDE, HC_LONG
-    mid_x = (HC_X0 + HC_X1) / 2
-    b.obj("Holo corridor fittings")
-    # the ribs: between every two doors and at both ends, a leaning post either side and a beam
-    ribs = [HC_X1 - WALL_THICK - i * ROOM_PITCH for i in range(ROOMS // 2 + 1)]
-    for x in ribs:
-        x = min(max(x, HC_X0 + 0.11), HC_X1 - 0.11)
-        for z, side in ((HC_Z0, 1), (HC_Z1, -1)):
-            with b.at((x, 0, z), (0, 0 if side > 0 else 180, 0)):   # +z of this frame is into the corridor
-                b.prism((0, 0, 0), [(0, 0), (0.16, 0), (0.07, 2.0), (0.34, high - 0.16), (0.34, high), (0, high)], 0.2, "SciTrim", plane='zy', bevel=0.012)
-                b.box((0, 1.0, 0.125), (0.05, 1.5, 0.012), "Amber", bevel=0.003, segs=1)
-        b.box((x, high - 0.08, HOLO_Z), (0.2, 0.16, wide - 0.6), "SciTrim", bevel=0.012)
-    # along both walls between the ribs: the band, the strip of light over it, and the floor's
-    for a, c in zip(ribs[1:], ribs[:-1]):
-        a, c = max(a, HC_X0) + 0.1, min(c, HC_X1) - 0.1
-        mid, run = (a + c) / 2, c - a
-        for z, side in ((HC_Z0, 1), (HC_Z1, -1)):
-            for part in (-1, 1):   # either side of the bay's door
-                x = mid + part * (run / 4 + ROOM_DOOR_WIDE / 4 + 0.09)
-                piece = run / 2 - ROOM_DOOR_WIDE / 2 - 0.2
-                b.box((x, 0.95, z + side * 0.012), (piece, 0.16, 0.024), "RackSteel", bevel=0.006)
-                b.box((x, 0.95, z + side * 0.026), (piece - 0.1, 0.03, 0.006), "LampLow", bevel=0.002, segs=1)
-                b.box((x, 0.06, z + side * 0.015), (piece, 0.12, 0.03), "SciTrim", bevel=0.008)
-            b.box((mid, high - 0.2, z + side * 0.03), (run, 0.1, 0.06), "RackSteel", bevel=0.01)
-            b.box((mid, high - 0.262, z + side * 0.036), (run - 0.08, 0.024, 0.03), "LampLow", bevel=0.004, segs=1)
-
-
-def holodecks(b):
-    corridor_fittings(b)
-    # what marks where the program's world may show: one room's faces, a hair inside the grid
-    b.obj("Holodeck mask")
-    grid_shell(b, "HoloMask", 0.002)
-    for k in range(ROOMS):
-        holo_room(b, k)
-    # the corridor's lamps, as the den's
-    b.obj("Holo lamps")
-    lamps = [HC_X1 - 1.2 - i * (HC_LONG - 2.4) / 3 for i in range(4)]
-    for x in lamps:
-        with b.at((x, HC_HIGH, HOLO_Z)):
-            b.box((0, -0.03, 0), (1.0, 0.06, 0.36), "RackSteel", bevel=0.012)
-            b.box((0, -0.064, 0), (0.92, 0.012, 0.28), "LampLow", bevel=0.004, segs=1)
-    here = os.path.dirname(os.path.abspath(__file__))
-    # for ShaderEmuHolodeck.cs, beside the models (rooms: x, z and turn of each, one after another)
-    json.dump({"rooms": [v for k in range(ROOMS) for v in room_place(k)], "room": [ROOM, ROOM_HIGH], "door": [ROOM_DOOR_WIDE, ROOM_DOOR_HIGH],
-               "corridor": [HC_X0, HC_X1, HC_Z0, HC_Z1, HC_HIGH], "seat": SEAT_Z, "screen": list(SCREEN), "screenTurn": list(SCREEN_TURN), "panel": list(console_point(KEYS_UP, 0.0, 0.004)),
-               "stand": list(STAND), "lamps": lamps},
-              open(os.path.join(here, "..", "unity", "ShaderEmu", "Models", "holodeck.json"), "w"), indent=1)
 
 
 # the corridor: along the back wall's far side, from the lift at its west end to past the den's door

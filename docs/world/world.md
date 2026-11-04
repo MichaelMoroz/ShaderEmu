@@ -9,6 +9,7 @@ in Blender by scripts in `world/`; furniture, plants and the main surfaces come 
 
     python world\install_packages.py C:\Development\VRChat\ShaderEmu
     python world\fetch.py
+    python world\gameboxes.py
     python world\textures.py
     python world\sounds.py
     & "C:\Program Files\Blender Foundation\Blender 5.2\blender.exe" -b --python world\build.py
@@ -19,6 +20,15 @@ in Blender by scripts in `world/`; furniture, plants and the main surfaces come 
   repository) and writes what Unity needs of them:
   `Textures/World/{Parquet,Plaster,Ceiling,Wood,Walnut,Velvet,Linen}.png`, a model's textures
   in `Textures/Assets`, and `Models/materials.txt`.
+- `gameboxes.py` fetches scans of the decade's games, software and magazines into `build/gameboxes`
+  and writes `Textures/Fetched/{GameBoxes,GameBoxes2,Magazines}.png` (and their `_p`), which are
+  not in the repository (`.gitignore`): the pictures are their publishers', and the sites only
+  show them. Boxes come from bigboxcollection.com (six faces and gloss maps a box, its size from
+  its page) and bigboxdb.com (a box's model; the software: MS-DOS 6, Windows 3.1 and 95, Netscape
+  Navigator, Flight Simulator 5, the Entertainment Pack), the Command & Conquer box from
+  gamebox.museum; magazines are archive.org's scans of Computer Gaming World, BYTE, PC Computing
+  and Linux Journal (the cover, the last page that is not the cover again, a drawn spine and
+  page edges). `world/gameboxes.json` (each one's size, atlas and faces) is in the repository.
 - `textures.py` computes the rest (plastic, metal, rugs, book spines, the atlas of small printed
   things, the city's windows and streets, the sky, clouds, rain) and `world/atlas.json`.
 - **Plastic close to** (`plastic_detail` in `fetch.py`, `PlasticDetail` in `ShaderEmuModels.cs`):
@@ -133,8 +143,10 @@ lightmap, which shows a line wherever two pieces of a wall meet and at every cor
   ray every 4 mm). A cardboard box's top is its flaps, under its bounds' top. A game's box leans till its top meets the wall (`leaning_box`).
 - Small printed things are one atlas, `Details.png`; `world/atlas.json` says where each is, and
   `quad(..., decal=NAME)` uses it. The packer stops if the atlas is full.
-- Books are `Books.png`: sixteen spines, each drawn at its own size (`world/bookdesigns.py`),
-  and a book is modelled at the size it was drawn, so its text is never stretched.
+- The shelf's books are boxes and magazines (`world/gameboxes.py`): games and software stand
+  spine out (`shelf_row` in `furniture.py`), magazines lie in piles (`pile`), and the same lie on the
+  low table, the desk, seven of the classroom's towers (`ON_TOWERS`; not the hubs') and in the
+  holodecks' corridor. The drawn spines of `Books.png` (`world/bookdesigns.py`) are no longer used.
 - The screens, keyboards, panels and lights are still the builder's own. `world/computer.py`
   repeats their rectangles at its top: a screen moved in the builder must be moved there too.
 - The builder's boxes stay where they stop a player, without their renderers (`StripBoxes`):
