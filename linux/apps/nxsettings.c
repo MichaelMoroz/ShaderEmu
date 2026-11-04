@@ -784,7 +784,8 @@ look_choose(int which)
 }
 
 /* The windows' colours: the look's own first, then tints dark enough for the classic caption's
- * white text and light enough, mixed with white, for Windows 7's black (nx_tint in nxpaintnc.c). */
+ * white text and light enough, mixed with white, for Windows 7's black (nx_tint in nxpaintnc.c). The Start
+ * orb is made in each of them (tools/make_icons.py's LOOK7_TINTS, nxbar.c's start_cell): a new one goes there too. */
 static const struct { const char *name, *value; } tints[] = {
 	{ "Default", "default" }, { "Blue", "2858a8" }, { "Teal", "1f8080" }, { "Green", "2e8040" }, { "Olive", "6c7820" },
 	{ "Orange", "c06010" }, { "Red", "b02828" }, { "Pink", "b03070" }, { "Purple", "6a3aa8" }, { "Graphite", "505860" },

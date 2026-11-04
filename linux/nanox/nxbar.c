@@ -283,6 +283,27 @@ tint_mix(int k)
 	return tint_mix256(k * 16);
 }
 
+/* The Start orb's cell of look7.ppm: the look's (8, 9 pressed), or in the windows' colour, Settings' nearest
+ * (tools/make_icons.py's LOOK7_TINTS, nxsettings.c's order: 10 + 2 * i, and the pressed one after it). */
+static int
+start_cell(int open)
+{
+	static const unsigned tints[] = { 0x2858a8, 0x1f8080, 0x2e8040, 0x6c7820, 0xc06010, 0xb02828, 0xb03070, 0x6a3aa8, 0x505860 };
+	int i, best = -1, d, nearest = 0;
+
+	if (!bar_tint)
+		return open ? 9 : 8;
+	for (i = 0; i < (int)(sizeof tints / sizeof tints[0]); i++) {
+		int r = (int)(bar_tint >> 16 & 255) - (int)(tints[i] >> 16), g = (int)(bar_tint >> 8 & 255) - (int)(tints[i] >> 8 & 255),
+			b = (int)(bar_tint & 255) - (int)(tints[i] & 255);
+
+		d = r * r + g * g + b * b;
+		if (best < 0 || d < nearest)
+			best = i, nearest = d;
+	}
+	return 10 + 2 * best + (open != 0);
+}
+
 /* Part of the bar's ground, x on for width: Windows 7's strip (bar7.ppm), or with a windows' colour
  * that colour darkened in bands down the bar, lighter at its top edge as the strip is; classic: the face. */
 static void
@@ -567,7 +588,7 @@ draw_bar(void)
 	width = task_width();
 	bar_strip(0, screen.cols);
 	if (ui_seven) {
-		GrDrawImageFromFile(bar, gc, 3, 1, 24, 24, LOOK7_SHEET_BAR, GR_IMAGE_CELL(24, open ? 9 : 8));
+		GrDrawImageFromFile(bar, gc, 3, 1, 24, 24, LOOK7_SHEET_BAR, GR_IMAGE_CELL(24, start_cell(open)));
 	} else {
 		GrSetGCForeground(gc, WHITE);
 		GrLine(bar, gc, 0, 0, screen.cols - 1, 0);
@@ -581,9 +602,9 @@ draw_bar(void)
 	for (i = 0; i < pinned_count; i++)
 		ui_icon_draw(bar, gc, quick_x(i) + (QUICK_W - 16) / 2, 5, &pinned[i].icon, 16);
 	if (pinned_count) {
-		GrSetGCForeground(gc, ui_seven ? MWRGB(20, 28, 40) : SHADOW);
+		GrSetGCForeground(gc, ui_seven ? (bar_tint ? tint_mix(-12) : MWRGB(20, 28, 40)) : SHADOW);
 		GrLine(bar, gc, quick_x(pinned_count) + 2, 4, quick_x(pinned_count) + 2, BAR_HEIGHT - 5);
-		GrSetGCForeground(gc, ui_seven ? MWRGB(90, 110, 140) : WHITE);
+		GrSetGCForeground(gc, ui_seven ? (bar_tint ? tint_mix(-2) : MWRGB(90, 110, 140)) : WHITE);
 		GrLine(bar, gc, quick_x(pinned_count) + 3, 4, quick_x(pinned_count) + 3, BAR_HEIGHT - 5);
 	}
 	for (i = 0; i < button_count; i++) {
@@ -1517,9 +1538,9 @@ preview(GR_WINDOW_ID frame, int zone)
 		else
 			x = zone & 1 ? 0 : cols - w, y = zone >= 5 ? rows - h : 0;
 		preview_window = GrNewWindowEx(GR_WM_PROPS_NODECORATE | GR_WM_PROPS_NOMOVE | GR_WM_PROPS_NOAUTOMOVE | GR_WM_PROPS_NOFOCUS,
-			"snap", GR_ROOT_WINDOW_ID, x, y, w, h, MWRGB(153, 196, 240));
+			"snap", GR_ROOT_WINDOW_ID, x, y, w, h, ui_accent(MWRGB(153, 196, 240), 150));
 		GrMapWindow(preview_window);
-		GrSetGCForeground(gc, MWRGB(51, 120, 200));
+		GrSetGCForeground(gc, ui_accent(MWRGB(51, 120, 200), 0));
 		GrRect(preview_window, gc, 0, 0, w, h);
 		GrRect(preview_window, gc, 1, 1, w - 2, h - 2);
 		GrRaiseWindow(preview_window);
@@ -1541,13 +1562,13 @@ switcher_draw(void)
 	int cell = 40, across = switch_count < 12 ? switch_count : 12, width = across * cell + 12, i;
 	const char *title = tasks[switch_order[switch_at]].title;
 
-	GrSetGCForeground(gc, ui_seven ? MWRGB(36, 52, 74) : FACE);
+	GrSetGCForeground(gc, ui_seven ? (bar_tint ? tint_mix(-9) : MWRGB(36, 52, 74)) : FACE);
 	GrFillRect(switcher, gc, 0, 0, width < 200 ? 200 : width, 72);
-	GrSetGCForeground(gc, ui_seven ? MWRGB(118, 138, 166) : BLACK);
+	GrSetGCForeground(gc, ui_seven ? (bar_tint ? tint_mix(2) : MWRGB(118, 138, 166)) : BLACK);
 	GrRect(switcher, gc, 0, 0, width < 200 ? 200 : width, 72);
 	for (i = 0; i < across; i++) {
 		if (i == switch_at % 12) {
-			GrSetGCForeground(gc, ui_seven ? MWRGB(118, 150, 192) : WHITE);
+			GrSetGCForeground(gc, ui_seven ? (bar_tint ? tint_mix(4) : MWRGB(118, 150, 192)) : WHITE);
 			GrFillRect(switcher, gc, 6 + i * cell, 4, cell, cell);
 		}
 		ui_icon_draw(switcher, gc, 6 + i * cell + 4, 8, &tasks[switch_order[i]].icon, 32);
@@ -1806,7 +1827,7 @@ popup(int x, int width, int height)
 static void
 popup_edge(GR_WINDOW_ID w, int width, int height)
 {
-	GrSetGCForeground(gc, ui_seven ? MWRGB(118, 138, 166) : BLACK);
+	GrSetGCForeground(gc, ui_seven ? ui_accent(MWRGB(118, 138, 166), 96) : BLACK);
 	GrRect(w, gc, 0, 0, width, height);
 }
 

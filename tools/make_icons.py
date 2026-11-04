@@ -145,6 +145,9 @@ def vertical(stops, height):
 # The Windows 7 look's cells (24 x 24 each, in this order): the caption's buttons are 18 x 18 at
 # a cell's top left, the Start button fills its cell. The window manager and the bar name them.
 LOOK7 = ['min', 'max', 'restore', 'close', 'min-off', 'max-off', 'restore-off', 'close-off', 'start', 'start-down']
+# and after them the Start button in each of Settings' windows' colours (nxsettings.c's tints, the same order; nxbar.c's
+# start_cell), its two cells each: 10 + 2 * i and the pressed one
+LOOK7_TINTS = [0x2858a8, 0x1f8080, 0x2e8040, 0x6c7820, 0xc06010, 0xb02828, 0xb03070, 0x6a3aa8, 0x505860]
 LOOK7_CELL = 24
 BUTTON = 18
 
@@ -179,6 +182,23 @@ def rounded(size, radius, top, bottom, edge, glyph=None, glyph_colour=(30, 40, 6
     return big.resize((size, size), Image.LANCZOS)
 
 
+def tinted(cell, rgb):
+    """A picture's colour moved to another hue: each pixel keeps its grey (the least of its channels) and its
+    colour (the most less the least) goes the tint's way, as much as the tint has colour (Graphite stays grey)."""
+    t = [rgb >> 16 & 255, rgb >> 8 & 255, rgb & 255]
+    lo, hi = min(t), max(t)
+    much = min(1.0, (hi - lo) / 64)
+    d = [(v - lo) / (hi - lo) * much + (1 - much) * 0.5 for v in t] if hi > lo else [0.5] * 3
+    out = cell.convert('RGBA')
+    px = out.load()
+    for y in range(out.size[1]):
+        for x in range(out.size[0]):
+            r, g, b, a = px[x, y]
+            m, c = min(r, g, b), max(r, g, b) - min(r, g, b)
+            px[x, y] = tuple(min(255, int(m + c * k + 0.5)) for k in d) + (a,)
+    return out
+
+
 def look7_cells(theme):
     cells = []
     blue = dict(top=(236, 244, 252), bottom=(196, 216, 238), edge=(92, 116, 150))
@@ -195,6 +215,8 @@ def look7_cells(theme):
     lit = Image.eval(orb.convert('RGB'), lambda v: min(255, v + 40)).convert('RGBA')
     lit.putalpha(orb.getchannel('A'))
     cells.append(lit)
+    for tint in LOOK7_TINTS:
+        cells += [tinted(orb, tint), tinted(lit, tint)]
     out = []
     for cell in cells:
         full = Image.new('RGBA', (LOOK7_CELL, LOOK7_CELL), (0, 0, 0, 0))

@@ -486,7 +486,8 @@ many as 160, the Windows 7 frame's edges and its caption a row each of the colou
 256ths, rounded (`tint_mix256`): bands of sixteenths, 16 across a caption and 2 rows each down it, were steps one saw.
 Inactive frames keep the look's grey. The bar takes it too (`bar_tint`, `tint_mix256` in `nxbar.c`,
 read with the look once a second): Windows 7's bar a row each of the colour darkened, its buttons' glass and the lit desktop
-cell of it; the classic bar's face the colour lightened, its bevels and black text as they were. 0 there (nobody set it) is the classic style with the smooth text, as a
+cell of it, and its Start orb a cell of `look7.ppm` made in each of Settings' colours (`tinted`, `LOOK7_TINTS` in
+`make_icons.py`; `start_cell` takes the nearest for a colour set by hand); the classic bar's face the colour lightened, its bevels and black text as they were. 0 there (nobody set it) is the classic style with the smooth text, as a
 bare `nano-X` for a test has it (`ui_look_read`, and `LOOK_SMOOTH` for the captions: the bitmap
 font only when Settings chose it, 4 November 2026); `nx` writes the registry's look (Windows 7
 and smooth unless it says otherwise) before the desktop starts (`nxbar --look`).
