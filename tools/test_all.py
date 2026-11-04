@@ -194,23 +194,23 @@ CASES = [
     case('tdawn-move-refresh', 'games tdawn long', X + TD + 'TDAWN_SCEN=3 TDAWN_MOVE=100,8,0 TDAWN_SUMS=1 TDAWN_REFRESH=1 TDAWN_FRAMES=600 tdawn FROMINSTALL', True,
          same=[(r'^(tdsum: .*)', 'tdawn-move')]),
     # docs/games/tdawn.md, "The window's size": the window made wide (792 x 300): the screen laid out at 528 x 200 (its height kept, the
-    # picture scaled by 1.5); the sidebar opened (Tab), the window maximised (792 x 544, narrower than the game's shape): 320 x 200 again, shown
-    # scaled by one factor with black above and below, a click on a unit selects it and one on the sidebar's Repair presses it, both through that
+    # picture scaled by 1.5); the sidebar opened (Tab), the window maximised (794 x 545, narrower than the game's shape): 320 x 220, as tall as
+    # the window's shape (no black above and below), a click on a unit selects it and one on the sidebar's Repair presses it, both through that
     # scaling; put back, 528 x 200 and Repair at the right edge. WIN_AT says where a place of a SW x SH screen is on the display.
     case('tdawn-window', 'games tdawn desktop', WIN_AT + 'nx; sleep 3; (' + TD + 'TDAWN_SCEN=10 TDAWN_INPUT_LOG=1 TDAWN_RESIZE=792x300 tdawn FROMINSTALL '
-         '2>&1 | grep -v tdstat &); T=Tiberian; sleep 60; nxkey tab; sleep 3; nxkey ctrl+f10; sleep 20; at 320 200 82 89; sleep 5; at 320 200 258 84; '
+         '2>&1 | grep -v tdstat &); T=Tiberian; sleep 60; nxkey tab; sleep 3; nxkey ctrl+f10; sleep 20; at 320 220 82 89; sleep 5; at 320 220 258 84; '
          'sleep 5; nxkey ctrl+f10; sleep 20; at 528 200 466 84; sleep 5; killall game', True, wall=600,
-         has=[r'tdawn: the screen laid out at 528x200 \(the view 528x192\)', r'tdawn: the screen laid out at 320x200 \(the view 240x192\)',
+         has=[r'tdawn: the screen laid out at 528x200 \(the view 528x192\)', r'tdawn: the screen laid out at 320x220 \(the view 240x212\)',
               r'tdawn: 1 selected', r'tdawn: the screen laid out at 528x200 \(the view 448x192\)'],
          count=[(r'tdawn: the sidebar.s repair button pressed', 2)]),
     # docs/games/ralert.md, "The window's size": the same for Red Alert: wide, 1,056 x 400 (scaled by 0.75), a soldier selected and Repair pressed
-    # at the right edge through the scaling; maximised, 640 x 400 with black above and below (the view 480 x 384) and Repair where it always was;
+    # at the right edge through the scaling; maximised, 640 x 440, as tall as the window's shape (the view 480 x 424), and Repair where it always was;
     # put back, 1,056 x 400 again (going wide moves the view to the map's left edge, as Set_View_Dimensions confines it: the clicks on the map
     # come first)
     case('ralert-window', 'games ralert desktop', WIN_AT + 'nx; sleep 3; (TDAWN_AUTO=1 RALERT_SIDE=allies RALERT_SEED=7 TDAWN_INPUT_LOG=1 '
          'TDAWN_RESIZE=792x300 ralert 2>&1 | grep -v ralstat &); T="Red Alert"; sleep 90; at 1056 400 631 199; sleep 5; at 1056 400 924 158; sleep 5; '
-         'nxkey ctrl+f10; sleep 25; at 640 400 508 158; sleep 5; nxkey ctrl+f10; sleep 25; killall game', True, wall=600,
-         has=[r'ralert: the screen laid out at 1056x400 \(the view \d+x384\)', r'ralert: the screen laid out at 640x400 \(the view 480x384\)',
+         'nxkey ctrl+f10; sleep 25; at 640 440 508 158; sleep 5; nxkey ctrl+f10; sleep 25; killall game', True, wall=600,
+         has=[r'ralert: the screen laid out at 1056x400 \(the view \d+x384\)', r'ralert: the screen laid out at 640x440 \(the view 480x424\)',
               r'ralert: [1-9]\d* selected'],
          count=[(r'ralert: the sidebar.s repair button pressed', 2), (r'ralert: the screen laid out at 1056x400', 2)]),
     # docs/games/tdawn.md, "A mission won": the demo's first mission won, its score screen, the next mission played
@@ -381,7 +381,7 @@ CASES = [
     case('jk2-resize', 'games jk2 desktop long', 'nx; sleep 3; if [ -f /usr/share/jk2/jk2demo.exe ]; then (sleep 6; nxkey pagedown; sleep 1; '
          'nxkey end; sleep 1; nxkey tab enter) & jk2 --unpack; (JK2_POINTER_LOG=1 jk2 &); sleep 320; nxkey ctrl+alt+up; sleep 120; '
          'set -- $(nxwintest list | grep Jedi); P=${5%,*}; Q=${5#*,}; S=$6; W=${S%x*}; H=${S#*x}; echo PLACE $P $Q $W $H; nxkey enter; sleep 40; '
-         'nxkey $((P+3+500*(W-6)/640)),$((Q+26+455*(H-29)/480)); sleep 200; killall jk2.bin; else echo JK2-NO-DATA; fi', True, wall=2400,
+         'C=$((W-6)); D=$((H-29)); nxkey $((P+3+500*D/480+(C-640*D/480)/2)),$((Q+26+455*D/480)); sleep 200; killall jk2.bin; else echo JK2-NO-DATA; fi', True, wall=2400,
          has=[r'(jk2: the window is \d+x\d+: the renderer restarted at \d+x\d+|JK2-NO-DATA)', r'(^PLACE \d+ \d+ \d+ \d+|JK2-NO-DATA)',
               r'(jk2pointer: \d+,\d+ of the display to (49\d|50\d),(44\d|45\d|46\d) of the menu|JK2-NO-DATA)',
               r'(Server Initialization|SpawnServer|JK2-NO-DATA)']),

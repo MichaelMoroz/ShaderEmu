@@ -50,7 +50,12 @@ uint8_t *aoe_win_open(int w, int h, const char *title)
      * screen has room for"), and the game's picture stays whole, above the bar. */
     GR_SCREEN_INFO screen;
     GrGetScreenInfo(&screen);
-    window = GrNewWindowEx(GR_WM_PROPS_APPWINDOW | (screen.rows < h + 58 ? GR_WM_PROPS_ONTOP : 0), (char *) title, GR_ROOT_WINDOW_ID, -1, -1, w, h, 0);
+    /* Started from the desktop as a game, it opens at the maximised size it is given (SE_MAXIMISED, ui_launch.h): the window
+     * manager then maximises it with no resize, and the picture is stretched over it as over any resized window. */
+    int ww = w, wh = h;
+    if (getenv("SE_MAXIMISED") && sscanf(getenv("SE_MAXIMISED"), "%dx%d", &ww, &wh) != 2) ww = w, wh = h;
+    if (ww < 320 || wh < 200) ww = w, wh = h;
+    window = GrNewWindowEx(GR_WM_PROPS_APPWINDOW | (screen.rows < wh + 58 ? GR_WM_PROPS_ONTOP : 0), (char *) title, GR_ROOT_WINDOW_ID, -1, -1, ww, wh, 0);
     GrSelectEvents(window, GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_KEY_UP | GR_EVENT_MASK_BUTTON_DOWN |
         GR_EVENT_MASK_BUTTON_UP | GR_EVENT_MASK_MOUSE_POSITION | GR_EVENT_MASK_CLOSE_REQ | GR_EVENT_MASK_UPDATE | GR_EVENT_MASK_EXPOSURE);
     {

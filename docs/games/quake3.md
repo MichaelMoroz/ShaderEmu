@@ -23,9 +23,15 @@ and EXIT, which asks nothing. Its icon is ioquake3's (`linux/apps/icons/quake3.p
 A menu's cursor is the desktop's pointer: `SE_Input` tells the menus where it is in the
 window, not how far it went (`UI_MouseEvent` in the patch), and their own cursor is not drawn.
 
-The game's picture keeps the size the window had when it started and is stretched to the
-window as it is now (`picture_viewport` in `tr_shaderemu.c`); the pointer's place in a menu
-and the sky's repeats go by the same two ratios.
+Started from the desktop as a game the window opens at the maximised size (`SE_MAXIMISED`,
+`linux/apps/ui_launch.h`), so the game's screen is that size from its first frame. A window
+resized later has the game's picture stretched to it (`picture_viewport` in `tr_shaderemu.c`;
+the pointer's place in a menu and the sky's repeats go by the same two ratios) until it has kept
+its size for a second: then the video restarts at it (`vid_restart`, `resized_at`). The HUD is
+the 640 x 480 screen at one scale for both axes in the middle of the window, a picture of the
+whole screen widened to it (`CG_AdjustFrom640`, `screenXBias`/`screenYBias` in the patch; 4
+November 2026: stretched before), the menus were so already (`uis.bias`), and the view's field
+of view is a 4:3 screen's, wider in a wider window (`CG_CalcFov`).
 
 ## What the build is made of (`linux/quake3`)
 

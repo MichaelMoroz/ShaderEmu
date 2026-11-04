@@ -3801,7 +3801,7 @@ index 5464b70b..6e6d897a 100644
  
  		GL_Bind(mImage);
 diff --git a/code/rd-vanilla/tr_backend.cpp b/code/rd-vanilla/tr_backend.cpp
-index 741bb95b..a6cf4250 100644
+index 741bb95b..6bc77a78 100644
 --- a/code/rd-vanilla/tr_backend.cpp
 +++ b/code/rd-vanilla/tr_backend.cpp
 @@ -27,6 +27,10 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
@@ -3856,7 +3856,97 @@ index 741bb95b..a6cf4250 100644
  	if ( !( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) && ( r_DynamicGlow->integer && !g_bRenderGlowingObjects ) )
  	{
  		if (tr.world && tr.world->globalFog != -1)
-@@ -1568,6 +1597,9 @@ const void	*RB_SwapBuffers( const void *data ) {
+@@ -966,6 +995,28 @@ RENDER BACK END FUNCTIONS
+ ============================================================================
+ */
+ 
++/* ShaderEmu: the 640 x 480 virtual screen's rectangle in a window of another shape, and a picture of that whole screen (a
++   level's picture while it loads, a cinematic, a fade) widened to the window's (RB_SetGL2D) */
++void SE_Screen2D( float *x0, float *y0, float *x1, float *y1 )
++{
++	float w = 640, h = 480;
++	if ( glConfig.vidWidth * 480 > glConfig.vidHeight * 640 )
++		w = 480.0f * glConfig.vidWidth / glConfig.vidHeight;
++	else if ( glConfig.vidWidth > 0 )
++		h = 640.0f * glConfig.vidHeight / glConfig.vidWidth;
++	*x0 = -0.5f * ( w - 640 ), *x1 = 640 + 0.5f * ( w - 640 );
++	*y0 = -0.5f * ( h - 480 ), *y1 = 480 + 0.5f * ( h - 480 );
++}
++
++void SE_Full2D( float *x, float *y, float *w, float *h )
++{
++	float x0, y0, x1, y1;
++	if ( *x > 0 || *y > 0 || *x + *w < 640 || *y + *h < 480 )
++		return;
++	SE_Screen2D( &x0, &y0, &x1, &y1 );
++	*x = x0, *y = y0, *w = x1 - x0, *h = y1 - y0;
++}
++
+ /*
+ ================
+ RB_SetGL2D
+@@ -980,7 +1031,12 @@ void	RB_SetGL2D (void) {
+ 	qglScissor( 0, 0, glConfig.vidWidth, glConfig.vidHeight );
+ 	qglMatrixMode(GL_PROJECTION);
+     qglLoadIdentity ();
+-	qglOrtho (0, 640, 480, 0, 0, 1);
++	{	// ShaderEmu: one scale for both axes, the 640 x 480 screen in the middle of a window of any shape (the desktop's
++		// window may be any size: stretched, the menus and the HUD were wider than tall); SE_Full2D's pictures fill it
++		float x0, y0, x1, y1;
++		SE_Screen2D( &x0, &y0, &x1, &y1 );
++		qglOrtho (x0, x1, y1, y0, 0, 1);
++	}
+ 	qglMatrixMode(GL_MODELVIEW);
+     qglLoadIdentity ();
+ 
+@@ -1027,6 +1083,8 @@ const void *RB_StretchPic ( const void *data ) {
+ 	int		numVerts, numIndexes;
+ 
+ 	cmd = (const stretchPicCommand_t *)data;
++	float px = cmd->x, py = cmd->y, pw = cmd->w, ph = cmd->h;
++	SE_Full2D( &px, &py, &pw, &ph );	// ShaderEmu
+ 
+ 	if ( !backEnd.projection2D ) {
+ 		RB_SetGL2D();
+@@ -1061,29 +1119,29 @@ const void *RB_StretchPic ( const void *data ) {
+ 	baDest = (byteAlias_t *)&tess.vertexColors[numVerts + 2]; baDest->ui = baSource->ui;
+ 	baDest = (byteAlias_t *)&tess.vertexColors[numVerts + 3]; baDest->ui = baSource->ui;
+ 
+-	tess.xyz[ numVerts ][0] = cmd->x;
+-	tess.xyz[ numVerts ][1] = cmd->y;
++	tess.xyz[ numVerts ][0] = px;
++	tess.xyz[ numVerts ][1] = py;
+ 	tess.xyz[ numVerts ][2] = 0;
+ 
+ 	tess.texCoords[ numVerts ][0][0] = cmd->s1;
+ 	tess.texCoords[ numVerts ][0][1] = cmd->t1;
+ 
+-	tess.xyz[ numVerts + 1 ][0] = cmd->x + cmd->w;
+-	tess.xyz[ numVerts + 1 ][1] = cmd->y;
++	tess.xyz[ numVerts + 1 ][0] = px + pw;
++	tess.xyz[ numVerts + 1 ][1] = py;
+ 	tess.xyz[ numVerts + 1 ][2] = 0;
+ 
+ 	tess.texCoords[ numVerts + 1 ][0][0] = cmd->s2;
+ 	tess.texCoords[ numVerts + 1 ][0][1] = cmd->t1;
+ 
+-	tess.xyz[ numVerts + 2 ][0] = cmd->x + cmd->w;
+-	tess.xyz[ numVerts + 2 ][1] = cmd->y + cmd->h;
++	tess.xyz[ numVerts + 2 ][0] = px + pw;
++	tess.xyz[ numVerts + 2 ][1] = py + ph;
+ 	tess.xyz[ numVerts + 2 ][2] = 0;
+ 
+ 	tess.texCoords[ numVerts + 2 ][0][0] = cmd->s2;
+ 	tess.texCoords[ numVerts + 2 ][0][1] = cmd->t2;
+ 
+-	tess.xyz[ numVerts + 3 ][0] = cmd->x;
+-	tess.xyz[ numVerts + 3 ][1] = cmd->y + cmd->h;
++	tess.xyz[ numVerts + 3 ][0] = px;
++	tess.xyz[ numVerts + 3 ][1] = py + ph;
+ 	tess.xyz[ numVerts + 3 ][2] = 0;
+ 
+ 	tess.texCoords[ numVerts + 3 ][0][0] = cmd->s1;
+@@ -1568,6 +1626,9 @@ const void	*RB_SwapBuffers( const void *data ) {
  
      GLimp_LogComment( "***************** RB_SwapBuffers *****************\n\n\n" );
  
@@ -3866,7 +3956,7 @@ index 741bb95b..a6cf4250 100644
  	ri.WIN_Present(&window);
  
  	backEnd.projection2D = qfalse;
-@@ -1604,7 +1636,15 @@ RB_ExecuteRenderCommands
+@@ -1604,7 +1665,15 @@ RB_ExecuteRenderCommands
  void RB_ExecuteRenderCommands( const void *data ) {
  	int		t1, t2;
  
@@ -3882,7 +3972,7 @@ index 741bb95b..a6cf4250 100644
  
  	while ( 1 ) {
  		data = PADP(data, sizeof(void *));
-@@ -1628,6 +1668,13 @@ void RB_ExecuteRenderCommands( const void *data ) {
+@@ -1628,6 +1697,13 @@ void RB_ExecuteRenderCommands( const void *data ) {
  		case RC_DRAW_SURFS:
  			data = RB_DrawSurfs( data );
  			break;
@@ -3896,7 +3986,7 @@ index 741bb95b..a6cf4250 100644
  		case RC_DRAW_BUFFER:
  			data = RB_DrawBuffer( data );
  			break;
-@@ -1640,7 +1687,11 @@ void RB_ExecuteRenderCommands( const void *data ) {
+@@ -1640,7 +1716,11 @@ void RB_ExecuteRenderCommands( const void *data ) {
  		case RC_END_OF_LIST:
  		default:
  			// stop rendering
@@ -4093,10 +4183,29 @@ index 04ad9bdb..f707ce5a 100644
  
  	tr.frameCount++;
 diff --git a/code/rd-vanilla/tr_draw.cpp b/code/rd-vanilla/tr_draw.cpp
-index c67c5d0a..10b93d2f 100644
+index c67c5d0a..0ac08dfc 100644
 --- a/code/rd-vanilla/tr_draw.cpp
 +++ b/code/rd-vanilla/tr_draw.cpp
-@@ -209,6 +209,51 @@ void RE_GetScreenShot(byte *buffer, int w, int h)
+@@ -37,11 +37,18 @@ Used for cinematics.
+ */
+ 
+ // param 'bDirty' should be true 99% of the time
++void SE_Full2D( float *x, float *y, float *w, float *h );
++
+ void RE_StretchRaw (int x, int y, int w, int h, int cols, int rows, const byte *data, int iClient, qboolean bDirty )
+ {
+ 	if ( !tr.registered ) {
+ 		return;
+ 	}
++	{	// ShaderEmu: a cinematic of the whole screen fills the window (tr_backend.cpp, SE_Full2D)
++		float fx = x, fy = y, fw = w, fh = h;
++		SE_Full2D( &fx, &fy, &fw, &fh );
++		x = (int)floorf( fx ), y = (int)floorf( fy ), w = (int)ceilf( fw ), h = (int)ceilf( fh );
++	}
+ 
+ 	R_IssuePendingRenderCommands();
+ 
+@@ -209,6 +216,51 @@ void RE_GetScreenShot(byte *buffer, int w, int h)
  	R_Free(source);
  }
  
@@ -4148,7 +4257,7 @@ index c67c5d0a..10b93d2f 100644
  // this is just a chunk of code from RE_TempRawImage_ReadFromFile() below, subroutinised so I can call it
  //	from the screen dissolve code as well...
  //
-@@ -240,6 +285,40 @@ static byte *RE_ReSample(byte *pbLoadedPic,			int iLoadedWidth,	int iLoadedHeigh
+@@ -240,6 +292,40 @@ static byte *RE_ReSample(byte *pbLoadedPic,			int iLoadedWidth,	int iLoadedHeigh
  
  		byte	*pbDst = pbReSampleBuffer;
  

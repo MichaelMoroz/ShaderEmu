@@ -216,6 +216,23 @@ window_t WIN_Init( const windowDesc_t *desc, glconfig_t *glConfig )
 	int w = 640, h = 480;
 	if ( !R_GetModeInfo( &w, &h, r_mode->integer ) )
 		w = 640, h = 480;
+#ifdef SE_WINDOW
+	// The desktop starts it maximised (SE_MAXIMISED, linux/apps/ui_launch.h): the window at that size and the renderer
+	// at it (in whole 8s, as a resize's restart has it) from the first frame: no restart a second after the maximise
+	static int se_asked_once;
+	const char *se_max = getenv( "SE_MAXIMISED" );
+	int se_mw = 0, se_mh = 0;
+	if ( !se_asked_once && se_max && sscanf( se_max, "%dx%d", &se_mw, &se_mh ) == 2 && se_mw >= 320 && se_mh >= 240 ) {
+		w = se_mw > 1024 ? 1024 : se_mw & ~7, h = se_mh > 768 ? 768 : se_mh & ~7;
+		Cvar_Set( "r_mode", "-1" );
+		Cvar_SetValue( "r_customwidth", w );
+		Cvar_SetValue( "r_customheight", h );
+	} else
+		se_mw = se_mh = 0;
+	if ( !se_asked_once )   // the view a 4:3 screen's and wider in a wider window (OpenJK's cvar), as the 2D keeps its shape
+		Cvar_Set( "cg_fovAspectAdjust", "1" );
+	se_asked_once = 1;
+#endif
 	se_glconfig = glConfig;
 	glConfig->vidWidth = w;
 	glConfig->vidHeight = h;
@@ -228,7 +245,7 @@ window_t WIN_Init( const windowDesc_t *desc, glconfig_t *glConfig )
 	glConfig->isFullscreen = qfalse;
 	glConfig->stereoEnabled = qfalse;
 #ifdef SE_WINDOW
-	se_window_open( w, h );
+	se_window_open( se_mw ? se_mw : w, se_mh ? se_mh : h );	// (SE_MAXIMISED's whole size)
 #endif
 	IN_Init( NULL );
 	window_t window = {};
@@ -583,7 +600,12 @@ static void se_menu_pointer( int x, int y )
 {
 	if ( !se_origin_known )
 		gpuWindowOrigin( &se_origin_x, &se_origin_y ), se_origin_known = 1;
-	int mx = ( x - se_origin_x ) * 640 / se_win_w, my = ( y - se_origin_y ) * 480 / se_win_h;
+	// the menu's 640 x 480 in the middle of the window at one scale (the renderer's SE_Screen2D, jk2.patch)
+	int mx, my;
+	if ( se_win_w * 480 > se_win_h * 640 )
+		mx = ( x - se_origin_x ) * 480 / se_win_h - ( 480 * se_win_w / se_win_h - 640 ) / 2, my = ( y - se_origin_y ) * 480 / se_win_h;
+	else
+		mx = ( x - se_origin_x ) * 640 / se_win_w, my = ( y - se_origin_y ) * 640 / se_win_w - ( 640 * se_win_h / se_win_w - 480 ) / 2;
 	mx = mx < 0 ? 0 : mx > 640 ? 640 : mx;
 	my = my < 0 ? 0 : my > 480 ? 480 : my;
 	if ( mx == se_menu_x && my == se_menu_y )
