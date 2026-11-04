@@ -552,6 +552,33 @@ int jk2glKeptWords(uint32_t* to, const float* points, int stride, int st, const 
     }
     return floored == 2 ? 2 : 1;
 }
+// Draws of words made elsewhere (the weather's particles, by its helper: rd-vanilla's tr_WorldEffects.cpp), as
+// fast_triangles makes a vertex of a draw of many colours: positions, coordinates from 0 in 12 bits each and a tag, the
+// tag a colour of the draw's table. `tables` holds each draw's 256 colours as the GL's RGBA bytes, made the GPU's words
+// here, with the state the GL has. 0: a 2D state, which those draws never have (the caller draws them otherwise).
+int jk2glTaggedDraws(const uint32_t* words, uint32_t* tables, const int* counts, int draws) {
+    if (!on) return 1;
+    fast_ok();
+    gpu_state s;
+    if (!draw_state(&s)) return 1;   // (its texture not in GPU memory: not drawn, as fast_triangles)
+    if (!fast_passes) {
+        float m[16];
+        seglGetMatrix(GL_PROJECTION, m);
+        if (m[10] == -2.0f && m[14] == -1.0f && m[11] == 0.0f && m[15] == 1.0f) return 0;
+        depth_seen = 1;
+    }
+    uint32_t keep = blending && blend_src == GL_ONE && blend_dst == GL_ONE ? 0x00ffffffu : 0xffffffffu;
+    s.vertex = GPU_TAGGED | GPU_TABLE;
+    for (int d = 0; d < draws; d++, tables += 256) {
+        const int tags = (counts[d] + 2) / 3 > 256 ? 256 : (counts[d] + 2) / 3;   // (at most a tag a triangle)
+        for (int k = 0; k < tags; k++) tables[k] = WORD_OF(tables[k]) & keep;
+        s.colour = gpuAddress(tables);
+        if (!gpuDrawAt(&s, gpuAddress(words), counts[d])) return 1;
+        drawn_vertices += (uint32_t)counts[d];
+        words += (size_t)counts[d] * 4;
+    }
+    return 1;
+}
 // (the GPU done with the list in flight: before memory it reads where it lies, the kept faces' words, is let go)
 void jk2glSettle(void) {
     if (on) seglSettle();

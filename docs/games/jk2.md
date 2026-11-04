@@ -798,6 +798,14 @@ death and the autosave's load.
     the game's sums, and two cores stored to it. With no window (the sums' runs) it uses the game's, all on one core, as
     before.
   - `R_WorldEffectCommand` settles the drawing and the helper first. `JK2_WEATHER=drawing` is the way before.
+- **The particles' GPU words made by the weather's helper** (`CParticleCloud::SE_Words`, `SE_DrawWords`; `gl_jk2.c`,
+  `jk2glTaggedDraws`). After its update the helper writes each cloud's particles as the words `fast_triangles` makes for
+  a draw of many colours (positions, coordinates in 12 bits each, a tag a particle; at most 255 particles a draw) and
+  their colours as the GL's bytes. The drawing sets the cloud's GL state as `Render` does, makes the colours the GPU's
+  words, and draws the words where they lie. Three sets of buffers, a frame's each in turn, sized by core 0 at
+  `SE_WxScene` (a settle is allowed there, not at the give). `JK2_WEATHER_WORDS=drawing` is the way before. The walk
+  with `JK2_SOUND=mix`: the drawing's worker 1.54 to 1.37 million a frame; captured at frame 1450, the same pixels but
+  the dials.
 - **The particles and the sky drawn from arrays** (`CParticleCloud::Render`, `DrawSkySide`): one `glDrawElements` of
   triangles, cut as the shim cuts quads and strips, not a call a vertex. `JK2_WEATHER_DRAW=begin` and
   `JK2_SKY_DRAW=begin` are the ways before.

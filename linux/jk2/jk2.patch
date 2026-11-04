@@ -3698,10 +3698,10 @@ index bc5ca630..82ced818 100644
  const mdxaBone_t &EvalBoneCache(int index,CBoneCache *boneCache);
  class CTraceSurface
 diff --git a/code/rd-vanilla/tr_WorldEffects.cpp b/code/rd-vanilla/tr_WorldEffects.cpp
-index 5464b70b..6acd5a7d 100644
+index 5464b70b..a1f3c8cd 100644
 --- a/code/rd-vanilla/tr_WorldEffects.cpp
 +++ b/code/rd-vanilla/tr_WorldEffects.cpp
-@@ -92,6 +92,43 @@ inline void VectorCeil(vec3_t in)
+@@ -92,6 +92,56 @@ inline void VectorCeil(vec3_t in)
  	in[2] = ceilf(in[2]);
  }
  
@@ -3741,11 +3741,24 @@ index 5464b70b..6acd5a7d 100644
 +#define Q_irand SE_WxIrand
 +#define rand SE_WxRand
 +static const viewParms_t *se_wx_view = &backEnd.viewParms;	// (the camera the clouds are updated for)
++// A cloud's particles as the GPU's words, made by the weather's helper after its update (SE_Words) and drawn where they
++// lie by the drawing (SE_DrawWords; gl_jk2.c's jk2glTaggedDraws): a draw of at most 255 particles, a tag a particle, its
++// colour its draw's table's (the GL's bytes, made the GPU's word by the drawing). Three sets, a frame's each in turn,
++// sized by the first core at the give for the cloud's particles (JK2_WEATHER_WORDS=drawing: the drawing makes them).
++#define SE_WX_CLOUDS 8
++#define SE_WX_SETS 3
++typedef struct {
++	uint32_t *words, *tables;
++	int *counts;
++	int particles, draws, made, unused;
++} seWxOut_t;
++static seWxOut_t se_wx_out[SE_WX_SETS][SE_WX_CLOUDS];
++extern "C" int jk2glTaggedDraws( const uint32_t *words, uint32_t *tables, const int *counts, int draws );
 +#endif
  inline float	FloatRand(void)
  {
  	return ((float)rand() / (float)RAND_MAX);
-@@ -428,8 +465,21 @@ bool R_GetWindGusting(vec3_t atpoint)
+@@ -428,8 +478,21 @@ bool R_GetWindGusting(vec3_t atpoint)
  ////////////////////////////////////////////////////////////////////////////////////////
  // Outside Point Cache
  ////////////////////////////////////////////////////////////////////////////////////////
@@ -3767,7 +3780,7 @@ index 5464b70b..6acd5a7d 100644
  #define COUTSIDE_STRUCT_VERSION 1	// you MUST increase this any time you change any binary (fields) inside this class, or cahced files will fuck up
  public:
  	////////////////////////////////////////////////////////////////////////////////////
-@@ -707,8 +757,15 @@ public:
+@@ -707,8 +770,15 @@ public:
  
  		// all this piece of code does really is fill in the bool "SWeatherZone::mMarkedOutside", plus the mPointCache[] for each zone,
  		//	so we can diskload those. Maybe.
@@ -3783,7 +3796,7 @@ index 5464b70b..6acd5a7d 100644
  		{
  			for (int iZone=0; iZone<mWeatherZones.size(); iZone++)
  			{
-@@ -728,7 +785,9 @@ public:
+@@ -728,7 +798,9 @@ public:
  			uint32_t		contents;
  			uint32_t		bit;
  
@@ -3793,7 +3806,7 @@ index 5464b70b..6acd5a7d 100644
  
  			// Iterate Over All Weather Zones
  			//--------------------------------
-@@ -744,6 +803,56 @@ public:
+@@ -744,6 +816,56 @@ public:
  					Mins[x] += (POINTCACHE_CELL_SIZE/2);
  				}
  
@@ -3850,7 +3863,7 @@ index 5464b70b..6acd5a7d 100644
  
  				// Start Scanning
  				//----------------
-@@ -879,6 +988,19 @@ public:
+@@ -879,6 +1001,19 @@ public:
  	}
  };
  COutside			mOutside;
@@ -3870,7 +3883,7 @@ index 5464b70b..6acd5a7d 100644
  bool				COutside::SWeatherZone::mMarkedOutside = false;
  
  
-@@ -1035,7 +1157,13 @@ public:
+@@ -1035,7 +1170,13 @@ public:
  		mImage = R_FindImageFile(texturePath, qfalse, qfalse, qfalse, GL_CLAMP);
  		if (!mImage)
  		{
@@ -3884,7 +3897,7 @@ index 5464b70b..6acd5a7d 100644
  		}
  
  		GL_Bind(mImage);
-@@ -1174,10 +1302,17 @@ public:
+@@ -1174,10 +1315,17 @@ public:
  		// Compute Camera
  		//----------------
  		{
@@ -3902,7 +3915,111 @@ index 5464b70b..6acd5a7d 100644
  
  			if (mRotationChangeNext!=-1)
  			{
-@@ -1454,6 +1589,97 @@ public:
+@@ -1426,6 +1574,103 @@ public:
+ 	////////////////////////////////////////////////////////////////////////////////////
+ 	// Render -
+ 	////////////////////////////////////////////////////////////////////////////////////
++#ifdef SHADEREMU
++	// (the helper: the words of the particles Render would draw, as its arrays' draw makes them)
++	void		SE_Words( seWxOut_t *o )
++	{
++		static const float quad_st[4][2] = { { 0, 0 }, { 1, 0 }, { 1, 1 }, { 0, 1 } }, tri_st[3][2] = { { 1, 0 }, { 0, 1 }, { 0, 0 } };
++		static const int quad_at[6] = { 0, 1, 2, 0, 2, 3 }, tri_at[3] = { 0, 1, 2 };
++		const int nv = mVertexCount == 3 ? 3 : 4, ni = nv == 3 ? 3 : 6;
++		const int *at = nv == 3 ? tri_at : quad_at;
++		const float (*st)[2] = nv == 3 ? tri_st : quad_st;
++		uint32_t *w = o->words, *table = o->tables;
++		int draws = 0, in_draw = 0;
++		CVec3 partDirection;
++		o->made = 0;
++		if ( mParticleCount > o->particles )
++			return;	// (not sized for them: the drawing draws them as before)
++		for ( int particleNum = 0; particleNum < mParticleCount; particleNum++ )
++		{
++			WFXParticle *part = &(mParticles[particleNum]);
++			if (!part->mFlags.get_bit(WFXParticle::FLAG_RENDER))
++			{
++				continue;
++			}
++			if (mOrientWithVelocity)
++			{
++				partDirection = part->mVelocity;
++				VectorNormalize(partDirection.v);
++				mCameraDown = partDirection;
++				mCameraDown *= (mHeight * -1);
++				if (mVertexCount==4)
++				{
++					mCameraLeftPlusUp  = (mCameraLeft - mCameraDown);
++					mCameraLeftMinusUp = (mCameraLeft + mCameraDown);
++				}
++				else
++				{
++					mCameraLeftPlusUp  = (mCameraDown + mCameraLeft);
++				}
++			}
++			float c[4];
++			if (mBlendMode==0)
++				c[0] = mColor[0], c[1] = mColor[1], c[2] = mColor[2], c[3] = part->mAlpha;
++			else
++				c[0] = mColor[0]*part->mAlpha, c[1] = mColor[1]*part->mAlpha, c[2] = mColor[2]*part->mAlpha, c[3] = mColor[3]*part->mAlpha;
++			byteAlias_t ba;
++			for ( int k = 0; k < 4; k++ ) {
++				const float v = c[k] < 0.0f ? 0.0f : c[k] > 1.0f ? 1.0f : c[k];
++				ba.b[k] = (byte)( v * 255.0f + 0.5f );
++			}
++			const float *pt = part->mPosition.v;
++			vec3_t x[4];
++			if ( nv == 3 ) {
++				VectorCopy( pt, x[0] );
++				VectorAdd( pt, mCameraLeft.v, x[1] );
++				VectorAdd( pt, mCameraLeftPlusUp.v, x[2] );
++			} else {
++				VectorSubtract( pt, mCameraLeftMinusUp.v, x[0] );
++				VectorSubtract( pt, mCameraLeftPlusUp.v, x[1] );
++				VectorAdd( pt, mCameraLeftMinusUp.v, x[2] );
++				VectorAdd( pt, mCameraLeftPlusUp.v, x[3] );
++			}
++			if ( in_draw == 255 ) {
++				o->counts[draws++] = in_draw * ni, in_draw = 0, table += 256;
++			}
++			table[in_draw] = ba.ui;
++			for ( int i = 0; i < ni; i++, w += 4 ) {
++				const int v = at[i];
++				byteAlias_t f;
++				f.f = x[v][0], w[0] = f.ui;
++				f.f = x[v][1], w[1] = f.ui;
++				f.f = x[v][2], w[2] = f.ui;
++				w[3] = ( (uint32_t)( st[v][0] * 1024.0f ) & 0xfff ) | ( (uint32_t)( st[v][1] * 1024.0f ) & 0xfff ) << 12 | (uint32_t)in_draw << 24;
++			}
++			in_draw++;
++		}
++		if ( in_draw )
++			o->counts[draws++] = in_draw * ni;
++		o->draws = draws;
++		o->made = 1;
++	}
++	// (the drawing: Render's state, then the helper's words)
++	void		SE_DrawWords( seWxOut_t *o )
++	{
++		GL_State((mBlendMode==0)?(GLS_ALPHA):(GLS_SRCBLEND_ONE | GLS_DSTBLEND_ONE));
++		GL_Bind(mImage);
++		qglEnable(GL_TEXTURE_2D);
++		qglDisable(GL_CULL_FACE);
++		qglTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, (mFilterMode==0)?(GL_LINEAR):(GL_NEAREST));
++		qglTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, (mFilterMode==0)?(GL_LINEAR):(GL_NEAREST));
++		qglMatrixMode(GL_MODELVIEW);
++		qglPushMatrix();
++		jk2glTaggedDraws( o->words, o->tables, o->counts, o->draws );
++		qglEnable(GL_CULL_FACE);
++		qglPopMatrix();
++		mParticlesRendered += mParticleCountRender;
++	}
++	int			SE_Particles() const { return mParticleCount; }
++#endif
+ 	void		Render()
+ 	{
+ 		WFXParticle*	part=0;
+@@ -1454,6 +1699,97 @@ public:
  		qglPushMatrix();
  
  
@@ -4000,7 +4117,7 @@ index 5464b70b..6acd5a7d 100644
  		// Begin
  		//-------
  		qglBegin(mGLModeEnum);
-@@ -1590,6 +1816,92 @@ void R_ShutdownWorldEffects(void)
+@@ -1590,6 +1926,128 @@ void R_ShutdownWorldEffects(void)
  ////////////////////////////////////////////////////////////////////////////////////////
  // RB_RenderWorldEffects - If any particle clouds exist, this will update and render them
  ////////////////////////////////////////////////////////////////////////////////////////
@@ -4042,15 +4159,24 @@ index 5464b70b..6acd5a7d 100644
 +// The helper's job: given by the first core (its record), its stamp written when done (the helper's own texel)
 +extern "C" int jk2SkinPost( uint32_t ( *fn )( uint32_t, uint32_t ), uint32_t a0, uint32_t a1 );
 +extern "C" void jk2WaitPass( void );
-+static struct { viewParms_t view; float frametime; unsigned stamp; int local, unused; } __attribute__(( aligned( 16 ) )) se_wx_job;	// this core's
++extern "C" void jk2RenderSettle( void );
++extern "C" void jk2glSettle( void );
++extern "C" void jk2Touch( void *memory, unsigned bytes );
++static struct { viewParms_t view; float frametime; unsigned stamp; int local, set, words, unused[2]; } __attribute__(( aligned( 16 ) )) se_wx_job;	// this core's
 +static struct { volatile unsigned stamp, unused[3]; } __attribute__(( aligned( 16 ) )) se_wx_done;	// the helper's
-+static struct { unsigned scene, given; int on, unused; viewParms_t view; float frametime; } __attribute__(( aligned( 16 ) )) se_wx_core;	// this core's (the scene's view until the give)
++static struct { unsigned scene, given; int on, words; viewParms_t view; float frametime; } __attribute__(( aligned( 16 ) )) se_wx_core;	// this core's (the scene's view until the give)
 +static struct { unsigned used, unused[3]; } __attribute__(( aligned( 16 ) )) se_wx_drawing;	// the drawing's
 +static uint32_t SE_WxJob( uint32_t stamp, uint32_t unused )
 +{
 +	(void)unused;
 +	se_wx_local = se_wx_job.local;
 +	SE_WxUpdate( &se_wx_job.view, se_wx_job.frametime );
++	if ( se_wx_job.words ) {
++		se_wx_view = &se_wx_job.view;	// (as Update left the clouds' cameras: their own vectors)
++		for ( int i = 0; i < mParticleClouds.size() && i < SE_WX_CLOUDS; i++ )
++			mParticleClouds[i].SE_Words( &se_wx_out[se_wx_job.set][i] );
++		se_wx_view = &backEnd.viewParms;
++	}
 +	se_wx_done.stamp = stamp;
 +	return 0;
 +}
@@ -4068,6 +4194,31 @@ index 5464b70b..6acd5a7d 100644
 +		return;
 +	se_wx_core.view = tr.viewParms, se_wx_core.frametime = tr.refdef.frametime;
 +	se_wx_core.scene = 1;
++	static int words_on = -1;
++	if ( words_on < 0 ) {
++		const char *e = getenv( "JK2_WEATHER_WORDS" );
++		words_on = !( e && !strcmp( e, "drawing" ) );
++	}
++	se_wx_core.words = words_on && jk2glOn();
++	const int set = (int)( ( se_wx_core.given + 1 ) % SE_WX_SETS );
++	for ( int i = 0; se_wx_core.words && i < mParticleClouds.size() && i < SE_WX_CLOUDS; i++ ) {
++		seWxOut_t *o = &se_wx_out[set][i];
++		const int n = mParticleClouds[i].SE_Particles();
++		if ( n <= o->particles )
++			continue;
++		jk2RenderSettle();	// (the drawing and the GPU done with the set before it is let go)
++		jk2glSettle();
++		free( o->words );
++		const int draws = n / 255 + 1;
++		const size_t bytes = (size_t)n * 6 * 16 + (size_t)draws * 256 * 4 + (size_t)draws * sizeof( int );
++		o->words = (uint32_t *)malloc( bytes );
++		o->particles = o->words ? n : 0;
++		if ( !o->words )
++			continue;
++		o->tables = o->words + (size_t)n * 6 * 4;
++		o->counts = (int *)( o->tables + (size_t)draws * 256 );
++		jk2Touch( o->words, (unsigned)bytes );	// (stored to by this core first: the helper writes them)
++	}
 +}
 +// (this core, at the give: the frame's update to a helper, the frame before's drawn already)
 +void SE_WxGive( int to_worker )
@@ -4085,6 +4236,8 @@ index 5464b70b..6acd5a7d 100644
 +		return;
 +	se_wx_job.view = se_wx_core.view, se_wx_job.frametime = se_wx_core.frametime;
 +	se_wx_job.local = jk2glOn();
++	se_wx_job.set = (int)( ( se_wx_core.given + 1 ) % SE_WX_SETS );
++	se_wx_job.words = se_wx_core.words;
 +	se_wx_job.stamp = ++se_wx_core.given;
 +	if ( !jk2SkinPost( SE_WxJob, se_wx_job.stamp, 0 ) )
 +		se_wx_job.stamp = 0;	// (no helper free: the drawing updates them)
@@ -4093,7 +4246,7 @@ index 5464b70b..6acd5a7d 100644
  void RB_RenderWorldEffects(void)
  {
  	if (!tr.world ||
-@@ -1605,6 +1917,24 @@ void RB_RenderWorldEffects(void)
+@@ -1605,6 +2063,34 @@ void RB_RenderWorldEffects(void)
  	qglMatrixMode(GL_MODELVIEW);
  	qglLoadMatrixf(backEnd.viewParms.world.modelMatrix);
  
@@ -4103,6 +4256,16 @@ index 5464b70b..6acd5a7d 100644
 +			while ( se_wx_done.stamp != se_wx_job.stamp )
 +				jk2WaitPass();
 +			se_wx_drawing.used = se_wx_job.stamp;
++			mParticlesRendered = 0;
++			for (int i=0; i<mParticleClouds.size(); i++)
++			{
++				seWxOut_t *o = i < SE_WX_CLOUDS && se_wx_job.words ? &se_wx_out[se_wx_job.set][i] : NULL;
++				if ( o && o->made )
++					mParticleClouds[i].SE_DrawWords( o );
++				else
++					mParticleClouds[i].Render();
++			}
++			return;
 +		} else {
 +			se_wx_local = jk2glOn();
 +			SE_WxUpdate( &backEnd.viewParms, backEnd.refdef.frametime );
@@ -4118,7 +4281,7 @@ index 5464b70b..6acd5a7d 100644
  
  	// Calculate Elapsed Time For Scale Purposes
  	//-------------------------------------------
-@@ -1710,8 +2040,15 @@ qboolean WE_ParseVector( const char **text, int count, float *v ) {
+@@ -1710,8 +2196,15 @@ qboolean WE_ParseVector( const char **text, int count, float *v ) {
  }
  
  
