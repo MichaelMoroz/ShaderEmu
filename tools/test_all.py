@@ -26,6 +26,11 @@ WMC = 'export NXBAR_CLOSE_MS=1000; ' + WM   # a second for a close
 F10 = '\x1b[21~'   # (the console's TERM is linux)
 CC = 'mkdir -p /tmp/classicube; echo singleplayerphysics=false >> /tmp/classicube/options.txt; ' + X
 TD = 'TDAWN_AUTO=1 TDAWN_SEED=7 TDAWN_NO_DELAY=1 '
+# where place X, Y of a SW x SH game screen is on the display, the game's window (title T) shown scaled by one factor in the middle
+# (docs/games/tdawn.md, "The window's size"): at SW SH X Y clicks there
+WIN_AT = ('at() { SW=$1; SH=$2; X=$3; Y=$4; set -- $(nxwintest list | grep "$T"); P=${5%,*}; Q=${5#*,}; S=$6; A=$((${S%x*}-6)); '
+          'B=$((${S#*x}-29)); if [ $((A*SH)) -le $((B*SW)) ]; then PW=$A; PH=$((A*SH/SW)); else PH=$B; PW=$((B*SW/SH)); fi; '
+          'nxkey $((P+3+(A-PW)/2+X*PW/SW)),$((Q+26+(B-PH)/2+Y*PH/SH)); }; ')
 Q3 = 'QUAKE3_STATS_FRAMES=100 quake3 +set fixedtime 33 +devmap q3dm17'
 NES = X + 'NES_SUM=1 NES_PPU=inline '
 NES_RUNS = (('thwaite-120', 'NES_FRAMES=120 nes thwaite', '31a18295', 'afcb4a98'),
@@ -188,25 +193,26 @@ CASES = [
     case('tdawn-move', 'games tdawn long', X + TD + 'TDAWN_SCEN=3 TDAWN_MOVE=100,8,0 TDAWN_SUMS=1 TDAWN_FRAMES=600 tdawn FROMINSTALL', True, count=[(r'^tdsum: ', 600)]),
     case('tdawn-move-refresh', 'games tdawn long', X + TD + 'TDAWN_SCEN=3 TDAWN_MOVE=100,8,0 TDAWN_SUMS=1 TDAWN_REFRESH=1 TDAWN_FRAMES=600 tdawn FROMINSTALL', True,
          same=[(r'^(tdsum: .*)', 'tdawn-move')]),
-    # docs/games/tdawn.md, "The window's size": the sidebar opened (Tab), the window maximised: the screen laid out at 392 x 272 with the
-    # sidebar at its right edge, a click on a unit of the map selects it and one on the sidebar's Repair (where it is now) presses it;
-    # put back, 320 x 200 again and Repair where it always was
-    case('tdawn-window', 'games tdawn desktop', 'nx; sleep 3; (' + TD + 'TDAWN_SCEN=10 TDAWN_INPUT_LOG=1 tdawn FROMINSTALL 2>&1 | grep -v tdstat &); '
-         'sleep 60; nxkey tab; sleep 3; nxkey ctrl+f10; sleep 20; set -- $(nxwintest list | grep Tiberian); P=${5%,*}; Q=${5#*,}; S=$6; W=${S%x*}; '
-         'H=${S#*x}; nxkey $((P+3+82*(W-6)/392)),$((Q+26+89*(H-29)/272)); sleep 5; nxkey $((P+3+330*(W-6)/392)),$((Q+26+84*(H-29)/272)); sleep 5; '
-         'nxkey ctrl+f10; sleep 20; set -- $(nxwintest list | grep Tiberian); P=${5%,*}; Q=${5#*,}; nxkey $((P+3+258*2)),$((Q+26+84*2)); sleep 5; '
-         'killall game', True, wall=600,
-         has=[r'tdawn: the screen laid out at 392x272 \(the view 312x264\)', r'tdawn: 1 selected', r'tdawn: the screen laid out at 320x200 \(the view 240x192\)'],
+    # docs/games/tdawn.md, "The window's size": the window made wide (792 x 300): the screen laid out at 528 x 200 (its height kept, the
+    # picture scaled by 1.5); the sidebar opened (Tab), the window maximised (792 x 544, narrower than the game's shape): 320 x 200 again, shown
+    # scaled by one factor with black above and below, a click on a unit selects it and one on the sidebar's Repair presses it, both through that
+    # scaling; put back, 528 x 200 and Repair at the right edge. WIN_AT says where a place of a SW x SH screen is on the display.
+    case('tdawn-window', 'games tdawn desktop', WIN_AT + 'nx; sleep 3; (' + TD + 'TDAWN_SCEN=10 TDAWN_INPUT_LOG=1 TDAWN_RESIZE=792x300 tdawn FROMINSTALL '
+         '2>&1 | grep -v tdstat &); T=Tiberian; sleep 60; nxkey tab; sleep 3; nxkey ctrl+f10; sleep 20; at 320 200 82 89; sleep 5; at 320 200 258 84; '
+         'sleep 5; nxkey ctrl+f10; sleep 20; at 528 200 466 84; sleep 5; killall game', True, wall=600,
+         has=[r'tdawn: the screen laid out at 528x200 \(the view 528x192\)', r'tdawn: the screen laid out at 320x200 \(the view 240x192\)',
+              r'tdawn: 1 selected', r'tdawn: the screen laid out at 528x200 \(the view 448x192\)'],
          count=[(r'tdawn: the sidebar.s repair button pressed', 2)]),
-    # docs/games/ralert.md, "The window's size": the same for Red Alert (scale 1): maximised 792 x 544 (the view 624 x 528), a soldier
-    # selected, Repair pressed where the sidebar now has it; put back, 640 x 400 and Repair where it always was
-    case('ralert-window', 'games ralert desktop', 'nx; sleep 3; (TDAWN_AUTO=1 RALERT_SIDE=allies RALERT_SEED=7 TDAWN_INPUT_LOG=1 ralert 2>&1 | grep -v ralstat &); '
-         'sleep 90; nxkey ctrl+f10; sleep 25; set -- $(nxwintest list | grep "Red Alert"); P=${5%,*}; Q=${5#*,}; S=$6; W=${S%x*}; H=${S#*x}; '
-         'nxkey $((P+3+214*(W-6)/792)),$((Q+26+199*(H-29)/544)); sleep 5; nxkey $((P+3+660*(W-6)/792)),$((Q+26+158*(H-29)/544)); sleep 5; '
-         'nxkey ctrl+f10; sleep 25; set -- $(nxwintest list | grep "Red Alert"); P=${5%,*}; Q=${5#*,}; nxkey $((P+3+508)),$((Q+26+158)); sleep 5; '
-         'killall game', True, wall=600,
-         has=[r'ralert: the screen laid out at 792x544 \(the view 624x528\)', r'ralert: [1-9]\d* selected', r'ralert: the screen laid out at 640x400 \(the view 480x384\)'],
-         count=[(r'ralert: the sidebar.s repair button pressed', 2)]),
+    # docs/games/ralert.md, "The window's size": the same for Red Alert: wide, 1,056 x 400 (scaled by 0.75), a soldier selected and Repair pressed
+    # at the right edge through the scaling; maximised, 640 x 400 with black above and below (the view 480 x 384) and Repair where it always was;
+    # put back, 1,056 x 400 again (going wide moves the view to the map's left edge, as Set_View_Dimensions confines it: the clicks on the map
+    # come first)
+    case('ralert-window', 'games ralert desktop', WIN_AT + 'nx; sleep 3; (TDAWN_AUTO=1 RALERT_SIDE=allies RALERT_SEED=7 TDAWN_INPUT_LOG=1 '
+         'TDAWN_RESIZE=792x300 ralert 2>&1 | grep -v ralstat &); T="Red Alert"; sleep 90; at 1056 400 631 199; sleep 5; at 1056 400 924 158; sleep 5; '
+         'nxkey ctrl+f10; sleep 25; at 640 400 508 158; sleep 5; nxkey ctrl+f10; sleep 25; killall game', True, wall=600,
+         has=[r'ralert: the screen laid out at 1056x400 \(the view \d+x384\)', r'ralert: the screen laid out at 640x400 \(the view 480x384\)',
+              r'ralert: [1-9]\d* selected'],
+         count=[(r'ralert: the sidebar.s repair button pressed', 2), (r'ralert: the screen laid out at 1056x400', 2)]),
     # docs/games/tdawn.md, "A mission won": the demo's first mission won, its score screen, the next mission played
     case('tdawn-won', 'games tdawn', X + TD + 'TDAWN_SCEN=1 TDAWN_WIN=100 TDAWN_FRAMES=300 tdawn FROMINSTALL', True, wall=400,
          has=[r'^tdawn: score: ends', r'done at frame 300: SCG10EA, .* state 325b1830'], never=[r'Segmentation fault', r'out of memory']),
@@ -385,6 +391,13 @@ CASES = [
               r'^(cabinst: accept refused: the licence is not read to its end|JK2-NO-DATA)', r'^(cabinst: licence at line \d+ of \d+, its end|JK2-NO-DATA)',
               r'^(cabinst: accepted|JK2-NO-DATA)', r'^(cabinst: round 9: 64001989 of 64001989 bytes of the files, 1 of 1 whole|JK2-NO-DATA)',
               r'^(cabinst: sum 239abc19 64001989 \\Disk1\\GameData\\demo\\assets0\.pk3|JK2-NO-DATA)', r'^(INSTALL=0|JK2-NO-DATA)']),
+    # the starters delete what they unpacked when the game ends (docs/system/install.md): 34 and 64 MB of RAM
+    case('aoe-cleanup', 'games aoe', AOE_UNPACK + X + 'if [ -f /tmp/aoe/Empires.dat ]; then AOE_TICK_MS=33 AOE_SCRIPT="3000 quit" aoe > /dev/null; '
+         'echo AOE=$?; ls -d /tmp/aoe 2>&1; else echo AOE-NO-DATA; fi', True, wall=300,
+         has=[r'^(AOE=0|AOE-NO-DATA)', r'(/tmp/aoe: No such file|AOE-NO-DATA)']),
+    case('jk2-cleanup', 'games jk2', 'if [ -f /usr/share/jk2/jk2demo.exe ]; then echo yes | jk2 --unpack > /dev/null; ls /tmp/jk2/base; '
+         'JK2_FRAMES=60 jk2 +set fixedtime 50 < /dev/null > /dev/null; echo JK2=$?; ls -d /tmp/jk2 2>&1; else echo JK2-NO-DATA; fi', True, wall=300,
+         has=[r'(assets0\.pk3|JK2-NO-DATA)', r'^(JK2=0|JK2-NO-DATA)', r'(/tmp/jk2: No such file|JK2-NO-DATA)']),
     case('jk2-sums', 'games jk2 long', 'if [ -f /usr/share/jk2/jk2demo.exe ]; then JK2_FRAMES=4000 JK2_SUM=400 JK2_SEED=7 jk2 +set fixedtime 50 '
          '+set com_maxfps 0 +map demo; else echo JK2-NO-DATA; fi', wall=1200, more=['--expect', 'Type yes', '--send', 'yes\\n'],
          has=[r'^.*(jk2sum: frame 3200 time 161250 entities 639 sum 559c85a7 draws 810d9e76|JK2-NO-DATA)',
@@ -907,6 +920,11 @@ CASES = [
     # a title said while another window has the keyboard reaches the bar's button (GR_WM_TELL_TITLE)
     case('wm-retitle', 'desktop wm', WM + "echo 'BEGIN{printf \"%c]0;Retitled%c\",27,7}' > /tmp/a.awk; (echo '#!/bin/sh'; echo 'sleep 6'; echo 'awk -f /tmp/a.awk'; echo 'sleep 3') > /tmp/rt; chmod +x /tmp/rt; nxterm /tmp/rt & sleep 2; nxwintest plain b & sleep 8; killall nxterm", wall=120,
          has=[r'^nxbar: buttons: .*\[Retitled x1']),
+    # a game the bar starts opens maximised (GR_WMC_MAXIMISE, wmclients.c), and those it starts; not with wm.maximise_games 0
+    case('wm-game', 'desktop wm', "echo '#!/bin/sh' > /tmp/g; echo 'nxwintest plain g' >> /tmp/g; chmod +x /tmp/g; echo 'Games/Test game=/tmp/g' > /usr/share/nxapps.99-test; "
+         "nxreg set bar.pinned /tmp/g; " + WM + "nxkey 49,586; sleep 4; nxwintest list; nxkey alt+f4 2000; nxreg set wm.maximise_games 0; "
+         "nxkey 49,586; sleep 4; nxwintest list; nxreg unset bar.pinned; nxreg unset wm.maximise_games", wall=120,
+         has=[r'^win 0 g 0,0 800x574 mapped maximised', r'^win 0 g [\d,]+ 246x149 mapped focus']),
     case('wm-single', 'desktop wm', WM + "nxsettings & sleep 4; nxwintest plain b & sleep 2; nxwintest list; nxsettings; echo SECOND=$?; sleep 1; nxwintest list", wall=120,
          has=[r'^SECOND=0', r'^win 0 Settings .* focus'], count=[(r'^win \d Settings', 2)]),
 ]

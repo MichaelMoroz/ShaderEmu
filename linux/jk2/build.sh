@@ -255,7 +255,8 @@ else
     cat > "$OUT/usr/bin/jk2" <<'EOF'
 #!/bin/sh
 # Jedi Outcast's demo (docs/games/jk2.md): LucasArts' installer lies unchanged in the ROM, and its pak is unpacked into
-# memory once a session, after the licence read out of it is accepted (cabinst, docs/system/install.md)
+# memory at each start, after the licence read out of it is accepted (cabinst, docs/system/install.md), and deleted when
+# the game ends: it is 64 MB of RAM
 cabinst --title "Jedi Outcast (demo)" --licence Disk1/Install/license.txt --key jk2.eula /usr/share/jk2/jk2demo.exe /tmp/jk2 \
     Disk1/GameData/demo/assets0.pk3=base/assets0.pk3 || exit $?
 [ "$1" = --unpack ] && exit 0	# (only that: a test unpacks first, then plays)
@@ -265,7 +266,9 @@ P=/persistence; mkdir -p $P/jk2 2>/dev/null || P=/tmp
 # quotes keep the engine's command line from cutting the bind at its +); pictures a quarter of their size each way, the
 # GPU's memory being 36 MB of RAM (gl_jk2.c); triangles as glDrawElements, not strips of glArrayElement (four thousand
 # primitives a frame, each a draw of its own)
-exec jk2.bin +set fs_basepath /tmp/jk2 +set fs_homepath $P/jk2 +set com_demo 1 +bind CTRL '"+attack"' +set r_picmip 2 +set r_primitives 2 "$@"
+# (not exec: the shell waits, and deletes the pak however the game ends)
+trap 'rm -rf /tmp/jk2' EXIT; trap 'exit 143' TERM INT HUP
+jk2.bin +set fs_basepath /tmp/jk2 +set fs_homepath $P/jk2 +set com_demo 1 +bind CTRL '"+attack"' +set r_picmip 2 +set r_primitives 2 "$@"
 EOF
     chmod 755 "$OUT/usr/bin/jk2"
     # the Start menu's entry; data.py puts it into an image with the demo, never into the shared one

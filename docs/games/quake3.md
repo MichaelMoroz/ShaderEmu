@@ -66,6 +66,14 @@ and the sky's repeats go by the same two ratios.
 - **Shaders** are the scripts' stages reduced to what the GPU has: one of four passes, a
   colour that may be a wave, a texture that may move. A reflection (`tcGen environment`) is
   left out, and what is blended over one is laid on its mean colour.
+- **A stage of several pictures** (`animMap`) is that many rows of the texture table one after
+  another, which the renderer counts on (`st->texture + frame`): a picture made before, by
+  another stage or earlier in the same list, is a copy of its row (`texture_copies` in
+  `bake.py`). Until 4 November 2026 such a frame was whatever texture came next: the launch
+  pads' arrows were the rocket explosion's pictures added over the whole pad three times in
+  four, and a rocket explosion's last eighth added a square of another picture at full strength
+  (a box round whoever it hit). The rail's and the bullet's impacts had wrong last frames too,
+  which their 600 ms never reach.
 - **The level** is triangles sorted by shader stage, three vertices each, patches cut into
   4 x 4 pieces; a light map and the texture it lights are one draw. A texture with no script
   is lit by its surface's light map too, as the game does, and on a surface with no light map
@@ -534,6 +542,17 @@ Hold a frame under `rvc_harness --cpu` with `--save-state` and `--gpu-capture`, 
 
 and compare views of the level (`devmap`, `setviewpos`, `wait 90; hold`), away from triangle edges.
 `hold` waits for the GPU. `QUAKE3_SEED` compares two builds' runs ("The server's frame made shorter").
+`rvc_cpu --save-ram FILE` at `quake3: holding frame` is enough for the model:
+`python tools\gpu_reference.py FILE - --size 640x480 --rom ROOTFS --png PREFIX` draws it with no card.
+
+**As Quake III draws it.** `bash linux/quake3/mesa_reference.sh build` (in WSL) compiles ioquake3 at
+`build.sh`'s commit as it is upstream, with its own OpenGL renderer, and `shot OUT.tga "+set
+cg_thirdperson 1" "+wait 30 +setviewpos 192 -380 40 90"` loads q3dm17 from the demo's own pak and
+writes a screenshot drawn by Mesa's llvmpipe: the same view as the machine's held frame
+(`+set fixedtime 33 +set cg_thirdperson 1 +devmap q3dm17`, `setviewpos 192 -380 40 90` typed at frame
+100). A shader's waves and pictures go by the clock, which is not the machine's: compare shapes,
+masks and passes, not the phase of an animation. Its own words follow the map's load, so `+addbot
+sarge 1 +wait 100 +team spectator +wait 60 +follownext` and `cg_thirdperson` show a bot from behind.
 
 ## Not done
 

@@ -93,8 +93,9 @@ riscv32-linux-strip -o "$OUT/usr/bin/aoeprep" "$OBJ/aoeprep"
 cat > "$OUT/usr/bin/aoe" <<'EOF'
 #!/bin/sh
 # Age of Empires (docs/games/aoe.md): Microsoft's trial lies unchanged in the ROM. The files the game reads are unpacked into
-# memory once a session, after the licence read out of it is accepted (cabinst, docs/system/install.md), and its strings and
-# its faces' pixels and its menus' pictures at its window's size are made from them (aoeprep)
+# memory at each start, after the licence read out of it is accepted (cabinst, docs/system/install.md), and its strings and
+# its faces' pixels and its menus' pictures at its window's size are made from them (aoeprep); they are deleted when the
+# game ends, as they are 34 MB of RAM
 D=/tmp/aoe
 cabinst --title "Age of Empires (trial)" --licence eula.txt --key aoe.eula /usr/share/aoe/MSAoE.exe $D '*.drs' '*.ai' '*.per' \
     '*.rps' '*.cty' '*.col' '*.scn' '*.cpn' '*.ply' '*.mid' '*.wav' '*.inf' Tileedge.dat Empires.dat language.dll '*.ttf' || exit $?
@@ -103,7 +104,9 @@ cabinst --title "Age of Empires (trial)" --licence eula.txt --key aoe.eula /usr/
 [ -e $D/genmidi.op2 ] || ln -s /usr/share/aoe/genmidi.op2 $D/genmidi.op2 2>/dev/null
 [ "$1" = --unpack ] && exit 0	# (only that: a test unpacks first, then plays)
 P=/persistence; mkdir -p $P/aoe 2>/dev/null || P=/tmp; mkdir -p $P/aoe
-AOE_DATA=${AOE_DATA:-$D} AOE_HOME=${AOE_HOME:-$P/aoe} exec aoe.bin "$@"
+# (not exec: the shell waits, and deletes what was unpacked however the game ends)
+trap 'rm -rf $D' EXIT; trap 'exit 143' TERM INT HUP
+AOE_DATA=${AOE_DATA:-$D} AOE_HOME=${AOE_HOME:-$P/aoe} aoe.bin "$@"
 EOF
 chmod +x "$OUT/usr/bin/aoe"
 mkdir -p "$OUT/usr/share"

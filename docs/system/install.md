@@ -29,8 +29,10 @@ keys (arrows, Page Up and Down, Home, End), and **Accept greyed and refused unti
 end** ("Read the licence to its end (scroll down) to accept it."); Decline, Escape or the frame's close is 1, and the
 starter ends. Without a window system the text is printed on the terminal and `yes` typed accepts it. An acceptance is
 the registry's key (`registry.h`) set to the licence's CRC-32: while `/persistence` is kept the window is not shown
-again for the same text, but the files are unpacked every session (they are in memory; `/persistence` holds 96,000
-bytes). `DEST/.unpacked` says the files are there this session, and the next start goes straight to the game.
+again for the same text, but the files are unpacked at every start (they are in memory; `/persistence` holds 96,000
+bytes). `DEST/.unpacked` says the files are there. The starters delete `DEST` when the game ends, however it ends (a
+`trap` on the shell's exit; the game is not `exec`ed): 34 and 64 MB of RAM are not left behind for the next program
+(4 November 2026). `aoe --unpack` and `jk2 --unpack` (a test's) unpack and end, leaving the files for the run after.
 
 ## Unpacking on the workers
 

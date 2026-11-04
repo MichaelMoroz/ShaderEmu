@@ -30,6 +30,14 @@ static int screen_w, screen_h;
  * so the map's kept rectangles stay as they are. The window's whole scale is the first one's.
  */
 static int unit_w, unit_h, open_scale;
+/*
+ * Where the screen is shown in the window (docs/games/tdawn.md, "The window's size"): scaled by one factor, as large as fits,
+ * in the middle, black round it; the pointer's places go through the same (picture_point). TDAWN_LAYOUT=stretch: the whole window.
+ */
+static int pic_x, pic_y, pic_w = 1, pic_h = 1;
+static int layout_stretch = -1;
+static void picture_place(void);
+static void picture_point(int x, int y, int *px, int *py);
 static unsigned screen_bytes;		/* GPU memory the pages have */
 static int sized_w, sized_h;		/* the window's size last told, and when (host_ms; 0: taken) */
 static unsigned sized_at;
@@ -326,30 +334,39 @@ host_page(int page)
 	return screen ? screen + page * screen_w * screen_h : NULL;
 }
 
+static int
+stretched(void)
+{
+	if (layout_stretch < 0) {
+		const char *how = getenv("TDAWN_LAYOUT");
+
+		layout_stretch = how && !strcmp(how, "stretch");
+	}
+	return layout_stretch;
+}
+
 /*
  * The size the window asks the screen to be laid out at (docs/games/tdawn.md, "The window's size"): a second after its last
- * change of size, the window's size at the first scale, in whole 8s across and 2s down, from the first screen's size up to
- * twice it (Tiberian Dawn's 320 x 200 to its largest view port, 640 x 400; Red Alert's 640 x 400 to 1,280 x 800). 1 and the size when that is not the screen's now; TDAWN_LAYOUT=stretch: never (the picture
- * stretched over the window, the way before).
+ * change of size, the first screen's height (Tiberian Dawn's 200 rows, Red Alert's 400: the sidebar's and the menus' art has
+ * no more) and as wide as the window's shape wants at that height, in whole 8s, from the first screen's width up to twice it
+ * (Tiberian Dawn's largest view port, 640; Red Alert's 1,280). The screen is then shown scaled by one factor (picture_place):
+ * the UI and the controls grow with the window, the map gains columns on a wide window, and a window taller than the game's
+ * shape has black above and below. 1 and the size when that is not the screen's now; TDAWN_LAYOUT=stretch: never (the
+ * picture stretched over the window, the way before).
  */
 int
 host_relayout_wanted(int *width, int *height)
 {
-	static int stretch = -1;
 	int w, h;
 
-	if (stretch < 0) {
-		const char *how = getenv("TDAWN_LAYOUT");
-
-		stretch = how && !strcmp(how, "stretch");
-	}
-	if (stretch || !sized_at || (int)(host_ms() - sized_at) < 1000)
+	if (stretched() || !sized_at || (int)(host_ms() - sized_at) < 1000)
 		return 0;
 	sized_at = 0;
-	w = (sized_w / (open_scale ? open_scale : 1)) & ~7;
-	h = (sized_h / (open_scale ? open_scale : 1)) & ~1;
+	if (sized_w <= 0 || sized_h <= 0)
+		return 0;
+	h = unit_h;
+	w = (sized_w * unit_h / sized_h + 4) & ~7;
 	w = w < unit_w ? unit_w : w > 2 * unit_w ? 2 * unit_w : w;
-	h = h < unit_h ? unit_h : h > 2 * unit_h ? 2 * unit_h : h;
 	*width = w, *height = h;
 	return w != screen_w || h != screen_h;
 }
@@ -558,7 +575,15 @@ whole_window(int origin_x, int origin_y)
 	int width, height;
 
 	seglSize(&width, &height);
-	glViewport(0, 0, width, height);
+	picture_place();
+	if (pic_w != width || pic_h != height) {
+		/* black round the picture: its viewport's draws reach only its own part */
+		glViewport(0, 0, width, height);
+		glClearColorx(0, 0, 0, ONE);
+		glClear(GL_COLOR_BUFFER_BIT);
+	}
+	/* (GL's rows count from the bottom) */
+	glViewport(pic_x, height - pic_y - pic_h, pic_w, pic_h);
 	glMatrixMode(GL_PROJECTION);
 	glLoadMatrixx(whole);
 	glMatrixMode(GL_MODELVIEW);
@@ -1889,17 +1914,47 @@ window_origin(void)
 	origin_y = y;
 }
 
+/* The screen's place in the window now (pic_x, pic_y, pic_w, pic_h): scaled by one factor, as large as fits, in the middle. */
+static void
+picture_place(void)
+{
+	int width, height;
+
+	seglSize(&width, &height);
+	width = width > 0 ? width : 1, height = height > 0 ? height : 1;
+	if (stretched() || !screen_w || !screen_h) {
+		pic_x = pic_y = 0, pic_w = width, pic_h = height;
+	} else if (width * screen_h <= height * screen_w) {	/* (a window and a screen are far below 32,768 a side) */
+		pic_w = width;
+		pic_h = width * screen_h / screen_w;
+	} else {
+		pic_h = height;
+		pic_w = height * screen_w / screen_h;
+	}
+	pic_w = pic_w > 0 ? pic_w : 1, pic_h = pic_h > 0 ? pic_h : 1;
+	pic_x = (width - pic_w) / 2;
+	pic_y = (height - pic_h) / 2;
+}
+
+/* Where a point of the window lies on the screen (as AoE's aoe_win_map): through picture_place, clamped to the screen. */
+static void
+picture_point(int x, int y, int *px, int *py)
+{
+	picture_place();
+	x = (x - pic_x) * screen_w / pic_w;
+	y = (y - pic_y) * screen_h / pic_h;
+	*px = x < 0 ? 0 : x >= screen_w ? screen_w - 1 : x;
+	*py = y < 0 ? 0 : y >= screen_h ? screen_h - 1 : y;
+}
+
 static void
 pointer_read(void)
 {
 	const volatile uint32_t *input = control(REG_INPUT);
-	int width, height;
 
 	if (!screen || (!pointer_inside && !pointer_held))
 		return;
-	seglSize(&width, &height);
-	if (width > 0 && height > 0)
-		seglPicturePoint((int)input[0] - origin_x, (int)input[1] - origin_y, screen_w, screen_h, &pointer_x, &pointer_y);
+	picture_point((int)input[0] - origin_x, (int)input[1] - origin_y, &pointer_x, &pointer_y);
 }
 
 int
@@ -2079,7 +2134,7 @@ host_event(struct host_event *event)
 			pointer_inside = 0;
 			break;
 		case GR_EVENT_TYPE_UPDATE:
-			/* the picture is stretched over the window, whatever size it is given */
+			/* the screen is scaled into the window by one factor, whatever size it is given (picture_place) */
 			if (e.update.utype == GR_UPDATE_SIZE) {
 				sized_w = e.update.width, sized_h = e.update.height, sized_at = host_ms();
 				sized_at += !sized_at;	/* (0 is none) */
@@ -2093,7 +2148,7 @@ host_event(struct host_event *event)
 		case GR_EVENT_TYPE_BUTTON_DOWN:
 		case GR_EVENT_TYPE_BUTTON_UP:
 			owed -= owed > 0;
-			seglPicturePoint(e.button.x, e.button.y, screen_w, screen_h, &pointer_x, &pointer_y);
+			picture_point(e.button.x, e.button.y, &pointer_x, &pointer_y);
 			if (e.type == GR_EVENT_TYPE_BUTTON_DOWN && pad_scroll(e.button.changebuttons) && pad_head != pad_tail) {
 				/* (the key's press now, its release at the next call) */
 				event->type = HOST_KEY;

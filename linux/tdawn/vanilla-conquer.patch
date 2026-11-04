@@ -5978,10 +5978,20 @@ index b38943f..4b3969b 100644
      int const h = 70 * factor;
      int const x = ((320 * factor) / 2) - w / 2;
 diff --git a/tiberiandawn/tab.cpp b/tiberiandawn/tab.cpp
-index d8d8a53..bf9f20a 100644
 --- a/tiberiandawn/tab.cpp
 +++ b/tiberiandawn/tab.cpp
-@@ -254,7 +254,7 @@ void TabClass::Set_Active(int select)
+@@ -127,7 +127,9 @@
+ 
+ void TabClass::Draw_Credits_Tab(void)
+ {
+-    unsigned x = Get_Resolution_Factor() ? 320 : 160;
++    // ShaderEmu: under the credits, which CreditClass::Graphic_Logic centres 120 (240) from the screen's right edge: the
++    // screen may be wider than 320 (640) (docs/games/tdawn.md, "The window's size")
++    unsigned x = SeenBuff.Get_Width() - (Get_Resolution_Factor() ? 320 : 160);
+     CC_Draw_Shape(TabShape, 0, x, 0, WINDOW_MAIN, SHAPE_NORMAL);
+ }
+ 
+@@ -254,7 +256,7 @@
  
  void TabClass::One_Time(void)
  {

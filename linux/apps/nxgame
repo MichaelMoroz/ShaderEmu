@@ -1,5 +1,5 @@
 #!/bin/sh
-# nxgame quake|quake3|openttd host|join, nxgame doom host|now: a game over the network with the other
+# nxgame quake|quake3|openttd|classicube host|join, nxgame doom host|now: a game over the network with the other
 # computers (docs/system/lan.md, "Games over the network"). A computer that hosts says so to whoever
 # asks who is there (/tmp/nxhosting, which nxnet --serve reads); a join looks for it.
 game="$1"
@@ -65,6 +65,24 @@ case "$game $how" in
         OPENTTD_JOIN=1 openttd
     fi
     ;;
+"classicube host")
+    # the player's own world served on the LAN by the game (docs/games/classicube.md, "Played together"),
+    # said to be hosted once the game is up
+    (trap - EXIT INT TERM; sleep "${NXGAME_WAIT:-30}"; echo classicube > /tmp/nxhosting) &
+    later=$!
+    CLASSICUBE_LAN=host classicube
+    ;;
+"classicube join")
+    it=$(others classicube | head -1)
+    if [ -z "$it" ]; then
+        say "Nobody is hosting ClassiCube yet: a computer that hosts says so some thirty seconds after it starts."
+        exit 1
+    fi
+    # a joiner's name is Player and its number on the LAN, as the game's own "Join a LAN game" makes it
+    third=${own%.*}; third=${third##*.}; n=$((third * 256 + ${own##*.}))
+    echo "nxgame: joining ClassiCube at $it as Player$n"
+    classicube "Player$n" lan "$it" 25565
+    ;;
 "doom host" | "doom now")
     # every player starts this: the players are the computers that say doom, in their addresses' order
     echo doom > /tmp/nxhosting
@@ -87,7 +105,7 @@ case "$game $how" in
     doom -net "$me"$rest
     ;;
 *)
-    echo "usage: nxgame quake|quake3|openttd host|join, nxgame doom host|now"
+    echo "usage: nxgame quake|quake3|openttd|classicube host|join, nxgame doom host|now"
     exit 2
     ;;
 esac
