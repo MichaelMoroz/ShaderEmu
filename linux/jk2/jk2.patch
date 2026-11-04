@@ -2044,7 +2044,7 @@ index 7f605324..6a35cd9c 100644
  	if (!local->numNodes) {
  		*results = tw.trace;
 diff --git a/code/qcommon/common.cpp b/code/qcommon/common.cpp
-index aeaff246..7e0e74b9 100644
+index aeaff246..5abeb4fe 100644
 --- a/code/qcommon/common.cpp
 +++ b/code/qcommon/common.cpp
 @@ -135,10 +135,16 @@ to the apropriate place.
@@ -2079,6 +2079,46 @@ index aeaff246..7e0e74b9 100644
  		com_showtrace = Cvar_Get ("com_showtrace", "0", CVAR_CHEAT);
  		com_speeds = Cvar_Get ("com_speeds", "0", 0);
  
+@@ -1449,7 +1462,21 @@ void Com_Frame( void ) {
+ 			timeBeforeServer = Sys_Milliseconds ();
+ 		}
+ 
++#ifdef SHADEREMU
++		// (JK2_PARTS=N: core 0's instructions in the server's frame and the client's, a line every N frames)
++		extern unsigned long long SE_Instructions( void );
++		static int se_parts_every = -1;
++		static unsigned long long se_parts[4];
++		if ( se_parts_every < 0 ) {
++			const char *e = getenv( "JK2_PARTS" );
++			se_parts_every = e ? atoi( e ) : 0;
++		}
++		unsigned long long se_t0 = se_parts_every ? SE_Instructions() : 0;
++#endif
+ 		SV_Frame (msec, fractionMsec);
++#ifdef SHADEREMU
++		unsigned long long se_t1 = se_parts_every ? SE_Instructions() : 0;
++#endif
+ 
+ 
+ 		//
+@@ -1478,6 +1505,17 @@ void Com_Frame( void ) {
+ 			}
+ 
+ 			CL_Frame (msec, fractionMsec);
++#ifdef SHADEREMU
++			if ( se_parts_every ) {
++				const unsigned long long se_t2 = SE_Instructions();
++				se_parts[0] += se_t1 - se_t0, se_parts[1] += se_t2 - se_t1, se_parts[2]++;
++				if ( se_parts[2] == (unsigned long long)se_parts_every ) {
++					Com_Printf( "jk2parts: %d frames, core 0 a frame: server %uk, client %uk\n", se_parts_every,
++						(unsigned)( se_parts[0] / se_parts[2] / 1000 ), (unsigned)( se_parts[1] / se_parts[2] / 1000 ) );
++					se_parts[0] = se_parts[1] = se_parts[2] = 0;
++				}
++			}
++#endif
+ 
+ 			if ( com_speeds->integer ) {
+ 				timeAfter = Sys_Milliseconds ();
 diff --git a/code/qcommon/files.cpp b/code/qcommon/files.cpp
 index d105742d..b3819598 100644
 --- a/code/qcommon/files.cpp
@@ -3658,10 +3698,54 @@ index bc5ca630..82ced818 100644
  const mdxaBone_t &EvalBoneCache(int index,CBoneCache *boneCache);
  class CTraceSurface
 diff --git a/code/rd-vanilla/tr_WorldEffects.cpp b/code/rd-vanilla/tr_WorldEffects.cpp
-index 5464b70b..6e6d897a 100644
+index 5464b70b..6acd5a7d 100644
 --- a/code/rd-vanilla/tr_WorldEffects.cpp
 +++ b/code/rd-vanilla/tr_WorldEffects.cpp
-@@ -428,8 +428,21 @@ bool R_GetWindGusting(vec3_t atpoint)
+@@ -92,6 +92,43 @@ inline void VectorCeil(vec3_t in)
+ 	in[2] = ceilf(in[2]);
+ }
+ 
++#ifdef SHADEREMU
++// The weather beside the drawing (docs/games/jk2.md, "The weather beside the drawing"): its update (the wind, the
++// particles moved, spawned and tested against the outside) made by a helper the first core posts at the give, from the
++// scene's view as RE_RenderWorldEffects found it, while the drawing's worker draws the frame's surfaces; the drawing waits
++// for it only at the effects, and draws the particles. With a window the weather draws its own random numbers, not the
++// game's (Q_flrand's state is the game's, in its sums, and two cores stored to it); with none (the sums' runs) the game's,
++// all on this core, as before. JK2_WEATHER=drawing: the update the drawing's, as before.
++extern "C" int jk2glOn( void );
++static int se_wx_local;
++static uint32_t se_wx_seed = 0x2545f491u;
++static float SE_WxFlrand( float min, float max )
++{
++	if ( !se_wx_local )
++		return Q_flrand( min, max );
++	se_wx_seed = se_wx_seed * 214013u + 2531011u;
++	return (float)( se_wx_seed >> 17 ) / 32768.0f * ( max - min ) + min;
++}
++static int SE_WxIrand( int min, int max )
++{
++	if ( !se_wx_local )
++		return Q_irand( min, max );
++	max++;
++	se_wx_seed = se_wx_seed * 214013u + 2531011u;
++	return (int)( ( ( se_wx_seed >> 17 ) * (uint32_t)( max - min ) ) >> 15 ) + min;
++}
++static int SE_WxRand( void )
++{
++	if ( !se_wx_local )
++		return rand();
++	se_wx_seed = se_wx_seed * 214013u + 2531011u;
++	return (int)( se_wx_seed >> 16 & 0x7fff ) * ( RAND_MAX / 0x7fff );
++}
++#define Q_flrand SE_WxFlrand
++#define Q_irand SE_WxIrand
++#define rand SE_WxRand
++static const viewParms_t *se_wx_view = &backEnd.viewParms;	// (the camera the clouds are updated for)
++#endif
+ inline float	FloatRand(void)
+ {
+ 	return ((float)rand() / (float)RAND_MAX);
+@@ -428,8 +465,21 @@ bool R_GetWindGusting(vec3_t atpoint)
  ////////////////////////////////////////////////////////////////////////////////////////
  // Outside Point Cache
  ////////////////////////////////////////////////////////////////////////////////////////
@@ -3683,7 +3767,7 @@ index 5464b70b..6e6d897a 100644
  #define COUTSIDE_STRUCT_VERSION 1	// you MUST increase this any time you change any binary (fields) inside this class, or cahced files will fuck up
  public:
  	////////////////////////////////////////////////////////////////////////////////////
-@@ -707,8 +720,15 @@ public:
+@@ -707,8 +757,15 @@ public:
  
  		// all this piece of code does really is fill in the bool "SWeatherZone::mMarkedOutside", plus the mPointCache[] for each zone,
  		//	so we can diskload those. Maybe.
@@ -3699,7 +3783,7 @@ index 5464b70b..6e6d897a 100644
  		{
  			for (int iZone=0; iZone<mWeatherZones.size(); iZone++)
  			{
-@@ -728,7 +748,9 @@ public:
+@@ -728,7 +785,9 @@ public:
  			uint32_t		contents;
  			uint32_t		bit;
  
@@ -3709,7 +3793,7 @@ index 5464b70b..6e6d897a 100644
  
  			// Iterate Over All Weather Zones
  			//--------------------------------
-@@ -744,6 +766,56 @@ public:
+@@ -744,6 +803,56 @@ public:
  					Mins[x] += (POINTCACHE_CELL_SIZE/2);
  				}
  
@@ -3766,7 +3850,7 @@ index 5464b70b..6e6d897a 100644
  
  				// Start Scanning
  				//----------------
-@@ -879,6 +951,19 @@ public:
+@@ -879,6 +988,19 @@ public:
  	}
  };
  COutside			mOutside;
@@ -3786,7 +3870,7 @@ index 5464b70b..6e6d897a 100644
  bool				COutside::SWeatherZone::mMarkedOutside = false;
  
  
-@@ -1035,7 +1120,13 @@ public:
+@@ -1035,7 +1157,13 @@ public:
  		mImage = R_FindImageFile(texturePath, qfalse, qfalse, qfalse, GL_CLAMP);
  		if (!mImage)
  		{
@@ -3800,8 +3884,258 @@ index 5464b70b..6e6d897a 100644
  		}
  
  		GL_Bind(mImage);
+@@ -1174,10 +1302,17 @@ public:
+ 		// Compute Camera
+ 		//----------------
+ 		{
++#ifdef SHADEREMU
++			mCameraPosition	= se_wx_view->ori.origin;
++			mCameraForward	= se_wx_view->ori.axis[0];
++			mCameraLeft		= se_wx_view->ori.axis[1];
++			mCameraDown		= se_wx_view->ori.axis[2];
++#else
+ 			mCameraPosition	= backEnd.viewParms.ori.origin;
+ 			mCameraForward	= backEnd.viewParms.ori.axis[0];
+ 			mCameraLeft		= backEnd.viewParms.ori.axis[1];
+ 			mCameraDown		= backEnd.viewParms.ori.axis[2];
++#endif
+ 
+ 			if (mRotationChangeNext!=-1)
+ 			{
+@@ -1454,6 +1589,97 @@ public:
+ 		qglPushMatrix();
+ 
+ 
++#ifdef SHADEREMU
++		// (arrays and one draw of triangles, not a call a vertex: gl_jk2.c's fast_triangles, about 20 instructions an
++		// index against some hundreds; the quads cut as the GL's GL_QUADS cuts them; JK2_WEATHER_DRAW=begin the way before)
++		static int se_arrays = -1;
++		if ( se_arrays < 0 ) {
++			const char *e = getenv( "JK2_WEATHER_DRAW" );
++			se_arrays = !( e && !strcmp( e, "begin" ) );
++		}
++		if ( se_arrays ) {
++			enum { SE_VERTS = 4096 };
++			static float xyz[SE_VERTS][4], st[SE_VERTS][2];
++			static uint32_t rgba[SE_VERTS];
++			static glIndex_t idx[SE_VERTS / 4 * 6];
++			static const float quad_st[4][2] = { { 0, 0 }, { 1, 0 }, { 1, 1 }, { 0, 1 } }, tri_st[3][2] = { { 1, 0 }, { 0, 1 }, { 0, 0 } };
++			const int nv = mVertexCount == 3 ? 3 : 4;
++			int verts = 0, indices = 0;
++			qglVertexPointer( 3, GL_FLOAT, 16, xyz );
++			qglEnableClientState( GL_TEXTURE_COORD_ARRAY );
++			qglTexCoordPointer( 2, GL_FLOAT, 0, st );
++			qglEnableClientState( GL_COLOR_ARRAY );
++			qglColorPointer( 4, GL_UNSIGNED_BYTE, 0, rgba );
++			for ( particleNum = 0; particleNum <= mParticleCount; particleNum++ )
++			{
++				if ( particleNum == mParticleCount || verts + nv > SE_VERTS ) {
++					if ( indices )
++						qglDrawElements( GL_TRIANGLES, indices, GL_INDEX_TYPE, idx );
++					verts = indices = 0;
++					if ( particleNum == mParticleCount )
++						break;
++				}
++				part = &(mParticles[particleNum]);
++				if (!part->mFlags.get_bit(WFXParticle::FLAG_RENDER))
++				{
++					continue;
++				}
++				if (mOrientWithVelocity)
++				{
++					partDirection = part->mVelocity;
++					VectorNormalize(partDirection.v);
++					mCameraDown = partDirection;
++					mCameraDown *= (mHeight * -1);
++					if (mVertexCount==4)
++					{
++						mCameraLeftPlusUp  = (mCameraLeft - mCameraDown);
++						mCameraLeftMinusUp = (mCameraLeft + mCameraDown);
++					}
++					else
++					{
++						mCameraLeftPlusUp  = (mCameraDown + mCameraLeft);
++					}
++				}
++				float c[4];
++				if (mBlendMode==0)
++					c[0] = mColor[0], c[1] = mColor[1], c[2] = mColor[2], c[3] = part->mAlpha;
++				else
++					c[0] = mColor[0]*part->mAlpha, c[1] = mColor[1]*part->mAlpha, c[2] = mColor[2]*part->mAlpha, c[3] = mColor[3]*part->mAlpha;
++				byteAlias_t ba;
++				for ( int k = 0; k < 4; k++ ) {
++					const float v = c[k] < 0.0f ? 0.0f : c[k] > 1.0f ? 1.0f : c[k];
++					ba.b[k] = (byte)( v * 255.0f + 0.5f );
++				}
++				const float *at = part->mPosition.v;
++				float (*x)[4] = &xyz[verts];
++				if ( nv == 3 ) {
++					VectorCopy( at, x[0] );
++					VectorAdd( at, mCameraLeft.v, x[1] );
++					VectorAdd( at, mCameraLeftPlusUp.v, x[2] );
++					for ( int k = 0; k < 3; k++ )
++						st[verts + k][0] = tri_st[k][0], st[verts + k][1] = tri_st[k][1], rgba[verts + k] = ba.ui;
++					idx[indices++] = verts, idx[indices++] = verts + 1, idx[indices++] = verts + 2;
++				} else {
++					VectorSubtract( at, mCameraLeftMinusUp.v, x[0] );
++					VectorSubtract( at, mCameraLeftPlusUp.v, x[1] );
++					VectorAdd( at, mCameraLeftMinusUp.v, x[2] );
++					VectorAdd( at, mCameraLeftPlusUp.v, x[3] );
++					for ( int k = 0; k < 4; k++ )
++						st[verts + k][0] = quad_st[k][0], st[verts + k][1] = quad_st[k][1], rgba[verts + k] = ba.ui;
++					idx[indices++] = verts, idx[indices++] = verts + 1, idx[indices++] = verts + 2;
++					idx[indices++] = verts, idx[indices++] = verts + 2, idx[indices++] = verts + 3;
++				}
++				verts += nv;
++			}
++			qglVertexPointer( 3, GL_FLOAT, 16, tess.xyz );	// (back to tess's, as the stages set them)
++			qglTexCoordPointer( 2, GL_FLOAT, 0, tess.svars.texcoords[0] );
++			qglColorPointer( 4, GL_UNSIGNED_BYTE, 0, tess.svars.colors );
++			qglEnable(GL_CULL_FACE);
++			qglPopMatrix();
++			mParticlesRendered += mParticleCountRender;
++			return;
++		}
++#endif
+ 		// Begin
+ 		//-------
+ 		qglBegin(mGLModeEnum);
+@@ -1590,6 +1816,92 @@ void R_ShutdownWorldEffects(void)
+ ////////////////////////////////////////////////////////////////////////////////////////
+ // RB_RenderWorldEffects - If any particle clouds exist, this will update and render them
+ ////////////////////////////////////////////////////////////////////////////////////////
++#ifdef SHADEREMU
++// (the wind and the clouds updated for a camera and a frame's time: the drawing's, or the helper's)
++static void SE_WxUpdate( const viewParms_t *view, float frametime )
++{
++	se_wx_view = view;
++	mMillisecondsElapsed = frametime;
++	if (mMillisecondsElapsed<1)
++	{
++		mMillisecondsElapsed = 1.0f;
++	}
++	if (mMillisecondsElapsed>1000.0f)
++	{
++		mMillisecondsElapsed = 1000.0f;
++	}
++	mSecondsElapsed = (mMillisecondsElapsed / 1000.0f);
++	if (!mFrozen)
++	{
++		mGlobalWindVelocity.Clear();
++		for (int wz=0; wz<mWindZones.size(); wz++)
++		{
++			mWindZones[wz].Update();
++			if (mWindZones[wz].mGlobal)
++			{
++				mGlobalWindVelocity += mWindZones[wz].mCurrentVelocity;
++			}
++		}
++		mGlobalWindDirection	= mGlobalWindVelocity;
++		mGlobalWindSpeed		= VectorNormalize(mGlobalWindDirection.v);
++	}
++	for (int i=0; i<mParticleClouds.size(); i++)
++	{
++		mParticleClouds[i].Update();
++	}
++	se_wx_view = &backEnd.viewParms;
++}
++// The helper's job: given by the first core (its record), its stamp written when done (the helper's own texel)
++extern "C" int jk2SkinPost( uint32_t ( *fn )( uint32_t, uint32_t ), uint32_t a0, uint32_t a1 );
++extern "C" void jk2WaitPass( void );
++static struct { viewParms_t view; float frametime; unsigned stamp; int local, unused; } __attribute__(( aligned( 16 ) )) se_wx_job;	// this core's
++static struct { volatile unsigned stamp, unused[3]; } __attribute__(( aligned( 16 ) )) se_wx_done;	// the helper's
++static struct { unsigned scene, given; int on, unused; viewParms_t view; float frametime; } __attribute__(( aligned( 16 ) )) se_wx_core;	// this core's (the scene's view until the give)
++static struct { unsigned used, unused[3]; } __attribute__(( aligned( 16 ) )) se_wx_drawing;	// the drawing's
++static uint32_t SE_WxJob( uint32_t stamp, uint32_t unused )
++{
++	(void)unused;
++	se_wx_local = se_wx_job.local;
++	SE_WxUpdate( &se_wx_job.view, se_wx_job.frametime );
++	se_wx_done.stamp = stamp;
++	return 0;
++}
++// (this core: the helper's update done, before anything changes the clouds)
++void SE_WxSettle( void )
++{
++	while ( se_wx_job.stamp && se_wx_done.stamp != se_wx_job.stamp )
++		jk2WaitPass();
++}
++// (this core, at RE_RenderScene's end: the scene the effects will be drawn for, if they will be)
++void SE_WxScene( void )
++{
++	if ( !tr.world || ( tr.refdef.rdflags & ( RDF_NOWORLDMODEL | RDF_SKYBOXPORTAL ) ) || !mParticleClouds.size() || !mOutside.Initialized()
++		|| ri.CL_IsRunningInGameCinematic() || se_wx_core.scene )
++		return;
++	se_wx_core.view = tr.viewParms, se_wx_core.frametime = tr.refdef.frametime;
++	se_wx_core.scene = 1;
++}
++// (this core, at the give: the frame's update to a helper, the frame before's drawn already)
++void SE_WxGive( int to_worker )
++{
++	if ( se_wx_core.on == 0 ) {
++		const char *e = getenv( "JK2_WEATHER" );
++		se_wx_core.on = e && !strcmp( e, "drawing" ) ? -1 : 1;
++		ri.Printf( PRINT_DEVELOPER, "jk2: the weather's update %s\n", se_wx_core.on > 0 ? "on a helper" : "the drawing's" );
++	}
++	const int scene = se_wx_core.scene;
++	se_wx_core.scene = 0;
++	SE_WxSettle();	// (the frame before's helper done: at a worker's give jk2SkinJoin has joined it already)
++	se_wx_job.stamp = 0;
++	if ( !scene || !to_worker || se_wx_core.on < 0 )
++		return;
++	se_wx_job.view = se_wx_core.view, se_wx_job.frametime = se_wx_core.frametime;
++	se_wx_job.local = jk2glOn();
++	se_wx_job.stamp = ++se_wx_core.given;
++	if ( !jk2SkinPost( SE_WxJob, se_wx_job.stamp, 0 ) )
++		se_wx_job.stamp = 0;	// (no helper free: the drawing updates them)
++}
++#endif
+ void RB_RenderWorldEffects(void)
+ {
+ 	if (!tr.world ||
+@@ -1605,6 +1917,24 @@ void RB_RenderWorldEffects(void)
+ 	qglMatrixMode(GL_MODELVIEW);
+ 	qglLoadMatrixf(backEnd.viewParms.world.modelMatrix);
+ 
++#ifdef SHADEREMU
++	if ( mOutside.Initialized() ) {
++		if ( se_wx_job.stamp && se_wx_job.stamp != se_wx_drawing.used ) {	// (the helper's update of this frame)
++			while ( se_wx_done.stamp != se_wx_job.stamp )
++				jk2WaitPass();
++			se_wx_drawing.used = se_wx_job.stamp;
++		} else {
++			se_wx_local = jk2glOn();
++			SE_WxUpdate( &backEnd.viewParms, backEnd.refdef.frametime );
++		}
++		mParticlesRendered = 0;
++		for (int i=0; i<mParticleClouds.size(); i++)
++		{
++			mParticleClouds[i].Render();
++		}
++		return;
++	}
++#endif
+ 
+ 	// Calculate Elapsed Time For Scale Purposes
+ 	//-------------------------------------------
+@@ -1710,8 +2040,15 @@ qboolean WE_ParseVector( const char **text, int count, float *v ) {
+ }
+ 
+ 
++#ifdef SHADEREMU
++extern "C" void jk2RenderSettle( void );
++#endif
+ void R_WorldEffectCommand(const char *command)
+ {
++#ifdef SHADEREMU
++	jk2RenderSettle();	// (the drawing and the weather's helper done: the clouds change here)
++	SE_WxSettle();
++#endif
+ 	if ( !command )
+ 	{
+ 		return;
 diff --git a/code/rd-vanilla/tr_backend.cpp b/code/rd-vanilla/tr_backend.cpp
-index 741bb95b..6bc77a78 100644
+index 741bb95b..ccc41b9f 100644
 --- a/code/rd-vanilla/tr_backend.cpp
 +++ b/code/rd-vanilla/tr_backend.cpp
 @@ -27,6 +27,10 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
@@ -3908,6 +4242,15 @@ index 741bb95b..6bc77a78 100644
  
  	if ( !backEnd.projection2D ) {
  		RB_SetGL2D();
+@@ -1034,7 +1092,7 @@ const void *RB_StretchPic ( const void *data ) {
+ 
+ 	shader = cmd->shader;
+ 	if ( shader != tess.shader ) {
+-		if ( tess.numIndexes ) {
++		if ( SE_TESS_PENDING ) {
+ 			RB_EndSurface();
+ 		}
+ 		backEnd.currentEntity = &backEnd.entity2D;
 @@ -1061,29 +1119,29 @@ const void *RB_StretchPic ( const void *data ) {
  	baDest = (byteAlias_t *)&tess.vertexColors[numVerts + 2]; baDest->ui = baSource->ui;
  	baDest = (byteAlias_t *)&tess.vertexColors[numVerts + 3]; baDest->ui = baSource->ui;
@@ -3946,7 +4289,49 @@ index 741bb95b..6bc77a78 100644
  	tess.xyz[ numVerts + 3 ][2] = 0;
  
  	tess.texCoords[ numVerts + 3 ][0][0] = cmd->s1;
-@@ -1568,6 +1626,9 @@ const void	*RB_SwapBuffers( const void *data ) {
+@@ -1113,7 +1171,7 @@ const void *RB_RotatePic ( const void *data )
+ 
+ 	shader = cmd->shader;
+ 	if ( shader != tess.shader ) {
+-		if ( tess.numIndexes ) {
++		if ( SE_TESS_PENDING ) {
+ 			RB_EndSurface();
+ 		}
+ 		backEnd.currentEntity = &backEnd.entity2D;
+@@ -1204,7 +1262,7 @@ const void *RB_RotatePic2 ( const void *data )
+ 
+ 		shader = cmd->shader;
+ 		if ( shader != tess.shader ) {
+-			if ( tess.numIndexes ) {
++			if ( SE_TESS_PENDING ) {
+ 				RB_EndSurface();
+ 			}
+ 			backEnd.currentEntity = &backEnd.entity2D;
+@@ -1311,7 +1369,7 @@ const void	*RB_DrawSurfs( const void *data ) {
+ 	const drawSurfsCommand_t	*cmd;
+ 
+ 	// finish any 2D drawing if needed
+-	if ( tess.numIndexes ) {
++	if ( SE_TESS_PENDING ) {
+ 		RB_EndSurface();
+ 	}
+ 
+@@ -1530,10 +1588,13 @@ RB_SwapBuffers
+ */
+ extern void RB_RenderWorldEffects( void );
+ const void	*RB_SwapBuffers( const void *data ) {
++#ifdef SHADEREMU
++	se_kept_stats.frames++;
++#endif
+ 	const swapBuffersCommand_t	*cmd;
+ 
+ 	// finish any 2D drawing if needed
+-	if ( tess.numIndexes ) {
++	if ( SE_TESS_PENDING ) {
+ 		RB_EndSurface();
+ 	}
+ 
+@@ -1568,6 +1629,9 @@ const void	*RB_SwapBuffers( const void *data ) {
  
      GLimp_LogComment( "***************** RB_SwapBuffers *****************\n\n\n" );
  
@@ -3956,13 +4341,23 @@ index 741bb95b..6bc77a78 100644
  	ri.WIN_Present(&window);
  
  	backEnd.projection2D = qfalse;
-@@ -1604,7 +1665,15 @@ RB_ExecuteRenderCommands
+@@ -1582,7 +1646,7 @@ const void	*RB_WorldEffects( const void *data )
+ 	cmd = (const setModeCommand_t *)data;
+ 
+ 	// Always flush the tess buffer
+-	if ( tess.shader && tess.numIndexes )
++	if ( tess.shader && SE_TESS_PENDING )
+ 	{
+ 		RB_EndSurface();
+ 	}
+@@ -1604,7 +1668,16 @@ RB_ExecuteRenderCommands
  void RB_ExecuteRenderCommands( const void *data ) {
  	int		t1, t2;
  
 +#ifdef SHADEREMU
 +	const int here = jk2RenderWorkerHere();	// (on the worker: no system call for the time)
 +	t1 = here ? 0 : ri.Milliseconds ();
++	memset( &backEnd.pc, 0, sizeof( backEnd.pc ) );	// (its counters its own: core 0 no longer clears them, tr_cmds.cpp)
 +	if ( here ) {
 +		glState.finishCalled = qfalse;	// (RE_BeginFrame's, for the frame it draws)
 +	}
@@ -3972,7 +4367,7 @@ index 741bb95b..6bc77a78 100644
  
  	while ( 1 ) {
  		data = PADP(data, sizeof(void *));
-@@ -1628,6 +1697,13 @@ void RB_ExecuteRenderCommands( const void *data ) {
+@@ -1628,6 +1701,13 @@ void RB_ExecuteRenderCommands( const void *data ) {
  		case RC_DRAW_SURFS:
  			data = RB_DrawSurfs( data );
  			break;
@@ -3986,7 +4381,7 @@ index 741bb95b..6bc77a78 100644
  		case RC_DRAW_BUFFER:
  			data = RB_DrawBuffer( data );
  			break;
-@@ -1640,7 +1716,11 @@ void RB_ExecuteRenderCommands( const void *data ) {
+@@ -1640,7 +1720,11 @@ void RB_ExecuteRenderCommands( const void *data ) {
  		case RC_END_OF_LIST:
  		default:
  			// stop rendering
@@ -3999,7 +4394,7 @@ index 741bb95b..6bc77a78 100644
  			return;
  		}
 diff --git a/code/rd-vanilla/tr_bsp.cpp b/code/rd-vanilla/tr_bsp.cpp
-index afbbb175..53dc6533 100644
+index afbbb175..c402dca7 100644
 --- a/code/rd-vanilla/tr_bsp.cpp
 +++ b/code/rd-vanilla/tr_bsp.cpp
 @@ -171,6 +171,27 @@ R_LoadLightmaps
@@ -4082,7 +4477,28 @@ index afbbb175..53dc6533 100644
  
  	if ( r_lightmap->integer == 2 )	{
  		ri.Printf( PRINT_ALL, "Brightest lightmap value: %d\n", ( int ) ( maxIntensity * 255 ) );
-@@ -1448,6 +1495,11 @@ void RE_LoadWorldMap_Actual( const char *name, world_t &worldData, int index ) {
+@@ -406,6 +453,9 @@ static void ParseFace( dsurface_t *ds, mapVert_t *verts, msurface_t *surf, int *
+ 	cv->numPoints = numPoints;
+ 	cv->numIndices = numIndexes;
+ 	cv->ofsIndices = ofsIndexes;
++#ifdef SHADEREMU
++	cv->seIndex = index ? -1 : (int)( surf - worldData.surfaces );
++#endif
+ 
+ 	verts += LittleLong( ds->firstVert );
+ 	for ( i = 0 ; i < numPoints ; i++ ) {
+@@ -1435,6 +1485,10 @@ void RE_LoadWorldMap_Actual( const char *name, world_t &worldData, int index ) {
+ 
+ 		// only set tr.world now that we know the entire level has loaded properly
+ 		tr.world = &worldData;
++#ifdef SHADEREMU
++		if ( !index )
++			SE_KeptWorld( &worldData );
++#endif
+ 	}
+ 
+ 
+@@ -1448,6 +1502,11 @@ void RE_LoadWorldMap_Actual( const char *name, world_t &worldData, int index ) {
  		//
  		//		R_Free( gpvCachedMapDiskImage );
  		//				gpvCachedMapDiskImage = NULL;
@@ -4095,10 +4511,64 @@ index afbbb175..53dc6533 100644
  	else
  	{
 diff --git a/code/rd-vanilla/tr_cmds.cpp b/code/rd-vanilla/tr_cmds.cpp
-index 04ad9bdb..f707ce5a 100644
+index 04ad9bdb..418bf253 100644
 --- a/code/rd-vanilla/tr_cmds.cpp
 +++ b/code/rd-vanilla/tr_cmds.cpp
-@@ -89,6 +89,22 @@ void R_PerformanceCounters( void ) {
+@@ -35,30 +35,37 @@ R_PerformanceCounters
+ void R_PerformanceCounters( void ) {
+ 	if ( !r_speeds->integer ) {
+ 		// clear the counters even if we aren't printing
++#ifdef SHADEREMU
++		if ( !SE_FrontWorker() )
++			memset( &SE_PC, 0, sizeof( SE_PC ) );
++#else
+ 		memset( &tr.pc, 0, sizeof( tr.pc ) );
++#endif
++#ifndef SHADEREMU
+ 		memset( &backEnd.pc, 0, sizeof( backEnd.pc ) );
++#endif
+ 		return;
+ 	}
+ 
+ 	if (r_speeds->integer == 1) {
+ 		const float texSize = R_SumOfUsedImages( qfalse )/(8*1048576.0f)*(r_texturebits->integer?r_texturebits->integer:glConfig.colorBits);
+ 		ri.Printf (PRINT_ALL, "%i/%i shdrs/srfs %i leafs %i vrts %i/%i tris %.2fMB tex %.2f dc\n",
+-			backEnd.pc.c_shaders, backEnd.pc.c_surfaces, tr.pc.c_leafs, backEnd.pc.c_vertexes,
++			backEnd.pc.c_shaders, backEnd.pc.c_surfaces, SE_PC.c_leafs, backEnd.pc.c_vertexes,
+ 			backEnd.pc.c_indexes/3, backEnd.pc.c_totalIndexes/3,
+ 			texSize, backEnd.pc.c_overDraw / (float)(glConfig.vidWidth * glConfig.vidHeight) );
+ 	} else if (r_speeds->integer == 2) {
+ 		ri.Printf (PRINT_ALL, "(patch) %i sin %i sclip  %i sout %i bin %i bclip %i bout\n",
+-			tr.pc.c_sphere_cull_patch_in, tr.pc.c_sphere_cull_patch_clip, tr.pc.c_sphere_cull_patch_out,
+-			tr.pc.c_box_cull_patch_in, tr.pc.c_box_cull_patch_clip, tr.pc.c_box_cull_patch_out );
++			SE_PC.c_sphere_cull_patch_in, SE_PC.c_sphere_cull_patch_clip, SE_PC.c_sphere_cull_patch_out,
++			SE_PC.c_box_cull_patch_in, SE_PC.c_box_cull_patch_clip, SE_PC.c_box_cull_patch_out );
+ 		ri.Printf (PRINT_ALL, "(md3) %i sin %i sclip  %i sout %i bin %i bclip %i bout\n",
+-			tr.pc.c_sphere_cull_md3_in, tr.pc.c_sphere_cull_md3_clip, tr.pc.c_sphere_cull_md3_out,
+-			tr.pc.c_box_cull_md3_in, tr.pc.c_box_cull_md3_clip, tr.pc.c_box_cull_md3_out );
++			SE_PC.c_sphere_cull_md3_in, SE_PC.c_sphere_cull_md3_clip, SE_PC.c_sphere_cull_md3_out,
++			SE_PC.c_box_cull_md3_in, SE_PC.c_box_cull_md3_clip, SE_PC.c_box_cull_md3_out );
+ 	} else if (r_speeds->integer == 3) {
+ 		ri.Printf (PRINT_ALL, "viewcluster: %i\n", tr.viewCluster );
+ 	} else if (r_speeds->integer == 4) {
+ 		if ( backEnd.pc.c_dlightVertexes ) {
+ 			ri.Printf (PRINT_ALL, "dlight srf:%i  culled:%i  verts:%i  tris:%i\n",
+-				tr.pc.c_dlightSurfaces, tr.pc.c_dlightSurfacesCulled,
++				SE_PC.c_dlightSurfaces, SE_PC.c_dlightSurfacesCulled,
+ 				backEnd.pc.c_dlightVertexes, backEnd.pc.c_dlightIndexes / 3 );
+ 		}
+ 	}
+@@ -81,7 +88,9 @@ void R_PerformanceCounters( void ) {
+ 	}
+ 
+ 	memset( &tr.pc, 0, sizeof( tr.pc ) );
++#ifndef SHADEREMU
+ 	memset( &backEnd.pc, 0, sizeof( backEnd.pc ) );
++#endif
+ }
+ 
+ /*
+@@ -89,6 +98,23 @@ void R_PerformanceCounters( void ) {
  R_IssueRenderCommands
  ====================
  */
@@ -4114,6 +4584,7 @@ index 04ad9bdb..f707ce5a 100644
 +void SE_RSInline( void );
 +unsigned SE_RSFrom( void );
 +void SE_SkinGive( unsigned from, unsigned to );
++void SE_WxGive( int to_worker );	// (tr_WorldEffects.cpp: the weather's update to a helper)
 +void R_SE_FrontGiven( int given );
 +void R_SE_FrontWait( void );
 +backEndData_t *se_backEndData[2];
@@ -4121,7 +4592,7 @@ index 04ad9bdb..f707ce5a 100644
  void R_IssueRenderCommands( qboolean runPerformanceCounters ) {
  	renderCommandList_t	*cmdList;
  
-@@ -101,6 +117,23 @@ void R_IssueRenderCommands( qboolean runPerformanceCounters ) {
+@@ -101,6 +127,25 @@ void R_IssueRenderCommands( qboolean runPerformanceCounters ) {
  	// clear it out, in case this is a sync and not a buffer flip
  	cmdList->used = 0;
  
@@ -4132,20 +4603,22 @@ index 04ad9bdb..f707ce5a 100644
 +		R_PerformanceCounters();
 +		R_SE_FrontGiven( 1 );	// (its views are made by the worker: waited for at the next RE_BeginFrame)
 +		jk2RenderGive( RB_ExecuteRenderCommands, cmdList->cmds );	// (it waits for jk2RenderGo: the skins given out first)
-+		SE_SkinGive( se_from, SE_RSFrom() );
++		SE_SkinGive( se_from, SE_RSFrom() );	// (its join is the helpers' of the frame before: the weather's too)
++		SE_WxGive( 1 );
 +		jk2RenderGo();
 +		backEndData = se_backEndData[backEndData == se_backEndData[0]];
 +		jk2RenderPresent();	// (the window's frame: its input and its counts, as at the swap)
 +		return;
 +	}
 +	SE_RSInline();
++	SE_WxGive( 0 );
 +	R_SE_FrontGiven( 0 );	// (drawn here at once: its views are made by this core)
 +#endif
 +
  	// at this point, the back end thread is idle, so it is ok
  	// to look at it's performance counters
  	if ( runPerformanceCounters ) {
-@@ -166,6 +199,9 @@ make sure there is enough command space
+@@ -166,6 +211,9 @@ make sure there is enough command space
  static void *R_GetCommandBuffer( int bytes ) {
  	return R_GetCommandBufferReserved( bytes, PAD( sizeof( swapBuffersCommand_t ), sizeof(void *) ) );
  }
@@ -4155,7 +4628,27 @@ index 04ad9bdb..f707ce5a 100644
  
  
  /*
-@@ -369,12 +405,26 @@ If running in stereo, RE_BeginFrame will be called twice
+@@ -322,6 +370,9 @@ void RE_LAGoggles( void )
+ 	fog->tcScale = 2.0f / ( fog->parms.depthForOpaque * (1.0f + cos( tr.refdef.floatTime) * 0.1f));
+ }
+ 
++#ifdef SHADEREMU
++void SE_WxScene( void );
++#endif
+ void RE_RenderWorldEffects(void)
+ {
+ 	setModeCommand_t	*cmd;
+@@ -329,6 +380,9 @@ void RE_RenderWorldEffects(void)
+ 	if (!tr.registered) {
+ 		return;
+ 	}
++#ifdef SHADEREMU
++	SE_WxScene();
++#endif
+ 
+ 	cmd = (setModeCommand_t *)R_GetCommandBuffer( sizeof( *cmd ) );
+ 	if ( !cmd ) {
+@@ -369,12 +423,26 @@ If running in stereo, RE_BeginFrame will be called twice
  for each RE_EndFrame
  ====================
  */
@@ -4182,6 +4675,17 @@ index 04ad9bdb..f707ce5a 100644
  	glState.finishCalled = qfalse;
  
  	tr.frameCount++;
+@@ -509,7 +577,9 @@ void RE_EndFrame( int *frontEndMsec, int *backEndMsec ) {
+ 	if ( backEndMsec ) {
+ 		*backEndMsec = backEnd.pc.msec;
+ 	}
+-	backEnd.pc.msec = 0;
++#ifndef SHADEREMU
++	backEnd.pc.msec = 0;	// (ShaderEmu: the back end's own, cleared by it: RB_ExecuteRenderCommands)
++#endif
+ 
+ 	for(int i=0;i<MAX_LIGHT_STYLES;i++)
+ 	{
 diff --git a/code/rd-vanilla/tr_draw.cpp b/code/rd-vanilla/tr_draw.cpp
 index c67c5d0a..0ac08dfc 100644
 --- a/code/rd-vanilla/tr_draw.cpp
@@ -4299,7 +4803,7 @@ index c67c5d0a..0ac08dfc 100644
  		{
  			for ( int x=0; x<*piWidth; x++ )
 diff --git a/code/rd-vanilla/tr_ghoul2.cpp b/code/rd-vanilla/tr_ghoul2.cpp
-index 5062daf5..468c7f64 100644
+index 5062daf5..a8f2668e 100644
 --- a/code/rd-vanilla/tr_ghoul2.cpp
 +++ b/code/rd-vanilla/tr_ghoul2.cpp
 @@ -83,8 +83,19 @@ extern	cvar_t	*r_Ghoul2UnSqashAfterSmooth;
@@ -4322,7 +4826,7 @@ index 5062daf5..468c7f64 100644
  #ifdef _G2_GORE
  qhandle_t		goreShader=-1;
  #endif
-@@ -723,6 +734,102 @@ CRenderableSurface *AllocRS()
+@@ -723,6 +734,105 @@ CRenderableSurface *AllocRS()
  	return ret;
  }
  
@@ -4401,9 +4905,12 @@ index 5062daf5..468c7f64 100644
 +			se_rs_jobs[k].from = (unsigned)se_rs_from, se_rs_jobs[k].to = NextRS, se_rs_jobs[k].part = k;
 +			SE_RsJob( &se_rs_jobs[k] );
 +		}
++	extern unsigned se_join_waits, se_rs_waits;
++	const unsigned waited = se_join_waits;
 +	for ( int k = 0 ; k < SE_RS_JOBS ; k++ )
 +		if ( handles[k] )
 +			SE_SlotJoin( handles[k] );
++	se_rs_waits += se_join_waits - waited;	// (JK2_STATS: the passes the bones were waited for)
 +	se_rs_from = NextRS;
 +	se_rs_set ^= 1;
 +	return made;
@@ -4425,7 +4932,26 @@ index 5062daf5..468c7f64 100644
  /*
  
  All bones should be an identity orientation to display the mesh exactly
-@@ -2768,6 +2875,195 @@ void G2_ConstructGhoulSkeleton( CGhoul2Info_v &ghoul2,const int frameNum,bool ch
+@@ -762,15 +872,15 @@ static int R_GCullModel( trRefEntity_t *ent ) {
+   	switch ( R_CullLocalPointAndRadius( vec3_origin,  ent->e.radius * largestScale) )
+   	{
+   	case CULL_OUT:
+-  		tr.pc.c_sphere_cull_md3_out++;
++  		SE_PC.c_sphere_cull_md3_out++;
+   		return CULL_OUT;
+ 
+ 	case CULL_IN:
+-		tr.pc.c_sphere_cull_md3_in++;
++		SE_PC.c_sphere_cull_md3_in++;
+ 		return CULL_IN;
+ 
+ 	case CULL_CLIP:
+-		tr.pc.c_sphere_cull_md3_clip++;
++		SE_PC.c_sphere_cull_md3_clip++;
+ 		return CULL_IN;
+  	}
+ 	return CULL_IN;
+@@ -2768,6 +2878,195 @@ void G2_ConstructGhoulSkeleton( CGhoul2Info_v &ghoul2,const int frameNum,bool ch
  RB_SurfaceGhoul
  ==============
  */
@@ -4621,7 +5147,7 @@ index 5062daf5..468c7f64 100644
  void RB_SurfaceGhoul( CRenderableSurface *surf )
  {
  #ifdef G2_PERFORMANCE_ANALYSIS
-@@ -2901,6 +3197,24 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
+@@ -2901,6 +3200,24 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
  	mdxmSurface_t	*surface = surf->surfaceData;
  
  	CBoneCache *bones = surf->boneCache;
@@ -4646,7 +5172,7 @@ index 5062daf5..468c7f64 100644
  
  	// first up, sanity check our numbers
  	RB_CheckOverflow( surface->numVerts, surface->numTriangles );
-@@ -2989,10 +3303,32 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
+@@ -2989,10 +3306,32 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
  		float t2;
  		const mdxaBone_t *bone;
  		const mdxaBone_t *bone2;
@@ -4680,7 +5206,7 @@ index 5062daf5..468c7f64 100644
  #else
  			bone = &bones->EvalRender(piBoneReferences[G2_GetVertBoneIndex( v, 0 )]);
  #endif // JK2_MODE
-@@ -3013,7 +3349,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
+@@ -3013,7 +3352,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
  				if (iNumWeights==2)
  				{
  #ifdef JK2_MODE
@@ -4689,7 +5215,7 @@ index 5062daf5..468c7f64 100644
  #else
  					bone2 = &bones->EvalRender(piBoneReferences[G2_GetVertBoneIndex( v, 1 )]);
  #endif // JK2_MODE
-@@ -3046,7 +3382,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
+@@ -3046,7 +3385,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
  					for (k=1; k < iNumWeights-1 ; k++)
  					{
  #ifdef JK2_MODE
@@ -4698,7 +5224,7 @@ index 5062daf5..468c7f64 100644
  #else
  						bone = &bones->EvalRender(piBoneReferences[G2_GetVertBoneIndex( v, k )]);
  #endif // JK2_MODE
-@@ -3060,7 +3396,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
+@@ -3060,7 +3399,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
  					}
  
  #ifdef JK2_MODE
@@ -4707,7 +5233,7 @@ index 5062daf5..468c7f64 100644
  #else
  					bone = &bones->EvalRender(piBoneReferences[G2_GetVertBoneIndex( v, k )]);
  #endif // JK2_MODE
-@@ -3075,6 +3411,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
+@@ -3075,6 +3414,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
  			tess.texCoords[baseVertex][0][0] = pTexCoords[j].texCoords[0];
  			tess.texCoords[baseVertex][0][1] = pTexCoords[j].texCoords[1];
  		}
@@ -5325,10 +5851,65 @@ index 13c72e66..c474a255 100644
  
  	const color4ub_t color = {0xff, 0xff, 0xff, 0xff};
 diff --git a/code/rd-vanilla/tr_local.h b/code/rd-vanilla/tr_local.h
-index c9e745aa..facb5ca7 100644
+index c9e745aa..9a5d832a 100644
 --- a/code/rd-vanilla/tr_local.h
 +++ b/code/rd-vanilla/tr_local.h
-@@ -1587,6 +1587,12 @@ public:
+@@ -657,6 +657,9 @@ typedef struct {
+ 	int			numPoints;
+ 	int			numIndices;
+ 	int			ofsIndices;
++#ifdef SHADEREMU
++	int			seIndex;			// (its surface's number in the first world, or -1: tr_surface.cpp's kept faces)
++#endif
+ 	float		points[1][VERTEXSIZE];	// variable sized
+ 										// there is a variable length list of indices here also
+ } srfSurfaceFace_t;
+@@ -895,6 +898,16 @@ typedef struct {
+ 	int		c_dlightSurfaces;
+ 	int		c_dlightSurfacesCulled;
+ } frontEndCounters_t;
++#ifdef SHADEREMU
++// (the front end's counters apart from tr: with JK2_FRONT=worker the drawing's worker counts the world's culls while the
++// first core ends the frame beside tr.pc, and they shared texels; cleared by the first core only when the front end is its)
++typedef struct { frontEndCounters_t c; int unused; } __attribute__(( aligned( 16 ) )) seFrontPc_t;	// (whole texels)
++extern seFrontPc_t se_pc;
++#define SE_PC se_pc.c
++int SE_FrontWorker( void );
++#else
++#define SE_PC tr.pc
++#endif
+ 
+ #define	FOG_TABLE_SIZE		256
+ #define FUNCTABLE_SIZE		1024
+@@ -1075,6 +1088,17 @@ void	 R_Images_DeleteImage(image_t *pImage);
+ 
+ extern backEndState_t	backEnd;
+ extern trGlobals_t	tr;
++#ifdef SHADEREMU
++// (JK2_KEPT_COUNT: what of the world's batches could be drawn from kept words; the drawing's, read by the first core)
++typedef struct { unsigned frames, batches, world, faces, indices, stage, kept, fog, deform, colour, coords, multi, other, ent, unused[2]; } seKeptCount_t;
++extern seKeptCount_t se_kept_stats;
++// (tr_surface.cpp: the world's faces whose words are kept, docs/games/jk2.md, "The world's faces kept")
++extern int se_kf_n, se_kf_ok, se_kf_indices;
++#define SE_TESS_PENDING ( tess.numIndexes || se_kf_n )	// (a batch of kept faces alone has no indices in tess)
++void SE_KeptWorld( world_t *w );
++int SE_KeptDraw( const shaderStage_t *p );
++void SE_KeptToTess( void );
++#endif
+ extern glconfig_t	glConfig;		// outside of TR since it shouldn't be cleared during ref re-init
+ extern glstate_t	glState;		// outside of TR since it shouldn't be cleared during ref re-init
+ extern window_t		window;
+@@ -1397,6 +1421,9 @@ TESSELATOR/SHADER DECLARATIONS
+ */
+ typedef byte color4ub_t[4];
+ 
++#ifndef SE_TESS_PENDING
++#define SE_TESS_PENDING ( tess.numIndexes )
++#endif
+ typedef struct stageVars
+ {
+ 	color4ub_t	colors[SHADER_MAX_VERTEXES];
+@@ -1587,6 +1614,12 @@ public:
  #endif
   	CBoneCache 		*boneCache;		// pointer to transformed bone list for this surf
  	mdxmSurface_t	*surfaceData;	// pointer to surface data loaded into file - only used by client renderer DO NOT USE IN GAME SIDE - if there is a vid restart this will be out of wack on the game
@@ -5341,7 +5922,7 @@ index c9e745aa..facb5ca7 100644
  #ifdef _G2_GORE
  	float			*alternateTex;		// alternate texture coordinates.
  	void			*goreChain;
-@@ -1604,6 +1610,10 @@ public:
+@@ -1604,6 +1637,10 @@ public:
  		surfaceData = src.surfaceData;
  		alternateTex = src.alternateTex;
  		goreChain = src.goreChain;
@@ -5352,7 +5933,7 @@ index c9e745aa..facb5ca7 100644
  
  		return *this;
  	}
-@@ -1625,6 +1635,10 @@ CRenderableSurface():
+@@ -1625,6 +1662,10 @@ CRenderableSurface():
  	{
  		boneCache=0;
  		surfaceData=0;
@@ -5363,7 +5944,7 @@ index c9e745aa..facb5ca7 100644
  #ifdef _G2_GORE
  		ident = SF_MDX;
  		alternateTex=0;
-@@ -1778,6 +1792,9 @@ typedef enum {
+@@ -1778,6 +1819,9 @@ typedef enum {
  	RC_DRAW_BUFFER,
  	RC_SWAP_BUFFERS,
  	RC_WORLD_EFFECTS,
@@ -5374,7 +5955,7 @@ index c9e745aa..facb5ca7 100644
  
  
 diff --git a/code/rd-vanilla/tr_main.cpp b/code/rd-vanilla/tr_main.cpp
-index da619736..cade2682 100644
+index da619736..1012222e 100644
 --- a/code/rd-vanilla/tr_main.cpp
 +++ b/code/rd-vanilla/tr_main.cpp
 @@ -205,7 +205,15 @@ void R_LocalPointToWorld (const vec3_t local, vec3_t world) {
@@ -5393,7 +5974,92 @@ index da619736..cade2682 100644
  
  void R_InvertMatrix(float *sourcemat, float *destmat)
  {
-@@ -1258,6 +1266,21 @@ void R_SortDrawSurfs( drawSurf_t *drawSurfs, int numDrawSurfs ) {
+@@ -1203,6 +1211,74 @@ void R_DecomposeSort( unsigned sort, int *entityNum, shader_t **shader,
+ R_SortDrawSurfs
+ =================
+ */
++#ifdef SHADEREMU
++// (JK2_VIEW_SUM=1: every 20th frame's views' sorted lists summed where they are sorted, here or on the drawing's
++// worker (R_SE_FrontView), and printed by this core at the next frame's start: two ways of making them, two runs, the
++// same lines. A Ghoul2 surface counts by its key only: its CRenderableSurface is made anew at each making.)
++int R_SE_IsRS( const void *p );
++struct seViewSum_t { unsigned frame, hash, n, portal; unsigned type[12], tsum[12]; };
++static struct { seViewSum_t ring[32]; volatile unsigned put; unsigned unused[3]; } __attribute__(( aligned( 16 ) )) se_vsum[2];	// [0] this core's, [1] the worker's
++static unsigned se_vsum_got[2];
++static struct { unsigned sort[1200], surf[1200]; volatile int n; int printed, unused[2]; } __attribute__(( aligned( 16 ) )) se_vdump[2];
++static int SE_ViewSumOn( void )
++{
++	static int on = -1;
++	if ( on < 0 )
++		on = getenv( "JK2_VIEW_SUM" ) != NULL;
++	return on;
++}
++static void SE_ViewSumNote( const drawSurf_t *s, int n, int side )
++{
++	if ( !SE_ViewSumOn() || ( tr.refdef.rdflags & RDF_NOWORLDMODEL ) || tr.viewParms.frameCount % 20 )
++		return;
++	unsigned h = 2166136261u;
++	unsigned type[12] = { 0 }, tsum[12] = { 0 };
++	for ( int i = 0 ; i < n ; i++ ) {
++		int en; shader_t *sh; int fg, dl;
++		R_DecomposeSort( s[i].sort, &en, &sh, &fg, &dl );
++		unsigned t = (unsigned)*(const int *)s[i].surface;
++		type[ t < 10 ? t : 10 ]++;
++		if ( en != REFENTITYNUM_WORLD ) type[11]++;
++		unsigned g = ( 2166136261u ^ s[i].sort ) * 16777619u;	// (a sum of each surface's: surfaces of one sort key are in any order, as a batch draws them)
++		g = ( g ^ ( R_SE_IsRS( s[i].surface ) ? 1u : (unsigned)(uintptr_t)s[i].surface ) ) * 16777619u;
++		h += g ^ g >> 15;
++		tsum[ t < 10 ? t : 10 ] += g ^ g >> 15;
++		if ( en != REFENTITYNUM_WORLD ) tsum[11] += g ^ g >> 15;
++	}
++	if ( tr.viewParms.frameCount == 200 && !se_vdump[side].n ) {	// (JK2_VIEW_SUM: frame 200's list whole, printed by this core)
++		int m = n < 1200 ? n : 1200;
++		for ( int i = 0 ; i < m ; i++ )
++			se_vdump[side].sort[i] = s[i].sort, se_vdump[side].surf[i] = R_SE_IsRS( s[i].surface ) ? 1u : (unsigned)(uintptr_t)s[i].surface;
++		se_vdump[side].n = m;
++	}
++	seViewSum_t *v = &se_vsum[side].ring[se_vsum[side].put % 32];
++	v->frame = (unsigned)tr.viewParms.frameCount, v->hash = h, v->n = (unsigned)n, v->portal = tr.viewParms.isPortal;
++	for ( int k = 0 ; k < 12 ; k++ ) v->type[k] = type[k], v->tsum[k] = tsum[k];
++	se_vsum[side].put++;
++}
++void R_SE_ViewSumPrint( void )
++{
++	for ( int side = 0 ; side < 2 ; side++ )
++		if ( se_vdump[side].n && !se_vdump[side].printed ) {
++			se_vdump[side].printed = 1;
++			for ( int i = 0 ; i < se_vdump[side].n ; i++ ) {
++				int en; shader_t *sh; int fg, dl;
++				R_DecomposeSort( se_vdump[side].sort[i], &en, &sh, &fg, &dl );
++				int at = -1;	// (the surface's number in the world: its address moves from run to run)
++				for ( int k = 0 ; tr.world && k < tr.world->numsurfaces ; k++ )
++					if ( (unsigned)(uintptr_t)tr.world->surfaces[k].data == se_vdump[side].surf[i] ) { at = k; break; }
++				if ( at >= 0 ) se_vdump[side].surf[i] = 0x40000000u + at;
++				ri.Printf( PRINT_ALL, "jk2dump: %08x %08x entity %d shader %s fog %d dlight %d\n", se_vdump[side].sort[i], se_vdump[side].surf[i], en, sh->name, fg, dl );
++			}
++		}
++	for ( int side = 0 ; side < 2 ; side++ )
++		for ( ; se_vsum_got[side] != se_vsum[side].put ; se_vsum_got[side]++ ) {
++			const seViewSum_t *v = &se_vsum[side].ring[se_vsum_got[side] % 32];
++			ri.Printf( PRINT_ALL, "jk2view: frame %u portal %u surfaces %u sum %08x types %u %u %u %u %u %u %u %u %u %u %u ent %u\n", v->frame, v->portal, v->n, v->hash, v->type[0], v->type[1], v->type[2], v->type[3], v->type[4], v->type[5], v->type[6], v->type[7], v->type[8], v->type[9], v->type[10], v->type[11] );
++			ri.Printf( PRINT_ALL, "jk2view: frame %u sums face %08x grid %08x poly %08x md3 %08x mdx %08x flare %08x entity %08x ent %08x\n", v->frame, v->tsum[2], v->tsum[3], v->tsum[5], v->tsum[6], v->tsum[7], v->tsum[8], v->tsum[9], v->tsum[11] );
++		}
++}
++#endif
+ void R_SortDrawSurfs( drawSurf_t *drawSurfs, int numDrawSurfs ) {
+ 	shader_t		*shader;
+ 	int				fogNum;
+@@ -1225,6 +1301,9 @@ void R_SortDrawSurfs( drawSurf_t *drawSurfs, int numDrawSurfs ) {
+ 
+ 	// sort the drawsurfs by sort type, then orientation, then shader
+ 	R_RadixSort( drawSurfs, numDrawSurfs );
++#ifdef SHADEREMU
++	SE_ViewSumNote( drawSurfs, numDrawSurfs, 0 );
++#endif
+ 
+ 	// check for any pass through drawing, which
+ 	// may cause another view to be rendered first
+@@ -1258,6 +1337,21 @@ void R_SortDrawSurfs( drawSurf_t *drawSurfs, int numDrawSurfs ) {
  R_AddEntitySurfaces
  =============
  */
@@ -5415,7 +6081,7 @@ index da619736..cade2682 100644
  void R_AddEntitySurfaces (void) {
  	trRefEntity_t	*ent;
  	shader_t		*shader;
-@@ -1270,6 +1293,10 @@ void R_AddEntitySurfaces (void) {
+@@ -1270,6 +1364,10 @@ void R_AddEntitySurfaces (void) {
  	      tr.currentEntityNum < tr.refdef.num_entities;
  		  tr.currentEntityNum++ ) {
  		ent = tr.currentEntity = &tr.refdef.entities[tr.currentEntityNum];
@@ -5426,7 +6092,7 @@ index da619736..cade2682 100644
  
  		ent->needDlights = qfalse;
  
-@@ -1550,4 +1577,183 @@ void R_RenderView (viewParms_t *parms) {
+@@ -1550,4 +1648,207 @@ void R_RenderView (viewParms_t *parms) {
  
  	// draw main system development information (surface outlines, etc)
  	R_DebugGraphics();
@@ -5458,6 +6124,12 @@ index da619736..cade2682 100644
 +static struct { volatile unsigned made, unused[3]; } __attribute__(( aligned( 16 ) )) se_views_made;	// (the worker's)
 +static const world_t *se_portal_world;
 +static int se_portal_world_has;
++static int SE_FrontOn( void );
++seFrontPc_t se_pc;
++int SE_FrontWorker( void )
++{
++	return SE_FrontOn() == 1;
++}
 +static int SE_FrontOn( void )	// 0 here (the default), 1 JK2_FRONT=worker, 2 JK2_FRONT=check
 +{	// (off by default: JK2_FRONT=check said most views' lists not as made whole on 4 November 2026, not yet explained)
 +	static int on = -1;
@@ -5474,8 +6146,9 @@ index da619736..cade2682 100644
 +{
 +	unsigned h = 2166136261u;
 +	for ( int i = 0 ; i < n ; i++ ) {
-+		h = ( h ^ s[i].sort ) * 16777619u;
-+		h = ( h ^ ( R_SE_IsRS( s[i].surface ) ? 1u : (unsigned)(uintptr_t)s[i].surface ) ) * 16777619u;
++		unsigned g = ( 2166136261u ^ s[i].sort ) * 16777619u;	// (a sum of each surface's: surfaces of one sort key are in any order, as a batch draws them)
++		g = ( g ^ ( R_SE_IsRS( s[i].surface ) ? 1u : (unsigned)(uintptr_t)s[i].surface ) ) * 16777619u;
++		h += g ^ g >> 15;
 +	}
 +	return h;
 +}
@@ -5565,6 +6238,7 @@ index da619736..cade2682 100644
 +	tr.refdef = cmd->refdef;
 +	tr.viewParms = cmd->viewParms;
 +	tr.viewCount = cmd->viewCount;
++	tr.ori = tr.viewParms.world;	// (as R_RotateForViewer leaves it: the world's faces are culled by tr.ori's eye)
 +	int n = cmd->count > MAX_DRAWSURFS ? MAX_DRAWSURFS : cmd->count;
 +	if ( n > 0 )
 +		memcpy( se_front_surfs, cmd->refdef.drawSurfs + cmd->first, n * sizeof( drawSurf_t ) );
@@ -5579,6 +6253,7 @@ index da619736..cade2682 100644
 +	n = tr.refdef.numDrawSurfs > MAX_DRAWSURFS ? MAX_DRAWSURFS : tr.refdef.numDrawSurfs;
 +	if ( n > 0 )
 +		R_RadixSort( se_front_surfs, n );
++	SE_ViewSumNote( se_front_surfs, n, 1 );
 +	if ( SE_FrontOn() == 2 ) {
 +		se_front_check.views++;
 +		if ( (unsigned)n != cmd->checkCount || ( n > 0 && SE_FrontSum( se_front_surfs, n ) != cmd->check ) )
@@ -5600,8 +6275,23 @@ index da619736..cade2682 100644
 +	se_views.target = given ? se_views.last : 0;
 +	se_views.last = 0;
 +}
++seKeptCount_t se_kept_stats __attribute__(( aligned( 16 ) ));
 +void R_SE_FrontWait( void )
 +{
++	static int count_on = -1;
++	if ( count_on < 0 )
++		count_on = getenv( "JK2_KEPT_COUNT" ) != NULL;
++	if ( count_on && tr.frameCount % 200 == 0 ) {
++		const seKeptCount_t *c = &se_kept_stats;
++		ri.Printf( PRINT_ALL, "jk2kept: frames %u batches %u world %u faces %u indices %u stage-indices %u kept %u; not: fog/dlight %u deform %u colour %u coords %u multi %u other %u; entities' stage-indices %u; drawn kept %u, refused %u\n",
++			c->frames, c->batches, c->world, c->faces, c->indices, c->stage, c->kept, c->fog, c->deform, c->colour, c->coords, c->multi, c->other, c->ent, c->unused[0], c->unused[1] );
++	}
++
++	if ( SE_ViewSumOn() ) {
++		while ( se_views.target && (int)( se_views_made.made - se_views.target ) < 0 )
++			SE_FrontRest();
++		R_SE_ViewSumPrint();
++	}
 +	if ( !se_views.target )
 +		return;
 +	while ( (int)( se_views_made.made - se_views.target ) < 0 )
@@ -5724,6 +6414,68 @@ index 2da2512a..bf5820c6 100644
  
  	//
  	VectorNormalize2( projection, projectionDir );
+diff --git a/code/rd-vanilla/tr_mesh.cpp b/code/rd-vanilla/tr_mesh.cpp
+index c9aa9fa0..be904729 100644
+--- a/code/rd-vanilla/tr_mesh.cpp
++++ b/code/rd-vanilla/tr_mesh.cpp
+@@ -88,15 +88,15 @@ static int R_CullModel( md3Header_t *header, trRefEntity_t *ent ) {
+ 			switch ( R_CullLocalPointAndRadius( newFrame->localOrigin, newFrame->radius ) )
+ 			{
+ 			case CULL_OUT:
+-				tr.pc.c_sphere_cull_md3_out++;
++				SE_PC.c_sphere_cull_md3_out++;
+ 				return CULL_OUT;
+ 
+ 			case CULL_IN:
+-				tr.pc.c_sphere_cull_md3_in++;
++				SE_PC.c_sphere_cull_md3_in++;
+ 				return CULL_IN;
+ 
+ 			case CULL_CLIP:
+-				tr.pc.c_sphere_cull_md3_clip++;
++				SE_PC.c_sphere_cull_md3_clip++;
+ 				break;
+ 			}
+ 		}
+@@ -115,17 +115,17 @@ static int R_CullModel( md3Header_t *header, trRefEntity_t *ent ) {
+ 			{
+ 				if ( sphereCull == CULL_OUT )
+ 				{
+-					tr.pc.c_sphere_cull_md3_out++;
++					SE_PC.c_sphere_cull_md3_out++;
+ 					return CULL_OUT;
+ 				}
+ 				else if ( sphereCull == CULL_IN )
+ 				{
+-					tr.pc.c_sphere_cull_md3_in++;
++					SE_PC.c_sphere_cull_md3_in++;
+ 					return CULL_IN;
+ 				}
+ 				else
+ 				{
+-					tr.pc.c_sphere_cull_md3_clip++;
++					SE_PC.c_sphere_cull_md3_clip++;
+ 				}
+ 			}
+ 		}
+@@ -140,14 +140,14 @@ static int R_CullModel( md3Header_t *header, trRefEntity_t *ent ) {
+ 	switch ( R_CullLocalBox( bounds ) )
+ 	{
+ 	case CULL_IN:
+-		tr.pc.c_box_cull_md3_in++;
++		SE_PC.c_box_cull_md3_in++;
+ 		return CULL_IN;
+ 	case CULL_CLIP:
+-		tr.pc.c_box_cull_md3_clip++;
++		SE_PC.c_box_cull_md3_clip++;
+ 		return CULL_CLIP;
+ 	case CULL_OUT:
+ 	default:
+-		tr.pc.c_box_cull_md3_out++;
++		SE_PC.c_box_cull_md3_out++;
+ 		return CULL_OUT;
+ 	}
+ }
 diff --git a/code/rd-vanilla/tr_model.cpp b/code/rd-vanilla/tr_model.cpp
 index a6d5bc7b..d2304e22 100644
 --- a/code/rd-vanilla/tr_model.cpp
@@ -5788,10 +6540,20 @@ index d0b6b549..7fcd3869 100644
  
  	// the next scene rendered in this frame will tack on after this one
 diff --git a/code/rd-vanilla/tr_shade.cpp b/code/rd-vanilla/tr_shade.cpp
-index 48f3ed13..fb04dac9 100644
+index 48f3ed13..91cb8fab 100644
 --- a/code/rd-vanilla/tr_shade.cpp
 +++ b/code/rd-vanilla/tr_shade.cpp
-@@ -1798,6 +1798,21 @@ static vec4_t	GLFogOverrideColors[GLFOGOVERRIDE_MAX] =
+@@ -442,6 +442,9 @@ void RB_BeginSurface( shader_t *shader, int fogNum ) {
+ 	tess.fading = false;
+ 
+ 	tess.registration++;
++#ifdef SHADEREMU
++	se_kf_n = 0, se_kf_ok = -1, se_kf_indices = 0;
++#endif
+ }
+ 
+ /*
+@@ -1798,6 +1801,21 @@ static vec4_t	GLFogOverrideColors[GLFOGOVERRIDE_MAX] =
  static const float logtestExp2 = (sqrt( -log( 1.0 / 255.0 ) ));
  #endif
  extern bool tr_stencilled; //tr_backend.cpp
@@ -5813,7 +6575,7 @@ index 48f3ed13..fb04dac9 100644
  static void RB_IterateStagesGeneric( shaderCommands_t *input )
  {
  	int stage;
-@@ -1946,6 +1961,12 @@ static void RB_IterateStagesGeneric( shaderCommands_t *input )
+@@ -1946,6 +1964,12 @@ static void RB_IterateStagesGeneric( shaderCommands_t *input )
  		{ //this means ignore this, while we do a fade-out
  			ComputeColors( pStage, forceAlphaGen, forceRGBGen );
  		}
@@ -5826,12 +6588,19 @@ index 48f3ed13..fb04dac9 100644
  		ComputeTexCoords( pStage );
  
  		if ( !setArraysOnce )
-@@ -2026,7 +2047,16 @@ static void RB_IterateStagesGeneric( shaderCommands_t *input )
+@@ -2026,7 +2050,23 @@ static void RB_IterateStagesGeneric( shaderCommands_t *input )
  			//
  			// draw
  			//
 +#ifdef SHADEREMU
-+			if ( !se_env || !jk2glEnvElements( input->numIndexes, input->indexes, input->normal[0], backEnd.ori.viewOrigin ) )
++			if ( se_kf_n && !SE_KeptDraw( pStage ) ) {
++				SE_KeptToTess();	// (and so for this stage and the rest: their colours and coordinates made again)
++				ComputeColors( pStage, forceAlphaGen, forceRGBGen );
++				ComputeTexCoords( pStage );
++			}
++			if ( !input->numIndexes )
++				;
++			else if ( !se_env || !jk2glEnvElements( input->numIndexes, input->indexes, input->normal[0], backEnd.ori.viewOrigin ) )
 +			{
 +				if ( se_env )
 +					ComputeTexCoords( pStage );
@@ -5843,7 +6612,7 @@ index 48f3ed13..fb04dac9 100644
  
  			if (lStencilled)
  			{ //re-enable the color buffer, disable stencil test
-@@ -2047,6 +2077,165 @@ static void RB_IterateStagesGeneric( shaderCommands_t *input )
+@@ -2047,6 +2087,165 @@ static void RB_IterateStagesGeneric( shaderCommands_t *input )
  /*
  ** RB_StageIteratorGeneric
  */
@@ -5945,7 +6714,7 @@ index 48f3ed13..fb04dac9 100644
 +		}
 +	}
 +	// (the same shader's surfaces before it, drawn first: as RB_CheckOverflow)
-+	if ( tess.numIndexes )
++	if ( SE_TESS_PENDING )
 +	{
 +		shader_t *s = tess.shader;
 +		int fog = tess.fogNum;
@@ -6009,7 +6778,7 @@ index 48f3ed13..fb04dac9 100644
  void RB_StageIteratorGeneric( void )
  {
  	shaderCommands_t *input;
-@@ -2197,6 +2386,11 @@ void RB_StageIteratorGeneric( void )
+@@ -2197,14 +2396,67 @@ void RB_StageIteratorGeneric( void )
  /*
  ** RB_EndSurface
  */
@@ -6021,8 +6790,13 @@ index 48f3ed13..fb04dac9 100644
  void RB_EndSurface( void ) {
  	shaderCommands_t *input;
  
-@@ -2205,6 +2399,15 @@ void RB_EndSurface( void ) {
+ 	input = &tess;
+ 
++#ifdef SHADEREMU
++	if (input->numIndexes == 0 && !se_kf_n) {
++#else
  	if (input->numIndexes == 0) {
++#endif
  		return;
  	}
 +#ifdef SHADEREMU
@@ -6033,11 +6807,46 @@ index 48f3ed13..fb04dac9 100644
 +	else
 +		jk2glKey( NULL, 0 );
 +	se_mesh_surface = NULL;
++	{	// (JK2_KEPT_COUNT's counts: tr_main.cpp prints them)
++		seKeptCount_t *c = &se_kept_stats;
++		const shader_t *sh = input->shader;
++		const unsigned n = (unsigned)( input->numIndexes + se_kf_indices );
++		c->batches++;
++		const int world = backEnd.currentEntity == &tr.worldEntity;
++		c->world += world;
++		for ( int st = 0 ; st < sh->numUnfoggedPasses ; st++ ) {
++			const shaderStage_t *p = &input->xstages[st];
++			if ( !p->active )
++				break;
++			if ( !world ) {
++				c->ent += n;
++				continue;
++			}
++			c->stage += n;
++			const int colour = ( p->rgbGen == CGEN_IDENTITY || p->rgbGen == CGEN_IDENTITY_LIGHTING || p->rgbGen == CGEN_CONST || p->rgbGen == CGEN_LIGHTMAPSTYLE )
++				&& ( p->alphaGen == AGEN_IDENTITY || p->alphaGen == AGEN_SKIP || p->alphaGen == AGEN_CONST );
++			const int coords = ( p->bundle[0].tcGen == TCGEN_TEXTURE || p->bundle[0].tcGen == TCGEN_LIGHTMAP ) && !p->bundle[0].numTexMods;
++			if ( input->fogNum || input->dlightBits )
++				c->fog += n;
++			else if ( sh->numDeforms )
++				c->deform += n;
++			else if ( p->bundle[1].image )
++				c->multi += n;
++			else if ( !colour )
++				c->colour += n;
++			else if ( !coords )
++				c->coords += n;
++			else if ( ( p->ss && p->ss->surfaceSpriteType ) || sh->polygonOffset )
++				c->other += n;
++			else
++				c->kept += n;
++		}
++	}
 +#endif
  
  	if (input->indexes[SHADER_MAX_INDEXES-1] != 0) {
  		Com_Error (ERR_DROP, "RB_EndSurface() - SHADER_MAX_INDEXES hit");
-@@ -2269,6 +2472,9 @@ void RB_EndSurface( void ) {
+@@ -2269,6 +2521,9 @@ void RB_EndSurface( void ) {
  	// call off to shader specific tess end function
  	//
  	tess.currentStageIteratorFunc();
@@ -6047,6 +6856,16 @@ index 48f3ed13..fb04dac9 100644
  
  	//
  	// draw debugging stuff
+@@ -2284,6 +2539,9 @@ void RB_EndSurface( void ) {
+ 
+ 	// clear shader so we can tell we don't have any unclosed surfaces
+ 	tess.numIndexes = 0;
++#ifdef SHADEREMU
++	se_kf_n = 0, se_kf_indices = 0;
++#endif
+ 
+ 	GLimp_LogComment( "----------\n" );
+ }
 diff --git a/code/rd-vanilla/tr_shader.cpp b/code/rd-vanilla/tr_shader.cpp
 index 89910449..117538cc 100644
 --- a/code/rd-vanilla/tr_shader.cpp
@@ -6183,6 +7002,54 @@ index 89910449..117538cc 100644
  }
  
  /*
+diff --git a/code/rd-vanilla/tr_sky.cpp b/code/rd-vanilla/tr_sky.cpp
+index 4c4dfcfb..ad9e8829 100644
+--- a/code/rd-vanilla/tr_sky.cpp
++++ b/code/rd-vanilla/tr_sky.cpp
+@@ -371,6 +371,43 @@ static void DrawSkySide( struct image_s *image, const int mins[2], const int max
+ 	int s, t;
+ 
+ 	GL_Bind( image );
++#ifdef SHADEREMU
++	// (the side's grid as arrays and one draw of its triangles, cut as the GL cuts the strips: not a call a vertex;
++	// JK2_SKY_DRAW=begin the way before)
++	static int se_arrays = -1;
++	if ( se_arrays < 0 ) {
++		const char *e = getenv( "JK2_SKY_DRAW" );
++		se_arrays = !( e && !strcmp( e, "begin" ) );
++	}
++	if ( se_arrays ) {
++		enum { SE_ROW = SKY_SUBDIVISIONS + 1 };
++		static uint32_t rgba[SE_ROW * SE_ROW];
++		static glIndex_t idx[SKY_SUBDIVISIONS * SKY_SUBDIVISIONS * 6];
++		byteAlias_t ba;
++		ba.b[0] = ba.b[1] = ba.b[2] = tr.identityLightByte, ba.b[3] = 255;	// (qglColor3f( tr.identityLight ... ): RB_StageIteratorSky's)
++		for ( int k = 0; k < SE_ROW * SE_ROW; k++ )
++			rgba[k] = ba.ui;
++		int n = 0;
++		for ( t = mins[1]+HALF_SKY_SUBDIVISIONS; t < maxs[1]+HALF_SKY_SUBDIVISIONS; t++ )
++			for ( s = mins[0]+HALF_SKY_SUBDIVISIONS; s < maxs[0]+HALF_SKY_SUBDIVISIONS; s++ ) {
++				const glIndex_t a = t * SE_ROW + s, b = ( t + 1 ) * SE_ROW + s;
++				idx[n++] = a, idx[n++] = b, idx[n++] = a + 1;
++				idx[n++] = a + 1, idx[n++] = b, idx[n++] = b + 1;
++			}
++		if ( n ) {
++			qglVertexPointer( 3, GL_FLOAT, sizeof( s_skyPoints[0][0] ), s_skyPoints );
++			qglEnableClientState( GL_TEXTURE_COORD_ARRAY );
++			qglTexCoordPointer( 2, GL_FLOAT, 0, s_skyTexCoords );
++			qglEnableClientState( GL_COLOR_ARRAY );
++			qglColorPointer( 4, GL_UNSIGNED_BYTE, 0, rgba );
++			qglDrawElements( GL_TRIANGLES, n, GL_INDEX_TYPE, idx );
++			qglVertexPointer( 3, GL_FLOAT, 16, tess.xyz );	// (back to tess's, as the stages set them)
++			qglTexCoordPointer( 2, GL_FLOAT, 0, tess.svars.texcoords[0] );
++			qglColorPointer( 4, GL_UNSIGNED_BYTE, 0, tess.svars.colors );
++		}
++		return;
++	}
++#endif
+ 
+ 	for ( t = mins[1]+HALF_SKY_SUBDIVISIONS; t < maxs[1]+HALF_SKY_SUBDIVISIONS; t++ )
+ 	{
 diff --git a/code/rd-vanilla/tr_stl.cpp b/code/rd-vanilla/tr_stl.cpp
 index f3648d1b..203a6e0d 100644
 --- a/code/rd-vanilla/tr_stl.cpp
@@ -6252,7 +7119,7 @@ index 8aa032b0..5701e807 100644
  
  	#define ShaderEntryPtrs_Clear()
 diff --git a/code/rd-vanilla/tr_surface.cpp b/code/rd-vanilla/tr_surface.cpp
-index 1e51e71c..ca14c6db 100644
+index 1e51e71c..cce8b841 100644
 --- a/code/rd-vanilla/tr_surface.cpp
 +++ b/code/rd-vanilla/tr_surface.cpp
 @@ -1196,6 +1196,51 @@ static void LerpMeshVertexes (md3Surface_t *surf, float backlerp)
@@ -6332,10 +7199,281 @@ index 1e51e71c..ca14c6db 100644
  }
  
  
+@@ -1321,6 +1377,149 @@ void RB_SurfaceMesh(md3Surface_t *surface) {
+ RB_SurfaceFace
+ ==============
+ */
++#ifdef SHADEREMU
++// The world's faces kept (docs/games/jk2.md, "The world's faces kept"): a world face of a batch whose stages are all as
++// the map has them (colours of the stage alone, coordinates of the face's texture or light map, no deforms, fog, dynamic
++// light or polygon offset) is not put in tess: each stage draws it from words of the GL's made once a face and a kind of
++// coordinates (gl_jk2.c's jk2glKeptWords, jk2glKeptFaces), copied into the draw. 98% of the walk's world indices, which
++// were filled into tess, coloured and given coordinates at every stage, and made into words by the GL each frame.
++// A stage the GL draws otherwise (a clamped texture) puts the kept faces into tess, for it and the stages after.
++// JK2_KEPT=0: none kept.
++#define SE_KF_MAX 1024
++static srfSurfaceFace_t *se_kf[SE_KF_MAX];
++int se_kf_n, se_kf_ok = -1, se_kf_indices;
++static int se_kept_on = -1;
++static uint32_t *se_kw_pool;				// the words, made by the drawing (this core's at the load)
++static unsigned se_kw_words, se_kw_used;
++static uint32_t **se_kw_of;					// a surface's words of each kind (5: the texture's, the light maps')
++static int se_kw_surfaces;
++static unsigned se_kw_full;					// (faces the pool had no room for)
++extern "C" int jk2glKeptOn( void );
++extern "C" int jk2glKeptWords( uint32_t *to, const float *points, int stride, int st, const int *idx, int count, int verts );
++extern "C" int jk2glKeptFaces( uint32_t rgba, const uint32_t *const *words, const int *counts, int faces, int floored );
++extern "C" void jk2RenderSettle( void );
++extern "C" void jk2glSettle( void );
++extern "C" void jk2Touch( void *memory, unsigned bytes );
++// (this core, the world loaded: room for two kinds of every face's indices, at most 6 MB)
++void SE_KeptWorld( world_t *w )
++{
++	if ( se_kept_on < 0 ) {
++		const char *g = getenv( "JK2_KEPT" );
++		se_kept_on = !( g && !strcmp( g, "0" ) ) && jk2glKeptOn();
++	}
++	jk2RenderSettle();
++	jk2glSettle();	// (the list in flight draws kept words where they lie)
++	free( se_kw_pool ), free( se_kw_of );
++	se_kw_pool = NULL, se_kw_of = NULL, se_kw_words = se_kw_used = 0, se_kw_surfaces = 0;
++	if ( !se_kept_on ) {
++		ri.Printf( PRINT_ALL, "jk2kept: off" "\n" );
++		return;
++	}
++	unsigned words = 0;
++	for ( int i = 0 ; i < w->numsurfaces ; i++ )
++		if ( w->surfaces[i].data && *w->surfaces[i].data == SF_FACE )
++			words += ( (srfSurfaceFace_t *)w->surfaces[i].data )->numIndices * 8u;
++	if ( words > ( 6u << 20 ) / 4 )
++		words = ( 6u << 20 ) / 4;
++	se_kw_pool = (uint32_t *)malloc( words * 4 );
++	se_kw_of = (uint32_t **)calloc( (size_t)w->numsurfaces * 5, sizeof( uint32_t * ) );
++	if ( !se_kw_pool || !se_kw_of ) {
++		ri.Printf( PRINT_ALL, "jk2kept: no memory for %u words" "\n", words );
++		free( se_kw_pool ), free( se_kw_of );
++		se_kw_pool = NULL, se_kw_of = NULL;
++		return;
++	}
++	jk2Touch( se_kw_pool, words * 4 ), jk2Touch( se_kw_of, (unsigned)w->numsurfaces * 5 * sizeof( uint32_t * ) );
++	se_kw_words = words, se_kw_surfaces = w->numsurfaces;
++	ri.Printf( PRINT_ALL, "jk2kept: %d surfaces, %u KB for the faces' words\n", w->numsurfaces, words / 256 );
++}
++static int SE_StageKind( const shaderStage_t *p )
++{
++	switch ( p->bundle[0].tcGen ) {
++	case TCGEN_TEXTURE: return 0;
++	case TCGEN_LIGHTMAP: return 1;
++	case TCGEN_LIGHTMAP1: return 2;
++	case TCGEN_LIGHTMAP2: return 3;
++	case TCGEN_LIGHTMAP3: return 4;
++	default: return -1;
++	}
++}
++// (the batch: may its world faces be kept)
++static int SE_KeptBatch( void )
++{
++	const shader_t *sh = tess.shader;
++	if ( !se_kw_pool || tess.fogNum || sh->numDeforms || sh->polygonOffset || tess.fading || tess.currentStageIteratorFunc != RB_StageIteratorGeneric
++		|| r_lightmap->integer || r_debugStyle->integer >= 0 )
++		return 0;
++	for ( int st = 0 ; st < sh->numUnfoggedPasses ; st++ ) {
++		const shaderStage_t *p = &tess.xstages[st];
++		if ( !p->active )
++			break;
++		if ( p->bundle[1].image || ( p->ss && p->ss->surfaceSpriteType ) || SE_StageKind( p ) < 0 || p->bundle[0].numTexMods )
++			return 0;
++		if ( !( p->rgbGen == CGEN_IDENTITY || p->rgbGen == CGEN_IDENTITY_LIGHTING || p->rgbGen == CGEN_CONST || p->rgbGen == CGEN_LIGHTMAPSTYLE )
++			|| !( p->alphaGen == AGEN_IDENTITY || p->alphaGen == AGEN_SKIP || p->alphaGen == AGEN_CONST ) )
++			return 0;
++	}
++	return 1;
++}
++// (the stage's one colour, as ComputeColors makes it for each vertex)
++static uint32_t SE_StageColour( const shaderStage_t *p )
++{
++	byteAlias_t c;
++	switch ( p->rgbGen ) {
++	case CGEN_IDENTITY: c.ui = 0xffffffffu; break;
++	case CGEN_CONST: c.ui = *(const uint32_t *)p->constantColor; break;
++	case CGEN_LIGHTMAPSTYLE: c.ui = *(const uint32_t *)styleColors[p->lightmapStyle]; break;
++	default: c.b[0] = c.b[1] = c.b[2] = c.b[3] = tr.identityLightByte; break;
++	}
++	if ( p->alphaGen == AGEN_IDENTITY )
++		c.b[3] = 0xff;
++	else if ( p->alphaGen == AGEN_CONST )
++		c.b[3] = p->constantColor[3];
++	return c.ui;
++}
++int SE_KeptDraw( const shaderStage_t *p )
++{
++	static const uint32_t *words[SE_KF_MAX];
++	static int counts[SE_KF_MAX];
++	const int kind = SE_StageKind( p );
++	const int st = kind ? VERTEX_LM + ( kind - 1 ) * 2 : 3;
++	int floored = 0;
++	for ( int i = 0 ; i < se_kf_n ; i++ ) {
++		const srfSurfaceFace_t *f = se_kf[i];
++		uint32_t **at = &se_kw_of[f->seIndex * 5 + kind];
++		if ( !*at ) {
++			const unsigned need = (unsigned)f->numIndices * 4;
++			if ( se_kw_used + need > se_kw_words ) {
++				se_kw_full++;
++				return 0;
++			}
++			uint32_t *to = se_kw_pool + se_kw_used;
++			const int made = jk2glKeptWords( to, f->points[0], VERTEXSIZE, st, (const int *)( (const char *)f + f->ofsIndices ), f->numIndices, f->numPoints );
++			if ( !made )
++				return 0;	// (coordinates over 64 repeats: the words cannot hold them)
++			se_kw_used += need, *at = (uint32_t *)( (uintptr_t)to | ( made == 2 ) );	// (bit 0: from the face's floor)
++		}
++		floored |= (int)( (uintptr_t)*at & 1 );
++		words[i] = (const uint32_t *)( (uintptr_t)*at & ~(uintptr_t)1 ), counts[i] = f->numIndices;
++	}
++	if ( !jk2glKeptFaces( SE_StageColour( p ), words, counts, se_kf_n, floored ) ) {
++		se_kept_stats.unused[1]++;
++		return 0;
++	}
++	se_kept_stats.unused[0] += (unsigned)se_kf_indices;
++	return 1;
++}
++static void RB_SurfaceFaceFill( srfSurfaceFace_t *surf );
++void SE_KeptToTess( void )
++{
++	const int n = se_kf_n;
++	se_kf_n = 0, se_kf_indices = 0;
++	for ( int i = 0 ; i < n ; i++ )
++		RB_SurfaceFaceFill( se_kf[i] );
++}
++#endif
+ void RB_SurfaceFace( srfSurfaceFace_t *surf ) {
+ 	int			i, j, k;
+ 	unsigned int *indices;
+@@ -1336,6 +1535,19 @@ void RB_SurfaceFace( srfSurfaceFace_t *surf ) {
+ 	RB_CHECKOVERFLOW( surf->numPoints, surf->numIndices );
+ 
+ 	dlightBits = surf->dlightBits;
++#ifdef SHADEREMU
++	if ( backEnd.currentEntity == &tr.worldEntity ) {
++		se_kept_stats.faces++, se_kept_stats.indices += surf->numIndices;
++		if ( !dlightBits && (unsigned)surf->seIndex < (unsigned)se_kw_surfaces && se_kf_n < SE_KF_MAX ) {
++			if ( se_kf_ok < 0 )
++				se_kf_ok = SE_KeptBatch();
++			if ( se_kf_ok ) {
++				se_kf[se_kf_n++] = surf, se_kf_indices += surf->numIndices;
++				return;
++			}
++		}
++	}
++#endif
+ 	tess.dlightBits |= dlightBits;
+ 
+ 	indices = ( unsigned * ) ( ( ( char  * ) surf ) + surf->ofsIndices );
+@@ -1386,6 +1598,15 @@ void RB_SurfaceFace( srfSurfaceFace_t *surf ) {
+ 
+ 	tess.numVertexes += surf->numPoints;
+ }
++#ifdef SHADEREMU
++static void RB_SurfaceFaceFill( srfSurfaceFace_t *surf )
++{
++	const int was = se_kf_ok;
++	se_kf_ok = 0;
++	RB_SurfaceFace( surf );
++	se_kf_ok = was;
++}
++#endif
+ 
+ 
+ static float LodErrorForVolume( vec3_t local, float radius ) {
 diff --git a/code/rd-vanilla/tr_world.cpp b/code/rd-vanilla/tr_world.cpp
-index 4a472e24..ebb99393 100644
+index 4a472e24..e7430451 100644
 --- a/code/rd-vanilla/tr_world.cpp
 +++ b/code/rd-vanilla/tr_world.cpp
+@@ -70,33 +70,33 @@ static qboolean	R_CullGrid( srfGridMesh_t *cv ) {
+ 	// check for trivial reject
+ 	if ( sphereCull == CULL_OUT )
+ 	{
+-		tr.pc.c_sphere_cull_patch_out++;
++		SE_PC.c_sphere_cull_patch_out++;
+ 		return qtrue;
+ 	}
+ 	// check bounding box if necessary
+ 	else if ( sphereCull == CULL_CLIP )
+ 	{
+-		tr.pc.c_sphere_cull_patch_clip++;
++		SE_PC.c_sphere_cull_patch_clip++;
+ 
+ 		boxCull = R_CullLocalBox( cv->meshBounds );
+ 
+ 		if ( boxCull == CULL_OUT )
+ 		{
+-			tr.pc.c_box_cull_patch_out++;
++			SE_PC.c_box_cull_patch_out++;
+ 			return qtrue;
+ 		}
+ 		else if ( boxCull == CULL_IN )
+ 		{
+-			tr.pc.c_box_cull_patch_in++;
++			SE_PC.c_box_cull_patch_in++;
+ 		}
+ 		else
+ 		{
+-			tr.pc.c_box_cull_patch_clip++;
++			SE_PC.c_box_cull_patch_clip++;
+ 		}
+ 	}
+ 	else
+ 	{
+-		tr.pc.c_sphere_cull_patch_in++;
++		SE_PC.c_sphere_cull_patch_in++;
+ 	}
+ 
+ 	return qfalse;
+@@ -179,7 +179,7 @@ static int R_DlightFace( srfSurfaceFace_t *face, int dlightBits ) {
+ 	}
+ 
+ 	if ( !dlightBits ) {
+-		tr.pc.c_dlightSurfacesCulled++;
++		SE_PC.c_dlightSurfacesCulled++;
+ 	}
+ 
+ 	face->dlightBits = dlightBits;
+@@ -207,7 +207,7 @@ static int R_DlightGrid( srfGridMesh_t *grid, int dlightBits ) {
+ 	}
+ 
+ 	if ( !dlightBits ) {
+-		tr.pc.c_dlightSurfacesCulled++;
++		SE_PC.c_dlightSurfacesCulled++;
+ 	}
+ 
+ 	grid->dlightBits = dlightBits;
+@@ -239,7 +239,7 @@ static int R_DlightTrisurf( srfTriangles_t *surf, int dlightBits ) {
+ 	}
+ 
+ 	if ( !dlightBits ) {
+-		tr.pc.c_dlightSurfacesCulled++;
++		SE_PC.c_dlightSurfacesCulled++;
+ 	}
+ 
+ 	grid->dlightBits = dlightBits;
+@@ -268,7 +268,7 @@ static int R_DlightSurface( msurface_t *surf, int dlightBits ) {
+ 	}
+ 
+ 	if ( dlightBits ) {
+-		tr.pc.c_dlightSurfaces++;
++		SE_PC.c_dlightSurfaces++;
+ 	}
+ 
+ 	return dlightBits;
+@@ -597,7 +597,7 @@ static void R_RecursiveWorldNode( mnode_t *node, int planeBits, int dlightBits )
+ 		int			c;
+ 		msurface_t	*surf, **mark;
+ 
+-		tr.pc.c_leafs++;
++		SE_PC.c_leafs++;
+ 
+ 		// add to z buffer bounds
+ 		if ( node->mins[0] < tr.viewParms.visBounds[0][0] ) {
 @@ -679,6 +679,59 @@ static const byte *R_ClusterPVS (int cluster) {
  	return tr.world->vis + cluster * tr.world->clusterBytes;
  }
@@ -6843,7 +7981,7 @@ index 63add3c3..41e7273b 100644
  	CPoly *pol = FX_AddPoly(p, uv, 4,			// verts, ST, vertCount
  			vel, accel,				// motion
 diff --git a/codeJK2/cgame/cg_ents.cpp b/codeJK2/cgame/cg_ents.cpp
-index bad8c736..738258e1 100644
+index bad8c736..4145c507 100644
 --- a/codeJK2/cgame/cg_ents.cpp
 +++ b/codeJK2/cgame/cg_ents.cpp
 @@ -118,7 +118,12 @@ Also called by event processing code
@@ -6886,7 +8024,7 @@ index bad8c736..738258e1 100644
  {
  	// event-only entities will have been dealt with already
  	if ( cent->currentState.eType >= ET_EVENTS ) {
-@@ -2162,6 +2186,214 @@ CG_AddPacketEntities
+@@ -2162,6 +2186,231 @@ CG_AddPacketEntities
  
  ===============
  */
@@ -6922,7 +8060,7 @@ index bad8c736..738258e1 100644
 +	centity_t *cent;
 +	int num, wave, slot, handle;	// (the first core's)
 +	int look, unused[3];	// look: the player it waits for, or -1
-+	struct { int state, why, bytes, unused; } __attribute__(( aligned( 16 ) )) out;	// (the maker's) state: 0 not yet, 1 made ahead (to replay), 2 to make in its turn
++	struct { int state, why, bytes, ran; } __attribute__(( aligned( 16 ) )) out;	// ran: its instructions (JK2_PLAYERS_LOG)	// (the maker's) state: 0 not yet, 1 made ahead (to replay), 2 to make in its turn
 +	__attribute__(( aligned( 16 ) )) centity_t cent_was;
 +	gentity_t gent_was;
 +	gclient_t client_was;
@@ -6936,12 +8074,15 @@ index bad8c736..738258e1 100644
 +static seLook_t se_look[MAX_GENTITIES];	// what a player made after another read of it: the frame before's
 +static unsigned se_counts[SE_WHY_COUNT + 4];	// [0] players, [1] made ahead, [2] by workers, [3] waited on an ended one, 4.. why
 +static int se_frames_logged;
++static unsigned long long se_ran[3];	// the longest player's instructions summed over the frames, all players', frames
 +static int se_ahead_frame;		// cg.time of the players made ahead (CG_SE_LookPoint asks within it)
 +
++unsigned long long SE_Instructions( void );
 +static void se_player_run( void *arg )
 +{
 +	sePlayer_t *p = (sePlayer_t *)arg;
 +	const int slot = SE_Slot();
++	const unsigned se_t0 = (unsigned)SE_Instructions();
 +	centity_t *cent = p->cent;
 +	memcpy( &p->cent_was, cent, sizeof( centity_t ) );
 +	memcpy( &p->gent_was, cent->gent, sizeof( gentity_t ) );
@@ -6959,6 +8100,7 @@ index bad8c736..738258e1 100644
 +		if ( client )
 +			memcpy( client, &p->client_was, sizeof( gclient_t ) );
 +		p->out.why = se_abort[slot].why;
++		p->out.ran = (int)( (unsigned)SE_Instructions() - se_t0 );
 +		p->out.state = 2;
 +		return;
 +	}
@@ -6967,6 +8109,7 @@ index bad8c736..738258e1 100644
 +	CG_AddCEntity( cent );
 +	p->out.bytes = SE_RecEnd();
 +	se_abort[slot].jb = NULL;
++	p->out.ran = (int)( (unsigned)SE_Instructions() - se_t0 );
 +	p->out.state = 1;
 +}
 +
@@ -7064,6 +8207,16 @@ index bad8c736..738258e1 100644
 +		if ( !any )
 +			break;
 +	}
++	{
++		unsigned longest = 0, all = 0;
++		for ( int i = 0; i < se_nplayers; i++ ) {
++			const unsigned r = (unsigned)se_players[i].out.ran;
++			all += r;
++			if ( r > longest )
++				longest = r;
++		}
++		se_ran[0] += longest, se_ran[1] += all, se_ran[2]++;
++	}
 +	for ( int i = 0; i < se_nplayers; i++ ) {
 +		se_counts[0]++;
 +		if ( se_players[i].out.state == 1 )
@@ -7083,8 +8236,10 @@ index bad8c736..738258e1 100644
 +		for ( int k = 1; k < SE_WHY_COUNT; k++ )
 +			if ( se_counts[4 + k] )
 +				Q_strcat( why, sizeof why, va( " %s %u", names[k], se_counts[4 + k] ) );
-+		Com_Printf( "jk2players: %u players, %u made ahead, %u on workers, %u waited on one in its turn; in its turn:%s\n",
-+			se_counts[0], se_counts[1], se_counts[2], se_counts[3], why );
++		Com_Printf( "jk2players: %u players, %u made ahead, %u on workers, %u waited on one in its turn; in its turn:%s; "
++			"a frame the longest %uk, all %uk\n", se_counts[0], se_counts[1], se_counts[2], se_counts[3], why,
++			se_ran[2] ? (unsigned)( se_ran[0] / se_ran[2] / 1000 ) : 0, se_ran[2] ? (unsigned)( se_ran[1] / se_ran[2] / 1000 ) : 0 );
++		se_ran[0] = se_ran[1] = se_ran[2] = 0;
 +		memset( se_counts, 0, sizeof se_counts );
 +	}
 +}
@@ -7101,7 +8256,7 @@ index bad8c736..738258e1 100644
  void CG_AddPacketEntities( void ) {
  	int					num;
  	centity_t			*cent;
-@@ -2209,10 +2441,29 @@ void CG_AddPacketEntities( void ) {
+@@ -2209,10 +2458,29 @@ void CG_AddPacketEntities( void ) {
  //	CG_AddCEntity( cent );					//
  
  	// add each entity sent over by the server

@@ -57,9 +57,11 @@ static void render_open(void) {
     mcw_touch_code(_start, (unsigned)(etext - _start));   // (a worker stops at a page of code no core has run)
     mcw_touch(render_stack, RENDER_STACK);
     mcw_touch(&job, sizeof job);
-    // (a worker on one of the first 16 cores, with the larger write cache: the drawing stores every vertex's words)
+    // (a worker on one of the first 16 cores, with the larger write cache: the drawing stores every vertex's words; the
+    // highest such, as mcw_try_call takes the lowest free one first: a job of the slots or the music's that took the
+    // drawing's or the mix's worker while it was free held its next frame back)
     rw0.worker = n;
-    for (int k = 1; k <= n; k++)
+    for (int k = n; k >= 1; k--)
         if (mcw_fast(k)) { rw0.worker = k; break; }
     rw0.mode = how && !strcmp(how, "menus") ? 2 : 1;
     printf("jk2: the drawing on worker %d (%s write cache), a frame behind\n", rw0.worker, mcw_fast(rw0.worker) ? "a large" : "a small");
@@ -87,7 +89,7 @@ void jk2RenderGive(void (*fn)(const void*), const void* arg) {
 // docs/games/jk2.md, "The mix on a worker") ----
 #define MIX_STACK (128 * 1024)
 static uint8_t mix_stack[MIX_STACK] __attribute__((aligned(16)));
-static struct __attribute__((aligned(16))) { int worker, out, unused[2]; } mw0;   // this core's
+static struct __attribute__((aligned(16))) { int worker, out, waits, unused; } mw0;   // this core's
 static struct __attribute__((aligned(16))) { void (*fn)(void); int unused[3]; } mix_job;   // the worker's while out
 static uint32_t mix_body(uint32_t unused) {
     (void)unused;
@@ -103,7 +105,7 @@ int jk2MixOn(void) {
         const char* how = getenv("JK2_MIX");
         mw0.worker = -1;
         if (!(how && !strcmp(how, "core"))) {
-            for (int k = 1; k <= mcw_count(); k++)
+            for (int k = mcw_count(); k >= 1; k--)   // (the highest but the drawing's: render_open)
                 if (k != rw0.worker && mcw_fast(k)) { mw0.worker = k; break; }
             if (mw0.worker > 0) mcw_touch(mix_stack, MIX_STACK), mcw_touch(&mix_job, sizeof mix_job);
         }
@@ -112,8 +114,13 @@ int jk2MixOn(void) {
 }
 void jk2MixSettle(void) {
     if (!mw0.out) return;
-    while (!mcw_done(mw0.worker)) mcw_rest_for(&mw0.worker, 1);
+    while (!mcw_done(mw0.worker)) mcw_rest_for(&mw0.worker, 1), mw0.waits++;
     mw0.out = 0;
+}
+unsigned jk2MixWaits(void) {
+    unsigned w = mw0.waits;
+    mw0.waits = 0;
+    return w;
 }
 void jk2MixGive(void (*fn)(void)) {
     jk2MixSettle();
@@ -180,6 +187,15 @@ static void gl_swap(void) {
     depth_seen = 0;
     if (gl_log_at < 0) gl_log_at = getenv("JK2_GL_LOG") ? atoi(getenv("JK2_GL_LOG")) : 0;
     gl_frames++;
+}
+// JK2_HOLD=F (sys_shaderemu.cpp, at the game's frame F): the frame given last drawn and shown, its list the last in RAM
+// and done, and the game held there, for a capture (rvc_cpu --until "jk2: holding" --save-ram, tools/gpu_reference.py)
+void jk2glHold(int frame) {
+    jk2RenderSettle();
+    if (on) seglSettle();
+    printf("jk2: holding at frame %d, swap %d\n", frame, gl_frames);
+    fflush(stdout);
+    for (;;) sleep(1);
 }
 void jk2glSwap(void) {
     if (!on || rw0.presenting) return;   // (a frame given to the worker: shown when it is done)
@@ -499,6 +515,65 @@ static int fast_triangles(int count, const uint32_t* idx) {
         to[0] = a, to[1] = b, to[2] = c, to[3] = d;
     }
     drawn_vertices += (uint32_t)count;
+    return 1;
+}
+// The world's faces kept (docs/games/jk2.md, "The world's faces kept"; rd-vanilla's tr_surface.cpp): a face's words for
+// one kind of its coordinates, made once by jk2glKeptWords as fast_triangles makes a vertex's, and copied into the draw
+// of each stage that has them by jk2glKeptFaces, the stage's one colour the draw's. The coordinates are from 0 when
+// they lie in 0 to 63 (as fast_triangles has a clamped texture's: the light maps), else from the face's own floor, not
+// its draw's (in a texture that repeats, the same texels; 2 from jk2glKeptWords). 0 from jk2glKeptWords: coordinates
+// over 64 repeats, which a word does not hold; 0 from jk2glKeptFaces: a draw fast_triangles would make otherwise (a
+// clamped texture with words from a floor, an offset, no texture), which rd-vanilla then draws from tess.
+// JK2_GL=plain: none.
+int jk2glKeptOn(void) {
+    fast_ok();
+    return !fast_off;
+}
+int jk2glKeptWords(uint32_t* to, const float* points, int stride, int st, const int* idx, int count, int verts) {
+    float low_s = points[st], low_t = points[st + 1], high_s = low_s, high_t = low_t;
+    for (int k = 1; k < verts; k++) {
+        const float* t = points + (size_t)k * stride + st;
+        if (t[0] < low_s) low_s = t[0];
+        if (t[0] > high_s) high_s = t[0];
+        if (t[1] < low_t) low_t = t[1];
+        if (t[1] > high_t) high_t = t[1];
+    }
+    int floored = 2;   // (coordinates from 0, as fast_triangles makes a clamped texture's: either texture takes them)
+    if (low_s >= 0.0f && low_t >= 0.0f && high_s < 63.0f && high_t < 63.0f) {
+        floored = 1, low_s = low_t = 0.0f;
+    } else {
+        low_s = floor_of(low_s), low_t = floor_of(low_t);
+        if (!(high_s - low_s < 63.0f && high_t - low_t < 63.0f)) return 0;
+    }
+    for (int i = 0; i < count; i++, to += 4) {
+        const float* p = points + (size_t)idx[i] * stride;
+        to[0] = bits(p[0]), to[1] = bits(p[1]), to[2] = bits(p[2]);
+        to[3] = ((uint32_t)(int32_t)((p[st] - low_s) * 1024.0f) & 0xffff) | (uint32_t)(int32_t)((p[st + 1] - low_t) * 1024.0f) << 16;
+    }
+    return floored == 2 ? 2 : 1;
+}
+// (the GPU done with the list in flight: before memory it reads where it lies, the kept faces' words, is let go)
+void jk2glSettle(void) {
+    if (on) seglSettle();
+}
+// (floored: some face's words are from its floor, which a clamped texture does not take)
+int jk2glKeptFaces(uint32_t rgba, const uint32_t* const* words, const int* counts, int faces, int floored) {
+    if (!on) return 1;
+    gpu_state s;
+    if (!draw_state(&s)) return 1;   // (its texture not in GPU memory: not drawn, as fast_triangles)
+    if ((s.fragment & 0xff) == GPU_COLOUR || (floored && (s.fragment & GPU_CLAMPED)) || (offsetting && offset_pull != 0)) return 0;
+    depth_seen = 1;
+    uint32_t keep = blending && blend_src == GL_ONE && blend_dst == GL_ONE ? 0x00ffffffu : 0xffffffffu;
+    s.colour = replace ? 0x00ffffffu : WORD_OF(rgba) & keep;
+    // (drawn where the words lie, faces whose words follow each other in one draw: copied into the frame's list they
+    // filled its 512 KB of vertices, and what came after them, the HUD, found no room)
+    for (int f = 0; f < faces;) {
+        int count = counts[f], g = f + 1;
+        while (g < faces && words[g] == words[g - 1] + counts[g - 1] * 4 && count + counts[g] <= MAX_PRIMITIVE) count += counts[g++];
+        if (!gpuDrawAt(&s, gpuAddress(words[f]), count)) return 1;
+        drawn_vertices += (uint32_t)count;
+        f = g;
+    }
     return 1;
 }
 // A Ghoul2 surface skinned by the GPU's vertex stage (gpu.h's VERTEX_BONES; docs/games/jk2.md, "Ghoul2 on the GPU"):
