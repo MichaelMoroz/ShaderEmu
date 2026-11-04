@@ -27,3 +27,4 @@ dcd25fea6418f398  2026-11-03  WARP passed 1 cases: mctest-3
 b5796c74cb8fdd78  2026-11-03  WARP passed 1 cases: mctest-3
 aa7b22e339fdf0b7  2026-11-04  WARP passed 1 cases: mctest-3
 92ed58a0a518ea4c  2026-11-04  WARP ran 3 snapshots of `nano-X -p & sleep 1; glxgears & mctest 3` 10 s each (tools/warp_stamp.py)
+fe5c4e8e468b3278  2026-11-04  WARP ran 3 snapshots of `nano-X -p & sleep 1; glxgears & mctest 3` 6 s each (tools/warp_stamp.py)

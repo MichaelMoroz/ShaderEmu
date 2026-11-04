@@ -243,6 +243,10 @@ GAMES.update({
         wall=6000, more=['--expect', 'Type yes', '--send', 'yes\\n'],
         mark='jk2mark: begins', frames=lambda log: int(re.search(r'jk2mark: ends, (\d+) frames', log)[1]),
         rate=lambda log: tuple(int(x) for x in re.search(r'jk2mark: ends, (\d+) frames in (\d+) ms', log).groups())),
+    'jk2-load': dict(
+        what="the level's load, the game's start to the level played (+map demo, client state 7; a frame here is the load)",
+        cmd="jk2 --unpack; nano-X -p & sleep 2; echo LOAD-''GO; JK2_STATS=1 JK2_SEED=7 jk2 +set fixedtime 50 +set com_maxfps 0 +map demo",
+        wall=6000, more=['--expect', 'Type yes', '--send', 'yes\\n'], mark='LOAD-GO', until='client state 7', frames=lambda log: 1),
     'jk2-level': dict(
         what='the level started at once (+map demo, no input), the opening scene at frames 900 to 1,000 (fixedtime 50): shorter on the card',
         cmd='jk2 --unpack; nano-X -p & sleep 2; JK2_MARK=900,1000 JK2_SEED=7 jk2 +set fixedtime 50 +set com_maxfps 0 +map demo',

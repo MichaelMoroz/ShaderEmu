@@ -236,8 +236,8 @@ if [ "${JK2_HOST:-}" != 1 ]; then
         $OBJCOPY --set-section-alignment '.data*=16' --set-section-alignment '.sdata*=16' --set-section-alignment '.bss*=16' \
             --set-section-alignment '.sbss*=16' "$o"
     done
-    # (every strtod and atof through sys_shaderemu.cpp's __wrap_strtod: musl's parses in software long doubles)
-    MACHINE="$BUILD/window/*.o $MW/src/lib/libnano-X.a $MEDIA -Wl,--wrap=strtod"
+    # (every strtod and atof through sys_shaderemu.cpp's __wrap_strtod and __wrap_atof: musl's parses in software long doubles)
+    MACHINE="$BUILD/window/*.o $MW/src/lib/libnano-X.a $MEDIA -Wl,--wrap=strtod -Wl,--wrap=atof"
 fi
 
 step "the program"

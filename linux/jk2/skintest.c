@@ -132,7 +132,7 @@ static uint32_t word_of(uint32_t c) { return (255u - (c >> 24)) << 24 | (c & 0xf
 static void place(int panel) {
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
-    glTranslatef(80.0f + 160.0f * (float)panel, 240.0f, 0.0f);
+    glTranslatef(80.0f + 160.0f * (float)panel, 140.0f, 0.0f);
     glScalef(55.0f, 55.0f, 0.2f);
 }
 
@@ -180,8 +180,81 @@ static void frame(int cpu) {
     }
 }
 
+// ---- environment mapping (gpu.h's VERTEX_ENV): RB_CalcEnvironmentTexCoords on this core, as gl_jk2.c's fast_triangles
+// then draws it (a compact vertex an index, the coordinates less their least whole repeat, in 1,024ths), against the
+// GPU's from the kept positions and normals and the eye, a panel each of four eyes, in the row below
+#define GPU_ENV 0x80000u
+static float rsqrt(float number) {   // (Q_rsqrt's first step)
+    float x2 = number * 0.5f, y = number;
+    uint32_t i;
+    memcpy(&i, &y, 4);
+    i = 0x5f3759df - (i >> 1);
+    memcpy(&y, &i, 4);
+    return y * (1.5f - (x2 * y * y));
+}
+static float env_pos[VERTS * 3], env_nor[VERTS * 3];
+static void env_make(void) {
+    for (int i = 0; i < VERTS; i++) {
+        const vertex_t* v = (const vertex_t*)&room[0][32 * i];
+        env_pos[3 * i] = v->at[0], env_pos[3 * i + 1] = v->at[1];
+        env_pos[3 * i + 2] = 0.4f * (v->at[0] * v->at[0] - v->at[1] * v->at[1]);
+        env_nor[3 * i] = v->normal[0], env_nor[3 * i + 1] = v->normal[1], env_nor[3 * i + 2] = v->normal[2];
+    }
+}
+static void env_frame(int cpu) {
+    static const float eyes[4][3] = {{0.3f, -0.2f, 4.0f}, {-2.5f, 1.0f, 1.5f}, {1.0f, 3.0f, -2.0f}, {0.05f, 0.02f, 9.0f}};
+    for (int p = 0; p < 4; p++) {
+        const float* e = eyes[p];
+        gpu_state s;
+        memset(&s, 0, sizeof s);
+        s.fragment = GPU_WORDS | GPU_PASS(0), s.texture = (unsigned)(uintptr_t)texture, s.width = 8, s.height = 8;
+        s.colour = 0x00ffffff;
+        glMatrixMode(GL_MODELVIEW);
+        glLoadIdentity();
+        glTranslatef(80.0f + 160.0f * (float)p, 360.0f, 0.0f);
+        glScalef(55.0f, 55.0f, 0.2f);
+        if (cpu) {
+            float st[VERTS * 2], low_s = 0, low_t = 0;
+            for (int i = 0; i < VERTS; i++) {
+                const float* x = &env_pos[3 * i];
+                const float* n = &env_nor[3 * i];
+                float viewer[3] = {e[0] - x[0], e[1] - x[1], e[2] - x[2]};
+                float il = rsqrt(viewer[0] * viewer[0] + viewer[1] * viewer[1] + viewer[2] * viewer[2]);
+                viewer[0] *= il, viewer[1] *= il, viewer[2] *= il;
+                float d = n[0] * viewer[0] + n[1] * viewer[1] + n[2] * viewer[2];
+                st[2 * i] = n[0] * d - 0.5f * viewer[0];
+                st[2 * i + 1] = n[1] * d - 0.5f * viewer[1];
+                if (!i || st[2 * i] < low_s) low_s = st[2 * i];
+                if (!i || st[2 * i + 1] < low_t) low_t = st[2 * i + 1];
+            }
+            low_s = floorf(low_s), low_t = floorf(low_t);
+            uint32_t* to = gpuDrawRoom(&s, TRIS * 3, TRIS * 3);
+            if (!to) return;
+            for (int i = 0; i < TRIS * 3; i++, to += 4) {
+                int k = tris[i];
+                to[0] = bits(env_pos[3 * k]), to[1] = bits(env_pos[3 * k + 1]), to[2] = bits(env_pos[3 * k + 2]);
+                to[3] = ((uint32_t)(int32_t)((st[2 * k] - low_s) * 1024.0f) & 0xffff) | (uint32_t)(int32_t)((st[2 * k + 1] - low_t) * 1024.0f) << 16;
+            }
+            continue;
+        }
+        uint32_t* words = gpuFrameMemory(TRIS * 3 * 32);
+        if (!words) return;
+        uint32_t* normals = words + TRIS * 3 * 4;
+        for (int i = 0; i < TRIS * 3; i++) {
+            int k = tris[i];
+            words[4 * i] = bits(env_pos[3 * k]), words[4 * i + 1] = bits(env_pos[3 * k + 1]), words[4 * i + 2] = bits(env_pos[3 * k + 2]), words[4 * i + 3] = 0;
+            normals[4 * i] = bits(env_nor[3 * k]), normals[4 * i + 1] = bits(env_nor[3 * k + 1]), normals[4 * i + 2] = bits(env_nor[3 * k + 2]);
+            normals[4 * i + 3] = 0;
+        }
+        s.vertex = GPU_ENV;
+        s.more[0] = gpuAddress(normals), s.more[1] = bits(e[0]), s.more[2] = bits(e[1]), s.more[3] = bits(e[2]);
+        gpuDrawAt(&s, gpuAddress(words), TRIS * 3);
+    }
+}
+
 int main(void) {
     make();
+    env_make();
     if (GrOpen() < 0) { printf("skintest: no window system\n"); return 1; }
     GR_WINDOW_ID w = GrNewWindowEx(GR_WM_PROPS_APPWINDOW, (char*)"skintest", GR_ROOT_WINDOW_ID, 20, 20, 640, 480, 0);
     GrMapWindow(w);
@@ -191,6 +264,7 @@ int main(void) {
         glLoadIdentity();
         glOrthof(0, 640, 480, 0, -1, 1);
         frame(getenv("SKINTEST") && !strcmp(getenv("SKINTEST"), "cpu"));
+        env_frame(getenv("SKINTEST") && !strcmp(getenv("SKINTEST"), "cpu"));
         seglSwap();
     }
     printf("skintest: drawn\n");

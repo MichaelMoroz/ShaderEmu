@@ -100,3 +100,9 @@ int jk2glSkinned(const void *tris, int count, const void *verts, const void *coo
     (void)tris; (void)count; (void)verts; (void)coords; (void)bones; (void)nbones; (void)light; (void)rgba;
     return 0;
 }
+int jk2glEnvElements(int count, const unsigned *idx, const float *normal, const float *eye) {
+    (void)count; (void)idx; (void)normal; (void)eye;
+    return 0;
+}
+void jk2glKey(const void *surface, int frame) { (void)surface; (void)frame; }
+void jk2glKeysForget(void) {}

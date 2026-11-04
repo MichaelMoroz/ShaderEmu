@@ -53,6 +53,7 @@
 #define VERTEX_FACING 0x20000    // flag (tagged): word 11 is the address of a table of the ways a vertex faces, and it is lit from word 13's three texels
 #define VERTEX_MOVED 0x10000     // flag: word 15 is the address of two rows of three numbers the texture coordinates are turned and moved by
 #define VERTEX_BONES 0x40000     // flag (floats, not compact): a skinned model's vertex, made from its indices, vertices, bones and light (words 1, 12-15; gpu.md)
+#define VERTEX_ENV 0x80000       // flag (compact, floats): u and v made from a normal a vertex (word 12, a texel each) and the eye (words 13-15), as rd-vanilla's environment map
 
 // How fragments are coloured (low byte), plus flags.
 #define FRAGMENT_COLOUR 0     // interpolated colour
@@ -171,6 +172,28 @@ void gpu_compact_vertex(uint base, uint4 head, uint4 how, uint4 more, uint k, ou
         pos = float4(gpu_number((how.r & VERTEX_FLOAT) != 0, t).xyz, 1.0);
     }
     gpu_compact(how.r, t.a, more.a, uv, colour);
+    [branch]
+    if (how.r & VERTEX_ENV) {
+        // RB_CalcEnvironmentTexCoords (Raven's): the way to the eye made one long by Q_rsqrt (its first step, as
+        // VectorNormalizeFast), d its dot with the normal, u and v the normal's x and y times d less half the way's;
+        // the operations the CPU's, in its order (precise), and in 1,024ths as a compact vertex has them
+        uint4 w = ram(base + 3);
+        float3 n = asfloat(ram(texel_of(w.r) + k)).xyz;
+        precise float3 viewer = asfloat(w.gba) - pos.xyz;
+        precise float l0 = viewer.x * viewer.x + viewer.y * viewer.y;
+        precise float l = l0 + viewer.z * viewer.z;
+        precise float half_l = l * 0.5f;
+        float y = asfloat(0x5f3759dfu - (asuint(l) >> 1));
+        precise float a0 = half_l * y;
+        precise float a1 = a0 * y;
+        precise float a2 = 1.5f - a1;
+        precise float il = y * a2;
+        precise float3 v = viewer * il;
+        precise float d0 = n.x * v.x + n.y * v.y;
+        precise float d = d0 + n.z * v.z;
+        precise float2 st = float2(n.x * d, n.y * d) - 0.5f * v.xy;
+        uv = floor(st * 1024.0) / 1024.0;
+    }
     if (how.r & VERTEX_FACING) {
         // A vertex's tag is which of 256 ways it faces (a texel each of floats, in the model's
         // own space); the light is three texels: from where, its colour, and the colour of

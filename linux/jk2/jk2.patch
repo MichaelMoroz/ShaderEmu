@@ -776,7 +776,7 @@ index bb539e4c..a336e99e 100644
  
  	Com_DPrintf( "SND_RegisterAudio_LevelLoadEnd():\n");
 diff --git a/code/client/snd_mem.cpp b/code/client/snd_mem.cpp
-index 97b4f4b4..a3c15e44 100644
+index 97b4f4b4..d6516fde 100644
 --- a/code/client/snd_mem.cpp
 +++ b/code/client/snd_mem.cpp
 @@ -26,6 +26,10 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
@@ -812,7 +812,7 @@ index 97b4f4b4..a3c15e44 100644
  	*piSize = FS_ReadFile( psFilename, (void **)pData );	// try WAV
  	if ( !*pData ) {
  		psFilename[iNameStrlen-3] = 'm';
-@@ -730,6 +742,174 @@ The filename may be different than sfx->name in the case
+@@ -730,6 +742,200 @@ The filename may be different than sfx->name in the case
  of a forced fallback of a player specific sound	(or of a wav/mp3 substitution now -Ste)
  ==============
  */
@@ -859,6 +859,8 @@ index 97b4f4b4..a3c15e44 100644
 +			memset( p->plain, 0, p->size );
 +		answer = SE_SoundResample( (const byte *)p->plain + p->dataofs, p->width, p->step, p->count, p->out );
 +	} else if ( !answer ) {	// (the worker's decode made too little: the decode before, here: libmedia's team, else the engine's)
++		if ( getenv( "JK2_SOUNDS_LOG" ) )
++			Com_Printf( "jk2snd-again: %s mp3 bytes %d pcm %d ch %d\n", p->sfx->sSoundName, p->size, p->pcm_bytes, p->channels );
 +		if ( SE_SoundMP3( p->file, p->size, p->pcm, p->pcm_bytes, p->rate, p->channels ) < 0 )
 +			MP3_UnpackRawPCM( p->name, p->file, p->size, (byte *)p->pcm, qfalse );
 +		answer = SE_SoundResample( (const byte *)p->pcm + p->dataofs, p->width, p->step, p->count, p->out );
@@ -893,6 +895,13 @@ index 97b4f4b4..a3c15e44 100644
 +	}
 +}
 +
++// (the sounds through joined, the others left out: a worker is free once its call is joined; sys_shaderemu.cpp's
++// SE_PakInflate waits so for one)
++void S_SE_SoundsReady( void )
++{
++	if ( se_sounds_out_count )
++		se_sounds_pump( qfalse );
++}
 +void S_SE_SoundsFinish( void )
 +{
 +	if ( se_sounds_out_count )
@@ -901,10 +910,14 @@ index 97b4f4b4..a3c15e44 100644
 +
 +// A sound's samples given to a worker: the file is the sound's then (qtrue), or nothing is done (qfalse). `mp3` decoded
 +// first to pcm_bytes of `channels`; the samples ResampleSfx takes from `src` (an MP3's: its decode) at dataofs.
++void SE_PicturesRest( void );
 +static qboolean se_sound_ahead( sfx_t *sfx, const char *name, byte *file, int size, qboolean mp3, int pcm_bytes, int channels,
 +	int rate, int width, int samples, int dataofs, void *packed = NULL, int packed_size = 0 )
 +{
-+	if ( !SE_SoundsOn() || ( mp3 && ( pcm_bytes <= 0 || channels < 1 || SE_MP3Channels( file, size ) != channels ) ) ||
++	// (a stereo MP3 the engine makes mono: decoded in stereo on the worker and its channels averaged there)
++	const int file_channels = mp3 ? SE_MP3Channels( file, size ) : 0;
++	const int downmix = mp3 && channels == 1 && file_channels == 2 && !getenv( "JK2_STEREO_ENGINE" );
++	if ( !SE_SoundsOn() || ( mp3 && ( pcm_bytes <= 0 || channels < 1 || ( file_channels != channels && !downmix ) ) ) ||
 +		( width != 1 && width != 2 ) ) {
 +		return qfalse;
 +	}
@@ -912,14 +925,14 @@ index 97b4f4b4..a3c15e44 100644
 +	int count = (int)( samples / fStepScale );
 +	unsigned step = (int)( fStepScale * 256 );
 +	void *pcm = NULL, *out = NULL, *plain = NULL;
-+	if ( count <= 0 || ( mp3 && posix_memalign( &pcm, 16, ( (unsigned)pcm_bytes + 2 * 2304 + 15 ) & ~15u ) ) ||
++	if ( count <= 0 || ( mp3 && posix_memalign( &pcm, 16, ( (unsigned)pcm_bytes * ( downmix ? 2 : 1 ) + 4 * 2304 + 15 ) & ~15u ) ) ||
 +		( packed && posix_memalign( &plain, 16, ( (unsigned)size + 15 ) & ~15u ) ) ||
 +		posix_memalign( &out, 16, ( (unsigned)count * 2 + 15 ) & ~15u ) ) {
 +		free( pcm );
 +		free( plain );
 +		return qfalse;
 +	}
-+	unsigned bytes = ( mp3 ? (unsigned)pcm_bytes : 0 ) + (unsigned)count * 2 + (unsigned)size + ( packed ? (unsigned)packed_size : 0 );
++	unsigned bytes = ( mp3 ? (unsigned)pcm_bytes * ( downmix ? 2 : 1 ) : 0 ) + (unsigned)count * 2 + (unsigned)size + ( packed ? (unsigned)packed_size : 0 );
 +	if ( se_sounds_out_count == SE_SOUNDS_OUT || se_sounds_out_bytes + bytes > SE_SOUNDS_OUT_BYTES ) {
 +		se_sounds_pump( qtrue );
 +	}
@@ -932,9 +945,22 @@ index 97b4f4b4..a3c15e44 100644
 +	if ( getenv( "JK2_SOUNDS_LOG" ) )
 +		Com_Printf( "jk2snd-ahead: %s mp3 %d rate %d width %d samples %d dataofs %d count %d step %u pcm %d ch %d\n",
 +			sfx->sSoundName, mp3, rate, width, samples, dataofs, count, step, pcm_bytes, channels );
-+	int answer = 1;
-+	int given = SE_SoundGive( mp3 ? file : NULL, size, pcm, mp3 ? pcm_bytes / ( 2 * channels ) : 0, channels, src, width,
-+		step, count, out, &answer, packed, packed_size, plain, size );
++	// (no worker with nothing to do: the sounds through are joined and this core rests a pass, and asks again, as a
++	// picture does; a decode here was about 6 million instructions of this core's, 20 million of the load. Made here only
++	// after JK2_SOUND_WAIT passes, 400; 0: at once)
++	static int wait = -1;
++	if ( wait < 0 )
++		wait = getenv( "JK2_SOUND_WAIT" ) ? atoi( getenv( "JK2_SOUND_WAIT" ) ) : 400;
++	int answer = 1, given;
++	for ( int tries = 0; ; tries++ ) {
++		answer = tries < wait ? -1 : 1;
++		given = SE_SoundGive( mp3 ? file : NULL, size, pcm, mp3 ? pcm_bytes / ( 2 * channels ) : 0, channels | ( downmix ? 0x100 : 0 ), src, width,
++			step, count, out, &answer, packed, packed_size, plain, size );
++		if ( given >= 0 )
++			break;
++		se_sounds_pump( qfalse );
++		SE_PicturesRest();
++	}
 +	se_sound_out_t *p = &se_sounds_out[se_sounds_out_count];
 +	p->sfx = sfx, p->file = file, p->pcm = pcm, p->out = out, p->count = count, p->given = given, p->bytes = bytes;
 +	se_sounds_out_bytes += bytes;
@@ -987,7 +1013,7 @@ index 97b4f4b4..a3c15e44 100644
  qboolean gbInsideLoadSound = qfalse;
  static qboolean S_LoadSound_Actual( sfx_t *sfx )
  {
-@@ -805,6 +985,18 @@ static qboolean S_LoadSound_Actual( sfx_t *sfx )
+@@ -805,6 +1011,18 @@ static qboolean S_LoadSound_Actual( sfx_t *sfx )
  				// small file, not worth keeping as MP3 since it would increase in size (with MP3 header etc)...
  				//
  				Com_DPrintf("S_LoadSound: Unpacking MP3 file \"%s\" to wav.\n",sLoadName);
@@ -1006,7 +1032,7 @@ index 97b4f4b4..a3c15e44 100644
  				//
  				// unpack and convert into WAV...
  				//
-@@ -812,7 +1004,16 @@ static qboolean S_LoadSound_Actual( sfx_t *sfx )
+@@ -812,7 +1030,16 @@ static qboolean S_LoadSound_Actual( sfx_t *sfx )
  					byte *pbUnpackBuffer = (byte *) Z_Malloc( iRawPCMDataSize+10 +2304 /* <g> */, TAG_TEMP_WORKSPACE, qfalse );	// won't return if fails
  
  					{
@@ -1024,7 +1050,7 @@ index 97b4f4b4..a3c15e44 100644
  
  						if (iResultBytes!= iRawPCMDataSize){
  							Com_Printf(S_COLOR_YELLOW"**** MP3 %s final unpack size %d different to previous value %d\n",sLoadName,iResultBytes,iRawPCMDataSize);
-@@ -900,6 +1101,22 @@ static qboolean S_LoadSound_Actual( sfx_t *sfx )
+@@ -900,6 +1127,22 @@ static qboolean S_LoadSound_Actual( sfx_t *sfx )
  
  //=========
  
@@ -1047,7 +1073,7 @@ index 97b4f4b4..a3c15e44 100644
  		info = GetWavinfo( sLoadName, data, size );
  		if ( info.channels != 1 ) {
  			Com_Printf ("%s is a stereo wav file\n", sLoadName);
-@@ -915,6 +1132,11 @@ static qboolean S_LoadSound_Actual( sfx_t *sfx )
+@@ -915,6 +1158,11 @@ static qboolean S_LoadSound_Actual( sfx_t *sfx )
  			Com_Printf(S_COLOR_YELLOW "WARNING: %s is not a 22kHz wav file\n", sLoadName);
  		}
  */
@@ -1086,6 +1112,98 @@ index d245590d..aa9de400 100644
  	for (i=0 ; i<snd_linear_count ; i+=2)
  	{
  		val = snd_p[i]>>8;
+diff --git a/code/mp3code/towave.c b/code/mp3code/towave.c
+index ff83a002..335fcfe9 100644
+--- a/code/mp3code/towave.c
++++ b/code/mp3code/towave.c
+@@ -243,9 +243,58 @@ LP_MP3STREAM pMP3Stream = &_MP3Stream;
+ int bFastEstimateOnly = 0;	// MUST DEFAULT TO THIS VALUE!!!!!!!!!
+ 
+ 
++#ifdef SHADEREMU
++// (ShaderEmu: what C_MP3_IsValid and C_MP3_GetHeaderData found of a file, kept for the next asking of the same file: a
++// sound's load asks both, and C_MP3_FakeUpWAVInfo asks the header again, each clearing the decoder's 26.6 KB and
++// initialising it, 20 million instructions of the load's. The same file is the same place, length and wish and its
++// first and last 256 bytes; what the decoder's state is after them nothing reads (each user initialises its own).
++// JK2_MP3_MEMO=0: not. docs/games/jk2.md, "The load")
++static struct {
++	const void *data;
++	int len, stereo, valid;
++	char *err;
++	int rate, width, channels;
++	unsigned char ends[512];
++} se_mp3_memo;
++static int se_mp3_memo_on = -1;
++static int se_mp3_same(const void *pvData, int iDataLen, int bStereoDesired)
++{
++	const unsigned char *f = (const unsigned char *)pvData;
++	int n = iDataLen < 256 ? iDataLen : 256;
++	if (se_mp3_memo_on < 0)
++		se_mp3_memo_on = !(getenv("JK2_MP3_MEMO") && !strcmp(getenv("JK2_MP3_MEMO"), "0"));
++	return se_mp3_memo_on && se_mp3_memo.valid && se_mp3_memo.data == pvData && se_mp3_memo.len == iDataLen &&
++		se_mp3_memo.stereo == bStereoDesired && !memcmp(se_mp3_memo.ends, f, n) &&
++		!memcmp(se_mp3_memo.ends + 256, f + iDataLen - n, n);
++}
++static void se_mp3_keep(const void *pvData, int iDataLen, int bStereoDesired, char *err, int rate, int width, int channels)
++{
++	const unsigned char *f = (const unsigned char *)pvData;
++	int n = iDataLen < 256 ? iDataLen : 256;
++	se_mp3_memo.data = pvData, se_mp3_memo.len = iDataLen, se_mp3_memo.stereo = bStereoDesired, se_mp3_memo.err = err;
++	se_mp3_memo.rate = rate, se_mp3_memo.width = width, se_mp3_memo.channels = channels;
++	memcpy(se_mp3_memo.ends, f, n);
++	memcpy(se_mp3_memo.ends + 256, f + iDataLen - n, n);
++	se_mp3_memo.valid = rate > 0;	/* (only a file the decoder took: its header's three numbers known) */
++}
++static char *C_MP3_IsValid_Actual(void *pvData, int iDataLen, int bStereoDesired);
++char *C_MP3_IsValid(void *pvData, int iDataLen, int bStereoDesired)
++{
++	char *err;
++	if (se_mp3_same(pvData, iDataLen, bStereoDesired))
++		return se_mp3_memo.err;
++	se_mp3_memo.valid = 0;
++	err = C_MP3_IsValid_Actual(pvData, iDataLen, bStereoDesired);
++	return err;
++}
++#endif
+ // char *return is NZ for any errors (no trailing CR!)
+ //
++#ifdef SHADEREMU
++static char *C_MP3_IsValid_Actual(void *pvData, int iDataLen, int bStereoDesired)
++#else
+ char *C_MP3_IsValid(void *pvData, int iDataLen, int bStereoDesired)
++#endif
+ {
+ //	char sTemp[1024];	/////////////////////////////////////////////////
+ 	unsigned int iRealDataStart;
+@@ -291,6 +340,14 @@ char *C_MP3_IsValid(void *pvData, int iDataLen, int bStereoDesired)
+ 		}
+ 
+ 		audio.decode_info(&decinfo);
++#ifdef SHADEREMU
++		{
++			char *err = decinfo.bits != 16 ? "MP3ERR: Source file is not 16bit!" : decinfo.samprate != 44100 ?
++				"MP3ERR: Source file is not sampled @ 44100!" : bStereoDesired && decinfo.channels != 2 ?
++				"MP3ERR: Source file is not stereo!" : NULL;
++			se_mp3_keep(pvData, iDataLen, bStereoDesired, err, decinfo.samprate, decinfo.bits / 8, decinfo.channels);
++		}
++#endif
+ 
+ 		if (decinfo.bits != 16)
+ 		{
+@@ -329,6 +386,13 @@ char* C_MP3_GetHeaderData(void *pvData, int iDataLen, int *piRate, int *piWidth,
+ 
+ 	int iBitRate;
+ 	int iFrameBytes;
++#ifdef SHADEREMU
++	if (se_mp3_same(pvData, iDataLen, bStereoDesired))
++	{
++		*piRate = se_mp3_memo.rate, *piWidth = se_mp3_memo.width, *piChannels = se_mp3_memo.channels;
++		return NULL;
++	}
++#endif
+ 
+ 	memset(pMP3Stream,0,sizeof(*pMP3Stream));
+ 
 diff --git a/code/qcommon/cm_load.cpp b/code/qcommon/cm_load.cpp
 index 5407ffb0..804d0124 100644
 --- a/code/qcommon/cm_load.cpp
@@ -3089,10 +3207,90 @@ index 741bb95b..0f77bee0 100644
  			return;
  		}
 diff --git a/code/rd-vanilla/tr_bsp.cpp b/code/rd-vanilla/tr_bsp.cpp
-index afbbb175..a5dbf9fd 100644
+index afbbb175..53dc6533 100644
 --- a/code/rd-vanilla/tr_bsp.cpp
 +++ b/code/rd-vanilla/tr_bsp.cpp
-@@ -1448,6 +1448,11 @@ void RE_LoadWorldMap_Actual( const char *name, world_t &worldData, int index ) {
+@@ -171,6 +171,27 @@ R_LoadLightmaps
+ ===============
+ */
+ #define	LIGHTMAP_SIZE	128
++#ifdef SHADEREMU
++// (ShaderEmu: every light map's bytes shifted in rows over the worker cores, as the loop below makes each, this core
++// resting: 12 million instructions of this core's over the load; a worker stores to its rows of the room alone, which is
++// on 16 bytes. JK2_LIGHTMAPS=core is the way before. docs/games/jk2.md, "The load")
++typedef struct {
++	unsigned grain, out_bytes;
++	void *touch;
++	unsigned touch_bytes;
++	int workers, first_idle;
++} se_lm_opts;	// (programs/mc/mcwx.h's mcw_for_opts)
++extern "C" void mcw_for_opt( unsigned n, void ( *fn )( void *ctx, unsigned from, unsigned to ), void *ctx, const se_lm_opts *o );
++struct se_lm_t { const byte *in; byte *out; };
++static void se_lm_rows( void *ctx, unsigned from, unsigned to )
++{
++	const se_lm_t *z = (const se_lm_t *)ctx;
++	for ( unsigned j = from * LIGHTMAP_SIZE; j < to * LIGHTMAP_SIZE; j++ ) {
++		R_ColorShiftLightingBytes( (byte *)&z->in[j*3], &z->out[j*4] );
++		z->out[j*4+3] = 255;
++	}
++}
++#endif
+ static	void R_LoadLightmaps( lump_t *l, const char *psMapName, world_t &worldData )
+ {
+ 	byte				*buf, *buf_p;
+@@ -208,6 +229,21 @@ static	void R_LoadLightmaps( lump_t *l, const char *psMapName, world_t &worldDat
+ 	char sMapName[MAX_QPATH];
+ 	COM_StripExtension(psMapName,sMapName, sizeof(sMapName));
+ 
++#ifdef SHADEREMU
++	byte *se_room = NULL, *se_all = NULL;
++	if ( r_lightmap->integer != 2 && count > 0 && !( getenv( "JK2_LIGHTMAPS" ) && !strcmp( getenv( "JK2_LIGHTMAPS" ), "core" ) ) &&
++	     ( se_room = (byte *)malloc( (size_t)count * LIGHTMAP_SIZE * LIGHTMAP_SIZE * 4 + 15 ) ) )
++	{
++		se_all = (byte *)( ( (size_t)se_room + 15 ) & ~(size_t)15 );
++		se_lm_t z = { buf, se_all };
++		se_lm_opts o;
++		memset( &o, 0, sizeof( o ) );
++		o.out_bytes = LIGHTMAP_SIZE * 4;
++		o.touch = se_all, o.touch_bytes = (unsigned)count * LIGHTMAP_SIZE * LIGHTMAP_SIZE * 4;
++		o.first_idle = 1;
++		mcw_for_opt( (unsigned)count * LIGHTMAP_SIZE, se_lm_rows, &z, &o );
++	}
++#endif
+ 	for ( i = 0 ; i < count ; i++ ) {
+ 		// expand the 24 bit on-disk to 32 bit
+ 		buf_p = buf + i * LIGHTMAP_SIZE*LIGHTMAP_SIZE * 3;
+@@ -242,17 +278,28 @@ static	void R_LoadLightmaps( lump_t *l, const char *psMapName, world_t &worldDat
+ 				sumIntensity += intensity;
+ 			}
+ 		} else {
++#ifdef SHADEREMU
++			if ( !se_all )
++#endif
+ 			for ( j = 0 ; j < LIGHTMAP_SIZE * LIGHTMAP_SIZE; j++ ) {
+ 				R_ColorShiftLightingBytes( &buf_p[j*3], &image[j*4] );
+ 				image[j*4+3] = 255;
+ 			}
+ 		}
++		byte *se_pic = image;
++#ifdef SHADEREMU
++		if ( se_all && r_lightmap->integer != 2 )
++			se_pic = se_all + (size_t)i * LIGHTMAP_SIZE * LIGHTMAP_SIZE * 4;
++#endif
+ 		tr.lightmaps[worldData.startLightMapIndex+i] = R_CreateImage(
+ 			va("$%s/lightmap%d", sMapName, worldData.startLightMapIndex+i),
+-			image, LIGHTMAP_SIZE, LIGHTMAP_SIZE, GL_RGBA, qfalse, qfalse,
++			se_pic, LIGHTMAP_SIZE, LIGHTMAP_SIZE, GL_RGBA, qfalse, qfalse,
+ 			(qboolean)(r_ext_compressed_lightmaps->integer != 0),
+ 			GL_CLAMP);
+ 	}
++#ifdef SHADEREMU
++	free( se_room );
++#endif
+ 
+ 	if ( r_lightmap->integer == 2 )	{
+ 		ri.Printf( PRINT_ALL, "Brightest lightmap value: %d\n", ( int ) ( maxIntensity * 255 ) );
+@@ -1448,6 +1495,11 @@ void RE_LoadWorldMap_Actual( const char *name, world_t &worldData, int index ) {
  		//
  		//		R_Free( gpvCachedMapDiskImage );
  		//				gpvCachedMapDiskImage = NULL;
@@ -4313,7 +4511,7 @@ index 2da2512a..97658329 100644
  	float		dot;
  	int			i, j;
 diff --git a/code/rd-vanilla/tr_model.cpp b/code/rd-vanilla/tr_model.cpp
-index a6d5bc7b..bcfc3f67 100644
+index a6d5bc7b..d2304e22 100644
 --- a/code/rd-vanilla/tr_model.cpp
 +++ b/code/rd-vanilla/tr_model.cpp
 @@ -254,9 +254,15 @@ extern cvar_t *r_modelpoolmegs;
@@ -4342,10 +4540,18 @@ index a6d5bc7b..bcfc3f67 100644
  	if(!CachedModels) {
  		return;	//argh!
  	}
-@@ -1004,6 +1013,9 @@ R_ModelInit
+@@ -1002,8 +1011,17 @@ void RE_BeginRegistration( glconfig_t *glconfigOut ) {
+ R_ModelInit
+ ===============
  */
++#ifdef SHADEREMU
++extern "C" void jk2glKeysForget( void );
++#endif
  void R_ModelInit( void )
  {
++#ifdef SHADEREMU
++	jk2glKeysForget();	// (the models made again: a surface's place may be another model's)
++#endif
 +#ifdef SHADEREMU
 +	se_models_gen++;
 +#endif
@@ -4353,10 +4559,62 @@ index a6d5bc7b..bcfc3f67 100644
  	CachedModels = &singleton;
  
 diff --git a/code/rd-vanilla/tr_shade.cpp b/code/rd-vanilla/tr_shade.cpp
-index 48f3ed13..04c53884 100644
+index 48f3ed13..fb04dac9 100644
 --- a/code/rd-vanilla/tr_shade.cpp
 +++ b/code/rd-vanilla/tr_shade.cpp
-@@ -2047,6 +2047,165 @@ static void RB_IterateStagesGeneric( shaderCommands_t *input )
+@@ -1798,6 +1798,21 @@ static vec4_t	GLFogOverrideColors[GLFOGOVERRIDE_MAX] =
+ static const float logtestExp2 = (sqrt( -log( 1.0 / 255.0 ) ));
+ #endif
+ extern bool tr_stencilled; //tr_backend.cpp
++#ifdef SHADEREMU
++extern "C" int jk2glEnvElements( int count, const glIndex_t *idx, const float *normal, const float *eye );
++extern "C" int jk2glOn( void );
++// (a stage the GPU makes the coordinates of: tcGen environment, as RB_CalcEnvironmentTexCoords makes them for a model
++// that is not the first person's; the draw itself may still refuse)
++static int SE_EnvOnGPU( const shaderStage_t *p )
++{
++	static int off = -1;
++	if ( off < 0 )
++		off = getenv( "JK2_ENV" ) && !strcmp( getenv( "JK2_ENV" ), "cpu" );
++	return !off && jk2glOn() && p->bundle[0].tcGen == TCGEN_ENVIRONMENT_MAPPED && !p->bundle[0].numTexMods && !p->bundle[1].image &&
++		!p->bundle[0].isLightmap && !( backEnd.currentEntity && ( backEnd.currentEntity->e.renderfx & RF_FIRST_PERSON ) ) &&
++		r_primitives->integer == 2;
++}
++#endif
+ static void RB_IterateStagesGeneric( shaderCommands_t *input )
+ {
+ 	int stage;
+@@ -1946,6 +1961,12 @@ static void RB_IterateStagesGeneric( shaderCommands_t *input )
+ 		{ //this means ignore this, while we do a fade-out
+ 			ComputeColors( pStage, forceAlphaGen, forceRGBGen );
+ 		}
++#ifdef SHADEREMU
++		// (an environment map's coordinates made by the GPU from the normals and the eye: docs/games/jk2.md, "The menu's
++		// logo"; made here only if the GPU's way is refused at the draw)
++		const int se_env = SE_EnvOnGPU( pStage );
++		if ( !se_env )
++#endif
+ 		ComputeTexCoords( pStage );
+ 
+ 		if ( !setArraysOnce )
+@@ -2026,7 +2047,16 @@ static void RB_IterateStagesGeneric( shaderCommands_t *input )
+ 			//
+ 			// draw
+ 			//
++#ifdef SHADEREMU
++			if ( !se_env || !jk2glEnvElements( input->numIndexes, input->indexes, input->normal[0], backEnd.ori.viewOrigin ) )
++			{
++				if ( se_env )
++					ComputeTexCoords( pStage );
++				R_DrawElements( input->numIndexes, input->indexes );
++			}
++#else
+ 			R_DrawElements( input->numIndexes, input->indexes );
++#endif
+ 
+ 			if (lStencilled)
+ 			{ //re-enable the color buffer, disable stencil test
+@@ -2047,6 +2077,165 @@ static void RB_IterateStagesGeneric( shaderCommands_t *input )
  /*
  ** RB_StageIteratorGeneric
  */
@@ -4522,6 +4780,44 @@ index 48f3ed13..04c53884 100644
  void RB_StageIteratorGeneric( void )
  {
  	shaderCommands_t *input;
+@@ -2197,6 +2386,11 @@ void RB_StageIteratorGeneric( void )
+ /*
+ ** RB_EndSurface
+ */
++#ifdef SHADEREMU
++extern const md3Surface_t *se_mesh_surface;
++extern int se_mesh_frame, se_mesh_nv, se_mesh_ni;
++extern "C" void jk2glKey( const void *surface, int frame );
++#endif
+ void RB_EndSurface( void ) {
+ 	shaderCommands_t *input;
+ 
+@@ -2205,6 +2399,15 @@ void RB_EndSurface( void ) {
+ 	if (input->numIndexes == 0) {
+ 		return;
+ 	}
++#ifdef SHADEREMU
++	// (tess is one static model's surface at a frame and nothing else, and nothing moves its vertices: the GL's kept
++	// draws know it by that name, gl_jk2.c's jk2glKey; docs/games/jk2.md, "The menu's logo")
++	if ( se_mesh_surface && input->numVertexes == se_mesh_nv && input->numIndexes == se_mesh_ni && !input->shader->numDeforms )
++		jk2glKey( se_mesh_surface, se_mesh_frame );
++	else
++		jk2glKey( NULL, 0 );
++	se_mesh_surface = NULL;
++#endif
+ 
+ 	if (input->indexes[SHADER_MAX_INDEXES-1] != 0) {
+ 		Com_Error (ERR_DROP, "RB_EndSurface() - SHADER_MAX_INDEXES hit");
+@@ -2269,6 +2472,9 @@ void RB_EndSurface( void ) {
+ 	// call off to shader specific tess end function
+ 	//
+ 	tess.currentStageIteratorFunc();
++#ifdef SHADEREMU
++	jk2glKey( NULL, 0 );	// (the name is this tess's alone)
++#endif
+ 
+ 	//
+ 	// draw debugging stuff
 diff --git a/code/rd-vanilla/tr_shader.cpp b/code/rd-vanilla/tr_shader.cpp
 index 89910449..d75fc01c 100644
 --- a/code/rd-vanilla/tr_shader.cpp
@@ -4710,7 +5006,7 @@ index 8aa032b0..5701e807 100644
  
  	#define ShaderEntryPtrs_Clear()
 diff --git a/code/rd-vanilla/tr_surface.cpp b/code/rd-vanilla/tr_surface.cpp
-index 1e51e71c..19f1439d 100644
+index 1e51e71c..ca14c6db 100644
 --- a/code/rd-vanilla/tr_surface.cpp
 +++ b/code/rd-vanilla/tr_surface.cpp
 @@ -1196,6 +1196,51 @@ static void LerpMeshVertexes (md3Surface_t *surf, float backlerp)
@@ -4765,6 +5061,31 @@ index 1e51e71c..19f1439d 100644
  	if ( backlerp == 0 ) {
  		//
  		// just copy the vertexes
+@@ -1275,6 +1320,10 @@ static void LerpMeshVertexes (md3Surface_t *surf, float backlerp)
+ RB_SurfaceMesh
+ =============
+ */
++#ifdef SHADEREMU
++const md3Surface_t *se_mesh_surface;	// (what RB_SurfaceMesh put into an empty tess, at a frame and not between two)
++int se_mesh_frame, se_mesh_nv, se_mesh_ni;
++#endif
+ void RB_SurfaceMesh(md3Surface_t *surface) {
+ 	int				j;
+ 	float			backlerp;
+@@ -1313,6 +1362,13 @@ void RB_SurfaceMesh(md3Surface_t *surface) {
+ 	}
+ 
+ 	tess.numVertexes += surface->numVerts;
++#ifdef SHADEREMU
++	// (tess holding this surface at a frame alone is named to the GL, so that its kept draws need not compare it: RB_EndSurface)
++	if ( Doug == 0 && backlerp == 0 )
++		se_mesh_surface = surface, se_mesh_frame = backEnd.currentEntity->e.frame, se_mesh_nv = numVerts, se_mesh_ni = indexes;
++	else
++		se_mesh_surface = NULL;
++#endif
+ }
+ 
+ 
 diff --git a/code/server/sv_game.cpp b/code/server/sv_game.cpp
 index 8cd596fb..b8e4be48 100644
 --- a/code/server/sv_game.cpp
@@ -4792,10 +5113,21 @@ index 8cd596fb..b8e4be48 100644
  	// clear all gentity pointers that might still be set from
  	// a previous level
 diff --git a/code/server/sv_init.cpp b/code/server/sv_init.cpp
-index c9dd4880..5de92c38 100644
+index c9dd4880..139ce40f 100644
 --- a/code/server/sv_init.cpp
 +++ b/code/server/sv_init.cpp
-@@ -78,6 +78,32 @@ SV_GetConfigstring
+@@ -62,6 +62,10 @@ void SV_SetConfigstring (int index, const char *val) {
+ 	// change the string in sv
+ 	Z_Free( sv.configstrings[index] );
+ 	sv.configstrings[index] = CopyString( val );
++#ifdef SHADEREMU
++	extern void SV_SE_ConfigstringChanged( int index );
++	SV_SE_ConfigstringChanged( index );
++#endif
+ 
+ 	// send it to all the clients if we aren't
+ 	// spawning a new server
+@@ -78,6 +82,61 @@ SV_GetConfigstring
  
  ===============
  */
@@ -4809,15 +5141,44 @@ index c9dd4880..5de92c38 100644
 +compared as the game compared its copy, case folded, the set's strings no longer than a copy keeps.)
 +===============
 +*/
++// (each configstring's case-folded hash, kept with the string it was made of: a string set anew by SV_SetConfigstring is
++// hashed again, as is one whose place is another string's; an empty one ends the search before its hash is asked. Only
++// a hash equal to the name's is compared: the search compared every configstring of a set, 10 million instructions of
++// the load's. docs/games/jk2.md, "The load")
++static const char *se_cs_of[MAX_CONFIGSTRINGS];
++static unsigned se_cs_hash[MAX_CONFIGSTRINGS];
++static unsigned SV_SE_Fold( const char *s )
++{
++	unsigned h = 2166136261u;
++	for ( ; *s; s++ ) {
++		unsigned c = (unsigned char)*s;
++		if ( c >= 'a' && c <= 'z' ) {
++			c -= 'a' - 'A';	// (Q_stricmp's folding)
++		}
++		h = ( h ^ c ) * 16777619u;
++	}
++	return h;
++}
++void SV_SE_ConfigstringChanged( int index )
++{
++	if ( index >= 0 && index < MAX_CONFIGSTRINGS ) {
++		se_cs_of[index] = NULL;
++	}
++}
 +int SV_SE_FindConfigstring( const char *name, int start, int max )
 +{
 +	int i;
++	const unsigned want = SV_SE_Fold( name );
 +	for ( i = 1 ; i < max ; i++ ) {
-+		const char *s = start + i >= 0 && start + i < MAX_CONFIGSTRINGS ? sv.configstrings[start + i] : NULL;
++		const int at = start + i;
++		const char *s = at >= 0 && at < MAX_CONFIGSTRINGS ? sv.configstrings[at] : NULL;
 +		if ( !s || !s[0] ) {
 +			return -i;
 +		}
-+		if ( !Q_stricmp( s, name ) ) {
++		if ( se_cs_of[at] != s ) {
++			se_cs_of[at] = s, se_cs_hash[at] = SV_SE_Fold( s );
++		}
++		if ( se_cs_hash[at] == want && !Q_stricmp( s, name ) ) {
 +			return i;
 +		}
 +	}
@@ -4828,7 +5189,7 @@ index c9dd4880..5de92c38 100644
  void SV_GetConfigstring( int index, char *buffer, int bufferSize ) {
  	if ( bufferSize < 1 ) {
  		Com_Error( ERR_DROP, "SV_GetConfigstring: bufferSize == %i", bufferSize );
-@@ -90,7 +116,21 @@ void SV_GetConfigstring( int index, char *buffer, int bufferSize ) {
+@@ -90,7 +149,21 @@ void SV_GetConfigstring( int index, char *buffer, int bufferSize ) {
  		return;
  	}
  
@@ -5574,8 +5935,126 @@ index 024b3fad..f4347db4 100644
  
  	gi.FS_Write( &id, sizeof (id), file );
  
+diff --git a/codeJK2/game/g_spawn.cpp b/codeJK2/game/g_spawn.cpp
+index 660e571a..6c2b8cb1 100644
+--- a/codeJK2/game/g_spawn.cpp
++++ b/codeJK2/game/g_spawn.cpp
+@@ -784,6 +784,66 @@ in a gentity
+ ===============
+ */
+ void Q3_SetParm (int entID, int parmNum, const char *parmValue);
++#ifdef SHADEREMU
++// (ShaderEmu: the fields looked up among those of the key's first letter alone, in the table's order: the same first
++// match, where every key of the level's spawns compared the whole table; a vector's floats read as sscanf reads them
++// but without its long doubles, when each is a plain decimal: a mantissa under 2^24 and a power of ten up to 10 is one
++// float operation, correctly rounded as sscanf's is; anything else sscanf. docs/games/jk2.md, "The load")
++static short se_field_next[512], se_field_first[256];
++static int se_field_made;
++static int se_fold( int c ) { return c >= 'a' && c <= 'z' ? c - ( 'a' - 'A' ) : c; }
++static void se_fields_index( void )
++{
++	int i, last[256];
++	for ( i = 0; i < 256; i++ )
++		se_field_first[i] = -1, last[i] = -1;
++	for ( i = 0; fields[i].name && i < 512; i++ ) {
++		int c = se_fold( (unsigned char)fields[i].name[0] );
++		se_field_next[i] = -1;
++		if ( last[c] < 0 )
++			se_field_first[c] = (short)i;
++		else
++			se_field_next[last[c]] = (short)i;
++		last[c] = i;
++	}
++	se_field_made = !fields[i].name;
++}
++static int se_floats( const char *s, float *out, int n )
++{
++	static const float tens[11] = { 1e0f, 1e1f, 1e2f, 1e3f, 1e4f, 1e5f, 1e6f, 1e7f, 1e8f, 1e9f, 1e10f };
++	for ( int k = 0; k < n; k++ ) {
++		while ( *s == ' ' || ( *s >= '\t' && *s <= '\r' ) )
++			s++;
++		int negative = *s == '-';
++		if ( *s == '-' || *s == '+' )
++			s++;
++		unsigned m = 0;
++		int digits = 0, sig = 0, scale = 0;
++		for ( ; *s >= '0' && *s <= '9'; s++, digits++ )
++			if ( m || *s != '0' ) {
++				if ( ++sig > 8 )
++					return -1;
++				m = m * 10 + (unsigned)( *s - '0' );
++			}
++		if ( *s == '.' )
++			for ( s++; *s >= '0' && *s <= '9'; s++, digits++, scale++ )
++				if ( m || *s != '0' ) {
++					if ( ++sig > 8 )
++						return -1;
++					m = m * 10 + (unsigned)( *s - '0' );
++				}
++		if ( !digits || m >= ( 1u << 24 ) || scale > 10 || ( *s && *s != ' ' && !( *s >= '\t' && *s <= '\r' ) ) )
++			return -1;	// (an exponent, a word, a long mantissa: sscanf's)
++		float f = (float)m;
++		if ( scale )
++			f = f / tens[scale];
++		out[k] = negative ? -f : f;
++	}
++	return n;
++}
++#define SE_SSCANF3( v, a ) ( se_floats( v, a, 3 ) == 3 ? 3 : sscanf( v, "%f %f %f", &a[0], &a[1], &a[2] ) )
++#define SE_SSCANF4( v, a ) ( se_floats( v, a, 4 ) == 4 ? 4 : sscanf( v, "%f %f %f %f", &a[0], &a[1], &a[2], &a[3] ) )
++#endif
+ void G_ParseField( const char *key, const char *value, gentity_t *ent ) {
+ 	field_t	*f;
+ 	byte	*b;
+@@ -791,7 +851,15 @@ void G_ParseField( const char *key, const char *value, gentity_t *ent ) {
+ 	vec3_t	vec;
+ 	vec4_t	vec4;
+ 
++#ifdef SHADEREMU
++	if ( !se_field_made )
++		se_fields_index();
++	int se_i = se_field_made ? se_field_first[se_fold( (unsigned char)key[0] )] : -2;
++	for ( f = se_i == -2 ? fields : se_i >= 0 ? &fields[se_i] : NULL ; f && f->name ;
++	      f = se_i == -2 ? f + 1 : ( se_i = se_field_next[se_i] ) >= 0 ? &fields[se_i] : NULL ) {
++#else
+ 	for ( f=fields ; f->name ; f++ ) {
++#endif
+ 		if ( !Q_stricmp(f->name, key) ) {
+ 			// found it
+ 			b = (byte *)ent;
+@@ -802,7 +870,11 @@ void G_ParseField( const char *key, const char *value, gentity_t *ent ) {
+ 				break;
+ 			case F_VECTOR:
+ 			{
++#ifdef SHADEREMU
++				int _iFieldsRead = SE_SSCANF3( value, vec );
++#else
+ 				int _iFieldsRead = sscanf (value, "%f %f %f", &vec[0], &vec[1], &vec[2]);
++#endif
+ 				assert(_iFieldsRead==3);
+ 				if (_iFieldsRead!=3)
+ 				{
+@@ -1020,7 +1092,18 @@ qboolean G_ParseSpawnVars( const char **data ) {
+ 			G_Error( "G_ParseSpawnVars: EOF without closing brace" );
+ 		}
+ 
++#ifdef SHADEREMU
++		// (ShaderEmu: copied without strncpy's zeros to 1,024 bytes: the key is read as a string alone)
++		{
++			size_t n = strlen( com_token );
++			if ( n > sizeof( keyname ) - 1 )
++				n = sizeof( keyname ) - 1;
++			memcpy( keyname, com_token, n );
++			keyname[n] = 0;
++		}
++#else
+ 		Q_strncpyz( keyname, com_token, sizeof(keyname) );
++#endif
+ 
+ 		// parse value
+ 		com_token = COM_Parse( data );
 diff --git a/codeJK2/game/g_utils.cpp b/codeJK2/game/g_utils.cpp
-index 95a70c62..db2542ed 100644
+index 95a70c62..1c9e2a35 100644
 --- a/codeJK2/game/g_utils.cpp
 +++ b/codeJK2/game/g_utils.cpp
 @@ -60,6 +60,18 @@ int G_FindConfigstringIndex( const char *name, int start, int max, qboolean crea
@@ -5597,6 +6076,23 @@ index 95a70c62..db2542ed 100644
  	for ( i=1 ; i<max ; i++ ) {
  		gi.GetConfigstring( start + i, s, sizeof( s ) );
  		if ( !s[0] ) {
+@@ -747,6 +759,16 @@ gentity_t *G_Spawn( void )
+ //			}
+ 		for ( i = MAX_CLIENTS ; i<globals.num_entities ; i++)
+ 		{
++#ifdef SHADEREMU
++			// (ShaderEmu: a word of 32 entities all in use passed at once, the same entity taken: some 600 spawns of the
++			// level's load each tested every entity before the first free one; docs/games/jk2.md, "The load")
++			extern unsigned int g_entityInUseBits[];
++			if ( !( i & 31 ) && i + 32 <= globals.num_entities && g_entityInUseBits[i >> 5] == 0xffffffffu )
++			{
++				i += 31;
++				continue;
++			}
++#endif
+ 			if(PInUse(i))
+ 			{
+ 				continue;
 diff --git a/codeJK2/game/wp_flechette.cpp b/codeJK2/game/wp_flechette.cpp
 index 8f073d71..b62fe72a 100644
 --- a/codeJK2/game/wp_flechette.cpp
@@ -6166,6 +6662,117 @@ index f52e45dd..ad496db1 100644
  qboolean VectorCompare( const vec3_t vec1, const vec3_t vec2 );
  qboolean VectorCompare2( const vec3_t v1, const vec3_t v2 );
  
+diff --git a/shared/qcommon/safe/sscanf.h b/shared/qcommon/safe/sscanf.h
+index e7652fb3..731695b2 100644
+--- a/shared/qcommon/safe/sscanf.h
++++ b/shared/qcommon/safe/sscanf.h
+@@ -1,6 +1,7 @@
+ #pragma once
+ 
+ #include <cstddef>
++#include <cstdlib>
+ #include <cctype>
+ #include <algorithm>
+ #include <istream>
+@@ -140,6 +141,90 @@ namespace Q
+ 		template< bool skipws = true, typename T, typename... Tail >
+ 		std::size_t sscanf_impl_stream( const gsl::cstring_span& input, const std::size_t accumulator, T& value, Tail&&... tail );
+ 
++#ifdef SHADEREMU
++		// (ShaderEmu: a number read as std::istream's operator>> reads it, without the stream: libstdc++'s num_get with
++		// musl brackets each float's strtof, which works in long doubles in software here, with two setlocale calls,
++		// a strdup and a free; the effects' templates read thousands at the level's load. The characters taken are
++		// num_get's (a sign, digits, a point and digits, an exponent with digits), what fails fails as there (no digit,
++		// an exponent without digits, an int out of range), and a float is strtof's: a mantissa under 2^24 with a power
++		// of ten up to 10 is one float operation, correctly rounded as strtof's is, anything else strtof itself.
++		// docs/games/jk2.md, "The load")
++		inline int se_number( const gsl::cstring_span& input, bool floating, char ( &buf )[64] )
++		{
++			auto it = skipWhitespace( input.begin(), input.end() );
++			const auto start = it;
++			int n = 0, digits = 0;
++			auto take = [&]() { if ( n < 63 ) buf[n] = *it; n++; ++it; };
++			if ( it != input.end() && ( *it == '+' || *it == '-' ) ) take();
++			while ( it != input.end() && *it >= '0' && *it <= '9' ) take(), digits++;
++			if ( floating && it != input.end() && *it == '.' ) {
++				take();
++				while ( it != input.end() && *it >= '0' && *it <= '9' ) take(), digits++;
++			}
++			if ( !digits ) return -1;
++			if ( floating && it != input.end() && ( *it == 'e' || *it == 'E' ) ) {
++				take();
++				if ( it != input.end() && ( *it == '+' || *it == '-' ) ) take();
++				int e = 0;
++				while ( it != input.end() && *it >= '0' && *it <= '9' ) take(), e++;
++				if ( !e ) return -1;	// (num_get took "1e", which strtof does not end at: a failure)
++			}
++			if ( n > 63 ) return -2;	// (longer than kept: the stream's way)
++			buf[n] = 0;
++			return (int)( it - start ) + (int)( start - input.begin() );
++		}
++		inline float se_float( const char *buf )
++		{
++			static const float tens[11] = { 1e0f, 1e1f, 1e2f, 1e3f, 1e4f, 1e5f, 1e6f, 1e7f, 1e8f, 1e9f, 1e10f };
++			const char *p = buf;
++			bool negative = *p == '-';
++			if ( *p == '-' || *p == '+' ) p++;
++			unsigned long long m = 0;
++			int k = 0, d = 0;
++			for ( ; *p >= '0' && *p <= '9'; p++ ) if ( m || *p != '0' ) { if ( ++d > 9 ) return std::strtof( buf, nullptr ); m = m * 10 + (unsigned)( *p - '0' ); }
++			if ( *p == '.' )
++				for ( p++; *p >= '0' && *p <= '9'; p++ ) {
++					if ( m || *p != '0' ) { if ( ++d > 9 ) return std::strtof( buf, nullptr ); m = m * 10 + (unsigned)( *p - '0' ); }
++					k--;
++				}
++			if ( *p == 'e' || *p == 'E' ) return std::strtof( buf, nullptr );
++			if ( m >= ( 1u << 24 ) || k < -10 ) return std::strtof( buf, nullptr );
++			float f = (float)m;
++			f = k < 0 ? f / tens[-k] : f;
++			return negative ? -f : f;
++		}
++
++		//    Float
++		template< typename... Tail >
++		std::size_t sscanf_impl( const gsl::cstring_span& input, const std::size_t accumulator, float& f, Tail&&... tail )
++		{
++			char buf[64];
++			int used = se_number( input, true, buf );
++			if ( used == -2 )
++				return sscanf_impl_stream( input, accumulator, f, std::forward< Tail >( tail )... );
++			if ( used < 0 )
++				return accumulator;
++			f = se_float( buf );
++			return sscanf_impl( { input.begin() + used, input.end() }, accumulator + 1, std::forward< Tail >( tail )... );
++		}
++
++		//    Int
++		template< typename... Tail >
++		std::size_t sscanf_impl( const gsl::cstring_span& input, const std::size_t accumulator, int& i, Tail&&... tail )
++		{
++			char buf[64];
++			int used = se_number( input, false, buf );
++			if ( used == -2 )
++				return sscanf_impl_stream( input, accumulator, i, std::forward< Tail >( tail )... );
++			if ( used < 0 )
++				return accumulator;
++			long long v = std::strtoll( buf, nullptr, 10 );
++			if ( v > 2147483647LL || v < -2147483647LL - 1 )
++				return accumulator;	// (the stream fails out of range)
++			i = (int)v;
++			return sscanf_impl( { input.begin() + used, input.end() }, accumulator + 1, std::forward< Tail >( tail )... );
++		}
++#else
+ 		//    Float
+ 		template< typename... Tail >
+ 		std::size_t sscanf_impl( const gsl::cstring_span& input, const std::size_t accumulator, float& f, Tail&&... tail )
+@@ -153,6 +238,7 @@ namespace Q
+ 		{
+ 			return sscanf_impl_stream( input, accumulator, i, std::forward< Tail >( tail )... );
+ 		}
++#endif
+ 
+ 		/**
+ 		Conversion using std::istream's operator>>
 diff --git a/shared/sys/sys_loadlib.h b/shared/sys/sys_loadlib.h
 index 97d2ef4f..1588a702 100644
 --- a/shared/sys/sys_loadlib.h
