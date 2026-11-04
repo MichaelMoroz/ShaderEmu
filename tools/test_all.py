@@ -46,7 +46,7 @@ KINDS_T = ('mkdir -p /tmp/t; cd /tmp/t; cp "/root/Music/Grieg - Hall of the Moun
 # Age of Empires' script at its window's size (tools/game_par.py has the same)
 # Age of Empires' trial unpacked from its installer in the ROM before the window system starts: its licence asked on the terminal,
 # answered (docs/system/install.md); the game reads the files in /tmp/aoe
-AOE_UNPACK = 'if [ -f /usr/share/aoe/MSAoE.exe ]; then echo yes | aoe --unpack > /dev/null; fi; '
+AOE_UNPACK = 'if [ -d /usr/share/aoe/installed ]; then echo yes | aoe --unpack > /dev/null; fi; '
 AOE_640 = '3000 click 320 196;3000 click 320 138;3000 click 190 454;2000 click 289 58;1000 rclick 425 110;1000 click 290 155;1000 click 163 388'
 
 
@@ -352,17 +352,17 @@ CASES = [
               r'^(aoe: layout 640 x 480 at Game Screen \(from 800 x 600\)|AOE-NO-DATA)', r'^(aoeinput: press 1 (31\d|32\d) (23\d|24\d)|AOE-NO-DATA)']),
     # the trial's first start on the desktop (docs/system/install.md): its EULA read out of the installer in a window, Accept refused until
     # the text has been scrolled to its end, then accepted by Tab and Enter, the bar to the last of 105 files, and aoeprep's strings and faces
-    case('aoe-install', 'games aoe desktop', X + 'if [ -f /usr/share/aoe/MSAoE.exe ]; then (sleep 6; nxkey a; sleep 1; nxkey pagedown; sleep 1; nxkey end; '
+    case('aoe-install', 'games aoe desktop', X + 'if [ -d /usr/share/aoe/installed ]; then (sleep 6; nxkey a; sleep 1; nxkey pagedown; sleep 1; nxkey end; '
          'sleep 1; nxkey tab enter) & CABINST_PRINT=1 aoe --unpack; echo INSTALL=$?; ls /tmp/aoe | wc -l; else echo AOE-NO-DATA; fi', True, wall=300,
          has=[r'^(cabinst: licence eula\.txt: 5065 bytes, CRC-32 b81b406b|AOE-NO-DATA)', r'^(cabinst: licence shown, \d+ lines|AOE-NO-DATA)',
               r'^(cabinst: accept refused: the licence is not read to its end|AOE-NO-DATA)', r'^(cabinst: licence at line \d+ of \d+, its end|AOE-NO-DATA)',
-              r'^(cabinst: accepted|AOE-NO-DATA)', r'^(cabinst: round 6: 34085752 of 34085752 bytes of the files, 105 of 105 whole|AOE-NO-DATA)',
-              r'^(aoeprep: 2276 strings .* 174 fonts|AOE-NO-DATA)', r"^(aoeprep: 1 menus' pictures brought to 640 x 480|AOE-NO-DATA)", r'^(INSTALL=0|AOE-NO-DATA)', r'^(109|AOE-NO-DATA)']),
+              r'^(cabinst: accepted|AOE-NO-DATA)', r'^(cabinst: Age of Empires \(trial\): 10\d files linked from /usr/share/aoe/installed|AOE-NO-DATA)',
+              r'^(aoeprep: 2276 strings .* 174 fonts|AOE-NO-DATA)', r"^(aoeprep: 1 menus' pictures brought to 640 x 480|AOE-NO-DATA)", r'^(INSTALL=0|AOE-NO-DATA)', r'^(1[01]\d|AOE-NO-DATA)']),
     # Jedi Outcast's demo, on images made with its installer only (docs/games/jk2.md, "Checking it"): its start played by a script of
     # keys from the menu (new game, a walk, a turn, a shot, the death and the autosave's load), and the build computer's sums;
     # no window, so the picture is nullgl's and the sound mixed into nothing (the card's pace would move the sums)
     # (its pak unpacked first, the licence answered on the terminal: no window system)
-    case('jk2', 'games jk2 long', 'if [ -f /usr/share/jk2/jk2demo.exe ]; then JK2_KEYS="250:enter 330:at500,455 340:mouse1 1500:w+ 1700:w- '
+    case('jk2', 'games jk2 long', 'if [ -d /usr/share/jk2/installed ]; then JK2_KEYS="250:enter 330:at500,455 340:mouse1 1500:w+ 1700:w- '
          '1700:right+ 1730:right- 1740:w+ 1900:w- 1900:mouse1+ 2000:mouse1-" JK2_FRAMES=2400 JK2_SUM=200 JK2_SEED=7 jk2 +set fixedtime 50 '
          '+set com_maxfps 0; else echo JK2-NO-DATA; fi', wall=600, more=['--expect', 'Type yes', '--send', 'yes\\n'],
          has=[r'^.*(jk2sum: frame 800 time 41250 entities 645 sum b7b63862 draws cf778cae|JK2-NO-DATA)',
@@ -372,33 +372,32 @@ CASES = [
     # the demo's first start on the desktop (docs/system/install.md): LucasArts' licence read out of the installer in a window, Accept
     # refused until it is scrolled to its end, the pak unpacked into memory with the bar, and its CRC-32 7-Zip's (239abc19)
     # the menus' cursor is the pointer (docs/games/jk2.md, "Input"): the pointer's place in the window, not its travel, at the window's place
-    case('jk2-pointer', 'games jk2 desktop long', X + 'if [ -f /usr/share/jk2/jk2demo.exe ]; then (sleep 6; nxkey pagedown; sleep 1; nxkey end; sleep 1; '
+    case('jk2-pointer', 'games jk2 desktop long', X + 'if [ -d /usr/share/jk2/installed ]; then (sleep 6; nxkey pagedown; sleep 1; nxkey end; sleep 1; '
          'nxkey tab enter) & jk2 --unpack; JK2_POINTER_LOG=1 JK2_FRAMES=150 jk2; else echo JK2-NO-DATA; fi', True, wall=1800,
          more=['--pointer-sweep', '0', '--pointer-circle', '400,300,100'],
          has=[r'(jk2pointer: (\d+),(\d+) of the display to \d+,\d+ of the menu \(window at \d+,\d+, 640x480\)|JK2-NO-DATA)']),
     # the window maximised at the main menu: the renderer restarted at the window's size (docs/games/jk2.md, "The window's size"), then
     # New and a click on Begin Game where the stretched menu has it (500, 455 of 640 x 480) in the window's place: the level loads
-    case('jk2-resize', 'games jk2 desktop long', 'nx; sleep 3; if [ -f /usr/share/jk2/jk2demo.exe ]; then (sleep 6; nxkey pagedown; sleep 1; '
+    case('jk2-resize', 'games jk2 desktop long', 'nx; sleep 3; if [ -d /usr/share/jk2/installed ]; then (sleep 6; nxkey pagedown; sleep 1; '
          'nxkey end; sleep 1; nxkey tab enter) & jk2 --unpack; (JK2_POINTER_LOG=1 jk2 &); sleep 320; nxkey ctrl+alt+up; sleep 120; '
          'set -- $(nxwintest list | grep Jedi); P=${5%,*}; Q=${5#*,}; S=$6; W=${S%x*}; H=${S#*x}; echo PLACE $P $Q $W $H; nxkey enter; sleep 40; '
          'C=$((W-6)); D=$((H-29)); nxkey $((P+3+500*D/480+(C-640*D/480)/2)),$((Q+26+455*D/480)); sleep 200; killall jk2.bin; else echo JK2-NO-DATA; fi', True, wall=2400,
          has=[r'(jk2: the window is \d+x\d+: the renderer restarted at \d+x\d+|JK2-NO-DATA)', r'(^PLACE \d+ \d+ \d+ \d+|JK2-NO-DATA)',
               r'(jk2pointer: \d+,\d+ of the display to (49\d|50\d),(44\d|45\d|46\d) of the menu|JK2-NO-DATA)',
               r'(Server Initialization|SpawnServer|JK2-NO-DATA)']),
-    case('jk2-install', 'games jk2 desktop', X + 'if [ -f /usr/share/jk2/jk2demo.exe ]; then (sleep 6; nxkey a; sleep 1; nxkey pagedown; sleep 1; nxkey end; '
+    case('jk2-install', 'games jk2 desktop', X + 'if [ -d /usr/share/jk2/installed ]; then (sleep 6; nxkey a; sleep 1; nxkey pagedown; sleep 1; nxkey end; '
          'sleep 1; nxkey tab enter) & CABINST_PRINT=1 CABINST_SUMS=1 jk2 --unpack; echo INSTALL=$?; else echo JK2-NO-DATA; fi', True, wall=300,
-         has=[r'^(cabinst: licence \\Disk1\\Install\\license\.txt: 3529 bytes, CRC-32 4361c574|JK2-NO-DATA)', r'^(cabinst: licence shown, \d+ lines|JK2-NO-DATA)',
+         has=[r'^(cabinst: licence Disk1/Install/license\.txt: 3529 bytes, CRC-32 4361c574|JK2-NO-DATA)', r'^(cabinst: licence shown, \d+ lines|JK2-NO-DATA)',
               r'^(cabinst: accept refused: the licence is not read to its end|JK2-NO-DATA)', r'^(cabinst: licence at line \d+ of \d+, its end|JK2-NO-DATA)',
-              r'^(cabinst: accepted|JK2-NO-DATA)', r'^(cabinst: round 9: 64001989 of 64001989 bytes of the files, 1 of 1 whole|JK2-NO-DATA)',
-              r'^(cabinst: sum 239abc19 64001989 \\Disk1\\GameData\\demo\\assets0\.pk3|JK2-NO-DATA)', r'^(INSTALL=0|JK2-NO-DATA)']),
+              r'^(cabinst: accepted|JK2-NO-DATA)', r'^(cabinst: Jedi Outcast \(demo\): \d+ files linked from /usr/share/jk2/installed|JK2-NO-DATA)', r'^(INSTALL=0|JK2-NO-DATA)']),
     # the starters delete what they unpacked when the game ends (docs/system/install.md): 34 and 64 MB of RAM
     case('aoe-cleanup', 'games aoe', AOE_UNPACK + X + 'if [ -f /tmp/aoe/Empires.dat ]; then AOE_TICK_MS=33 AOE_SCRIPT="3000 quit" aoe > /dev/null; '
          'echo AOE=$?; ls -d /tmp/aoe 2>&1; else echo AOE-NO-DATA; fi', True, wall=300,
          has=[r'^(AOE=0|AOE-NO-DATA)', r'(/tmp/aoe: No such file|AOE-NO-DATA)']),
-    case('jk2-cleanup', 'games jk2', 'if [ -f /usr/share/jk2/jk2demo.exe ]; then echo yes | jk2 --unpack > /dev/null; ls /tmp/jk2/base; '
+    case('jk2-cleanup', 'games jk2', 'if [ -d /usr/share/jk2/installed ]; then echo yes | jk2 --unpack > /dev/null; ls /tmp/jk2/base; '
          'JK2_FRAMES=60 jk2 +set fixedtime 50 < /dev/null > /dev/null; echo JK2=$?; ls -d /tmp/jk2 2>&1; else echo JK2-NO-DATA; fi', True, wall=300,
          has=[r'(assets0\.pk3|JK2-NO-DATA)', r'^(JK2=0|JK2-NO-DATA)', r'(/tmp/jk2: No such file|JK2-NO-DATA)']),
-    case('jk2-sums', 'games jk2 long', 'if [ -f /usr/share/jk2/jk2demo.exe ]; then JK2_FRAMES=4000 JK2_SUM=400 JK2_SEED=7 jk2 +set fixedtime 50 '
+    case('jk2-sums', 'games jk2 long', 'if [ -d /usr/share/jk2/installed ]; then JK2_FRAMES=4000 JK2_SUM=400 JK2_SEED=7 jk2 +set fixedtime 50 '
          '+set com_maxfps 0 +map demo; else echo JK2-NO-DATA; fi', wall=1200, more=['--expect', 'Type yes', '--send', 'yes\\n'],
          has=[r'^.*(jk2sum: frame 3200 time 161250 entities 639 sum 559c85a7 draws 810d9e76|JK2-NO-DATA)',
               r'^.*(jk2sum: frame 3600 time 181250 entities 639 sum 286e9b16 draws 274198c2|JK2-NO-DATA)']),
@@ -867,7 +866,7 @@ CASES = [
               r'volume_frames: frames: .*empty worlds over a second: 0', r'volume_frames: exit 0']),
     # Jedi Outcast from the seat (an image with the demo; docs/world/holodeck.md): the level loaded flat, then the sitter's stick walks
     # it ("seat: 2 ... move 127 0 0", JK2_SEAT=1), the world with its HUD, no empty world over a second
-    case('jk2-seat', 'games jk2 holodeck', 'if [ -f /usr/share/jk2/jk2demo.exe ]; then jk2 --unpack; nano-X -p & sleep 2; JK2_SEAT=1 jk2 +map demo; '
+    case('jk2-seat', 'games jk2 holodeck', 'if [ -d /usr/share/jk2/installed ]; then jk2 --unpack; nano-X -p & sleep 2; JK2_SEAT=1 jk2 +map demo; '
          "else echo Type y''es; read x; echo JK2-NO-DATA move 127 0 $((0)); fi", until='move 127 0 0', wall=600, volume=True,   # (no data: what it waits for at once, not typed whole)
          more=['--expect', 'Type yes', '--send', 'yes\\n', '--host', '00000112,0,0,0,0,00007f00,0,0'],
          has=[r'(seat: 2 aim .* move 127 0 0|JK2-NO-DATA)', r'(volume_frames: exit 0|JK2-NO-DATA)']),

@@ -258,11 +258,15 @@ else
     # its licence is accepted; what the game writes where the host keeps it
     cat > "$OUT/usr/bin/jk2" <<'EOF'
 #!/bin/sh
-# Jedi Outcast's demo (docs/games/jk2.md): LucasArts' installer lies unchanged in the ROM, and its pak is unpacked into
-# memory at each start, after the licence read out of it is accepted (cabinst, docs/system/install.md), and deleted when
-# the game ends: it is 64 MB of RAM
-cabinst --title "Jedi Outcast (demo)" --licence Disk1/Install/license.txt --key jk2.eula /usr/share/jk2/jk2demo.exe /tmp/jk2 \
+# Jedi Outcast's demo (docs/games/jk2.md): its pak lies decoded in the ROM and is linked into /tmp/jk2 at each start,
+# after its licence is accepted (cabinst, docs/system/install.md); the links are deleted when the game ends
+# (the image has the installer decoded since 4 November 2026, linux/jk2/data.py: the licence shown, the pak linked into place)
+if [ -d /usr/share/jk2/installed ]; then
+    cabinst --title "Jedi Outcast (demo)" --licence Disk1/Install/license.txt --key jk2.eula --installed /usr/share/jk2/installed /tmp/jk2 || exit $?
+else
+    cabinst --title "Jedi Outcast (demo)" --licence Disk1/Install/license.txt --key jk2.eula /usr/share/jk2/jk2demo.exe /tmp/jk2 \
     Disk1/GameData/demo/assets0.pk3=base/assets0.pk3 || exit $?
+fi
 [ "$1" = --unpack ] && exit 0	# (only that: a test unpacks first, then plays)
 # settings and saved games in the folder the host keeps, else in /tmp
 P=/persistence; mkdir -p $P/jk2 2>/dev/null || P=/tmp
