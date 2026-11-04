@@ -15,6 +15,7 @@
  */
 #include <dirent.h>
 #include <errno.h>
+#include <limits.h>
 #include <stdarg.h>
 #include <signal.h>
 #include <strings.h>
@@ -1121,6 +1122,8 @@ run_command(const char *command)
 		*at++ = 0;
 	}
 	words[n] = NULL;
+	if (n)
+		ui_launch_env();	/* (a game=1 shortcut's: SE_MAXIMISED, ui_launch.h) */
 	if (!n || (child = real_vfork()) != 0)
 		return n ? child : 0;
 	signal(SIGCHLD, SIG_DFL);	/* (ignored here, and that would be the started program's too: its children gone unseen) */
@@ -2572,8 +2575,25 @@ run_shortcut(const char *path)
 	if (!e.run[0])
 		return 1;
 	signal(SIGCHLD, SIG_IGN);
+	{
+		/* (start_shortcut reads the file again for its game=1 line: by its whole name, from /root) */
+		char here[PATH_MAX], whole[PATH_MAX + 130];
+
+		if (e.name[0] != '/' && getcwd(here, sizeof here)) {
+			snprintf(whole, sizeof whole, "%s/%s", strcmp(here, "/") ? here : "", e.name);
+			if (strlen(whole) < sizeof e.name)
+				strcpy(e.name, whole);
+		}
+	}
 	chdir("/root");
-	start_shortcut(&e);
+	/* (the server for a game=1 shortcut: its size is asked before it starts, and the window
+	 * manager told after, ui_launch.h) */
+	if (GrOpen() < 0) {
+		start_shortcut(&e);
+		return 0;
+	}
+	ui_launch_started(start_shortcut(&e));
+	GrClose();
 	return 0;
 }
 

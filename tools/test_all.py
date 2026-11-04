@@ -935,7 +935,13 @@ CASES = [
     case('wm-game', 'desktop wm', "echo '#!/bin/sh' > /tmp/g; echo 'nxwintest plain g' >> /tmp/g; chmod +x /tmp/g; echo 'Games/Test game=/tmp/g' > /usr/share/nxapps.99-test; "
          "nxreg set bar.pinned /tmp/g; " + WM + "nxkey 49,586; sleep 4; nxwintest list; nxkey alt+f4 2000; nxreg set wm.maximise_games 0; "
          "nxkey 49,586; sleep 4; nxwintest list; nxreg unset bar.pinned; nxreg unset wm.maximise_games", wall=120,
-         has=[r'^win 0 g 0,0 800x574 mapped maximised', r'^win 0 g [\d,]+ 246x149 mapped focus']),
+         # (opened at its maximised size, SE_MAXIMISED: so the window manager's maximise is no resize)
+         has=[r'^win 0 g 0,0 800x574 mapped maximised', r'^win 0 g [\d,]+ 246x149 mapped focus', r'^opened 794x545'],
+         never=[r'^resized'], count=[(r'^opened', 1)]),
+    # a desktop shortcut with game=1 (nxfiles --run, as a double click): the same, the file read again by its whole name
+    case('wm-game-shortcut', 'desktop wm', "true; echo game=1 > /tmp/q.lnk; echo run=nxwintest plain q >> /tmp/q.lnk; " + WM +
+         "nxfiles --run /tmp/q.lnk; sleep 4; nxwintest list", wall=90,
+         has=[r'^win 0 q 0,0 800x574 mapped maximised', r'^opened 794x545'], never=[r'^resized']),
     case('wm-single', 'desktop wm', WM + "nxsettings & sleep 4; nxwintest plain b & sleep 2; nxwintest list; nxsettings; echo SECOND=$?; sleep 1; nxwintest list", wall=120,
          has=[r'^SECOND=0', r'^win 0 Settings .* focus'], count=[(r'^win \d Settings', 2)]),
 ]

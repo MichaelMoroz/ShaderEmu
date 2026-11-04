@@ -50,6 +50,31 @@ static unsigned ui_reaped_out;
  * desktop shortcut with game=1. */
 static int ui_launch_maximise;
 
+/* The frame round a program's window (wmclients.c: 6 across, 29 down: a maximised window is 794 x 545 on the 800 x 600 desktop) and
+ * the bar under a maximised one (WM_BAR_HEIGHT). */
+#define UI_FRAME_W	6
+#define UI_FRAME_H	29
+#define UI_BAR_H	26
+
+/* Right before the vfork of a program ui_launch_maximise names: SE_MAXIMISED=WxH, the size of its
+ * window once maximised (the client area of a frame over the screen above the bar), so a game opens
+ * its window, and makes its picture, at that size from the first frame; the window manager's
+ * maximise then changes nothing. Any other program is started without it. */
+static void
+ui_launch_env(void)
+{
+	char value[24];
+	GR_SCREEN_INFO si;
+
+	if (!ui_launch_maximise || (reg_changed(), !reg_int("wm.maximise_games", 1))) {
+		unsetenv("SE_MAXIMISED");
+		return;
+	}
+	GrGetScreenInfo(&si);
+	snprintf(value, sizeof value, "%dx%d", si.cols - UI_FRAME_W, si.rows - UI_BAR_H - UI_FRAME_H);
+	setenv("SE_MAXIMISED", value, 1);
+}
+
 static void ui_launch_again(const char *name, const char *command);
 static void ui_launch_begin(const char *name, const struct ui_icon_ref *icon, GR_EVENT_MASK root_events);
 static void ui_launch_started(pid_t pid);
@@ -401,6 +426,7 @@ ui_launch_started(pid_t pid)
 	int error = pid > 0 ? ui_exec_errno : pid < 0 ? errno : 0, k, maximise = ui_launch_maximise;
 
 	ui_launch_maximise = 0;
+	unsetenv("SE_MAXIMISED");
 	if (pid > 0 && !error && maximise && (reg_changed(), reg_int("wm.maximise_games", 1))) {
 		GR_WM_PROPERTIES word;
 
@@ -505,6 +531,7 @@ ui_launch_again(const char *name, const char *command)
 	ui_icon_of_command(command, &icon);
 	ui_launch_will_run(command);
 	ui_launch_begin(name, &icon, ui_launch_root_asked);
+	ui_launch_env();
 	if ((child = real_vfork()) == 0) {
 		signal(SIGCHLD, SIG_DFL);
 		execvp(words[0], words);

@@ -1132,8 +1132,9 @@ start(const char *label, const char *command)
 	ui_icon_of_command(command, &icon);
 	ui_launch_will_run(command);
 	ui_launch_begin(label, &icon, GR_EVENT_MASK_CHLD_UPDATE);
-	child = launch(command);
 	ui_launch_maximise = is_game(command);
+	ui_launch_env();
+	child = launch(command);
 	ui_launch_started(child);
 	if (child > 0 && !ui_exec_errno)
 		starting_add(child, label, &icon);
