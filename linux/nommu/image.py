@@ -30,7 +30,17 @@ share = os.path.join(flat, 'usr', 'share')
 if not os.path.abspath(flat).startswith(PREBUILT) and os.path.isdir(share):
     subprocess.run([sys.executable, os.path.join(ROOT, 'tools', 'make_icons.py')], env=dict(os.environ, ICONS_OUT=share),
                    check=True, stdout=subprocess.DEVNULL)
-    if not os.path.exists(os.path.join(share, 'font-ui-12.sef')):
+    # every face's distance fields: the shared root's sans, serif and mono are old 4-bit bitmaps
+    # with no atlas, which a root with font-ui-12.sef alone kept (and the window system drew them so)
+    def fields(face, size):
+        try:
+            with open(os.path.join(share, 'font-%s-%d.sef' % (face, size)), 'rb') as f:
+                head = f.read(10)
+        except OSError:
+            return False
+        return head[:4] == b'SEF1' and int.from_bytes(head[8:10], 'little') == 24 and \
+            os.path.exists(os.path.join(share, 'font-%s.msdf' % face))
+    if not all(fields(face, 13 if face[:2] != 'ui' else 12) for face in ('ui', 'ui-b', 'sans', 'sans-b', 'serif', 'serif-b', 'mono', 'mono-b')):
         subprocess.run([sys.executable, os.path.join(ROOT, 'tools', 'make_fonts.py'), share], check=True, stdout=subprocess.DEVNULL)
 D = os.path.join(ROOT, 'build', 'images', name)
 if os.path.isdir(os.path.join(D, 'overlay')):

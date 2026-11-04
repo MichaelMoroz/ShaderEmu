@@ -39,22 +39,48 @@
 
 static GR_GC_ID ui_gc;
 static GR_FONT_ID ui_fixed, ui_var;
-static int ui_fw, ui_fh;	/* a character of the fixed font */
+static int ui_fw, ui_fh;	/* a character of the fixed font: the bitmap one's cell in either look */
+static int ui_fixed_dy;		/* rows the fixed font is drawn lower, for the bitmap font's baseline */
 static struct ui_widths ui_var_widths;	/* the other font's: ui_width(&ui_var_widths, ui_var, ...) */
+
+/* The fixed font for the look: Liberation Mono's distance fields when smooth and its characters
+ * are the bitmap font's width (font-mono-10: 6 pixels), else X6x13. ui_fw and ui_fh stay X6x13's,
+ * so a layout is the same in both looks. */
+static GR_FONT_ID
+ui_fixed_font(void)
+{
+	static int base = -1;
+	GR_FONT_INFO info;
+	GR_FONT_ID bitmap = GrCreateFontEx(GR_FONT_SYSTEM_FIXED, 0, 0, NULL), smooth;
+
+	if (base < 0) {
+		GrGetFontInfo(bitmap, &info);
+		ui_fw = info.maxwidth, ui_fh = info.height, base = info.baseline;
+	}
+	ui_fixed_dy = 0;
+	if (!ui_smooth || (smooth = GrCreateFontEx(UI_LOOK_FIXED, 0, 0, NULL)) == 0)
+		return bitmap;
+	GrGetFontInfo(smooth, &info);
+	/* (a font the ROM does not have, or a server drawing in software, gives the built-in one) */
+	if (info.lastchar != 0xffff || info.maxwidth != ui_fw || info.height > ui_fh) {
+		GrDestroyFont(smooth);
+		return bitmap;
+	}
+	GrDestroyFont(bitmap);
+	ui_fixed_dy = base - info.baseline;
+	if (ui_fixed_dy < 0 || ui_fixed_dy > ui_fh - info.height)
+		ui_fixed_dy = ui_fh - info.height;
+	return smooth;
+}
 
 static void
 ui_init(void)
 {
-	GR_FONT_INFO info;
-
 	ui_look_read();
 	ui_gc = GrNewGC();
 	GrSetGCUseBackground(ui_gc, GR_FALSE);
 	ui_var = GrCreateFontEx(ui_smooth ? UI_LOOK_FONT : GR_FONT_SYSTEM_VAR, 0, 0, NULL);
-	ui_fixed = GrCreateFontEx(GR_FONT_SYSTEM_FIXED, 0, 0, NULL);
-	GrGetFontInfo(ui_fixed, &info);
-	ui_fw = info.maxwidth;
-	ui_fh = info.height;
+	ui_fixed = ui_fixed_font();
 }
 
 /* The look as Settings has it now; true when it changed, and the caller draws again. */
@@ -69,6 +95,8 @@ ui_restyle(void)
 		GrDestroyFont(ui_var);
 		ui_var = GrCreateFontEx(ui_smooth ? UI_LOOK_FONT : GR_FONT_SYSTEM_VAR, 0, 0, NULL);
 		ui_var_widths.known = 0;
+		GrDestroyFont(ui_fixed);	/* (a GC given ui_fixed by its caller is given it again) */
+		ui_fixed = ui_fixed_font();
 	}
 	return 1;
 }
@@ -95,13 +123,15 @@ ui_fill(GR_DRAW_ID w, int x, int y, int width, int height, GR_COLOR colour)
 }
 
 /* Text with its top left corner at x, y; `fixed` picks the font. (Selawik's ascent is a pixel
- * more than the bitmap font's: its text is a pixel higher, on the same baseline.) */
+ * more than the bitmap font's: its text is a pixel higher, on the same baseline; the fixed
+ * font's stand-in is lower by ui_fixed_dy.) */
 static void
 ui_text(GR_DRAW_ID w, int x, int y, const char *text, int count, GR_COLOR colour, int fixed)
 {
 	GrSetGCFont(ui_gc, fixed ? ui_fixed : ui_var);
 	GrSetGCForeground(ui_gc, colour);
-	GrText(w, ui_gc, x, y - (ui_smooth && !fixed), (void *)text, count < 0 ? (int)strlen(text) : count, GR_TFASCII | GR_TFTOP);
+	GrText(w, ui_gc, x, y + (fixed ? ui_fixed_dy : -(ui_smooth != 0)), (void *)text, count < 0 ? (int)strlen(text) : count,
+	       GR_TFASCII | GR_TFTOP);
 }
 
 /* The four sides of a rectangle, in two colours: top and left, bottom and right. */

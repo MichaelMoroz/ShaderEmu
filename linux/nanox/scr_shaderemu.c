@@ -1421,7 +1421,8 @@ static struct romfile {
 	const unsigned char *bytes;
 	uint32_t size, rom, atlas;	/* atlas: SEF_MSDF's, in the ROM, with its header in `sizes` */
 	struct sef_atlas sizes;
-} romfiles[64];
+} romfiles[128];	/* (kept for the session: 64 were fewer than the image's 79 fonts, and the browser's
+			 * faces and sizes filled them, after which every new font was the built-in one) */
 
 extern PMWFONT (*gd_createfont)(const char *name, MWCOORD height, MWCOORD width, int attr) __attribute__((weak));
 static MWFONTPROCS romfont_procs;
@@ -1490,9 +1491,9 @@ romfont_create(const char *name, MWCOORD height, MWCOORD width, int attr)
 
 	if (n < 5 || n >= sizeof romfiles[0].path || strcmp(name + n - 4, ".sef") != 0 || !accelerate)
 		return NULL;
-	for (file = romfiles; file < romfiles + 64 && file->bytes && strcmp(file->path, name) != 0; file++)
+	for (file = romfiles; file < romfiles + 128 && file->bytes && strcmp(file->path, name) != 0; file++)
 		;
-	if (file == romfiles + 64)
+	if (file == romfiles + 128)
 		return NULL;
 	if (!file->bytes) {
 		uint32_t rom;

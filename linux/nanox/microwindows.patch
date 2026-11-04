@@ -2088,7 +2088,7 @@ index 9e40afe..8ddf562 100644
 +extern unsigned nx_look(void) __attribute__((weak));
 +#define LOOK_OK(w)	(((w) >> 16) == 0x4c4b)
 +#define LOOK_SEVEN(w)	(LOOK_OK(w) && ((w) & 0xff) == 1)
-+#define LOOK_SMOOTH(w)	(LOOK_OK(w) && (((w) >> 8) & 0xff) == 1)
++#define LOOK_SMOOTH(w)	(!LOOK_OK(w) || (((w) >> 8) & 0xff) == 1)	/* (nobody has said: smooth) */
 +/* the Windows 7 look's caption buttons, cells of 24 pixels (tools/make_icons.py) */
 +#define LOOK7_SHEET	"/usr/share/look7.ppm"
 +enum { LOOK7_MIN, LOOK7_MAX, LOOK7_RESTORE, LOOK7_CLOSE, LOOK7_OFF };

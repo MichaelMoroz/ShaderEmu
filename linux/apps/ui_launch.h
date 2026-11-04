@@ -360,7 +360,8 @@ ui_launch_begin(const char *name, const struct ui_icon_ref *icon, GR_EVENT_MASK 
 	if (!ui_launch_gc) {
 		ui_launch_gc = GrNewGC();
 		GrSetGCUseBackground(ui_launch_gc, GR_FALSE);
-		GrSetGCFont(ui_launch_gc, GrCreateFontEx(GR_FONT_SYSTEM_VAR, 0, 0, NULL));
+		ui_look_read();
+		GrSetGCFont(ui_launch_gc, GrCreateFontEx(ui_smooth ? UI_LOOK_FONT : GR_FONT_SYSTEM_VAR, 0, 0, NULL));
 		ui_launch_busy = ui_launch_cursor();
 		GrGetScreenInfo(&si);
 	}

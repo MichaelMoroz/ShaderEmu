@@ -2,7 +2,8 @@
  * or Windows 7, and a font, the window system's bitmap one or Selawik. One word of the window
  * system's page of GPU memory holds it, so the window manager and every program read it with no
  * question asked; the registry keeps it for the next session. 0 there (nobody has said) is the
- * classic look with the bitmap font, as a bare `nano-X` for a test has it. */
+ * classic look with the smooth font (a bare `nano-X` for a test; the window manager's LOOK_SMOOTH
+ * says the same): the bitmap font only when Settings chose it. */
 #ifndef UI_LOOK_H
 #define UI_LOOK_H
 #include <fcntl.h>
@@ -19,6 +20,7 @@
 #define UI_LOOK_TEXT	"desktop.font"	/* "smooth" or "classic" */
 #define UI_LOOK_FONT	"/usr/share/font-ui-12.sef"
 #define UI_LOOK_FONT_BOLD "/usr/share/font-ui-b-12.sef"
+#define UI_LOOK_FIXED	"/usr/share/font-mono-10.sef"	/* the fixed font's stand-in: 6 pixels a character, as X6x13 */
 
 enum { UI_STYLE_CLASSIC, UI_STYLE_SEVEN };
 
@@ -59,7 +61,7 @@ static int
 ui_look_read(void)
 {
 	unsigned look = ui_look_now();
-	int seven = (look & 0xff) == UI_STYLE_SEVEN, smooth = (look >> 8 & 0xff) == 1;
+	int seven = (look & 0xff) == UI_STYLE_SEVEN, smooth = !look || (look >> 8 & 0xff) == 1;
 	int changed = seven != ui_seven || smooth != ui_smooth;
 
 	ui_seven = seven, ui_smooth = smooth;

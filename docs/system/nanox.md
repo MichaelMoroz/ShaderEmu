@@ -469,9 +469,11 @@ buttons then change only that. `nxsettings look seven|classic [smooth|classic]` 
 from a script. The choice is the registry's `desktop.style` and `desktop.font` and, for the
 running session, one word of the window manager's page of GPU memory (word 24 of `WM_OFFSET`,
 `0x81001860`; `/dev/gpu` at offset `0x01001000` + `0x860`): `0x4c4b0000 | smooth << 8 | style`,
-style 1 for Windows 7. 0 there (nobody set it) is the classic look, as a bare `nano-X` for a
-test has it; `nx` writes the registry's look (Windows 7 unless it says otherwise) before the
-desktop starts (`nxbar --look`). `linux/apps/ui_look.h` reads and writes it.
+style 1 for Windows 7. 0 there (nobody set it) is the classic style with the smooth text, as a
+bare `nano-X` for a test has it (`ui_look_read`, and `LOOK_SMOOTH` for the captions: the bitmap
+font only when Settings chose it, 4 November 2026); `nx` writes the registry's look (Windows 7
+and smooth unless it says otherwise) before the desktop starts (`nxbar --look`).
+`linux/apps/ui_look.h` reads and writes it.
 
 - **Frames** are painted in the look when they are painted (`nxPaintNCArea`): the geometry is
   the same in both (`CYCAPTION` 22, the buttons where the window manager's clicks look for
@@ -487,6 +489,11 @@ desktop starts (`nxbar --look`). `linux/apps/ui_look.h` reads and writes it.
   then (240 grey, 160 grey, 51/153/255 blue), so a program that uses them follows.
 - With the smooth font, text is drawn a pixel higher (`ui_text`): Selawik 12's ascent is 12
   where the bitmap font's is 11, and the baseline stays where layouts expect it.
+- The fixed font (`ui_fixed`: the editor's and the IDE's text, nxcalc's, nxperf's) is Liberation
+  Mono 10's distance fields when smooth (`UI_LOOK_FIXED`, `ui_fixed_font` in `ui.h`): 6 pixels a
+  character as X6x13, whose cell `ui_fw` x `ui_fh` (6 x 13) layouts keep in both looks; its 12
+  rows are drawn `ui_fixed_dy` (1) lower. A program that set `ui_fixed` on a GC of its own sets
+  it again after `ui_restyle()` (nxide). The "Starting" note (`ui_launch.h`) follows the look too.
 - After a change of look the desktop decodes its picture again: copying the decoded picture
   it keeps back over the screen did not cover the old names in two of three tries, and the
   names of both fonts stood one on the other. Not understood.
