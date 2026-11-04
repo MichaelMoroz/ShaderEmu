@@ -193,9 +193,22 @@ lightmap, which shows a line wherever two pieces of a wall meet and at every cor
 
 ## The storm
 
-- The window's pane is Silent's Fake Glass with rain (`GlassMaterial` in `ShaderEmuWeather.cs`):
-  drops run down it, and what is behind a drop is bent out of the window's own reflection probe
-  (a camera's picture of the city, `WindowProbe`), so nothing grabs the screen. Anything of the
+- The window's pane is `WindowRain.shader` (`GlassMaterial` in `ShaderEmuWeather.cs`): the drops are
+  BigWings's "Heartfelt" (shadertoy.com/view/dslczf), ported to HLSL; that file is under its licence,
+  CC BY-NC-SA 3.0, not the repository's MIT. Its value is the water's height on the glass (`_Scale`
+  metres a unit of its picture, `_Height` mm at 1), the normal from its differences, and the eye's ray
+  is traced through that water: bent into it at the glass and out of it at its surface (index 1.333),
+  the city looked up in that direction in the window probe's picture, given to the material as `_Sky`
+  (a camera's picture taken outside the pane, `WindowProbe`, linear and HDR: captured into a half-float
+  cube target, as `RenderToCubemap` into the asset gave 8-bit sRGB values the glass read as linear, the
+  city washed out), and what the surface reflects mirrored back out (`_Rim`). Between the drops the pane
+  is clear. Against aliasing: no screen derivatives in the water (taken over 2 x 2 blocks of pixels they
+  drew a grid); a drop is never narrower than a pixel's footprint, from the projection; the water is
+  taken on a 3 x 3 lattice across the pixel and its four quarters shaded and averaged, each lookup's mip
+  from its ray's screen gradient. Measured against an 8 x 8 supersampled picture (`_Footprint`, `_Widen`,
+  `_Layers` are that test's) it is still not clean: the error is 0.3 of the drops' own light at a metre
+  and 0.8 to 0.9 far away (4 November 2026). The material sets every number of its own: a value left from
+  another shader of the same name (Fake Glass's `_IOR` of 1) bent nothing. Anything of the
   room's on a pane makes its drops white paint: a lightmap, light probes, the room's probe. A pane
   is held, not set once (`ShaderEmuGlass.cs`): every pane named `Window glass…` (Blender adds
   `.001` in some build orders) is put back unlit by the room, anchored to that probe, and the probe

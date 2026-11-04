@@ -7,8 +7,8 @@ using UnityEngine;
 using UnityEngine.Rendering;
 using UnityEngine.SceneManagement;
 
-// The windows' panes (docs/world/world.md, "The storm"): Silent's Fake Glass with rain, whose drops
-// bend the window's own reflection probe, a picture of the city (WindowProbe in ShaderEmuWeather.cs).
+// The windows' panes (docs/world/world.md, "The storm"): WindowRain.shader, whose drops bend the
+// window probe's picture of the city (WindowProbe in ShaderEmuWeather.cs), given it as _Sky.
 // A pane lit by anything of the room's shows its drops as white paint: a lightmap (a bake of a pane
 // left static), light probes, or the room's probe. All that a pane needs lived in the scene's
 // overrides, and each of these undid it: Blender naming a pane "Window glass.001" in another build
@@ -26,7 +26,7 @@ public static class ShaderEmuGlass
     const string Generated = "Assets/ShaderEmu/Generated";
     const string PicturePath = Generated + "/" + ProbeName + " picture.cubemap";
     const string GlassPath = Generated + "/Glass.mat";
-    const string GlassShader = "Silent/FakeGlass Rain";
+    const string GlassShader = "ShaderEmu/WindowRain";
 
     static ShaderEmuGlass()
     {
@@ -63,6 +63,8 @@ public static class ShaderEmuGlass
         Material glass = AssetDatabase.LoadAssetAtPath<Material>(GlassPath);
         bool wrong = watchedProbe.mode != ReflectionProbeMode.Custom || watchedProbe.customBakedTexture == null
                      || AssetDatabase.GetAssetPath(watchedProbe.customBakedTexture) != PicturePath;
+        Material glassNow = AssetDatabase.LoadAssetAtPath<Material>(GlassPath);
+        wrong |= glassNow != null && glassNow.HasProperty("_Sky") && (glassNow.GetTexture("_Sky") == null || AssetDatabase.GetAssetPath(glassNow.GetTexture("_Sky")) != PicturePath);
         foreach (MeshRenderer pane in watched)
         {
             if (pane == null) { watched = null; return; }
@@ -105,6 +107,12 @@ public static class ShaderEmuGlass
         if (panes.Count == 0) return 0;
         List<string> fixes = new List<string>();
         Material glass = AssetDatabase.LoadAssetAtPath<Material>(GlassPath);
+        if ((glass == null || glass.shader == null || glass.shader.name != GlassShader) && !Application.isPlaying && !BuildPipeline.isBuildingPlayer)
+        {
+            ShaderEmuBuilder.GlassAgain();   // the material made again (its shader, Mochie's textures), the probe's picture and the anchors
+            glass = AssetDatabase.LoadAssetAtPath<Material>(GlassPath);
+            fixes.Add("the glass material made again");
+        }
         Cubemap picture = AssetDatabase.LoadAssetAtPath<Cubemap>(PicturePath);
         ReflectionProbe probe = Probe(scene);
         if (probe != null && picture != null && (probe.mode != ReflectionProbeMode.Custom || probe.customBakedTexture != picture))
@@ -114,6 +122,12 @@ public static class ShaderEmuGlass
             probe.boxProjection = false;
             EditorUtility.SetDirty(probe);
             fixes.Add("the window probe's picture");
+        }
+        if (glass != null && picture != null && glass.HasProperty("_Sky") && glass.GetTexture("_Sky") != picture)
+        {
+            glass.SetTexture("_Sky", picture);   // (what the drops bend: WindowRain.shader takes the picture itself)
+            EditorUtility.SetDirty(glass);
+            fixes.Add("the drops' sky");
         }
         foreach (MeshRenderer pane in panes)
         {
@@ -190,6 +204,8 @@ public static class ShaderEmuGlass
         if (probe == null) problems.Add("no " + ProbeName + " (ShaderEmu/Give the windows' glass its rain again)");
         else if (probe.customBakedTexture == null || AssetDatabase.GetAssetPath(probe.customBakedTexture) != PicturePath)
             problems.Add("the window probe does not show " + PicturePath + " (ShaderEmu/Give the windows' glass its rain again)");
+        if (glass != null && (!glass.HasProperty("_Sky") || glass.GetTexture("_Sky") == null || AssetDatabase.GetAssetPath(glass.GetTexture("_Sky")) != PicturePath))
+            problems.Add("the glass's drops have no sky (" + PicturePath + ")");
         foreach (MeshRenderer pane in panes)
         {
             string was = Wrong(pane, probe, glass);
