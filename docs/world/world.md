@@ -204,10 +204,13 @@ lightmap, which shows a line wherever two pieces of a wall meet and at every cor
   city washed out), and what the surface reflects mirrored back out (`_Rim`). Between the drops the pane
   is clear. Against aliasing: no screen derivatives in the water (taken over 2 x 2 blocks of pixels they
   drew a grid); a drop is never narrower than a pixel's footprint, from the projection; the water is
-  taken on a 3 x 3 lattice across the pixel and its four quarters shaded and averaged, each lookup's mip
-  from its ray's screen gradient. Measured against an 8 x 8 supersampled picture (`_Footprint`, `_Widen`,
-  `_Layers` are that test's) it is still not clean: the error is 0.3 of the drops' own light at a metre
-  and 0.8 to 0.9 far away (4 November 2026). Lightning reaches the drops as a second picture of the city lit by a flash of 1 (`_SkyFlash`),
+  taken on a 3 x 3 lattice across the pixel with Heartfelt's exact gradient at each point (`HeartfeltD`,
+  its steps carried with their derivatives; `_Debug` 6 checks it against differences), each quarter's
+  shares and rays its corners' (a rim, a fifth of a drop, is thinner than a quarter from a few metres:
+  its mean slope had reflected a fifth of the light), each lookup blurred over what its rays sweep.
+  Measured against an 8 x 8 supersampled picture (`_Footprint`, `_Widen`, `_Layers`, `_Test` are that
+  test's; 4 November 2026): the shimmer under half-pixel moves 0.78 to 1.11 of the reference's, the
+  reflection 0.81 to 0.94 of it, what goes through 7 to 14% too bright; 0.40 ms a pane at 1080p. Lightning reaches the drops as a second picture of the city lit by a flash of 1 (`_SkyFlash`),
   mixed by the flash. The outside's own light is a third of what it was (`Night`, 4 November 2026): City.shader's
   `_Night` takes what is under a quarter of blooming to a third and leaves what blooms (1 and above), the
   haze, the sky and the rain sheets are a third, and lightning lights each as before (`_HazeFlash`, `_CityGlow`). The material sets every number of its own: a value left from
