@@ -58,7 +58,8 @@ if [ "${JK2_TREE:-}" != keep ]; then
     : > "$P.files"
     if [ -s "$HERE/jk2.patch" ]; then
         git -C "$SRC" apply --numstat "$HERE/jk2.patch" | cut -f3 > "$P.files"
-        while read -r f; do mkdir -p "$P/$(dirname "$f")"; git -C "$SRC" show "$COMMIT:$f" > "$P/$f"; done < "$P.files"
+        # (a file the patch adds is not in the commit: git apply makes it)
+        while read -r f; do mkdir -p "$P/$(dirname "$f")"; git -C "$SRC" show "$COMMIT:$f" > "$P/$f" 2>/dev/null || rm -f "$P/$f"; done < "$P.files"
         (cd "$P" && git apply "$HERE/jk2.patch")
         while read -r f; do put "$P/$f" "$SRC/$f"; done < "$P.files"
     fi
