@@ -7511,7 +7511,7 @@ index 8aa032b0..5701e807 100644
  
  	#define ShaderEntryPtrs_Clear()
 diff --git a/code/rd-vanilla/tr_surface.cpp b/code/rd-vanilla/tr_surface.cpp
-index 1e51e71c..cce8b841 100644
+index 1e51e71c..e3281aa3 100644
 --- a/code/rd-vanilla/tr_surface.cpp
 +++ b/code/rd-vanilla/tr_surface.cpp
 @@ -1196,6 +1196,51 @@ static void LerpMeshVertexes (md3Surface_t *surf, float backlerp)
@@ -7741,13 +7741,24 @@ index 1e51e71c..cce8b841 100644
  void RB_SurfaceFace( srfSurfaceFace_t *surf ) {
  	int			i, j, k;
  	unsigned int *indices;
-@@ -1336,6 +1535,19 @@ void RB_SurfaceFace( srfSurfaceFace_t *surf ) {
+@@ -1336,6 +1535,30 @@ void RB_SurfaceFace( srfSurfaceFace_t *surf ) {
  	RB_CHECKOVERFLOW( surf->numPoints, surf->numIndices );
  
  	dlightBits = surf->dlightBits;
 +#ifdef SHADEREMU
-+	if ( backEnd.currentEntity == &tr.worldEntity ) {
-+		se_kept_stats.faces++, se_kept_stats.indices += surf->numIndices;
++	// (a brush model's faces too, drawn under its entity's matrix as tess's would be, when the entity changes nothing of
++	// the stages: no renderfx that RB_StageIteratorGeneric or ComputeColors reads; JK2_KEPT_BMODELS=0: the world's only)
++	static int se_kept_bmodels = -1;
++	if ( se_kept_bmodels < 0 ) {
++		const char *e = getenv( "JK2_KEPT_BMODELS" );
++		se_kept_bmodels = !( e && !strcmp( e, "0" ) );
++	}
++	if ( backEnd.currentEntity == &tr.worldEntity ||
++		 ( se_kept_bmodels && backEnd.currentEntity && backEnd.currentEntity->e.reType == RT_MODEL &&
++		   !( backEnd.currentEntity->e.renderfx & ( RF_DISINTEGRATE1 | RF_DISINTEGRATE2 | RF_VOLUMETRIC | RF_ALPHA_FADE |
++			  RF_RGB_TINT | RF_DISTORTION | RF_FORCE_ENT_ALPHA | RF_SETANIMINDEX | RF_FIRST_PERSON ) ) ) ) {
++		if ( backEnd.currentEntity == &tr.worldEntity )
++			se_kept_stats.faces++, se_kept_stats.indices += surf->numIndices;
 +		if ( !dlightBits && (unsigned)surf->seIndex < (unsigned)se_kw_surfaces && se_kf_n < SE_KF_MAX ) {
 +			if ( se_kf_ok < 0 )
 +				se_kf_ok = SE_KeptBatch();
@@ -7761,7 +7772,7 @@ index 1e51e71c..cce8b841 100644
  	tess.dlightBits |= dlightBits;
  
  	indices = ( unsigned * ) ( ( ( char  * ) surf ) + surf->ofsIndices );
-@@ -1386,6 +1598,15 @@ void RB_SurfaceFace( srfSurfaceFace_t *surf ) {
+@@ -1386,6 +1609,15 @@ void RB_SurfaceFace( srfSurfaceFace_t *surf ) {
  
  	tess.numVertexes += surf->numPoints;
  }

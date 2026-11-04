@@ -826,6 +826,13 @@ death and the autosave's load.
 - **A message's bits a byte at once** (`MSG_WriteBits`, `MSG_ReadBits`): Jedi Outcast's messages have no Huffman coder,
   but the loop took a piece a byte with a mask each; now whole bytes, the same bytes (Quake III's "Traces and messages
   made cheaper"). `JK2_MSG=bits` is the way before. Captured at frame 1450 with both: the same pixels but the dials.
+- **A brush model's faces kept too** (`RB_SurfaceFace`): a door's or a mover's faces are the world's surfaces, drawn under
+  the entity's matrix, so their kept words draw them as tess's words would, when the entity has no `renderfx` that the
+  stages read (alpha fade, tint, disintegration, forced alpha, distortion, volumetric, an animation index, the first
+  person). `JK2_KEPT_BMODELS=0` is the way before. `JK2_KEPT_COUNT=1` over the walk: 94% of the world's stage indices
+  were kept already, and what the GL still makes into words is mostly the entities' (about 6 thousand stage indices a
+  frame: models and the effects' sprites, about 160 draws at some 2,000 instructions each). The walk with
+  `JK2_SOUND=mix`: the drawing's worker 1.288 to 1.271 million a frame; captured at frame 1450, the same pixels but the dials.
 - **The particles and the sky drawn from arrays** (`CParticleCloud::Render`, `DrawSkySide`): one `glDrawElements` of
   triangles, cut as the shim cuts quads and strips, not a call a vertex. `JK2_WEATHER_DRAW=begin` and
   `JK2_SKY_DRAW=begin` are the ways before.
