@@ -745,8 +745,8 @@ death and the autosave's load.
 - **The front end split** (`tr_main.cpp`, `R_SE_RenderViewSplit`, `RC_SE_VIEW`, `R_SE_FrontView`). Core 0 makes a
   view's Ghoul2 surfaces; the drawing's worker makes the rest of the view and draws it.
   - A view that may see the level's portal surface is made whole as before (`R_SE_PortalMaybeSeen`).
-  - **Off by default** (`JK2_FRONT=worker` turns it on). `JK2_FRONT=check` said 1,005 of 1,200 views' sorted lists were
-    not as the view made whole: not yet explained (the check makes each view twice).
+  - `JK2_FRONT=check` said 1,005 of 1,200 views' sorted lists were not as the view made whole: a stale `tr.ori` and
+    sums that went by order and address, fixed in the next section, where it became the default.
 - **The server**:
   - `SV_AreaEntities_r` tests the bounds kept in `svEntity_t` at the link. `JK2_AREA_CHECK=1` printed no difference in
     one walk.
@@ -762,10 +762,153 @@ death and the autosave's load.
 
   With the front end split, the drawing's worker (2.15 million a frame) bounds the frame.
 - **Checked**: `RVC_RACES` with `RVC_RACES_NEAR=4` said 0 undone with the players and the bones.
-- **Not checked**: the sums (`host_sum.sh`, `test_all.py jk2 jk2-sums`), captures, the walk with the area and stealth
-  changes.
+- **Checked since** (the next section): `test_all.py jk2 jk2-sums`, 7 of 7, and captures of the walk.
 - **Left for 5 frames a second**: the back end shared out to several workers, and the server overlapped with the client
   through copies of the entities and of their Ghoul2 instances.
+
+### The drawing's worker lighter (4 November 2026)
+
+- **The world's faces kept in GPU memory** (`tr_surface.cpp`, `SE_KeptDraw`; `gl_jk2.c`, `jk2glKeptWords`,
+  `jk2glKeptFaces`). A world face's GPU words (its positions, and its texture coordinates as the shim packs them) are made
+  once, the first time it is drawn, into a pool of at most 6 MB that core 0 makes when the level loads (`SE_KeptWorld`,
+  `jk2kept:` says how many surfaces and KB). A batch of faces is then drawn by copying those words into the frame's list,
+  not by filling `tess` and running every stage's colour and coordinates through `fast_triangles`.
+  - A face is kept only if it has no dynamic light. Its batch must have none of: fog, deforms, a polygon offset, fading,
+    an iterator other than the generic one, `r_lightmap`, `debugStyle`, multitexture, surface sprites, tcMods, or a colour
+    that is not the same for every vertex. Any of these, and the batch is filled into `tess` as before
+    (`SE_KeptToTess`).
+  - Light maps are clamped textures, so their words are made from 0, not from the floored minimum: a face's words say
+    which (`jk2glKeptWords` gives 2 floored, 1 from 0, 0 for a range of 63 or more, which is not kept).
+  - `srfSurfaceFace_t` carries its number in the world (`seIndex`, set in `tr_bsp.cpp`).
+  - The words are drawn where they lie in the pool (`gpuDrawAt`), faces whose words follow each other in one draw. A
+    list has 512 KB of vertices (`SET_SIZE`): copied into it, the world's words filled it, and what came after was
+    refused. That was so before the kept faces too (each world draw's words made into the list): the HUD, drawn last,
+    was mostly missing in play (the captures below). The pool is let go only after the GPU is done (`jk2glSettle`).
+  - A batch of kept faces alone has no indices in `tess`: the places that end a batch when `tess.numIndexes` is not 0
+    test `SE_TESS_PENDING`, and `RB_EndSurface` clears the kept faces with the indices.
+  - `JK2_KEPT=0` is the way before; `JK2_KEPT_COUNT=1` prints `jk2kept:` lines (faces drawn kept and refused).
+- **The drawing and the mix on the highest fast workers** (`render_open`, `jk2MixOn`). `mcw_try_call` takes the lowest
+  free fast worker first, so a job of the slots or of the music sometimes took the drawing's worker while it was free and
+  held its next frame back.
+- **The weather updated on a helper** (`tr_WorldEffects.cpp`, `SE_WxGive`, `SE_WxJob`). Core 0 keeps the scene's view
+  at `RE_RenderWorldEffects` (`SE_WxScene`) and posts the clouds' and the wind's update at the give
+  (`jk2SkinPost`), while the drawing's worker draws the frame's surfaces. The drawing waits for it only at the effects,
+  and draws the particles.
+  - With a window the weather draws its own random numbers, not the game's (`SE_WxFlrand`): `Q_flrand`'s state is in
+    the game's sums, and two cores stored to it. With no window (the sums' runs) it uses the game's, all on one core, as
+    before.
+  - `R_WorldEffectCommand` settles the drawing and the helper first. `JK2_WEATHER=drawing` is the way before.
+- **The particles' GPU words made by the weather's helper** (`CParticleCloud::SE_Words`, `SE_DrawWords`; `gl_jk2.c`,
+  `jk2glTaggedDraws`). After its update the helper writes each cloud's particles as the words `fast_triangles` makes for
+  a draw of many colours (positions, coordinates in 12 bits each, a tag a particle; at most 255 particles a draw) and
+  their colours as the GL's bytes. The drawing sets the cloud's GL state as `Render` does, makes the colours the GPU's
+  words, and draws the words where they lie. Three sets of buffers, a frame's each in turn, sized by core 0 at
+  `SE_WxScene` (a settle is allowed there, not at the give). `JK2_WEATHER_WORDS=drawing` is the way before. The walk
+  with `JK2_SOUND=mix`: the drawing's worker 1.54 to 1.37 million a frame; captured at frame 1450, the same pixels but
+  the dials.
+- **The players in one wave** (`CG_SE_PlayersAhead`): a player looking at the player in the first person looks at
+  `cg.refdef`'s eye, made before the entities, so it does not wait for the player's job; the walk's NPCs all did, and the
+  players were two waves, the longest of each in turn (407 to 431 thousand instructions a frame). `JK2_PLAYERS_WAVE=all`
+  is the way before. `JK2_PLAYERS_LOG` prints the waves' longest summed and how many waves.
+- **Marks** (`R_MarkFragments`, `se_mark_outside` in `tr_marks.cpp`): a triangle wholly behind one of the mark's planes
+  by more than a quarter unit gives no fragment, as `R_ChopPolyBehindPlane` keeps a point only 0.5 in front and what
+  earlier planes leave of the triangle lies within it: it is not chopped, nor its normal made. A moving player's blob
+  shadow was 147 thousand instructions. `JK2_MARKS=chop` is the way before. With the wave above, the walk with
+  `JK2_SOUND=mix` (4 November 2026): 503 to 466 passes a frame, the longest player 270 to 165 thousand, core 0's joins
+  46 to 69 passes a frame to 17 to 41; captured at frame 1450, the same pixels as both ways before but the dials.
+- **The sky's box whole** (`SE_DrawSkyWhole` in `tr_sky.cpp`): every frame the sky's triangles in view (about 30) were
+  clipped onto the box's six planes to find which squares of each side show, and those squares' points made again
+  (`MakeSkyVec`, about 317 a frame): 160 thousand instructions of the drawing's worker a frame, for a box whose points go
+  only by `zFar`. Now each side's whole grid is made once at size 1 and drawn under a `glScalef` of `zFar / 1.75` (the
+  translation to the eye was already the GL's), at depth 1 as before: what the sky's surfaces did not show of it is
+  behind the world. Not for a sky with clouds, whose layers are made from the clipped sides. `JK2_SKY=clip` is the way
+  before (and `JK2_SKY_DRAW=begin`). The walk with `JK2_SOUND=mix`: the drawing's worker 1.38 to 1.29 million a frame.
+- **A message's bits a byte at once** (`MSG_WriteBits`, `MSG_ReadBits`): Jedi Outcast's messages have no Huffman coder,
+  but the loop took a piece a byte with a mask each; now whole bytes, the same bytes (Quake III's "Traces and messages
+  made cheaper"). `JK2_MSG=bits` is the way before. Captured at frame 1450 with both: the same pixels but the dials.
+- **A brush model's faces kept too** (`RB_SurfaceFace`): a door's or a mover's faces are the world's surfaces, drawn under
+  the entity's matrix, so their kept words draw them as tess's words would, when the entity has no `renderfx` that the
+  stages read (alpha fade, tint, disintegration, forced alpha, distortion, volumetric, an animation index, the first
+  person). `JK2_KEPT_BMODELS=0` is the way before. `JK2_KEPT_COUNT=1` over the walk: 94% of the world's stage indices
+  were kept already, and what the GL still makes into words is mostly the entities' (about 6 thousand stage indices a
+  frame: models and the effects' sprites, about 160 draws at some 2,000 instructions each). The walk with
+  `JK2_SOUND=mix`: the drawing's worker 1.288 to 1.271 million a frame; captured at frame 1450, the same pixels but the dials.
+- **The particles and the sky drawn from arrays** (`CParticleCloud::Render`, `DrawSkySide`): one `glDrawElements` of
+  triangles, cut as the shim cuts quads and strips, not a call a vertex. `JK2_WEATHER_DRAW=begin` and
+  `JK2_SKY_DRAW=begin` are the ways before.
+- **The front end split, fixed**: the worker's view used a stale `tr.ori`, and dropped faces. The views' sums
+  (`SE_ViewSumNote`, `SE_FrontSum`) are now order-free and name a world surface by its number, not its address. The
+  front end's counters (`tr.pc`) are `se_pc`, in texels of their own, cleared by core 0 only when the front end is its
+  own: they shared texels with core 0's `RE_EndFrame` (`RVC_RACES_NEAR=4`). `JK2_FRONT=check` then said 0 of 1,200
+  views of the walk not as made whole. Before the kept faces were drawn in place it bounded the drawing's worker (320.7
+  passes a frame against 315.6); since, it is **the default** (`JK2_FRONT=core` the way back): the walk with
+  `JK2_SOUND=mix`, core 0 3.60 to 3.30 million a frame, the drawing's worker 1.22 to 1.54, 540 to 506 passes.
+- **Instruments**: `JK2_PARTS=N` prints core 0's instructions a frame in the server's frame and the client's;
+  `JK2_PLAYERS_LOG=N` says the longest player's job and all of them a frame; `JK2_HOLD=N` holds the game's frame N's picture (its list drawn and the last in RAM) for `rvc_cpu --save-ram` and
+  `tools/gpu_reference.py`.
+- **Captured** (`JK2_HOLD=1450` on the walk with `JK2_SOUND=mix`, `rvc_cpu --save-ram` at "jk2: holding",
+  `tools/gpu_reference.py RAM - --png NAME`; the model draws the world's textures as magenta and black, so it checks
+  the shapes and the HUD, not the world's colours). With all of `JK2_KEPT=0 JK2_WEATHER_DRAW=begin JK2_SKY_DRAW=begin
+  JK2_WEATHER=drawing` the picture is the same as with `JK2_KEPT=0` alone (0 pixels differ). The defaults against them:
+  0 pixels differ outside the HUD; inside it, the defaults draw the health and ammunition dials, the crosshair and the
+  datapad's messages, of which the old way drew only the dials' rims (its list was full). The front end on the worker
+  against `JK2_FRONT=core`: 0 pixels differ but in the two dials (about 1,400 each), which differ as much between two
+  captures of the same setting from two builds.
+- **Measured** (the walk, frames 1,500 to 1,700, calibrated, from a save; each row adds to the one above):
+
+  | Change | Passes a frame | fps | The drawing's worker a frame |
+  |---|---|---|---|
+  | Kept faces off | 405.9 | 1.69 | |
+  | Kept faces | 377.8 | 1.81 | 1.75 million |
+  | The drawing and the mix on the highest workers | 321.8 | 2.10 | |
+  | The weather on a helper | 315.6 | 2.14 | 1.51 million |
+
+  The particles' and the sky's arrays, measured with `JK2_SOUND=mix` (the card's pace moves the walk): 506 to 477 passes
+  a frame, the drawing's worker 1.67 to 1.56 million. The kept faces drawn where they lie, against `JK2_KEPT=0` of the
+  same build (`JK2_SOUND=mix`): the drawing's worker 1.46 to 1.22 million a frame; core 0 3.60 million both ways, which
+  bounds that walk (the mix is on it): 541 to 540 passes. Two builds' walks differ by up to 15% of core 0 even with the
+  mix: compare a build only with itself.
+- **Checked**: `test_all.py jk2 jk2-sums --sections` on the private image, 7 of 7 (the sums as `host_sum.sh`'s).
+- **Where the frame goes now** (`JK2_PARTS=100`, `JK2_STATS=100`, the walk with the card's sound): core 0 0.67 to 1.09
+  million a frame in the server's frame and 0.52 to 0.74 in the client's; it rests 43 to 85 passes a frame waiting for
+  the drawing and 46 to 74 in joins, mostly the players' wave (9 players a frame, all on workers in one wave). The
+  drawing's worker is 1.73 million a frame. At 5.49 million instructions a second, 5 frames a second is 1.1 million a
+  frame on each: the server's frame alone is about that on core 0.
+- **Since** (the steps above it, 4 November 2026; the walk with the card's sound): 2.16 frames a second, 311.8 passes a
+  frame; core 0 1.97 million a frame (the server's frame about 1.0 of it, `G_RunFrame` 0.93), the drawing's worker 1.49;
+  core 0 waits 34 to 35 passes a frame for the drawing and 13 to 24 in joins.
+
+### The game's frame apart (4 November 2026, the first stage)
+
+The game's frame (`G_RunFrame`, about a million instructions a frame of play) is core 0's and in order, and the client's
+game reads and writes the game's entities directly: so core 0 cannot be under the game's frame plus the client's. The way
+out is the client's frame on a copy, made when it begins, so that the game's next frame can be made beside it; the
+build computer's program is built with `-DSHADEREMU` too, so a change of order made there is in both sums.
+
+The first stage, on one core (`JK2_SPLIT=copy`, `=check`; unset is as before):
+- **The copy** (`SE_GameGive` in `g_main.cpp`, from `CL_Frame`'s start): the 1,024 entities (1.26 MB, one `memcpy`,
+  the machine's copy), each one's client and NPC, every pointer to an entity in them moved into the copy (the savegame's
+  fields, `savefields_gEntity`, `savefields_gClient`, `savefields_gNPC`, and `gNPC_t`'s `watchTarget`). The client's game's
+  files are compiled with `-DSE_CG_UNIT` (`build.sh`), and there `g_entities` is `se_cg_gents` (`g_shared.h`), the copy
+  while the client's frame is out and the game's own otherwise; `cg_entities[i].gent` is moved with it
+  (`SE_CGEntitiesAt`). The game hands the engine its two functions at its first frame (`SE_GameHooks` in `cl_main.cpp`):
+  its module keeps its names.
+- **What the client's frame wrote** goes back to the game's entities when it ends (`SE_GameTake`), a pointer into the
+  copy made the game's again. `JK2_SPLIT=copy` gives back the words of a list of fields that changed against the copy
+  as given (`se_ent_back`, `se_cl_back`): what the check found and every field the client's game's sources assign.
+  `JK2_SPLIT=check` gives back every word that changed, by difference (about a million instructions a frame, the walk
+  at 0.58 frames a second), counts each one's place (`jk2split:` lines) and the words outside the list. Over the sums'
+  4,000 frames that is: of an entity, `disconnectDebounceTime`, `setTime` and `lightLevel`; of its client, one word of the
+  player's state, the three facial timers and `renderInfo` from its 188th byte to its end (the eye, head and feet the
+  drawing found); of an NPC, nothing. Over the walk with `JK2_SPLIT=check`: 0 words written outside the list and 0
+  words pointing into the copy outside the pointer fields.
+- **Checked**: `test_all.py jk2-split` (the sums with `JK2_SPLIT=copy`) gives `jk2-sums`'s sums at frames 3200 and 3600,
+  and so did `JK2_SPLIT=check`.
+
+Still to come, in order: the Ghoul2 instances the client's game poses, which the game traces against and animates; the
+engine's zone, console and snapshot ring used by both; then the game's next frame on a worker beside the client's,
+what the client wrote given back a frame later on both computers. Even so core 0 stays at about the game's frame, 1.0
+million a frame (about 4.5 frames a second at most), and the drawing's worker, 1.3 to 1.5 million, is then the bound.
 
 ### What bounds it
 

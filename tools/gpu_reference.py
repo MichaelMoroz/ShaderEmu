@@ -383,7 +383,10 @@ def draw(m):
             sx = np.round((p[:, 0] * iw * 0.5 + 0.5) * TARGET * 256) / 256
             sy = np.round((0.5 - p[:, 1] * iw * 0.5) * TARGET * 256) / 256
             z = p[:, 2] * iw
-            area = (sx[1] - sx[0]) * (sy[2] - sy[0]) - (sy[1] - sy[0]) * (sx[2] - sx[0])
+            if not (np.isfinite(sx).all() and np.isfinite(sy).all()):
+                stats['not_finite'] = stats.get('not_finite', 0) + 1   # (a corner past what a float holds: the card culls it)
+                continue
+            area =(sx[1] - sx[0]) * (sy[2] - sy[0]) - (sy[1] - sy[0]) * (sx[2] - sx[0])
             if area == 0:
                 continue
             x_lo, x_hi = max(int(np.floor(sx.min())), 0), min(int(np.ceil(sx.max())) + 1, width)

@@ -154,9 +154,11 @@ extern "C" {
 int jk2glOpen( unsigned window );
 int jk2glOn( void );
 void jk2glSwap( void );
+void jk2glHold( int frame );
 void jk2RenderSettle( void );
 void jk2RenderServe( void );
 void jk2RenderStats( unsigned *gives, unsigned *settles, unsigned *gl_settles, unsigned *waits );
+unsigned jk2MixWaits( void );
 void jk2glStats( unsigned *in_gpu, unsigned *gpu_size, unsigned *left_out, unsigned *vertices );
 const volatile unsigned *gpuControl( int offset );
 void gpuWindowOrigin( int *x, int *y );
@@ -288,6 +290,13 @@ void WIN_Present( window_t *window )
 	}
 	se_frames++;
 	se_window_frames++;
+#ifdef SE_WINDOW
+	static int hold_at = -1;	// JK2_HOLD=F: the game held at frame F with its picture shown (gl_jk2.c's jk2glHold)
+	if ( hold_at < 0 )
+		hold_at = env_int( "JK2_HOLD", 0 );
+	if ( hold_at && se_frames == hold_at )
+		jk2glHold( se_frames );
+#endif
 	// JK2_MARK=F0,F1: a measured window (tools/game_par.py's jk2 entries): a line at frame F0 and one at F1 with its
 	// frames and milliseconds of the machine's time, then the end
 	static int mark_from = -2, mark_to, mark_ms;
@@ -335,8 +344,11 @@ void WIN_Present( window_t *window )
 			Com_Printf( "jk2gpu: textures %u of %u KB, %u left out, %u vertices a frame\n", in_gpu >> 10, size >> 10, left_out,
 				vertices / ( se_stats_every > 0 ? se_stats_every : 1 ) );
 			jk2RenderStats( &gives, &settles, &gl_settles, &waits );
+			extern unsigned se_join_waits, se_rs_waits;
 			Com_Printf( "jk2render: %u frames given to the drawing's worker, %u settled (%u by a GL call of this core's), "
-				"%u passes waited for it\n", gives, settles, gl_settles, waits );
+				"%u passes waited for it, %u for the mix, %u in joins (%u for the bones)\n", gives, settles, gl_settles, waits,
+				jk2MixWaits(), se_join_waits, se_rs_waits );
+			se_join_waits = se_rs_waits = 0;
 		}
 #endif
 		se_window_frames = 0;
@@ -1196,10 +1208,11 @@ static void se_files_reap( int all );	// (files read ahead: below)
 
 // A call waited for in passes this core rests (mcw_rest_on: a pass of idle work, some hundreds of instructions), not by
 // mcw_join's polling, which served and counted instructions every turn: 15 million of the load's (docs/games/jk2.md, "The load")
+unsigned se_join_waits, se_rs_waits;	// (passes rested in joins, and of them the bones' (tr_ghoul2.cpp's SE_RSBones): JK2_STATS's jk2render line)
 static uint32_t se_join( int h )
 {
 	while ( !mcw_ready( h ) )
-		mcw_rest_on( &h, 1 );
+		mcw_rest_on( &h, 1 ), se_join_waits++;
 	return mcw_join( h );
 }
 

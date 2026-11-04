@@ -162,10 +162,13 @@ GF="$OPT $COMMON -fno-gnu-unique -DJK2_MODE -DSP_GAME -I$S/codeJK2 -I$S/codeJK2/
 step "the game"
 compile game \
     "$(lines game "$CXX $CXXSTD $GF" $(for f in $GAME; do echo "$S/codeJK2/game/$f.cpp"; done) \
-        $(for f in $CGAME; do echo "$S/codeJK2/cgame/$f.cpp"; done) $(for f in $ICARUS; do echo "$S/codeJK2/icarus/$f.cpp"; done) \
+        $(for f in $ICARUS; do echo "$S/codeJK2/icarus/$f.cpp"; done) \
         "$S/code/ui/gameinfo.cpp" "$S/code/qcommon/tri_coll_test.cpp" "$S/code/qcommon/q_shared.cpp" "$S/code/Rufl/hstring.cpp" \
         $(for f in $SHARED_CXX; do echo "$S/shared/$f.cpp"; done))" \
-    "$(lines game "$CC $GF" $(for f in $SHARED_C; do echo "$S/shared/$f.c"; done) "$HERE/se_rand.c" "$HERE/cg_rand.c")"
+    "$(lines game "$CC $GF" $(for f in $SHARED_C; do echo "$S/shared/$f.c"; done) "$HERE/se_rand.c" "$HERE/cg_rand.c")" \
+    "$(lines game "$CXX $CXXSTD $GF -DSE_CG_UNIT" $(for f in $CGAME; do echo "$S/codeJK2/cgame/$f.cpp"; done))"
+# (SE_CG_UNIT: the client's game's files, which read the game's entities through se_cg_gents, g_shared.h: the copy the
+# game gives it, docs/games/jk2.md, "The game's frame apart")
 # the client's game draws its random numbers from states of its own (cg_rand.c says why): its objects' calls renamed
 for o in "$BUILD"/game/cgame_*.o; do
     $OBJCOPY --redefine-sym Q_flrand=CG_flrand --redefine-sym Q_irand=CG_irand --redefine-sym rand=CG_rand "$o"
