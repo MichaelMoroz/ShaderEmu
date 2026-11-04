@@ -648,7 +648,9 @@ public static partial class ShaderEmuBuilder
         "the window system, and its port of Doom\nDOOM, Quake and Quake III Arena (ioquake3) by id Software: " +
         "the source releases, and the demos' data\nXash3D FWGS and hlsdk-portable by FWGS: Half-Life's " +
         "engine; Half-Life: Uplink by Valve, fetched when the image is made\nVanilla Conquer, and Command & " +
-        "Conquer by Westwood Studios (source released by Electronic Arts)\nMicropolis (MicropolisCore) by Don " +
+        "Conquer by Westwood Studios (source released by Electronic Arts)\nOpenJK, and Jedi Outcast by Raven Software " +
+        "(source released by LucasArts): its 2002 demo\naoe1-decomp by dcostap, and Age of Empires by Ensemble Studios: " +
+        "its 1997 trial\nMicropolis (MicropolisCore) by Don " +
         "Hopkins, from SimCity by Will Wright\nOpenTTD by the OpenTTD team, with OpenGFX, OpenSFX and OpenMSX; DMXOPL " +
         "by sneakernets: its music's instruments\nClassiCube by UnknownShadow200 and contributors; Dear ImGui by " +
         "Omar Cornut and contributors\nNofrendo by Matthew Conte: the NES, with Thwaite by Damian Yerrick and " +
@@ -657,7 +659,7 @@ public static partial class ShaderEmuBuilder
         "Unsplash, and somebody's cats\nChicago95 by grassmunk, and KDE's Oxygen icons: the desktop's two " +
         "looks; Selawik by Microsoft, drawn by msdf-atlas-gen\nPoly Haven (CC0): this room's furniture, " +
         "plants and many of its surfaces\nLTCGI by pimaker, Light Volumes by RED_SIM, Mochie's shaders, " +
-        "Silent's Fake Glass: light, rain\nQvPen by ureishi: the pens\nCascadia Mono by Microsoft: the " +
+        "Silent's Fake Glass, BigWings's Heartfelt: light, rain\nQvPen by ureishi: the pens\nCascadia Mono by Microsoft: the " +
         "console's font\nShaderAudio by lox9973: how sound gets out of a shader\nminimp3 by lieff and dr_flac " +
         "by David Reid: the music player's decoders\npl_mpeg by Dominic Szablewski: the video player's " +
         "decoder\nBig Buck Bunny (c) 2008 Blender Foundation, www.bigbuckbunny.org, CC BY 3.0: the sample " +

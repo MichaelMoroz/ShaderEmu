@@ -39,7 +39,8 @@ way this computer becomes usable.
 - **A desktop** (`docs/system/nanox.md`): Nano-X, with every window in a buffer of its own and the
   screen composed by the GPU, a bar with a Start menu, pinned programs, task buttons, a calendar and
   the volume. The machine starts it by itself at boot. Two looks, chosen in Settings: Windows 7
-  (Oxygen icons, glass frames, the Selawik font, `docs/system/fonts.md`) and classic. A program that
+  (Oxygen icons, glass frames, the Selawik font, `docs/system/fonts.md`) and classic. A game starts as
+  large as the screen and keeps its shape in any window. A program that
   fails to start is reported in a window, and a file opens with the program for its kind
   (`docs/system/open.md`).
 - **Pictures, sound and films** (`docs/system/media.md`): one library, libmedia, decodes and encodes
@@ -70,7 +71,7 @@ menu lists those with a window; the machine's own reader has these docs at `/usr
 
 | In the Start menu | What it is | Doc |
 |---|---|---|
-| Half-Life: Uplink (`halflife`) | Xash3D FWGS with the HLSDK, its 3D on a worker core a frame behind; Valve's demo data is fetched from archive.org when an image is made, never committed | `docs/games/halflife.md` |
+| Half-Life: Uplink (`halflife`) | Xash3D FWGS with the HLSDK, its 3D on a worker core a frame behind; Valve's demo data is fetched from archive.org when an image is made, never committed, and its licence is asked at the first start | `docs/games/halflife.md` |
 | Quake (`quake`) | id's GLQuake with the shareware episode, everything drawn by the GPU, the server on a worker | `docs/games/quake.md` |
 | Quake III Arena (`quake3`) | ioquake3 with the free demo's The Longest Yard and its bots, the server's frame on a worker | `docs/games/quake3.md` |
 | Doom (`doom`) | Microwindows' port, the level drawn by the GPU, the view made on up to four workers | `docs/games/doom.md` |
@@ -78,7 +79,8 @@ menu lists those with a window; the machine's own reader has these docs at `/usr
 | Red Alert (`ralert`) | the same source tree with the 1996 demo's data (a Soviet and an Allied mission), sound and music | `docs/games/ralert.md` |
 | Chess (`nxchess`) | chess in a window, an engine of its own searching on 63 workers | `docs/games/chess.md` |
 | OpenTTD (`openttd`) | OpenTTD 15.3 with the open base sets, the picture on the GPU, viewports on the workers, the game's tick on a worker | `docs/games/openttd.md` |
-| Age of Empires (`aoe`, private images only) | The decompiled game on the first core with the 1997 trial's data, no sound yet | `docs/games/aoe.md` |
+| Age of Empires (`aoe`) | the decompiled game with the 1997 trial's data (its licence asked at the first start), sound and music on the card, the view on a worker, the game screen in the window's shape | `docs/games/aoe.md` |
+| Jedi Outcast (`jk2`) | OpenJK's single player with the 2002 demo's level (its licence asked at the first start), drawn by the GPU on a worker a frame behind, Ghoul2's models skinned by the GPU; far too slow to play yet | `docs/games/jk2.md` |
 | ClassiCube (`classicube`) | the Minecraft Classic client, a world of blocks to dig and build in, chunks kept in GPU memory | `docs/games/classicube.md` |
 | Micropolis (`nxmicropolis`) | the city simulator of 1989 (MicropolisCore's engine) with its cities and scenarios, the map on the GPU | `docs/games/micropolis.md` |
 | Thwaite, Nova the Squirrel (`nes`) | a NES: Nofrendo with two free games, or any `.nes` of a mapper it has | `docs/games/nes.md` |
@@ -103,7 +105,7 @@ menu lists those with a window; the machine's own reader has these docs at `/usr
 | `nxsettings`, `nxreg`, `nxpersist` | settings; the registry; what `/persistence` keeps | `docs/system/nanox.md`, `docs/system/persist.md` |
 | `nxnet` | the machines of the network and their shared folders | `docs/system/lan.md` |
 | `open`, `unarc` | a file with the program for its kind; zip, tar and `.gz` unpacked on the workers, eight to ten times busybox's speed | `docs/system/open.md`, `docs/system/media.md` |
-| `cabinst` | a game's installer as its maker shipped it: its licence shown, Accept once read to its end, its cabinet unpacked on the workers into memory with a bar (Age of Empires, Jedi Outcast) | `docs/system/install.md` |
+| `cabinst` | a game's licence as its maker shipped it, shown at its first start, Accept only once it is read to its end; the game's files, decoded in the image, linked where it reads them (Age of Empires, Jedi Outcast, Half-Life: Uplink) | `docs/system/install.md` |
 | `nxphys` | rigid boxes on every core | `docs/apps/physics.md` |
 | `nxperf` | the benchmark: the processor, memory, the workers, the lanes, numerical kernels, libmedia and the GPU, each result checked | `docs/apps/bench.md` |
 | `nxray`, `nxpath` | rays on every core; a path tracer and viewer of meshes | `docs/apps/raytrace.md` |
@@ -278,7 +280,7 @@ the design notes are kept in `docs/plans/original-x86-plan.md`.
 
 [rvc](https://github.com/pimaker/rvc) and [linux-rvc](https://github.com/pimaker/linux-rvc) by
 pimaker; Linux; musl; BusyBox; GCC and LLVM; [Microwindows](https://github.com/ghaerr/microwindows)
-by Greg Haerr and contributors, with its port of Doom; [Xash3D FWGS](https://github.com/FWGS/xash3d-fwgs) and [hlsdk-portable](https://github.com/FWGS/hlsdk-portable) by FWGS, after Valve's Half-Life SDK; [QuickJS](https://bellard.org/quickjs/) by Fabrice Bellard; [MicroPython](https://micropython.org); nano, htop, Midnight Commander, mg, dialog, file and sl, and Dropbear, OpenSSH's sftp, curl with Mbed TLS, socat, thttpd, at and iproute2, with Monocypher (their versions in `docs/system/terminal.md` and `docs/system/ports.md`); TinyCC and jrrk2's riscv32 port of it; DOOM, [Quake](https://github.com/id-Software/Quake) and Quake III Arena by id Software, with [ioquake3](https://github.com/ioquake/ioq3); [MicropolisCore](https://github.com/SimHacker/MicropolisCore) by Don Hopkins, from SimCity by Will Wright and Maxis (source released by Electronic Arts); [Vanilla Conquer](https://github.com/TheAssemblyArmada/Vanilla-Conquer)
+by Greg Haerr and contributors, with its port of Doom; [Xash3D FWGS](https://github.com/FWGS/xash3d-fwgs) and [hlsdk-portable](https://github.com/FWGS/hlsdk-portable) by FWGS, after Valve's Half-Life SDK; [QuickJS](https://bellard.org/quickjs/) by Fabrice Bellard; [MicroPython](https://micropython.org); nano, htop, Midnight Commander, mg, dialog, file and sl, and Dropbear, OpenSSH's sftp, curl with Mbed TLS, socat, thttpd, at and iproute2, with Monocypher (their versions in `docs/system/terminal.md` and `docs/system/ports.md`); TinyCC and jrrk2's riscv32 port of it; [OpenJK](https://github.com/JACoders/OpenJK) and Jedi Outcast by Raven Software (source released by LucasArts), with the 2002 demo's data; [aoe1-decomp](https://github.com/dcostap/aoe1-decomp) by dcostap, with Age of Empires' 1997 trial by Ensemble Studios and Microsoft; DOOM, [Quake](https://github.com/id-Software/Quake) and Quake III Arena by id Software, with [ioquake3](https://github.com/ioquake/ioq3); [MicropolisCore](https://github.com/SimHacker/MicropolisCore) by Don Hopkins, from SimCity by Will Wright and Maxis (source released by Electronic Arts); [Vanilla Conquer](https://github.com/TheAssemblyArmada/Vanilla-Conquer)
 and Command & Conquer by Westwood Studios (source released by Electronic Arts);
 [ClassiCube](https://github.com/ClassiCube/ClassiCube) by UnknownShadow200 and contributors; [Dear ImGui](https://github.com/ocornut/imgui) by Omar Cornut and contributors; [Nofrendo](https://github.com/espressif/esp32-nesemu) by Matthew Conte, with [Thwaite](https://github.com/pinobatch/thwaite-nes) by Damian Yerrick and [Nova the Squirrel](https://github.com/NovaSquirrel/NovaTheSquirrel) by NovaSquirrel; [minimp3](https://github.com/lieff/minimp3) by lieff and [dr_flac](https://github.com/mackron/dr_libs) by David Reid in the music player; glxgears from the
 Mesa demos; [pl_mpeg](https://github.com/phoboslab/pl_mpeg) by Dominic Szablewski; the
@@ -287,7 +289,7 @@ Foundation, CC BY 3.0); Musopen's public-domain recordings; photographs from Uns
 paintings from Wikimedia Commons; furniture, plants and surfaces of the VRChat room from
 [Poly Haven](https://polyhaven.com) (CC0); [LTCGI](https://github.com/PiMaker/ltcgi) by pimaker,
 [VRC Light Volumes](https://github.com/REDSIM/VRCLightVolumes) by RED_SIM and
-[Mochie's shaders](https://github.com/MochiesCode/Mochies-Unity-Shaders) for the room's light, and [Fake Glass](https://gitlab.com/s-ilent/fake-glass) by Silent (CC BY-SA 4.0, its rain's textures by deepspacebanana) for the rain on the window; the path tracer's models are the Utah teapot (Martin Newell) and the Stanford Bunny (Stanford Computer Graphics Laboratory); recordings from [Freesound](https://freesound.org) given to the public domain: a computer by squashy555, a keyboard by harrisonlace, thunder by Fission9, bastipictures and Kinoton; [QvPen](https://github.com/ureishi/QvPen) by ureishi for the room's pens; VRChat's SDK and UdonSharp;
+[Mochie's shaders](https://github.com/MochiesCode/Mochies-Unity-Shaders) for the room's light, and [Fake Glass](https://gitlab.com/s-ilent/fake-glass) by Silent (CC BY-SA 4.0, its rain's textures by deepspacebanana) and BigWings's [Heartfelt](https://www.shadertoy.com/view/dslczf) for the rain on the window; the path tracer's models are the Utah teapot (Martin Newell) and the Stanford Bunny (Stanford Computer Graphics Laboratory); recordings from [Freesound](https://freesound.org) given to the public domain: a computer by squashy555, a keyboard by harrisonlace, thunder by Fission9, bastipictures and Kinoton; [QvPen](https://github.com/ureishi/QvPen) by ureishi for the room's pens; VRChat's SDK and UdonSharp;
 [ShaderAudio](https://gitlab.com/lox9973/ShaderAudio) by lox9973, whose way of getting sound out of
 a shader the sound card follows.
 
