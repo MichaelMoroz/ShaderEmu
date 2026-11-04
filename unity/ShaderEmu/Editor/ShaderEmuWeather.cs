@@ -20,6 +20,8 @@ public static partial class ShaderEmuBuilder
 
     // the window probe's picture as a flash of lightning of 1 lights the city (WindowProbe)
     const string LightningPath = Generated + "/Reflection probe window lightning.cubemap";
+    // the room as the pane sees it, the panes put away: what a drop reflects (WindowProbe)
+    const string RoomPath = Generated + "/Reflection probe window room.cubemap";
 
     static void WeatherMaterials(Dictionary<string, Material> made)
     {
@@ -39,14 +41,19 @@ public static partial class ShaderEmuBuilder
         glass.shaderKeywords = new string[0];
         glass.SetTexture("_Sky", AssetDatabase.LoadAssetAtPath<Cubemap>(Generated + "/Reflection probe window picture.cubemap"));   // (WindowProbe makes it again)
         glass.SetTexture("_SkyFlash", AssetDatabase.LoadAssetAtPath<Cubemap>(LightningPath));
+        glass.SetTexture("_Room", AssetDatabase.LoadAssetAtPath<Cubemap>(RoomPath));
         // every number set here: a material keeps another shader's numbers of the same names (Fake Glass's _IOR of 1 bent nothing)
         // Heartfelt's drops (WindowRain.shader: BigWings's, CC BY-NC-SA 3.0), on the pane in metres
-        glass.SetFloat("_Scale", 0.48f);   // (as tuned in the editor)
-        glass.SetFloat("_Rain", 0.672f);
+        glass.SetFloat("_Scale", 0.84f);   // (as tuned in the editor, 4 November 2026: these, _Rim and the mist)
+        glass.SetFloat("_Rain", 1f);
+        // (2.7 mm, a puddle's height at glass's contact angle, was tried on 4 November 2026: from afar the
+        // drops bent the city more, and what shows through them blurred into the city behind; no more seen)
         glass.SetFloat("_Height", 0.83f);
         glass.SetFloat("_IOR", 1.333f);
         glass.SetColor("_Clear", new Color(0.93f, 0.96f, 1f, 1f));
-        glass.SetFloat("_Rim", 0.738f);
+        glass.SetFloat("_Rim", 1f);
+        glass.SetFloat("_Mist", 0.5f);       // Heartfelt's fog on the dry glass, which drops and trails clear
+        glass.SetFloat("_MistBlur", 4f);
         glass.SetFloat("_Debug", 0f);
         glass.renderQueue = -1;
         glass.globalIlluminationFlags = MaterialGlobalIlluminationFlags.EmissiveIsBlack;
@@ -56,8 +63,9 @@ public static partial class ShaderEmuBuilder
     // The glass's own reflection probe, just outside the pane: a drop shows the city bent, and
     // the room's probe has only the lit room and a blank window. Its picture is a camera's (six
     // faces, the sheets of rain put away meanwhile), and every pane takes it by its anchor.
-    // The lit room is in it at an eighth: whole, every drop's steep side was the colour of the walls.
-    const float RoomInGlass = 0.12f;
+    // The city's pictures have the city and the sky alone; the room is a picture of its own (RoomPath),
+    // what a drop's surface reflects back into the room (before, the lit room was an eighth of the
+    // city's picture, and the reflection was turned back out to the city: the drops blended in).
 
     // The camera's six faces as they are in the scene: linear and HDR. (RenderToCubemap straight into a
     // Cubemap asset went through an 8-bit sRGB target: every value clamped at 1 and kept sRGB-encoded,
@@ -118,8 +126,13 @@ public static partial class ShaderEmuBuilder
         camera.nearClipPlane = 0.05f;
         camera.farClipPlane = 3000f;
         CubemapFace[] faces = { CubemapFace.PositiveX, CubemapFace.NegativeX, CubemapFace.PositiveY, CubemapFace.NegativeY, CubemapFace.PositiveZ, CubemapFace.NegativeZ };
+        // the room (and the city through the other panes' frames), the panes themselves put away
+        List<Renderer> panesAway = new List<Renderer>();
+        foreach (Renderer renderer in Object.FindObjectsOfType<Renderer>())
+            if (renderer.enabled && System.Array.IndexOf(renderer.sharedMaterials, glass) >= 0) { renderer.enabled = false; panesAway.Add(renderer); }
         Color[][] whole = CaptureHdr(camera, faces);
-        // again with nothing but the city and the sky, and the two mixed
+        foreach (Renderer renderer in panesAway) renderer.enabled = true;
+        // again with nothing but the city and the sky
         Transform city = world.Find("Models/City");
         List<Renderer> hidden = new List<Renderer>();
         foreach (Renderer renderer in Object.FindObjectsOfType<Renderer>())
@@ -140,19 +153,22 @@ public static partial class ShaderEmuBuilder
             lightning = new Cubemap(256, TextureFormat.RGBAHalf, true);
             AssetDatabase.CreateAsset(lightning, LightningPath);
         }
+        Cubemap room = AssetDatabase.LoadAssetAtPath<Cubemap>(RoomPath);
+        if (room == null)
+        {
+            room = new Cubemap(256, TextureFormat.RGBAHalf, true);
+            AssetDatabase.CreateAsset(room, RoomPath);
+        }
         for (int f = 0; f < 6; f++)
         {
-            Color[] outside = cityOnly[f], lit = cityLit[f];
-            for (int i = 0; i < outside.Length; i++)
-            {
-                outside[i] = Color.LerpUnclamped(outside[i], whole[f][i], RoomInGlass);
-                lit[i] = Color.LerpUnclamped(lit[i], whole[f][i], RoomInGlass);
-            }
-            picture.SetPixels(outside, faces[f]);
-            lightning.SetPixels(lit, faces[f]);
+            picture.SetPixels(cityOnly[f], faces[f]);
+            lightning.SetPixels(cityLit[f], faces[f]);
+            room.SetPixels(whole[f], faces[f]);
         }
         lightning.Apply(true);
         EditorUtility.SetDirty(lightning);
+        room.Apply(true);
+        EditorUtility.SetDirty(room);
         Object.DestroyImmediate(camera.gameObject);
         if (rain != null) rain.gameObject.SetActive(rainOn);
         picture.Apply(true);
@@ -161,6 +177,7 @@ public static partial class ShaderEmuBuilder
         probe.customBakedTexture = picture;
         probe.boxProjection = false;   // (a direction's colour: the city is far)
         glass.SetTexture("_SkyFlash", lightning);
+        glass.SetTexture("_Room", room);
         glass.SetTexture("_Sky", picture);   // what the drops bend (WindowRain.shader takes it itself: the probe Unity binds did not reach it)
         EditorUtility.SetDirty(glass);
 

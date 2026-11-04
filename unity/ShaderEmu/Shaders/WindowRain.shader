@@ -8,23 +8,26 @@ Shader "ShaderEmu/WindowRain"
     // repository's MIT: credit him, no commercial use, and changes shared alike.
     //
     // What is ours: its drops on the pane in metres (a unit of its picture is _Scale m of glass,
-    // as tuned in the editor: 0.48), its value as the
-    // water's height (_Height mm at 1: a 45 degree cap of that radius is 0.83 mm high), the
-    // normal from its differences as it takes them, and the ray traced through that water: bent
-    // into the water at the flat glass and out through its surface (Snell, 1.333), the city looked
-    // up in the window probe's picture (_Sky: taken outside the pane, far enough to be at
-    // infinity), what the surface reflects (Fresnel) mirrored back out (_Rim). Between the drops
-    // the pane is clear. (Both panes look along x: across them is world z.)
+    // as tuned in the editor: 0.84), its value as the
+    // water's height (_Height mm at 1, as tuned in the editor: 0.83),
+    // its exact gradient (HeartfeltD), and the ray traced through that water: bent into the water at
+    // the flat glass and out through its surface (Snell, 1.333), the city looked up in the window
+    // probe's picture (_Sky: taken outside the pane, far enough to be at infinity), what the surface
+    // reflects (Fresnel) back into the room, looked up in the room's picture (_Room, times _Rim).
+    // Between the drops the pane is clear. (Both panes look along x: across them is world z.)
     Properties
     {
         _Sky ("The city at infinity (the window probe's picture)", CUBE) = "black" {}
         _SkyFlash ("The same as a flash of lightning of 1 lights it", CUBE) = "black" {}
-        _Scale ("Metres of glass a unit of Heartfelt's picture", Float) = 0.48
-        _Rain ("Heartfelt's rain amount", Range(0,1)) = 0.672
+        _Room ("The room as the pane sees it (what the water's surface reflects back in)", CUBE) = "black" {}
+        _Mist ("Mist on the dry glass: the city behind it blurred (Heartfelt's fog; drops and trails clear it)", Range(0, 1)) = 0.5
+        _MistBlur ("The mist's blur, degrees", Float) = 4
+        _Scale ("Metres of glass a unit of Heartfelt's picture", Float) = 0.84
+        _Rain ("Heartfelt's rain amount", Range(0,1)) = 1
         _Height ("The water's height where Heartfelt's value is 1 (mm)", Float) = 0.83
         _IOR ("Water's index", Float) = 1.333
         _Clear ("The water's own tint", Color) = (0.93, 0.96, 1.0, 1)
-        _Rim ("What the inside reflection keeps", Range(0,1)) = 0.738
+        _Rim ("What the inside reflection keeps", Range(0,1)) = 1
         [HideInInspector] _Footprint ("A pixel's footprint times this (tests: a supersampled picture as a plain one's)", Float) = 1
         _Debug ("Debug: 1 the sky straight, 2 the slope, 3 cover, 4 the drops' value, 5 the mip, 9 no water", Float) = 0
     }
@@ -43,8 +46,8 @@ Shader "ShaderEmu/WindowRain"
             #pragma target 3.0
             #include "UnityCG.cginc"
 
-            samplerCUBE _Sky, _SkyFlash;
-            float4 _Layers; float _Test, _Widen, _Footprint, _Scale, _Rain, _Height, _IOR, _Rim, _Debug;
+            samplerCUBE _Sky, _SkyFlash, _Room;
+            float4 _Layers; float _Mist, _MistBlur, _Test, _Widen, _Footprint, _Scale, _Rain, _Height, _IOR, _Rim, _Debug;
             float4 _Clear;
             float _UdonWeatherFlash;   // lightning (EmuWeather)
 
@@ -197,7 +200,7 @@ Shader "ShaderEmu/WindowRain"
                 return float2(g.x * sx, g.y);
             }
 
-            float3 DropLayer2D(float2 uv, float t, float w) {
+            float4 DropLayer2D(float2 uv, float t, float w) {
                 float2 UV = uv;
                 float2 a = float2(6.0, 1.0);
                 float2 grid = a * 2.0;
@@ -253,7 +256,8 @@ Shader "ShaderEmu/WindowRain"
                 // m = mainDrop + droplets r trailFront
                 float prod = droplets.x * r * trailFront.x;
                 float2 dprod = droplets.yz * r * trailFront.x + droplets.x * dr * trailFront.x + droplets.x * r * trailFront.yz;
-                return float3(mainDrop.x + prod, mainDrop.yz + dprod);
+                float trail = S(max(thickness * r, wc), 0.0, cd) * r2.x * trailFront.x * 0.5;   // (its value only: the mist's)
+                return float4(mainDrop.x + prod, mainDrop.yz + dprod, trail);
             }
 
             float3 StaticDropsD(float2 uv, float t, float w) {
@@ -272,7 +276,7 @@ Shader "ShaderEmu/WindowRain"
             }
 
             // HeartfeltAt's value (x) and its gradient by the place in the picture (yz)
-            float3 HeartfeltD(float2 uv, float w) {
+            float4 HeartfeltD(float2 uv, float w) {   // (w: Heartfelt's trail value, as HeartfeltAt's y)
                 float t = _Time.y * 0.2;
                 float rainAmount = _Rain;
                 float staticDrops = S(-0.5, 1.0, rainAmount) * 2.0;
@@ -280,11 +284,11 @@ Shader "ShaderEmu/WindowRain"
                 float layer2 = S(0.0, 0.5, rainAmount);
                 float3 keep = any(_Layers.xyz) ? _Layers.xyz : 1.0;
                 float3 s0 = StaticDropsD(uv, t, w) * staticDrops * keep.x;
-                float3 m1 = DropLayer2D(uv, t, w) * layer1 * keep.y;
-                float3 m2 = DropLayer2D(uv * 1.85, t, w * 1.85) * layer2 * keep.z;
+                float4 m1 = DropLayer2D(uv, t, w) * layer1 * keep.y;
+                float4 m2 = DropLayer2D(uv * 1.85, t, w * 1.85) * layer2 * keep.z;
                 m2.yz *= 1.85;
-                float3 c = s0 + m1 + m2;
-                return SD(0.3, 0, 1.0, 0, c.x, c.yz);
+                float3 c = s0 + m1.xyz + m2.xyz;
+                return float4(SD(0.3, 0, 1.0, 0, c.x, c.yz), m1.w + m2.w);
             }
 
             #undef S
@@ -353,10 +357,19 @@ Shader "ShaderEmu/WindowRain"
                     o.reflected = 0.5 * (rs * rs + rp * rp);
                 }
                 float3 back = reflect(water, -outward);
-                o.mirrored = normalize(back - 2.0 * dot(back, n) * n);   // back out through the pane's plane: towards the city again
+                // what the surface reflects goes back through the glass into the room, and shows the room: its
+                // lamps on a drop's rim against the dark city are what makes a drop seen at night (before, it was
+                // turned back out to the city, and a drop blended into what was behind it)
+                o.mirrored = normalize(back);
                 o.leaves = dot(air, air) >= 1e-4 ? 1.0 : 0.0;
                 o.air = o.leaves > 0 ? normalize(air) : o.mirrored;      // (a direction always: a lookup wants one)
                 return o;
+            }
+
+            // the room in direction d over a cone of `spread` radians, as SkyCone
+            float3 RoomCone(float3 d, float spread) {
+                float lod = log2(max(spread * (_Layers.w > 0 ? _Layers.w : 1.0) / (1.5707963 * _Sky_TexelSize.x), 1.0));
+                return texCUBElod(_Room, float4(d, lod)).rgb;
             }
 
             // the city in direction d over a cone of `spread` radians: the mip whose texel spans it
@@ -387,11 +400,13 @@ Shader "ShaderEmu/WindowRain"
                 float hs = 0.5 * wp;
                 float v[3][3];
                 float2 g[3][3];   // and the exact slope there (HeartfeltD's gradient, mm over mm)
+                float tr[3][3];   // and Heartfelt's trail value (the mist's)
                 float toPoint = _Height / (_Scale * 1000.0);
                 [unroll] for (int a = 0; a < 3; a++)
                     [unroll] for (int b = 0; b < 3; b++)
                     {
-                        float3 h = HeartfeltD(uv + float2(a - 1, b - 1) * hs, w);
+                        float4 h = HeartfeltD(uv + float2(a - 1, b - 1) * hs, w);
+                        tr[a][b] = h.w;
                         v[a][b] = h.x;
                         g[a][b] = h.yz * toPoint;
                     }
@@ -489,16 +504,32 @@ Shader "ShaderEmu/WindowRain"
                     if (_Test == 1)   // (a test's: the screen gradient's mip, as before)
                     {
                         through = Sky(q[k].air, 0.5);
-                        mirroredSky = Sky(q[k].mirrored, 0.5);
+                        mirroredSky = RoomCone(q[k].mirrored, 0.0);
                     }
                     else
                     {
                         through = SkyCone(q[k].air, max(max(sweepAir, spreadAir[k]), own));
-                        mirroredSky = SkyCone(q[k].mirrored, max(max(sweepMirror, spreadMirror[k]), own));
+                        mirroredSky = RoomCone(q[k].mirrored, max(max(sweepMirror, spreadMirror[k]), own));
                     }
                     float3 col = (through * throughShare[k] + mirroredSky * q[k].reflected * _Rim) * _Clear.rgb;
                     sum += col * cover[k];
                     wet += cover[k];
+                }
+                // Mist on the dry glass (Heartfelt's fog: his picture is blurred everywhere but where a drop or a
+                // trail has cleared it): the city behind seen blurred, so a drop, clear, stands out of it. A
+                // trail at its fullest (his trail value's peak, 0.5) clears it all
+                [branch] if (_Mist > 0.0)
+                {
+                    float3 misty = SkyCone(eye, radians(_MistBlur));
+                    float mist = 0;
+                    [unroll] for (int k = 0; k < 4; k++)
+                    {
+                        int qa = k >> 1, qb = k & 1;
+                        float trail = 0.25 * (tr[qa][qb] + tr[qa + 1][qb] + tr[qa][qb + 1] + tr[qa + 1][qb + 1]);
+                        mist += _Mist * (1.0 - saturate(trail / 0.5)) * (1.0 - cover[k]);
+                    }
+                    sum += misty * _Clear.rgb * mist;
+                    wet += mist;
                 }
                 return float4(sum, wet) * 0.25;
             }

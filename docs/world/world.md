@@ -210,7 +210,11 @@ lightmap, which shows a line wherever two pieces of a wall meet and at every cor
   its mean slope had reflected a fifth of the light), each lookup blurred over what its rays sweep.
   Measured against an 8 x 8 supersampled picture (`_Footprint`, `_Widen`, `_Layers`, `_Test` are that
   test's; 4 November 2026): the shimmer under half-pixel moves 0.78 to 1.11 of the reference's, the
-  reflection 0.81 to 0.94 of it, what goes through 7 to 14% too bright; 0.40 ms a pane at 1080p. Lightning reaches the drops as a second picture of the city lit by a flash of 1 (`_SkyFlash`),
+  reflection 0.81 to 0.94 of it, what goes through 7 to 14% too bright; 0.40 ms a pane at 1080p. What a drop's surface reflects goes back into the room and shows the room, a picture of its own (`_Room`,
+  `Reflection probe window room.cubemap`, the panes put away while it is taken). The dry glass has Heartfelt's
+  fog (`_Mist`, `_MistBlur`): the city behind it blurred, cleared by a drop and by his trail value, so a drop
+  stands out of it; the room's reflection alone hardly showed (a shallow drop reflects 2% but at its rim), and
+  drops 2.7 mm high (a puddle's height) blurred into the city from afar. Lightning reaches the drops as a second picture of the city lit by a flash of 1 (`_SkyFlash`),
   mixed by the flash. The outside's own light is a third of what it was (`Night`, 4 November 2026): City.shader's
   `_Night` takes what is under a quarter of blooming to a third and leaves what blooms (1 and above), the
   haze, the sky and the rain sheets are a third, and lightning lights each as before (`_HazeFlash`, `_CityGlow`). The material sets every number of its own: a value left from
