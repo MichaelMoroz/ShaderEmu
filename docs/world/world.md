@@ -194,8 +194,15 @@ lightmap, which shows a line wherever two pieces of a wall meet and at every cor
 ## The storm
 
 - The window's pane is Silent's Fake Glass with rain (`GlassMaterial` in `ShaderEmuWeather.cs`):
-  drops run down it, and what is behind a drop is bent out of the room's baked reflection probe,
-  so nothing grabs the screen.
+  drops run down it, and what is behind a drop is bent out of the window's own reflection probe
+  (a camera's picture of the city, `WindowProbe`), so nothing grabs the screen. Anything of the
+  room's on a pane makes its drops white paint: a lightmap, light probes, the room's probe. A pane
+  is held, not set once (`ShaderEmuGlass.cs`): every pane named `Window glass…` (Blender adds
+  `.001` in some build orders) is put back unlit by the room, anchored to that probe, and the probe
+  to its picture, when a model is imported, the scene opened or saved, scripts reloaded, a bake
+  done, every two seconds in the editor, and at play and at a build, where a pane still wrong fails
+  the build. "ShaderEmu/Check the windows' glass" says what it finds. Model copies, a bake of a
+  static pane and Unity's own bake of the probe had each undone it.
 - Rain is sheets of scrolling streaks at four distances (`Rain` in `world/city.py`,
   `Rain.shader`), and haze that hides the far towers (a vertex's alpha, 480 m).
 - The sky is `Sky.shader`: the panorama under a layer of cloud that drifts.
