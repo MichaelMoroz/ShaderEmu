@@ -2,8 +2,12 @@
  * nxlife: Conway's Game of Life on a grid that wraps at its edges, a generation at a time on the
  * worker cores: each takes a band of rows, works out its cells' next state from the last one and
  * writes their pixels straight into the window's buffer (as nxmon does: docs/system/nanox.md, "A
- * window's buffer written by its program"). A living cell is coloured by its age. The left button
- * paints cells, the right one clears them; a few patterns to start from.
+ * window's buffer written by its program"). A living cell is coloured by its age. The pictures are
+ * apart from the generations: every frame (FRAME_MS) the workers move each cell's fade a step toward
+ * what it is, so a cell born fades in through white and one that dies flares orange and fades out,
+ * and paint the cells whose colour changed. The left button sprays living cells at random round the
+ * pointer, again and again while it is held (one cell alone dies at the next generation; a spray
+ * leaves clumps that live), the right one clears a disc; a few patterns to start from.
  *
  * Keys: Space runs and pauses, N (or S) makes one generation, R fills the grid at random, C clears
  * it, G puts a glider gun, + and - set the speed, F10 the menus. A controller (ui_pad.h): A runs
@@ -44,6 +48,14 @@ static unsigned population;
 static int running, speed = 3;	/* speed: 0 slowest (2 a second) to 4 (as fast as it can) */
 static const int speed_ms[5] = { 500, 200, 80, 30, 0 };
 static unsigned seed = 1;
+/* a cell's fade, 0 (the dark of an empty cell) to 255 (its living colour): moved toward that by the workers every frame */
+static unsigned char *fade;
+#define FRAME_MS 33
+#define BIRTH_STEP 64		/* a cell born is there in four frames */
+#define DEATH_STEP 40		/* one that dies fades in seven */
+#define SPRAY_R 6		/* the spray's disc, in cells */
+#define SPRAY_MS 40		/* and how often it sprays while the button is held */
+static long long anim_until;	/* frames are drawn while running, or until then (a fade still going) */
 
 /* the window and its buffer */
 static GR_WINDOW_ID window;
@@ -98,31 +110,42 @@ colour_of(int age)
 	return (uint32_t)steps[k][0] << 16 | (uint32_t)steps[k][1] << 8 | steps[k][2];
 }
 
-/* ---- a generation: rows from..to-1 of the next grid from this one, and their pixels ---- */
+/* A colour a share f/255 of the way from the dark of an empty cell to `to`. */
+static uint32_t
+mix_dark(uint32_t to, int f)
+{
+	int r = to >> 16 & 255, g = to >> 8 & 255, b = to & 255;
 
-struct step { const unsigned char *from; unsigned char *to; uint32_t *pixels; int pixel_row; unsigned live[1]; };
+	r = 0x10 + (r - 0x10) * f / 255, g = 0x14 + (g - 0x14) * f / 255, b = 0x1c + (b - 0x1c) * f / 255;
+	return (uint32_t)r << 16 | (uint32_t)g << 8 | (uint32_t)b;
+}
+
+/* A cell's colour by its age (0: empty) and its fade: one coming to life brightens from the dark through
+ * white to its colour, one gone flares orange and fades to the dark. */
+static uint32_t
+cell_colour(int age, int f)
+{
+	if (!age)
+		return mix_dark(f > 160 ? 0xffa040 : 0xc84020, f);
+	if (f < 255 && age < 3) {
+		uint32_t c = colour_of(age);	/* (white over the newborn's yellow while it comes) */
+		int w = (255 - f) / 2, r = c >> 16 & 255, g = c >> 8 & 255, b = c & 255;
+
+		c = (uint32_t)(r + (255 - r) * w / 255) << 16 | (uint32_t)(g + (255 - g) * w / 255) << 8 | (uint32_t)(b + (255 - b) * w / 255);
+		return mix_dark(c, f);
+	}
+	return mix_dark(colour_of(age), f);
+}
+
+/* ---- a generation: rows from..to-1 of the next grid from this one ---- */
+
+struct step { const unsigned char *from; unsigned char *to; };
 static struct step job __attribute__((aligned(16)));
 
-static void
-paint_row(uint32_t *pixels, int pixel_row, const unsigned char *row, int r)
-{
-	uint32_t *p = pixels + (FY + r * CELL) * pixel_row + FX;
-	int c, k, y;
+/* ---- a frame: every cell's fade a step on, and the pixels of those whose colour moved ---- */
 
-	for (c = 0; c < COLS; c++) {
-		uint32_t colour = colour_of(row[c]);
-
-		for (k = 0; k < CELL - (CELL > 2); k++)
-			p[c * CELL + k] = colour;
-		if (CELL > 2)
-			p[c * CELL + CELL - 1] = 0x0c0f16;	/* (a line between cells) */
-	}
-	for (y = 1; y < CELL; y++)
-		memcpy(p + y * pixel_row, p, (size_t)(COLS * CELL) * 4);
-	if (CELL > 2)
-		for (c = 0; c < COLS * CELL; c++)
-			p[(CELL - 1) * pixel_row + c] = 0x0c0f16;
-}
+struct frame { const unsigned char *g; unsigned char *fade; uint32_t *pixels; int pixel_row, force, fresh; };
+static struct frame frame_job __attribute__((aligned(16)));
 
 static void
 step_rows(void *ctx, uint32_t from, uint32_t to)
@@ -142,8 +165,44 @@ step_rows(void *ctx, uint32_t from, uint32_t to)
 
 			out[c] = mid[c] ? (n == 2 || n == 3 ? (mid[c] < 255 ? mid[c] + 1 : 255) : 0) : n == 3;
 		}
-		if (s->pixels)
-			paint_row(s->pixels, s->pixel_row, out, (int)r);
+	}
+}
+
+/* Rows from..to-1 of cells: each fade a step toward its cell's state, and the cell painted when its
+ * colour may have changed (its fade moved, its age crossed a colour's step in the generation just
+ * made, or the whole field is asked for); `force` paints the lines between cells too. */
+static void
+frame_rows(void *ctx, uint32_t from, uint32_t to)
+{
+	const struct frame *s = ctx;
+	uint32_t r;
+	int c, k, y, inner = CELL - (CELL > 2);
+
+	for (r = from; r < to; r++) {
+		const unsigned char *row = s->g + r * STRIDE;
+		unsigned char *f = s->fade + r * STRIDE;
+		uint32_t *p = s->pixels + (FY + (int)r * CELL) * s->pixel_row + FX;
+
+		for (c = 0; c < COLS; c++) {
+			int age = row[c], was = f[c], now = age ? (was > 255 - BIRTH_STEP ? 255 : was + BIRTH_STEP) :
+				(was < DEATH_STEP ? 0 : was - DEATH_STEP);
+			uint32_t colour, *q = p + c * CELL;
+
+			if (now == was && !s->force && !(s->fresh && (age == 2 || age == 6 || age == 20 || age == 60)))
+				continue;
+			f[c] = (unsigned char)now;
+			colour = cell_colour(age, now);
+			for (y = 0; y < inner; y++, q += s->pixel_row)
+				for (k = 0; k < inner; k++)
+					q[k] = colour;
+		}
+		if (s->force && CELL > 2) {	/* (the lines between cells) */
+			for (y = 0; y < CELL - 1; y++)
+				for (c = 0; c < COLS; c++)
+					p[y * s->pixel_row + c * CELL + CELL - 1] = 0x0c0f16;
+			for (c = 0; c < COLS * CELL; c++)
+				p[(CELL - 1) * s->pixel_row + c] = 0x0c0f16;
+		}
 	}
 }
 
@@ -197,19 +256,56 @@ draw_field_server(void)
 	server_drew = 1;
 }
 
+/* The workers given back when another program asks for them: it has them, and this one goes on alone. */
+static void
+workers_check(void)
+{
+	if (workers > 0 && mcw_asked()) {
+		mcw_for_end();
+		mcw_close();
+		workers = 0;
+	}
+}
+
+static int fresh;	/* a generation was made since the last frame */
+
+/* A frame: the fades a step on and what changed painted, on the workers (`force`: every cell and line). */
+static void
+draw_frame(int force)
+{
+	mcw_for_opts o = { 0 };
+
+	if (!surface) {
+		if (force || fresh)
+			draw_field_server();
+		fresh = 0;
+		return;
+	}
+	settle();
+	workers_check();
+	frame_job.g = grid[now_grid], frame_job.fade = fade, frame_job.pixels = surface, frame_job.pixel_row = surface_row;
+	frame_job.force = force, frame_job.fresh = fresh;
+	fresh = 0;
+	o.grain = 2;
+	o.out_bytes = (uint32_t)STRIDE;
+	if (workers > 0)
+		mcw_for_opt((uint32_t)ROWS, frame_rows, &frame_job, &o);
+	else
+		frame_rows(&frame_job, 0, (uint32_t)ROWS);
+}
+
 /* The whole field drawn again from the grid as it is. */
 static void
 draw_field(void)
 {
-	int r;
+	draw_frame(1);
+}
 
-	if (!surface) {
-		draw_field_server();
-		return;
-	}
-	settle();
-	for (r = 0; r < ROWS; r++)
-		paint_row(surface, surface_row, grid[now_grid] + r * STRIDE, r);
+/* The grid changed by hand or by a pattern: frames go on until its fades are done. */
+static void
+changed(void)
+{
+	anim_until = now_ms() + 8 * FRAME_MS;
 }
 
 static void
@@ -218,14 +314,7 @@ next_generation(void)
 	mcw_for_opts o = { 0 };
 
 	job.from = grid[now_grid], job.to = grid[!now_grid];
-	job.pixels = surface, job.pixel_row = surface_row;
-	if (surface)
-		settle();
-	if (workers > 0 && mcw_asked()) {	/* (another program wants them: it has them) */
-		mcw_for_end();
-		mcw_close();
-		workers = 0;
-	}
+	workers_check();
 	o.grain = 2;
 	o.out_bytes = (uint32_t)STRIDE;
 	if (workers > 0)
@@ -234,8 +323,8 @@ next_generation(void)
 		step_rows(&job, 0, (uint32_t)ROWS);
 	now_grid = !now_grid;
 	generation++;
-	if (!surface)
-		draw_field_server();
+	fresh = 1;
+	changed();
 }
 
 /* ---- the grid's contents ---- */
@@ -245,6 +334,7 @@ clear_grid(void)
 {
 	memset(grid[now_grid], 0, (size_t)STRIDE * ROWS);
 	generation = 0;
+	changed();
 }
 
 static void
@@ -372,6 +462,8 @@ make_grid(void)
 		grid[k] = aligned_alloc(16, (size_t)STRIDE * ROWS);
 		memset(grid[k], 0, (size_t)STRIDE * ROWS);
 	}
+	fade = aligned_alloc(16, (size_t)STRIDE * ROWS);
+	memset(fade, 0, (size_t)STRIDE * ROWS);
 	left_of = malloc(sizeof *left_of * (size_t)COLS);
 	right_of = malloc(sizeof *right_of * (size_t)COLS);
 	for (c = 0; c < COLS; c++)
@@ -409,27 +501,39 @@ locate(void)
 	}
 	mcw_touch(grid[0], (unsigned)(STRIDE * ROWS));
 	mcw_touch(grid[1], (unsigned)(STRIDE * ROWS));
+	mcw_touch(fade, (unsigned)(STRIDE * ROWS));
 	server_drew = 1;
 }
 
 /* ---- input ---- */
 
+static int paint_x, paint_y;	/* where the pointer is while a button is held */
+static long long sprayed_at;
+
+/* The left button: living cells sprayed at random in a disc round the pointer (a third of it each
+ * time). The right one: the disc cleared. */
 static void
 paint_at(int x, int y)
 {
-	int c = (x - FX) / CELL, r = (y - FY) / CELL;
-	unsigned char *cell;
+	int c0 = (x - FX) / CELL, r0 = (y - FY) / CELL, dr, dc, k;
 
-	if (x < FX || y < FY || c >= COLS || r >= ROWS)
+	paint_x = x, paint_y = y;
+	sprayed_at = now_ms();
+	if (x < FX || y < FY || c0 >= COLS || r0 >= ROWS)
 		return;
-	cell = &grid[now_grid][r * STRIDE + c];
-	if ((painting == 1) == (*cell != 0))
-		return;
-	*cell = painting == 1 ? 1 : 0;
-	if (surface) {
-		settle();
-		paint_row(surface, surface_row, grid[now_grid] + r * STRIDE, r);
+	if (painting == 2) {
+		for (dr = -SPRAY_R; dr <= SPRAY_R; dr++)
+			for (dc = -SPRAY_R; dc <= SPRAY_R; dc++)
+				if (dr * dr + dc * dc <= SPRAY_R * SPRAY_R)
+					grid[now_grid][((r0 + dr + ROWS) % ROWS) * STRIDE + (c0 + dc + COLS) % COLS] = 0;
 	} else
+		for (k = 0; k < SPRAY_R * SPRAY_R * 6 / 5; k++) {	/* (about a third of the disc a time: soup that lives) */
+			dr = (int)(roll() % (2 * SPRAY_R + 1)) - SPRAY_R, dc = (int)(roll() % (2 * SPRAY_R + 1)) - SPRAY_R;
+			if (dr * dr + dc * dc <= SPRAY_R * SPRAY_R)
+				grid[now_grid][((r0 + dr + ROWS) % ROWS) * STRIDE + (c0 + dc + COLS) % COLS] = 1;
+		}
+	changed();
+	if (!surface)
 		draw_field_server();
 }
 
@@ -463,12 +567,12 @@ command(int id)
 	case C_EXIT: GrClose(); exit(0);
 	case C_KEYS:
 		ui_ask("Keys", "Space: run or pause     N: one generation\nR: random     C: clear     G: a glider gun\n"
-			"+ and -: faster and slower     F10: the menus\nLeft button: paint cells     Right button: clear them", ok, 1, others);
+			"+ and -: faster and slower     F10: the menus\nLeft button: spray living cells     Right button: clear them", ok, 1, others);
 		GrSetFocus(window);
 		break;
 	case C_ABOUT:
 		ui_ask("About Life", "Conway's Game of Life: a cell with two or three\nliving neighbours lives on, an empty one with three\n"
-			"is born. Each generation is made on the worker cores.", ok, 1, others);
+			"is born. Each generation, and each frame of the cells\nfading in and out, is made on the worker cores.", ok, 1, others);
 		GrSetFocus(window);
 		break;
 	}
@@ -529,7 +633,7 @@ main(void)
 {
 	GR_EVENT event = { 0 };
 	const char *a;
-	long long next_at = 0, said_at = 0, status_at = 0;
+	long long next_at = 0, said_at = 0, status_at = 0, frame_at = 0;
 	int id;
 
 	if (GrOpen() < 0)
@@ -578,8 +682,27 @@ main(void)
 				said_at = now + 1000;
 			}
 		}
+		/* a frame every FRAME_MS while anything may still be fading */
+		if ((running || now < anim_until) && now >= frame_at) {
+			draw_frame(0);
+			frame_at = now + FRAME_MS;
+		}
+		/* a held left button sprays on where the pointer rests */
+		if (painting == 1 && now - sprayed_at >= SPRAY_MS)
+			paint_at(paint_x, paint_y);
 		if (running)
 			wait = next_at > now ? (int)(next_at - now) : 1;
+		if (running || now < anim_until) {
+			int to_frame = frame_at > now ? (int)(frame_at - now) : 1;
+
+			wait = wait < 0 || to_frame < wait ? to_frame : wait;
+		}
+		if (painting == 1) {
+			int to_spray = (int)(sprayed_at + SPRAY_MS - now);
+
+			to_spray = to_spray < 1 ? 1 : to_spray;
+			wait = wait < 0 || to_spray < wait ? to_spray : wait;
+		}
 		wait = ui_pad_wait(&pad, wait);
 		GrFlush();
 		if (wait > 0 || !running) {
