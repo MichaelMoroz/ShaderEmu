@@ -28,25 +28,31 @@ char perf_host_name[52];
 
 static uint64_t host_ns(void)
 {
+#ifdef __riscv
 	uint32_t lo, hi;
 
 	__asm__ volatile("csrr %0, 0x8c0" : "=r"(lo));
 	__asm__ volatile("csrr %0, 0x8c1" : "=r"(hi));
 	return (uint64_t)hi << 32 | lo;
+#else
+	return 0;	/* (natively the clock is the build computer's own: perf_host.c) */
+#endif
 }
 
 void perf_clock_init(void)
 {
 	const char *c = getenv("NXPERF_CLOCK");
-	uint32_t w;
 	int k;
 
 	perf_host_clock = !(c && !strcmp(c, "guest")) && host_ns() != 0;
 	if (!perf_host_clock) return;
+#ifdef __riscv
 	/* the host's processor, CPUID's brand string: 0x8c4 to 0x8cf, four bytes each */
+	uint32_t w;
 #define BRAND(k) __asm__ volatile("csrr %0, %1" : "=r"(w) : "i"(0x8c4 + k)); memcpy(perf_host_name + 4 * k, &w, 4);
 	BRAND(0) BRAND(1) BRAND(2) BRAND(3) BRAND(4) BRAND(5) BRAND(6) BRAND(7) BRAND(8) BRAND(9) BRAND(10) BRAND(11)
 #undef BRAND
+#endif
 	perf_host_name[48] = 0;
 	for (k = 0; perf_host_name[k] == ' '; k++) continue;
 	memmove(perf_host_name, perf_host_name + k, strlen(perf_host_name + k) + 1);
@@ -99,6 +105,36 @@ void perf_check(struct perf_run *r, int ok, const char *format, ...)
 	vsnprintf(r->note, sizeof r->note, format, a);
 	va_end(a);
 	r->ok = ok ? 1 : 0;
+}
+
+/* A test run again until its timed parts are PERF_MIN_NS together, its value the runs' work over their time (a rate:
+ * the work a run is its value times its time; a time an operation: its time over its value). Most tests on the
+ * machine run once (they are sized for a few hundred milliseconds of the card's), as their reference values were
+ * made. The field on the card is 9 ms, inside one Unity frame, whose guest clock had not moved: 0 ns, and the lanes
+ * part 296 million. A run that fails or is not run is the result; one that times nothing (r->ns 0) is run once. */
+int perf_most_runs = 64;
+
+void perf_run_test(int test, struct perf_run *r)
+{
+	const struct perf_test *t = &perf_tests[test];
+	int lower = strncmp(t->unit, "ns/", 3) == 0;
+	float work = 0, ns = 0;
+	uint64_t timed = 0;
+
+	r->runs = 0;
+	do {
+		struct perf_run one;
+
+		memset(&one, 0, sizeof one);
+		one.ok = 1;
+		t->run(&one);
+		one.runs = r->runs + 1;
+		*r = one;
+		if (one.ok != 1 || !one.ns || one.value <= 0) return;
+		timed += one.ns, ns += (float)one.ns;
+		work += lower ? (float)one.ns / one.value : one.value * (float)one.ns;
+	} while (timed < PERF_MIN_NS && r->runs < perf_most_runs);
+	if (r->runs > 1 && work > 0) r->value = lower ? ns / work : work / ns;
 }
 
 /* memory kept between tests: slot k, at least `bytes`, on 16 bytes */

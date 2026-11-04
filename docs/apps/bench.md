@@ -255,22 +255,55 @@ above, so there every part and the whole are 1,000 (a run of the same binary und
 The score page has the whole in large type, a bar for each part (the reference's 1,000 a grey mark), the
 date and the machine, whether every check held, the last run's score and the best (with their dates), and
 the reference machines' scores beside this run's in a table. The machine is told by the field: it has
-lanes on the card's lean tick only, so "the card (N lanes in the field)" or "no lanes: rvc_cpu or a tick
-without them", with the workers. A run of every test keeps its score in the registry as `nxperf.score`, and
+lanes on the card's lean tick only, so "the card, N lanes in the field" or "no lanes, rvc_cpu or a tick
+without them", with the workers, each on a line of its own; on `rvc_cpu` by the host's clock, the processor
+(`on AMD Ryzen 9 9950X3D`, CPUID's brand string without its "16-Core Processor").
+
+The bars are logarithmic, from 10 to 10 million (`bar_width`): the card model's 1,000 is a third of the way,
+`rvc_cpu`'s tens of thousands half, a native part's millions near the end. Bars by the largest part (before 4
+November 2026) left every other part 0 pixels when one was large, as the world's lanes were. The table's
+columns are as wide as their widest text, its names say the processor (`rvc_cpu, 5900X, 1 thread`), and a
+machine with no values yet (the world on an RTX 5090, until a run with the repeats is written into its column) is
+not shown. The window is 700 x 540.
+
+### A test run until it is timed
+
+A test runs again until its timed parts are 200 ms together (`perf_run_test`, `PERF_MIN_NS`), 64 runs at most
+on the machine and 4,096 natively (`perf_most_runs`: each run makes its data again, which under `rvc_cpu` is
+most of the time; natively 64 runs of a 40 us test were 9% slow, warming up), and its value is the runs' work over
+their time. The tests are sized for a few hundred milliseconds of the card's time, so on the card and under the
+model most run once, as their reference values were made. In the world the guest's clock moves once a Unity
+frame: the field's 9 ms was inside one frame and timed 0 ns (1 ns, `perf_end`), 15,872 indices in a nanosecond,
+and the lanes part was 296,317,824 (4 November 2026, the world on an RTX 5090). `--cli` says how many runs a
+result took. A run of every test keeps its score in the registry as `nxperf.score`, and
 as `nxperf.best` when it is the highest yet: `SCORE PARTS... TIME WORKERS LANES`.
 
 ### Reference machines
 
 `perf_machines` and the values table in `perf_score.c`: each machine's results of the same tests, scored by
-the same arithmetic, 3 November 2026.
+the same arithmetic, 3 and 4 November 2026.
 
 | Machine | Score | single core | FPU | memory | multicore | lanes | numerical | media | GPU |
 |---|---|---|---|---|---|---|---|---|---|
 | the card model (reference) | 1,000 | 1,000 | 1,000 | 1,000 | 1,000 | 1,000 | 1,000 | 1,000 | 1,000 |
 | 486DX-33 (1990, estimated) | 761 | 1,571 | 327 | 1,585 | 517 | - | 780 | 588 | - |
-| RTX 3090 (the card, 255 workers) | 1,175 | 1,064 | 762 | 649 | 1,324 | 8,904 | 858 | 990 | 691 |
-| rvc_cpu, one thread (Ryzen 9 5900X, the host's clock) | 23,109 | 55,021 | 28,896 | 42,979 | 19,093 | 3,928 | 28,315 | 8,501 | 65,921 |
-| rvc_cpu, 24 threads (the same) | 33,244 | 55,959 | 29,833 | 45,328 | 36,687 | 12,913 | 33,478 | 18,837 | 65,992 |
+| RTX 3090, harness (the card, 255 workers) | 1,175 | 1,064 | 762 | 649 | 1,324 | 8,904 | 858 | 990 | 691 |
+| rvc_cpu, 5900X, 1 thread (the host's clock) | 23,109 | 55,021 | 28,896 | 42,979 | 19,093 | 3,928 | 28,315 | 8,501 | 65,921 |
+| rvc_cpu, 5900X, 24 threads (the same) | 33,244 | 55,959 | 29,833 | 45,328 | 36,687 | 12,913 | 33,478 | 18,837 | 65,992 |
+| rvc_cpu, 9950X3D, 1 thread (this PC, the host's clock) | 36,346 | 85,304 | 42,024 | 72,473 | 28,934 | 5,993 | 42,705 | 12,887 | 122,845 |
+| rvc_cpu, 9950X3D, 16 threads (the same) | 52,678 | 85,529 | 42,248 | 76,256 | 59,346 | 19,293 | 51,151 | 29,911 | 122,838 |
+| 9950X3D, native (this PC, no workers, lanes or GPU) | 2,155,644 | 1,717,048 | 1,240,884 | 2,782,002 | 1,828,829 | - | 4,409,307 | 2,099,189 | - |
+
+- **rvc_cpu, 9950X3D**: this PC, an AMD Ryzen 9 9950X3D, `RVC_THREADS=1` and `=16` (half its 32 threads),
+  `tools/test_all.py nxperf`, 4 November 2026, with the repeats ("A test run until it is timed"): 1.57 times
+  the 5900X on one thread (`int-alu` 455 Mop/s), 1.58 times its 24 threads on 16.
+- **9950X3D, native**: the tests compiled for the build computer, an AMD Ryzen 9 9950X3D, by WSL's gcc -O2 and
+  timed by its own clock, one thread (`linux/bench/perf_host.c`, `$WORK/src/bench-build/nxperf-host --table`,
+  4,096 runs at most a test). The workers' and lanes' tests and the GPU's are not run there: the machine's
+  workers are not the host's threads (`perf_host_mcw.c` only links), so multicore is `mc-0` alone and media
+  `inflate` alone, and the whole is of six parts. A second run was within 3%. Against the machine on the card
+  the host is about 2,000 times as fast; against rvc_cpu on one thread of a 5900X, 31 times in a single core's
+  integer tests.
 
 - **The card**: `rvc_harness --d3d11` through `tools\gpu_queue.ps1` on the RTX 3090, `nano-X -p & sleep 2;
   nxperf --cli`, 255 workers, the field 3,968 lanes, every check held. Against the model: the first core 1 to

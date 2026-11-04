@@ -31,3 +31,13 @@ riscv32-linux-nm -n "$BUILD/nxperf" > "$WORK/src/nxperf.nm"
 riscv32-linux-strip -o "$OUT/usr/bin/nxperf" "$BUILD/nxperf"
 echo "Utilities/Benchmark=nxperf" > "$OUT/usr/share/nxapps.22-bench"
 ls -l "$OUT/usr/bin/nxperf"
+# the same tests on this computer, natively (perf_host.c; docs/apps/bench.md, "The host natively"): libmedia's host
+# objects and mcw_host.c from linux/libmedia/build.sh, the machine's own calls of the workers stood in by perf_host_mcw.c
+HOSTMEDIA=$WORK/src/libmedia/host
+if ls "$HOSTMEDIA"/*.o > /dev/null 2>&1; then
+    HINC="-I$REPO/programs/mc -I$REPO/linux/libmedia -I$WORK/src/libmedia -I$HERE"
+    gcc -O2 -fsingle-precision-constant -fno-math-errno -fno-tree-loop-distribute-patterns -w $HINC \
+        "$HERE/perf_host.c" "$HERE/perf_tests.c" "$HERE/perf_score.c" "$HERE/perf_host_mcw.c" \
+        "$REPO/linux/libmedia/test/mcw_host.c" "$HOSTMEDIA"/*.o -lpthread -lm -o "$BUILD/nxperf-host"
+    ls -l "$BUILD/nxperf-host"
+fi
