@@ -720,6 +720,49 @@ compress's room grows as it writes (a step writes at most 128 bytes; the bytes a
 when the file is closed (they held 6.4 MB of the game's memory after the autosave). The walk then plays on to its
 death and the autosave's load.
 
+### The players on workers (4 November 2026, work in progress)
+
+`shared/qcommon/se_slot.h`: eight job slots, each a stack of its own (`SE_Slot()` tells a slot by its stack).
+
+- **The players made ahead** (`cg_ents.cpp`, `CG_SE_PlayersAhead`). Before the entity loop, every `ET_PLAYER` entity's
+  `CG_AddCEntity` runs on a slot.
+  - What it asks of the engine is answered where it runs if it only reads (traces, point contents, marks, `LerpTag`,
+    lighting, bolts). It is recorded if it adds to the scene (`cl_cgame.cpp`, `SE_RecBegin`, `SE_RecReplay`), and the
+    loop replays the recordings in the entities' order.
+  - What cannot be done there ends the job with `SE_SlotAbort`: an allocation, a print, an effect, a spawn, a random
+    number of the game's. The entity is then put back from its copies and made in its turn.
+  - A player draws random numbers from a state of its own (`cg_rand.c`, `SE_CGRandFor`).
+  - Per-slot state: the trace memo, the marks' counts, `calcedMp`, the shadows' cache, `worldMatrix`, and
+    `CM_PointContents`'s leaf cache.
+  - `JK2_PLAYERS=core` is the way before, `=inline` makes them ahead on core 0, `JK2_PLAYERS_LOG=N` counts them.
+  - In the walk, 4,830 of 4,840 players were made ahead.
+- **The bones at the give** (`SE_RSBones`, `tr_ghoul2.cpp`) are evaluated on the slots, a bone cache always by the same
+  slot. `JK2_RSBONES=core` is the way before.
+- **The front end split** (`tr_main.cpp`, `R_SE_RenderViewSplit`, `RC_SE_VIEW`, `R_SE_FrontView`). Core 0 makes a
+  view's Ghoul2 surfaces; the drawing's worker makes the rest of the view and draws it.
+  - A view that may see the level's portal surface is made whole as before (`R_SE_PortalMaybeSeen`).
+  - **Off by default** (`JK2_FRONT=worker` turns it on). `JK2_FRONT=check` said 1,005 of 1,200 views' sorted lists were
+    not as the view made whole: not yet explained (the check makes each view twice).
+- **The server**:
+  - `SV_AreaEntities_r` tests the bounds kept in `svEntity_t` at the link. `JK2_AREA_CHECK=1` printed no difference in
+    one walk.
+  - The stealth loop skips empty words of the in-use bits.
+- **Measured** (the walk, frames 1,500 to 1,700, calibrated, from a save):
+
+  | Change | Core 0 a frame | Passes a frame | fps |
+  |---|---|---|---|
+  | Before | 3.01 million | 467 | 1.45 |
+  | Players made ahead | 2.11 million | 398 | 1.71 |
+  | And the bones on the slots | 1.89 million | 392 | 1.74 |
+  | And the front end split | 1.66 million | 407 | 1.69 |
+
+  With the front end split, the drawing's worker (2.15 million a frame) bounds the frame.
+- **Checked**: `RVC_RACES` with `RVC_RACES_NEAR=4` said 0 undone with the players and the bones.
+- **Not checked**: the sums (`host_sum.sh`, `test_all.py jk2 jk2-sums`), captures, the walk with the area and stealth
+  changes.
+- **Left for 5 frames a second**: the back end shared out to several workers, and the server overlapped with the client
+  through copies of the entities and of their Ghoul2 instances.
+
 ### What bounds it
 
 After both rounds (3 November 2026, calibrated, `game_par.py`): the walk 655 passes a frame (1.1 frames a second), the

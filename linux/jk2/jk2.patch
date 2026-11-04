@@ -1,8 +1,200 @@
 diff --git a/code/client/cl_cgame.cpp b/code/client/cl_cgame.cpp
-index b9d7b6fc..131778c1 100644
+index b9d7b6fc..ba92b780 100644
 --- a/code/client/cl_cgame.cpp
 +++ b/code/client/cl_cgame.cpp
-@@ -861,6 +861,23 @@ intptr_t CL_CgameSystemCalls( intptr_t *args ) {
+@@ -422,8 +422,14 @@ CL_ShutdonwCGame
+ 
+ ====================
+ */
++#ifdef SHADEREMU
++extern "C" void SE_NamesForget( void );
++#endif
+ void CL_ShutdownCGame( void ) {
+ 	cls.cgameStarted = qfalse;
++#ifdef SHADEREMU
++	SE_NamesForget();	// (the names registered are the cgame's that was)
++#endif
+ 
+ 	if ( !cgvm.entryPoint) {
+ 		return;
+@@ -808,7 +814,176 @@ The cgame module is making a system call
+ void CM_SnapPVS(vec3_t origin,byte *buffer);
+ extern void		Menu_Paint(menuDef_t *menu, qboolean forcePaint);
+ extern menuDef_t *Menus_FindByName(const char *p);
++#ifdef SHADEREMU
++#include "../../shared/qcommon/se_slot.h"
++// ---- players made ahead (se_slot.h; docs/games/jk2.md, "The players on workers")
++// What a player made ahead asks of the engine: a call that only reads is made where it is asked; one that adds to the
++// scene or the sound is recorded with what its pointers point at, and made by the first core when that player's turn
++// comes (SE_RecReplay); a name to register is looked up in what the first core registered (and registered again at the
++// replay, so that what registering touches is touched in its turn); anything else ends the job (SE_WHY_CALL).
++struct seRec_t { unsigned char *start, *at, *end; int unused; } __attribute__(( aligned( 16 ) ));
++static seRec_t se_rec[SE_SLOTS + 1];
++struct seRecHead_t { int op, size, nargs, ptrs; intptr_t args[6]; int lens[6]; } __attribute__(( aligned( 16 ) ));
++extern "C" void SE_RecBegin( void *buf, int size )
++{
++	seRec_t *r = &se_rec[SE_Slot()];
++	r->start = r->at = (unsigned char *)buf, r->end = r->start + size;
++}
++extern "C" int SE_RecEnd( void )
++{
++	seRec_t *r = &se_rec[SE_Slot()];
++	int n = (int)( r->at - r->start );
++	r->start = r->at = r->end = NULL;
++	return n;
++}
++// (op: the call as the game asked it, before CL_ConvertJK2SysCall; args 1 to n, those in `ptrs` pointers to lens' bytes)
++static void se_record( intptr_t op, const intptr_t *args, int n, int ptrs, const int *lens )
++{
++	seRec_t *r = &se_rec[SE_Slot()];
++	int size = (int)sizeof( seRecHead_t );
++	for ( int i = 0; i < n; i++ )
++		if ( ( ptrs >> i & 1 ) && args[1 + i] )
++			size += ( lens[i] + 15 ) & ~15;
++	if ( !r->at || r->at + size > r->end )
++		SE_SlotAbort( SE_WHY_FULL );
++	seRecHead_t *h = (seRecHead_t *)r->at;
++	h->op = (int)op, h->size = size, h->nargs = n, h->ptrs = ptrs;
++	unsigned char *d = r->at + sizeof( seRecHead_t );
++	for ( int i = 0; i < n; i++ ) {
++		h->args[i] = args[1 + i];
++		h->lens[i] = 0;
++		if ( ( ptrs >> i & 1 ) && args[1 + i] ) {
++			h->lens[i] = lens[i];
++			memcpy( d, (const void *)args[1 + i], lens[i] );
++			d += ( lens[i] + 15 ) & ~15;
++		}
++	}
++	r->at += size;
++}
++intptr_t CL_CgameSystemCalls( intptr_t *args );
++extern "C" void SE_RecReplay( const void *buf, int bytes )
++{
++	const unsigned char *at = (const unsigned char *)buf, *end = at + bytes;
++	while ( at < end ) {
++		const seRecHead_t *h = (const seRecHead_t *)at;
++		intptr_t a[16] = { h->op };
++		const unsigned char *d = at + sizeof( seRecHead_t );
++		for ( int i = 0; i < h->nargs; i++ ) {
++			a[1 + i] = h->args[i];
++			if ( ( h->ptrs >> i & 1 ) && h->args[i] ) {
++				a[1 + i] = (intptr_t)d;
++				d += ( h->lens[i] + 15 ) & ~15;
++			}
++		}
++		CL_CgameSystemCalls( a );
++		at += h->size;
++	}
++}
++// The names the first core registered (sounds, shaders, skins): a player made ahead asks for them by name every frame
++#define SE_NAMES 1024
++struct seName_t { uint32_t hash; int op; intptr_t handle; char name[52]; } __attribute__(( aligned( 16 ) ));
++static seName_t se_names[SE_NAMES];
++static uint32_t se_name_hash( int op, const char *name )
++{
++	uint32_t h = 2166136261u ^ (uint32_t)op;
++	for ( ; *name; name++ )
++		h = ( h ^ (unsigned char)*name ) * 16777619u;
++	return h | 1;
++}
++static void se_name_keep( int op, const char *name, intptr_t handle )
++{
++	if ( strlen( name ) >= sizeof( se_names[0].name ) )
++		return;
++	const uint32_t h = se_name_hash( op, name );
++	for ( int k = 0; k < 8; k++ ) {
++		seName_t *e = &se_names[( h + k ) & ( SE_NAMES - 1 )];
++		if ( !e->hash || ( e->hash == h && e->op == op && !strcmp( e->name, name ) ) ) {
++			e->op = op, e->handle = handle;
++			strcpy( e->name, name );
++			e->hash = h;
++			return;
++		}
++	}
++}
++static bool se_name_find( int op, const char *name, intptr_t *handle )
++{
++	const uint32_t h = se_name_hash( op, name );
++	for ( int k = 0; k < 8; k++ ) {
++		const seName_t *e = &se_names[( h + k ) & ( SE_NAMES - 1 )];
++		if ( !e->hash )
++			return false;
++		if ( e->hash == h && e->op == op && !strcmp( e->name, name ) ) {
++			*handle = e->handle;
++			return true;
++		}
++	}
++	return false;
++}
++extern "C" void SE_NamesForget( void ) { memset( se_names, 0, sizeof se_names ); }
++// true: made here (recorded, looked up) with *made its answer; false: an ordinary call made as always
++static bool se_ahead_call( intptr_t *args, intptr_t *made )
++{
++	intptr_t op = args[0];
++#ifdef JK2_MODE
++	op = (intptr_t)CL_ConvertJK2SysCall( (cgameJK2Import_t)args[0] );
++#endif
++	*made = 0;
++	switch ( op ) {
++	case CG_CM_NUMINLINEMODELS: case CG_CM_INLINEMODEL: case CG_CM_POINTCONTENTS: case CG_CM_TRANSFORMEDPOINTCONTENTS:
++	case CG_CM_BOXTRACE: case CG_CM_TRANSFORMEDBOXTRACE: case CG_CM_MARKFRAGMENTS: case CG_R_LERPTAG: case CG_R_GETLIGHTING:
++	case CG_R_MODELBOUNDS: case CG_R_INPVS: case CG_G2_SETMODELS: case CG_CM_TEMPBOXMODEL:
++		return false;	// (only read; the box model ends the job in CM_TempBoxModel)
++	case CG_R_ADDREFENTITYTOSCENE: {
++		const int lens[1] = { (int)sizeof( refEntity_t ) };
++		se_record( args[0], args, 1, 1, lens );
++		return true;
++	}
++	case CG_R_ADDPOLYTOSCENE: {
++		const int lens[3] = { 0, 0, (int)( args[2] * sizeof( polyVert_t ) ) };
++		se_record( args[0], args, 3, 4, lens );
++		return true;
++	}
++	case CG_R_ADDLIGHTTOSCENE: {
++		const int lens[5] = { 12 };
++		se_record( args[0], args, 5, 1, lens );
++		return true;
++	}
++	case CG_S_STARTSOUND: {
++		const int lens[4] = { 12 };
++		se_record( args[0], args, 4, 1, lens );
++		return true;
++	}
++	case CG_S_ADDLOOPINGSOUND: {
++		const int lens[5] = { 0, 12, 12 };
++		se_record( args[0], args, 5, 6, lens );
++		return true;
++	}
++	case CG_S_UPDATEENTITYPOSITION: {
++		const int lens[2] = { 0, 12 };
++		se_record( args[0], args, 2, 2, lens );
++		return true;
++	}
++	case CG_S_REGISTERSOUND: case CG_R_REGISTERSHADER: case CG_R_REGISTERSHADERNOMIP: case CG_R_REGISTERSKIN: {
++		const char *name = (const char *)args[1];
++		if ( !name || !se_name_find( (int)op, name, made ) )
++			SE_SlotAbort( SE_WHY_LOOKUP );
++		const int lens[1] = { (int)strlen( name ) + 1 };
++		se_record( args[0], args, 1, 1, lens );	// (registered again in its turn)
++		return true;
++	}
++	default:
++		SE_SlotAbort( SE_WHY_CALL );
++	}
++}
++#endif
+ intptr_t CL_CgameSystemCalls( intptr_t *args ) {
++#ifdef SHADEREMU
++	if ( SE_Recording() ) {
++		intptr_t made;
++		if ( se_ahead_call( args, &made ) )
++			return made;
++	}
++#endif
+ #ifdef JK2_MODE
+ 	args[0] = (intptr_t)CL_ConvertJK2SysCall((cgameJK2Import_t)args[0]);
+ #endif
+@@ -861,6 +1036,23 @@ intptr_t CL_CgameSystemCalls( intptr_t *args ) {
  	case CG_UPDATESCREEN:
  		// this is used during lengthy level loading, so pump message loop
  		Com_EventLoop();	// FIXME: if a server restarts here, BAD THINGS HAPPEN!
@@ -26,6 +218,53 @@ index b9d7b6fc..131778c1 100644
  		SCR_UpdateScreen();
  		return 0;
  	case CG_RMG_INIT:
+@@ -951,6 +1143,13 @@ intptr_t CL_CgameSystemCalls( intptr_t *args ) {
+ 		S_Respatialize( args[1], (const float *) VMA(2), (float(*)[3]) VMA(3), (qboolean)(args[4] != 0) );
+ 		return 0;
+ 	case CG_S_REGISTERSOUND:
++#ifdef SHADEREMU
++		{
++			intptr_t h = S_RegisterSound( (const char *) VMA(1) );
++			se_name_keep( CG_S_REGISTERSOUND, (const char *) VMA(1), h );
++			return h;
++		}
++#endif
+ 		return S_RegisterSound( (const char *) VMA(1) );
+ 	case CG_S_STARTBACKGROUNDTRACK:
+ 		S_StartBackgroundTrack( (const char *) VMA(1), (const char *) VMA(2), (qboolean)(args[3] != 0) );
+@@ -962,12 +1161,22 @@ intptr_t CL_CgameSystemCalls( intptr_t *args ) {
+ 		return 0;
+ 	case CG_R_REGISTERMODEL:
+ 		return re.RegisterModel( (const char *) VMA(1) );
++#ifdef SHADEREMU
++	case CG_R_REGISTERSKIN: case CG_R_REGISTERSHADER: case CG_R_REGISTERSHADERNOMIP: {
++		const char *name = (const char *) VMA(1);
++		intptr_t h = args[0] == CG_R_REGISTERSKIN ? re.RegisterSkin( name ) : args[0] == CG_R_REGISTERSHADER ?
++			re.RegisterShader( name ) : re.RegisterShaderNoMip( name );
++		se_name_keep( (int)args[0], name, h );
++		return h;
++	}
++#else
+ 	case CG_R_REGISTERSKIN:
+ 		return re.RegisterSkin( (const char *) VMA(1) );
+ 	case CG_R_REGISTERSHADER:
+ 		return re.RegisterShader( (const char *) VMA(1) );
+ 	case CG_R_REGISTERSHADERNOMIP:
+ 		return re.RegisterShaderNoMip( (const char *) VMA(1) );
++#endif
+ 	case CG_R_REGISTERFONT:
+ 		return re.RegisterFont( (const char *) VMA(1) );
+ 	case CG_R_FONTSTRLENPIXELS:
+@@ -1393,6 +1602,9 @@ extern qboolean Sys_LowPhysicalMemory();
+ void CL_InitCGame( void ) {
+ 	const char			*info;
+ 	const char			*mapname;
++#ifdef SHADEREMU
++	SE_NamesForget();
++#endif
+ 	//int		t1, t2;
+ 
+ 	//t1 = Sys_Milliseconds();
 diff --git a/code/client/cl_cin.cpp b/code/client/cl_cin.cpp
 index 7cf2db8c..e8dc8ba1 100644
 --- a/code/client/cl_cin.cpp
@@ -1205,7 +1444,7 @@ index ff83a002..335fcfe9 100644
  	memset(pMP3Stream,0,sizeof(*pMP3Stream));
  
 diff --git a/code/qcommon/cm_load.cpp b/code/qcommon/cm_load.cpp
-index 5407ffb0..804d0124 100644
+index 5407ffb0..62551e3a 100644
 --- a/code/qcommon/cm_load.cpp
 +++ b/code/qcommon/cm_load.cpp
 @@ -639,6 +639,11 @@ qboolean CM_DeleteCachedMap(qboolean bGuaranteedOkToDelete)
@@ -1242,6 +1481,91 @@ index 5407ffb0..804d0124 100644
  
  		TotalSubModels += cm.numSubModels;
  
+@@ -835,6 +848,10 @@ static void CM_LoadMap_Actual( const char *name, qboolean clientload, int *check
+ //
+ void CM_LoadMap( const char *name, qboolean clientload, int *checksum, qboolean subBSP )
+ {
++#ifdef SHADEREMU
++	extern void CM_SE_TraceMemoClear( void );
++	CM_SE_TraceMemoClear();	// (the traces kept are of the map that was: cm_trace.cpp)
++#endif
+ 	if (subBSP)
+ 	{
+ 		Com_DPrintf("^5CM_LoadMap->CMLoadSubBSP(%s, %i)\n", name, qfalse);
+@@ -880,6 +897,10 @@ CM_ClearMap
+ */
+ void CM_ClearMap( void )
+ {
++#ifdef SHADEREMU
++	extern void CM_SE_TraceMemoClear( void );
++	CM_SE_TraceMemoClear();	// (the traces kept are of the map that was: cm_trace.cpp)
++#endif
+ 	int		i;
+ 
+ 	CM_OrOfAllContentsFlagsInMap = CONTENTS_BODY;
+@@ -1061,6 +1082,9 @@ BSP trees instead of being compared directly.
+ ===================
+ */
+ clipHandle_t CM_TempBoxModel( const vec3_t mins, const vec3_t maxs) {//, const int contents ) {
++#ifdef SHADEREMU
++	SE_NOT_AHEAD( SE_WHY_BOX );	// (one box model, its planes this call's: a player made ahead does not make it)
++#endif
+ 	box_planes[0].dist = maxs[0];
+ 	box_planes[1].dist = -maxs[0];
+ 	box_planes[2].dist = mins[0];
+diff --git a/code/qcommon/cm_local.h b/code/qcommon/cm_local.h
+index cfd9b106..1cdccaa8 100644
+--- a/code/qcommon/cm_local.h
++++ b/code/qcommon/cm_local.h
+@@ -197,9 +197,48 @@ typedef struct traceWork_s {
+ 	bool			startout;
+ 	bool			getout;
+ 
++#ifdef SHADEREMU
++	int			seSlot;		// the job slot tracing (se_slot.h): 0 marks the brushes' and patches' checkcount, a slot its own
++#endif
+ 	trace_t		trace;		// returned from trace call
+ 	// make sure nothing goes under here for Ghoul2 collision purposes
+ } traceWork_t;
++#ifdef SHADEREMU
++#include "../../shared/qcommon/se_slot.h"
++// A slot's marks of what its trace has seen (cm_trace.cpp): the world's brushes, then its surfaces, one array a slot; the
++// slot's count is its traces'. Made by the first core (CM_SE_Marks), as the world's sizes are; a slot finding none ends.
++bool CM_SE_Marks( int slot );
++extern int *se_cm_marks[SE_SLOTS + 1];
++extern int se_cm_count[SE_SLOTS + 1][4];
++static inline bool CM_SE_Seen( traceWork_t *tw, clipMap_t *local, int *field, int index )
++{
++	if ( !tw->seSlot ) {
++		if ( *field == local->checkcount )
++			return true;
++		*field = local->checkcount;
++		return false;
++	}
++	int *m = se_cm_marks[tw->seSlot] + local->numBrushes + index;
++	if ( *m == se_cm_count[tw->seSlot][0] )
++		return true;
++	*m = se_cm_count[tw->seSlot][0];
++	return false;
++}
++static inline bool CM_SE_SeenBrush( traceWork_t *tw, clipMap_t *local, cbrush_t *b, int index )
++{
++	if ( !tw->seSlot ) {
++		if ( b->checkcount == local->checkcount )
++			return true;
++		b->checkcount = local->checkcount;
++		return false;
++	}
++	int *m = se_cm_marks[tw->seSlot] + index;
++	if ( *m == se_cm_count[tw->seSlot][0] )
++		return true;
++	*m = se_cm_count[tw->seSlot][0];
++	return false;
++}
++#endif
+ 
+ typedef struct leafList_s {
+ 	int		count;
 diff --git a/code/qcommon/cm_patch.cpp b/code/qcommon/cm_patch.cpp
 index dbaa19dd..d61bcc5c 100644
 --- a/code/qcommon/cm_patch.cpp
@@ -1278,10 +1602,48 @@ index efb97b53..83ee931a 100644
  
  void		CM_BoxTrace ( trace_t *results, const vec3_t start, const vec3_t end,
 diff --git a/code/qcommon/cm_test.cpp b/code/qcommon/cm_test.cpp
-index 77a2265f..6735e0ae 100644
+index 77a2265f..ebfb4c76 100644
 --- a/code/qcommon/cm_test.cpp
 +++ b/code/qcommon/cm_test.cpp
-@@ -680,4 +680,145 @@ void CM_SnapPVS(vec3_t origin,byte *buffer)
+@@ -61,14 +61,27 @@ struct PointAndLeaf
+ 
+ #define MAX_POINTS_TO_LEAVES	16
+ 
++#ifdef SHADEREMU
++// ShaderEmu: a cache a job slot (shared/qcommon/se_slot.h): the players made ahead on workers look leaves up at once
++struct sePointToLeaf_t { PointAndLeaf a[MAX_POINTS_TO_LEAVES]; int oldest, size, unused[2]; } __attribute__(( aligned( 16 ) ));
++static sePointToLeaf_t se_point_to_leaf[SE_SLOTS + 1];
++#define pointToLeaf ( se_point_to_leaf[SE_Slot()].a )
++#define oldestPointToLeaf ( se_point_to_leaf[SE_Slot()].oldest )
++#define sizePointToLeaf ( se_point_to_leaf[SE_Slot()].size )
++#else
+ static PointAndLeaf	pointToLeaf[MAX_POINTS_TO_LEAVES];
+ static int	oldestPointToLeaf = 0, sizePointToLeaf = 0;
++#endif
+ 
+ //static hlist<pair<CPoint,int> >				pointToLeaf;
+ //static hlist<pair<CPoint,int> >				pointToContents;
+ 
+ void CM_CleanLeafCache(void)
+ {
++#ifdef SHADEREMU
++	for ( int s = 0; s <= SE_SLOTS; s++ )
++		se_point_to_leaf[s].oldest = se_point_to_leaf[s].size = 0;
++#endif
+ 	oldestPointToLeaf = sizePointToLeaf = 0;
+ //	pointToLeaf.clear();
+ #if 0 // VVFIXME
+@@ -112,6 +125,9 @@ int CM_PointLeafnum_r( const vec3_t p, int num, clipMap_t *local ) {
+ 			num = node->children[0];
+ 	}
+ 
++#ifdef SHADEREMU
++	if ( !SE_Slot() )	// (the first core's count)
++#endif
+ 	c_pointcontents++;		// optimize counter
+ 
+ 	return -1 - num;
+@@ -680,4 +696,145 @@ void CM_SnapPVS(vec3_t origin,byte *buffer)
  
  }
  
@@ -1427,11 +1789,282 @@ index 77a2265f..6735e0ae 100644
 +	CM_SE_Grid_r( &g, 0, lo, hi );
 +}
 +#endif
+diff --git a/code/qcommon/cm_trace.cpp b/code/qcommon/cm_trace.cpp
+index 7f605324..6a35cd9c 100644
+--- a/code/qcommon/cm_trace.cpp
++++ b/code/qcommon/cm_trace.cpp
+@@ -256,10 +256,16 @@ void CM_TestInLeaf( traceWork_t *tw, cLeaf_t *leaf, clipMap_t *local ) {
+ 	for (k=0 ; k<leaf->numLeafBrushes ; k++) {
+ 		brushnum = local->leafbrushes[leaf->firstLeafBrush+k];
+ 		b = &local->brushes[brushnum];
++#ifdef SHADEREMU
++		if ( CM_SE_SeenBrush( tw, local, b, brushnum ) ) {
++			continue;	// already checked this brush in another leaf
++		}
++#else
+ 		if (b->checkcount == local->checkcount) {
+ 			continue;	// already checked this brush in another leaf
+ 		}
+ 		b->checkcount = local->checkcount;
++#endif
+ 
+ 		if ( !(b->contents & tw->contents)) {
+ 			continue;
+@@ -283,10 +289,16 @@ void CM_TestInLeaf( traceWork_t *tw, cLeaf_t *leaf, clipMap_t *local ) {
+ 			if ( !patch ) {
+ 				continue;
+ 			}
++#ifdef SHADEREMU
++			if ( CM_SE_Seen( tw, local, &patch->checkcount, local->leafsurfaces[ leaf->firstLeafSurface + k ] ) ) {
++				continue;	// already checked this patch in another leaf
++			}
++#else
+ 			if ( patch->checkcount == local->checkcount ) {
+ 				continue;	// already checked this brush in another leaf
+ 			}
+ 			patch->checkcount = local->checkcount;
++#endif
+ 
+ 			if ( !(patch->contents & tw->contents)) {
+ 				continue;
+@@ -329,12 +341,21 @@ void CM_PositionTest( traceWork_t *tw ) {
+ 	ll.lastLeaf = 0;
+ 	ll.overflowed = qfalse;
+ 
++#ifdef SHADEREMU
++	if ( tw->seSlot ) {
++		se_cm_count[tw->seSlot][0] += 2;
++	} else {
++		cmg.checkcount += 2;
++	}
++	CM_BoxLeafnums_r( &ll, 0 );
++#else
+ 	cmg.checkcount++;
+ 
+ 	CM_BoxLeafnums_r( &ll, 0 );
+ 
+ 
+ 	cmg.checkcount++;
++#endif
+ 
+ 	// test the contents of the leafs
+ 	for (i=0 ; i < ll.count ; i++) {
+@@ -363,7 +384,7 @@ CM_TraceThroughPatch
+ void CM_TraceThroughPatch( traceWork_t *tw, cPatch_t *patch ) {
+ 	float		oldFrac;
+ 
+-	c_patch_traces++;
++	if ( !tw->seSlot ) c_patch_traces++;	// (the first core's count)
+ 
+ 	oldFrac = tw->trace.fraction;
+ 
+@@ -412,7 +433,7 @@ void CM_TraceThroughBrush( traceWork_t *tw, cbrush_t *brush ) {
+ 		return;
+ 	}
+ 
+-	c_brush_traces++;
++	if ( !tw->seSlot ) c_brush_traces++;	// (the first core's count)
+ 
+ 	getout = qfalse;
+ 	startout = qfalse;
+@@ -542,10 +563,16 @@ void CM_TraceToLeaf( traceWork_t *tw, cLeaf_t *leaf, clipMap_t *local ) {
+ 		brushnum = local->leafbrushes[leaf->firstLeafBrush+k];
+ 
+ 		b = &local->brushes[brushnum];
++#ifdef SHADEREMU
++		if ( CM_SE_SeenBrush( tw, local, b, brushnum ) ) {
++			continue;	// already checked this brush in another leaf
++		}
++#else
+ 		if ( b->checkcount == local->checkcount ) {
+ 			continue;	// already checked this brush in another leaf
+ 		}
+ 		b->checkcount = local->checkcount;
++#endif
+ 
+ 		if ( !(b->contents & tw->contents) ) {
+ 			continue;
+@@ -570,10 +597,16 @@ void CM_TraceToLeaf( traceWork_t *tw, cLeaf_t *leaf, clipMap_t *local ) {
+ 			if ( !patch ) {
+ 				continue;
+ 			}
++#ifdef SHADEREMU
++			if ( CM_SE_Seen( tw, local, &patch->checkcount, local->leafsurfaces[ leaf->firstLeafSurface + k ] ) ) {
++				continue;	// already checked this patch in another leaf
++			}
++#else
+ 			if ( patch->checkcount == local->checkcount ) {
+ 				continue;	// already checked this patch in another leaf
+ 			}
+ 			patch->checkcount = local->checkcount;
++#endif
+ 
+ 			if ( !(patch->contents & tw->contents) ) {
+ 				continue;
+@@ -749,9 +782,108 @@ void CM_CalcExtents(const vec3_t start, const vec3_t end, const traceWork_t *tw,
+ CM_BoxTrace
+ ==================
+ */
++#ifdef SHADEREMU
++static void CM_BoxTrace_Made( trace_t *results, const vec3_t start, const vec3_t end,
++						  const vec3_t mins, const vec3_t maxs,
++						  clipHandle_t model, int brushmask);
++// A trace of a model's own brushes and patches asked again with the same words is the same trace: the map does not move
++// under it (a brush entity's model is traced in its own space; the box model, whose planes each call makes, is not kept).
++// The feet's slope traces of a person standing are asked so every frame (PM_FootSlopeTrace: 22 a frame of the walk, 0.18
++// million instructions). Kept by the exact words of start, end, mins, maxs, model and mask, one table a slot (SE_CoreSlot);
++// a hit gives the trace's words before its Ghoul2 records, which come out empty as the made trace's do. Emptied with the map.
++// JK2_TRACE_MEMO=0: not kept; =check: made anyway and compared (docs/games/jk2.md, "Fewer instructions")
++int *se_cm_marks[SE_SLOTS + 1];
++int se_cm_count[SE_SLOTS + 1][4] __attribute__(( aligned( 16 ) ));
++static int se_cm_marks_for[4] __attribute__(( aligned( 16 ) )) = { -1, -1 };	// the brushes and surfaces they were made for
++// Whether slot `slot` has its marks of the map now loaded; the first core makes every slot's when they are missing or
++// of another map
++bool CM_SE_Marks( int slot )
++{
++	if ( se_cm_marks_for[0] == cmg.numBrushes && se_cm_marks_for[1] == cmg.numSurfaces )
++		return true;
++	if ( slot )
++		return false;
++	for ( int s = 1; s <= SE_SLOTS; s++ ) {
++		if ( se_cm_marks[s] )
++			free( se_cm_marks[s] );
++		se_cm_marks[s] = (int *)calloc( cmg.numBrushes + cmg.numSurfaces + 1, sizeof( int ) );
++		se_cm_count[s][0] = 1;
++	}
++	se_cm_marks_for[0] = cmg.numBrushes, se_cm_marks_for[1] = cmg.numSurfaces;
++	return true;
++}
++extern "C" int SE_CoreSlot( void );
++#define SE_TRACE_MEMO 256
++#define SE_TRACE_HEAD ( offsetof( trace_t, G2CollisionMap ) )
++struct seTraceMemo_t {
++	uint32_t key[14];
++	uint32_t gen;
++	unsigned char head[SE_TRACE_HEAD];
++} __attribute__(( aligned( 16 ) ));
++static seTraceMemo_t se_trace_memo[SE_SLOTS + 1][SE_TRACE_MEMO];
++static uint32_t se_trace_gen[SE_SLOTS + 1][4] __attribute__(( aligned( 16 ) ));
++static int se_trace_mode = -1;	// 0 off, 1 on, 2 check
++static uint32_t se_trace_count[SE_SLOTS + 1][4] __attribute__(( aligned( 16 ) ));	// asked, kept, wrong
++void CM_SE_TraceMemoClear( void )
++{
++	for ( int c = 0; c <= SE_SLOTS; c++ )
++		se_trace_gen[c][0]++;
++	se_cm_marks_for[0] = -1;	// (the marks are made again for the next map)
++}
++void CM_SE_TraceMemoStats( void )
++{
++	for ( int c = 0; c <= SE_SLOTS; c++ )
++		if ( se_trace_count[c][0] )
++			Com_Printf( "jk2trace: core slot %d, %u traces, %u kept, %u wrong\n", c, se_trace_count[c][0], se_trace_count[c][1], se_trace_count[c][2] );
++}
++void CM_BoxTrace( trace_t *results, const vec3_t start, const vec3_t end,
++						  const vec3_t mins, const vec3_t maxs,
++						  clipHandle_t model, int brushmask) {
++	if ( se_trace_mode < 0 ) {
++		const char *e = getenv( "JK2_TRACE_MEMO" );
++		se_trace_mode = !e || !*e ? 1 : !strcmp( e, "check" ) ? 2 : atoi( e ) ? 1 : 0;
++	}
++	const int c = SE_CoreSlot();
++	if ( !se_trace_mode || model == BOX_MODEL_HANDLE || c < 0 ) {
++		CM_BoxTrace_Made( results, start, end, mins, maxs, model, brushmask );
++		return;
++	}
++	uint32_t key[14];
++	memcpy( key, start, 12 ), memcpy( key + 3, end, 12 );
++	if ( mins ) memcpy( key + 6, mins, 12 ); else memset( key + 6, 0, 12 );
++	if ( maxs ) memcpy( key + 9, maxs, 12 ); else memset( key + 9, 0, 12 );
++	key[12] = (uint32_t)model, key[13] = (uint32_t)brushmask;
++	uint32_t h = 2166136261u;
++	for ( int i = 0; i < 14; i++ )
++		h = ( h ^ key[i] ) * 16777619u;
++	seTraceMemo_t *m = &se_trace_memo[c][( h ^ h >> 16 ) & ( SE_TRACE_MEMO - 1 )];
++	se_trace_count[c][0]++;
++	if ( m->gen == se_trace_gen[c][0] + 1 && !memcmp( m->key, key, sizeof key ) ) {
++		se_trace_count[c][1]++;
++		if ( se_trace_mode == 2 ) {
++			CM_BoxTrace_Made( results, start, end, mins, maxs, model, brushmask );
++			if ( memcmp( results, m->head, SE_TRACE_HEAD ) )
++				se_trace_count[c][2]++;
++			return;
++		}
++		memcpy( results, m->head, SE_TRACE_HEAD );
++		for ( int i = 0; i < MAX_G2_COLLISIONS; i++ )
++			results->G2CollisionMap[i].mEntityNum = -1, results->G2CollisionMap[i].mDistance = 100000;
++		return;
++	}
++	CM_BoxTrace_Made( results, start, end, mins, maxs, model, brushmask );
++	memcpy( m->key, key, sizeof key );
++	memcpy( m->head, results, SE_TRACE_HEAD );
++	m->gen = se_trace_gen[c][0] + 1;
++}
++static void CM_BoxTrace_Made( trace_t *results, const vec3_t start, const vec3_t end,
++						  const vec3_t mins, const vec3_t maxs,
++						  clipHandle_t model, int brushmask) {
++#else
+ void CM_BoxTrace( trace_t *results, const vec3_t start, const vec3_t end,
+ 						  const vec3_t mins, const vec3_t maxs,
+ 						  clipHandle_t model, int brushmask) {
++#endif
+ 	int			i;
+ 	traceWork_t	tw;
+ 	vec3_t		offset;
+@@ -760,13 +892,32 @@ void CM_BoxTrace( trace_t *results, const vec3_t start, const vec3_t end,
+ 
+ 	cmod = CM_ClipHandleToModel( model, &local );
+ 
++#ifdef SHADEREMU
++	// (a slot's marks are of the world's map alone, made by the first core; c_traces is the first core's)
++	const int se_slot = SE_Slot();
++	if ( se_slot ) {
++		if ( local != &cmg )
++			SE_SlotAbort( SE_WHY_SUBBSP );
++		if ( !CM_SE_Marks( se_slot ) )
++			SE_SlotAbort( SE_WHY_MARKS );
++		se_cm_count[se_slot][0]++;
++	} else {
++		CM_SE_Marks( 0 );
++		local->checkcount++;		// for multi-check avoidance
++		c_traces++;				// for statistics, may be zeroed
++	}
++#else
+ 	local->checkcount++;		// for multi-check avoidance
+ 
+ 	c_traces++;				// for statistics, may be zeroed
++#endif
+ 
+ 	// fill in a default trace
+ 	memset( &tw, 0, sizeof(tw) - sizeof(tw.trace.G2CollisionMap));
+ 	tw.trace.fraction = 1;	// assume it goes the entire distance until shown otherwise
++#ifdef SHADEREMU
++	tw.seSlot = se_slot;
++#endif
+ 
+ 	if (!local->numNodes) {
+ 		*results = tw.trace;
 diff --git a/code/qcommon/common.cpp b/code/qcommon/common.cpp
-index aeaff246..187184e5 100644
+index aeaff246..7e0e74b9 100644
 --- a/code/qcommon/common.cpp
 +++ b/code/qcommon/common.cpp
-@@ -1133,7 +1133,14 @@ void Com_Init( char *commandLine ) {
+@@ -135,10 +135,16 @@ to the apropriate place.
+ A raw string should NEVER be passed as fmt, because of "%f" type crashers.
+ =============
+ */
++#ifdef SHADEREMU
++#include "../../shared/qcommon/se_slot.h"
++#endif
+ void QDECL Com_Printf( const char *fmt, ... ) {
+ 	va_list		argptr;
+ 	char		msg[MAXPRINTMSG];
+ 	const char *p;
++#ifdef SHADEREMU
++	SE_NOT_AHEAD( SE_WHY_PRINT );	// (a player made ahead prints nothing: se_slot.h)
++#endif
+ 
+ 	va_start (argptr,fmt);
+ 	Q_vsnprintf (msg, sizeof(msg), fmt, argptr);
+@@ -1133,7 +1139,14 @@ void Com_Init( char *commandLine ) {
  		com_speedslog = Cvar_Get ("speedslog", "0", CVAR_TEMP );
  
  		com_timescale = Cvar_Get ("timescale", "1", CVAR_CHEAT );
@@ -2952,10 +3585,26 @@ index a0f0ace4..e1a2ddd9 100644
  	qboolean			(*SND_RegisterAudio_LevelLoadEnd)	( qboolean bDeleteEverythingNotUsedThisLevel );
  
 diff --git a/code/rd-vanilla/G2_API.cpp b/code/rd-vanilla/G2_API.cpp
-index 09bc27ed..e46a01eb 100644
+index 09bc27ed..cb27d4c3 100644
 --- a/code/rd-vanilla/G2_API.cpp
 +++ b/code/rd-vanilla/G2_API.cpp
-@@ -2277,6 +2277,13 @@ bool G2_SetupModelPointers(CGhoul2Info *ghlInfo) // returns true if the model is
+@@ -45,8 +45,15 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
+ #include "../ghoul2/ghoul2_gore.h"
+ //rww - RAGDOLL_END
+ 
++#ifdef SHADEREMU
++#include "../../shared/qcommon/se_slot.h"
++extern mdxaBone_t		se_worldMatrix[], se_worldMatrixInv[];
++#define worldMatrix ( se_worldMatrix[SE_Slot()] )
++#define worldMatrixInv ( se_worldMatrixInv[SE_Slot()] )
++#else
+ extern mdxaBone_t		worldMatrix;
+ extern mdxaBone_t		worldMatrixInv;
++#endif
+ 
+ extern	cvar_t	*r_Ghoul2TimeBase;
+ 
+@@ -2277,6 +2284,13 @@ bool G2_SetupModelPointers(CGhoul2Info *ghlInfo) // returns true if the model is
  	if (ghlInfo->mModelindex != -1)
  	{
  		G2ERROR(ghlInfo->mFileName[0],"empty ghlInfo->mFileName");
@@ -2969,6 +3618,45 @@ index 09bc27ed..e46a01eb 100644
  		ghlInfo->mModel = RE_RegisterModel(ghlInfo->mFileName);
  		ghlInfo->currentModel = R_GetModelByHandle(ghlInfo->mModel);
  		G2ERROR(ghlInfo->currentModel,va("NULL Model (glm) %s",ghlInfo->mFileName));
+diff --git a/code/rd-vanilla/G2_bones.cpp b/code/rd-vanilla/G2_bones.cpp
+index beb4bb30..432ae2f9 100644
+--- a/code/rd-vanilla/G2_bones.cpp
++++ b/code/rd-vanilla/G2_bones.cpp
+@@ -3248,7 +3248,14 @@ static inline int G2_RagIndexForBoneNum(int boneNum)
+ }
+ #endif
+ 
++#ifdef SHADEREMU
++#include "../../shared/qcommon/se_slot.h"
++extern mdxaBone_t		se_worldMatrix[], se_worldMatrixInv[];
++#define worldMatrix ( se_worldMatrix[SE_Slot()] )
++#define worldMatrixInv ( se_worldMatrixInv[SE_Slot()] )
++#else
+ extern mdxaBone_t		worldMatrix;
++#endif
+ void G2_RagGetBoneBasePoseMatrixLow(CGhoul2Info &ghoul2, int boneNum, mdxaBone_t &boneMatrix, mdxaBone_t &retMatrix, vec3_t scale);
+ void G2_RagGetAnimMatrix(CGhoul2Info &ghoul2, const int boneNum, mdxaBone_t &matrix, const int frame);
+ 
+diff --git a/code/rd-vanilla/G2_misc.cpp b/code/rd-vanilla/G2_misc.cpp
+index bc5ca630..82ced818 100644
+--- a/code/rd-vanilla/G2_misc.cpp
++++ b/code/rd-vanilla/G2_misc.cpp
+@@ -197,8 +197,15 @@ CGoreSet::~CGoreSet()
+ };
+ #endif
+ 
++#ifdef SHADEREMU
++#include "../../shared/qcommon/se_slot.h"
++extern mdxaBone_t		se_worldMatrix[], se_worldMatrixInv[];
++#define worldMatrix ( se_worldMatrix[SE_Slot()] )
++#define worldMatrixInv ( se_worldMatrixInv[SE_Slot()] )
++#else
+ extern mdxaBone_t		worldMatrix;
+ extern mdxaBone_t		worldMatrixInv;
++#endif
+ 
+ const mdxaBone_t &EvalBoneCache(int index,CBoneCache *boneCache);
+ class CTraceSurface
 diff --git a/code/rd-vanilla/tr_WorldEffects.cpp b/code/rd-vanilla/tr_WorldEffects.cpp
 index 5464b70b..6e6d897a 100644
 --- a/code/rd-vanilla/tr_WorldEffects.cpp
@@ -3113,7 +3801,7 @@ index 5464b70b..6e6d897a 100644
  
  		GL_Bind(mImage);
 diff --git a/code/rd-vanilla/tr_backend.cpp b/code/rd-vanilla/tr_backend.cpp
-index 741bb95b..0f77bee0 100644
+index 741bb95b..a6cf4250 100644
 --- a/code/rd-vanilla/tr_backend.cpp
 +++ b/code/rd-vanilla/tr_backend.cpp
 @@ -27,6 +27,10 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
@@ -3194,7 +3882,21 @@ index 741bb95b..0f77bee0 100644
  
  	while ( 1 ) {
  		data = PADP(data, sizeof(void *));
-@@ -1640,7 +1680,11 @@ void RB_ExecuteRenderCommands( const void *data ) {
+@@ -1628,6 +1668,13 @@ void RB_ExecuteRenderCommands( const void *data ) {
+ 		case RC_DRAW_SURFS:
+ 			data = RB_DrawSurfs( data );
+ 			break;
++#ifdef SHADEREMU
++		case RC_SE_VIEW: {
++			const void *R_SE_FrontView( const void *data );
++			data = R_SE_FrontView( data );
++			break;
++		}
++#endif
+ 		case RC_DRAW_BUFFER:
+ 			data = RB_DrawBuffer( data );
+ 			break;
+@@ -1640,7 +1687,11 @@ void RB_ExecuteRenderCommands( const void *data ) {
  		case RC_END_OF_LIST:
  		default:
  			// stop rendering
@@ -3303,10 +4005,10 @@ index afbbb175..53dc6533 100644
  	else
  	{
 diff --git a/code/rd-vanilla/tr_cmds.cpp b/code/rd-vanilla/tr_cmds.cpp
-index 04ad9bdb..e855ba45 100644
+index 04ad9bdb..f707ce5a 100644
 --- a/code/rd-vanilla/tr_cmds.cpp
 +++ b/code/rd-vanilla/tr_cmds.cpp
-@@ -89,6 +89,20 @@ void R_PerformanceCounters( void ) {
+@@ -89,6 +89,22 @@ void R_PerformanceCounters( void ) {
  R_IssueRenderCommands
  ====================
  */
@@ -3322,12 +4024,14 @@ index 04ad9bdb..e855ba45 100644
 +void SE_RSInline( void );
 +unsigned SE_RSFrom( void );
 +void SE_SkinGive( unsigned from, unsigned to );
++void R_SE_FrontGiven( int given );
++void R_SE_FrontWait( void );
 +backEndData_t *se_backEndData[2];
 +#endif
  void R_IssueRenderCommands( qboolean runPerformanceCounters ) {
  	renderCommandList_t	*cmdList;
  
-@@ -101,6 +115,21 @@ void R_IssueRenderCommands( qboolean runPerformanceCounters ) {
+@@ -101,6 +117,23 @@ void R_IssueRenderCommands( qboolean runPerformanceCounters ) {
  	// clear it out, in case this is a sync and not a buffer flip
  	cmdList->used = 0;
  
@@ -3336,6 +4040,7 @@ index 04ad9bdb..e855ba45 100644
 +	unsigned se_from = SE_RSFrom();
 +	if ( runPerformanceCounters && !r_skipBackEnd->integer && jk2RenderOn() && se_backEndData[1] && SE_RSBones() >= 0 ) {
 +		R_PerformanceCounters();
++		R_SE_FrontGiven( 1 );	// (its views are made by the worker: waited for at the next RE_BeginFrame)
 +		jk2RenderGive( RB_ExecuteRenderCommands, cmdList->cmds );	// (it waits for jk2RenderGo: the skins given out first)
 +		SE_SkinGive( se_from, SE_RSFrom() );
 +		jk2RenderGo();
@@ -3344,12 +4049,23 @@ index 04ad9bdb..e855ba45 100644
 +		return;
 +	}
 +	SE_RSInline();
++	R_SE_FrontGiven( 0 );	// (drawn here at once: its views are made by this core)
 +#endif
 +
  	// at this point, the back end thread is idle, so it is ok
  	// to look at it's performance counters
  	if ( runPerformanceCounters ) {
-@@ -369,12 +398,25 @@ If running in stereo, RE_BeginFrame will be called twice
+@@ -166,6 +199,9 @@ make sure there is enough command space
+ static void *R_GetCommandBuffer( int bytes ) {
+ 	return R_GetCommandBufferReserved( bytes, PAD( sizeof( swapBuffersCommand_t ), sizeof(void *) ) );
+ }
++#ifdef SHADEREMU
++void *R_SE_CommandBuffer( int bytes ) { return R_GetCommandBuffer( bytes ); }
++#endif
+ 
+ 
+ /*
+@@ -369,12 +405,26 @@ If running in stereo, RE_BeginFrame will be called twice
  for each RE_EndFrame
  ====================
  */
@@ -3360,6 +4076,7 @@ index 04ad9bdb..e855ba45 100644
 +int R_SE_PicturesAtBind( void );
  void RE_BeginFrame( stereoFrame_t stereoFrame ) {
 +#ifdef SHADEREMU
++	R_SE_FrontWait();	// (the views the drawing's worker makes of the frame before: tr_main.cpp)
 +	// (while a level loads, its loading screen's pictures are uploaded as they are bound: tr_image.cpp's R_SE_PictureNeeded)
 +	if ( SE_InPlay() || !R_SE_PicturesAtBind() )
 +		R_SE_PicturesFinish();
@@ -3473,10 +4190,30 @@ index c67c5d0a..10b93d2f 100644
  		{
  			for ( int x=0; x<*piWidth; x++ )
 diff --git a/code/rd-vanilla/tr_ghoul2.cpp b/code/rd-vanilla/tr_ghoul2.cpp
-index 5062daf5..d94dec4b 100644
+index 5062daf5..468c7f64 100644
 --- a/code/rd-vanilla/tr_ghoul2.cpp
 +++ b/code/rd-vanilla/tr_ghoul2.cpp
-@@ -723,6 +723,56 @@ CRenderableSurface *AllocRS()
+@@ -83,8 +83,19 @@ extern	cvar_t	*r_Ghoul2UnSqashAfterSmooth;
+ bool HackadelicOnClient=false; // means this is a render traversal
+ 
+ // I hate doing this, but this is the simplest way to get this into the routines it needs to be
++#ifdef SHADEREMU
++#include "../../shared/qcommon/se_slot.h"
++#define worldMatrix ( se_worldMatrix[SE_Slot()] )
++#define worldMatrixInv ( se_worldMatrixInv[SE_Slot()] )
++#endif
++#ifdef SHADEREMU
++// (one a job slot: every G2API_GetBoltMatrix makes them, and the players' bolts are made on worker cores; se_slot.h)
++mdxaBone_t		se_worldMatrix[SE_SLOTS + 2] __attribute__(( aligned( 16 ) ));
++mdxaBone_t		se_worldMatrixInv[SE_SLOTS + 2] __attribute__(( aligned( 16 ) ));
++#else
+ mdxaBone_t		worldMatrix;
+ mdxaBone_t		worldMatrixInv;
++#endif
+ #ifdef _G2_GORE
+ qhandle_t		goreShader=-1;
+ #endif
+@@ -723,6 +734,102 @@ CRenderableSurface *AllocRS()
  	return ret;
  }
  
@@ -3488,8 +4225,42 @@ index 5062daf5..d94dec4b 100644
 +#define SE_RS_BONES ( 96 * 1024 )		// floats a set: 8,000 matrices
 +static float se_rs_bones[2][SE_RS_BONES];
 +static int se_rs_set, se_rs_from;
++// The evaluation itself is the frame's bone transforms (about a tenth of this core's frame): it is shared out to the job
++// slots (shared/qcommon/se_slot.h), a surface to the slot its bone cache hashes to, so that a cache (its lazily made
++// bones and its touch marks) is evaluated by one core only. Its place in the pool is this core's, made first.
++// JK2_RSBONES=core: all on this core, as before.
++extern "C" int SE_SlotMode( void );
++extern "C" int SE_SlotGive( int slot, void ( *fn )( void * ), void *arg );
++extern "C" void SE_SlotJoin( int handle );
++#define SE_RS_JOBS SE_SLOTS
++struct seRsJob_t { unsigned from, to; int part, unused; } __attribute__(( aligned( 16 ) ));
++static seRsJob_t se_rs_jobs[SE_RS_JOBS];
++static inline int SE_RsPart( const CBoneCache *c ) { return (int)( ( (uintptr_t)c >> 4 ) * 2654435761u >> 16 ) % SE_RS_JOBS; }
++static void SE_RsEval( CRenderableSurface *rs )
++{
++	const mdxmSurface_t *surface = rs->surfaceData;
++	const int *refs = (const int *)( (const byte *)surface + surface->ofsBoneReferences );
++	float *out = (float *)rs->seBones;
++	for ( int r = 0 ; r < surface->numBoneReferences ; r++ )
++		memcpy( out + r * 12, &rs->boneCache->Eval( refs[r] ), 12 * sizeof( float ) );
++}
++static void SE_RsJob( void *arg )
++{
++	const seRsJob_t *j = (const seRsJob_t *)arg;
++	for ( unsigned i = j->from ; i != j->to ; i = ( i + 1 ) % MAX_RENDER_SURFACES )
++	{
++		CRenderableSurface *rs = &RSStorage[i];
++		if ( rs->seBones && SE_RsPart( rs->boneCache ) == j->part )
++			SE_RsEval( rs );
++	}
++}
 +int SE_RSBones( void )
 +{
++	static int on_slots = -1;
++	if ( on_slots < 0 ) {
++		const char *e = getenv( "JK2_RSBONES" );
++		on_slots = !( e && !strcmp( e, "core" ) );
++	}
 +	float *pool = se_rs_bones[se_rs_set];
 +	int used = 0, made = 0;
 +	for ( unsigned i = (unsigned)se_rs_from ; i != NextRS ; i = ( i + 1 ) % MAX_RENDER_SURFACES )
@@ -3503,21 +4274,33 @@ index 5062daf5..d94dec4b 100644
 +			)
 +			continue;
 +		const mdxmSurface_t *surface = rs->surfaceData;
-+		const int *refs = (const int *)( (const byte *)surface + surface->ofsBoneReferences );
 +		if ( used + surface->numBoneReferences * 12 > SE_RS_BONES )
 +			return -1;	// (no room: the caller draws this frame on this core)
-+		float *out = pool + used;
-+		for ( int r = 0 ; r < surface->numBoneReferences ; r++ )
-+			memcpy( out + r * 12, &rs->boneCache->Eval( refs[r] ), 12 * sizeof( float ) );
-+		rs->seBones = out;
++		rs->seBones = pool + used;
 +		used += surface->numBoneReferences * 12;
 +		made++;
 +	}
++	int handles[SE_RS_JOBS] = { 0 };
++	if ( on_slots && made > 1 && SE_SlotMode() == 2 ) {
++		for ( int k = 0 ; k < SE_RS_JOBS ; k++ ) {
++			se_rs_jobs[k].from = (unsigned)se_rs_from, se_rs_jobs[k].to = NextRS, se_rs_jobs[k].part = k;
++			handles[k] = SE_SlotGive( 1 + k, SE_RsJob, &se_rs_jobs[k] );
++		}
++	}
++	for ( int k = 0 ; k < SE_RS_JOBS ; k++ )
++		if ( !handles[k] ) {	// (no worker for it, or all on this core)
++			se_rs_jobs[k].from = (unsigned)se_rs_from, se_rs_jobs[k].to = NextRS, se_rs_jobs[k].part = k;
++			SE_RsJob( &se_rs_jobs[k] );
++		}
++	for ( int k = 0 ; k < SE_RS_JOBS ; k++ )
++		if ( handles[k] )
++			SE_SlotJoin( handles[k] );
 +	se_rs_from = NextRS;
 +	se_rs_set ^= 1;
 +	return made;
 +}
 +unsigned SE_RSFrom( void ) { return (unsigned)se_rs_from; }
++int R_SE_IsRS( const void *p ) { return (const byte *)p >= (const byte *)RSStorage && (const byte *)p < (const byte *)( RSStorage + MAX_RENDER_SURFACES ); }
 +// (the frame's surfaces, drawn on this core: their bones are the cache's, as always)
 +void SE_RSInline( void )
 +{
@@ -3533,7 +4316,7 @@ index 5062daf5..d94dec4b 100644
  /*
  
  All bones should be an identity orientation to display the mesh exactly
-@@ -2768,6 +2818,195 @@ void G2_ConstructGhoulSkeleton( CGhoul2Info_v &ghoul2,const int frameNum,bool ch
+@@ -2768,6 +2875,195 @@ void G2_ConstructGhoulSkeleton( CGhoul2Info_v &ghoul2,const int frameNum,bool ch
  RB_SurfaceGhoul
  ==============
  */
@@ -3729,7 +4512,7 @@ index 5062daf5..d94dec4b 100644
  void RB_SurfaceGhoul( CRenderableSurface *surf )
  {
  #ifdef G2_PERFORMANCE_ANALYSIS
-@@ -2901,6 +3140,24 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
+@@ -2901,6 +3197,24 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
  	mdxmSurface_t	*surface = surf->surfaceData;
  
  	CBoneCache *bones = surf->boneCache;
@@ -3754,7 +4537,7 @@ index 5062daf5..d94dec4b 100644
  
  	// first up, sanity check our numbers
  	RB_CheckOverflow( surface->numVerts, surface->numTriangles );
-@@ -2989,10 +3246,32 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
+@@ -2989,10 +3303,32 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
  		float t2;
  		const mdxaBone_t *bone;
  		const mdxaBone_t *bone2;
@@ -3788,7 +4571,7 @@ index 5062daf5..d94dec4b 100644
  #else
  			bone = &bones->EvalRender(piBoneReferences[G2_GetVertBoneIndex( v, 0 )]);
  #endif // JK2_MODE
-@@ -3013,7 +3292,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
+@@ -3013,7 +3349,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
  				if (iNumWeights==2)
  				{
  #ifdef JK2_MODE
@@ -3797,7 +4580,7 @@ index 5062daf5..d94dec4b 100644
  #else
  					bone2 = &bones->EvalRender(piBoneReferences[G2_GetVertBoneIndex( v, 1 )]);
  #endif // JK2_MODE
-@@ -3046,7 +3325,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
+@@ -3046,7 +3382,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
  					for (k=1; k < iNumWeights-1 ; k++)
  					{
  #ifdef JK2_MODE
@@ -3806,7 +4589,7 @@ index 5062daf5..d94dec4b 100644
  #else
  						bone = &bones->EvalRender(piBoneReferences[G2_GetVertBoneIndex( v, k )]);
  #endif // JK2_MODE
-@@ -3060,7 +3339,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
+@@ -3060,7 +3396,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
  					}
  
  #ifdef JK2_MODE
@@ -3815,7 +4598,7 @@ index 5062daf5..d94dec4b 100644
  #else
  					bone = &bones->EvalRender(piBoneReferences[G2_GetVertBoneIndex( v, k )]);
  #endif // JK2_MODE
-@@ -3075,6 +3354,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
+@@ -3075,6 +3411,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
  			tess.texCoords[baseVertex][0][0] = pTexCoords[j].texCoords[0];
  			tess.texCoords[baseVertex][0][1] = pTexCoords[j].texCoords[1];
  		}
@@ -4433,7 +5216,7 @@ index 13c72e66..c474a255 100644
  
  	const color4ub_t color = {0xff, 0xff, 0xff, 0xff};
 diff --git a/code/rd-vanilla/tr_local.h b/code/rd-vanilla/tr_local.h
-index c9e745aa..f77e65fa 100644
+index c9e745aa..facb5ca7 100644
 --- a/code/rd-vanilla/tr_local.h
 +++ b/code/rd-vanilla/tr_local.h
 @@ -1587,6 +1587,12 @@ public:
@@ -4471,8 +5254,18 @@ index c9e745aa..f77e65fa 100644
  #ifdef _G2_GORE
  		ident = SF_MDX;
  		alternateTex=0;
+@@ -1778,6 +1792,9 @@ typedef enum {
+ 	RC_DRAW_BUFFER,
+ 	RC_SWAP_BUFFERS,
+ 	RC_WORLD_EFFECTS,
++#ifdef SHADEREMU
++	RC_SE_VIEW,		// a view whose front end the drawing's worker makes (tr_main.cpp, R_SE_FrontView)
++#endif
+ } renderCommand_t;
+ 
+ 
 diff --git a/code/rd-vanilla/tr_main.cpp b/code/rd-vanilla/tr_main.cpp
-index da619736..4bc452c6 100644
+index da619736..cade2682 100644
 --- a/code/rd-vanilla/tr_main.cpp
 +++ b/code/rd-vanilla/tr_main.cpp
 @@ -205,7 +205,15 @@ void R_LocalPointToWorld (const vec3_t local, vec3_t world) {
@@ -4491,8 +5284,228 @@ index da619736..4bc452c6 100644
  
  void R_InvertMatrix(float *sourcemat, float *destmat)
  {
+@@ -1258,6 +1266,21 @@ void R_SortDrawSurfs( drawSurf_t *drawSurfs, int numDrawSurfs ) {
+ R_AddEntitySurfaces
+ =============
+ */
++#ifdef SHADEREMU
++// (the front end on the worker: 1 the Ghoul2 entities only, made by this core at the scene; 2 all but those, by the worker)
++static int se_entity_filter;
++static int SE_EntityIsGhoul( const trRefEntity_t *ent )
++{
++	if ( ent->e.reType != RT_MODEL )
++		return 0;
++	const model_t *m = R_GetModelByHandle( ent->e.hModel );
++	if ( !m )
++		return 0;
++	if ( m->type == MOD_MDXM )
++		return 1;
++	return m->type == MOD_BAD && ent->e.ghoul2 && G2API_HaveWeGhoul2Models( *( (CGhoul2Info_v *)ent->e.ghoul2 ) );
++}
++#endif
+ void R_AddEntitySurfaces (void) {
+ 	trRefEntity_t	*ent;
+ 	shader_t		*shader;
+@@ -1270,6 +1293,10 @@ void R_AddEntitySurfaces (void) {
+ 	      tr.currentEntityNum < tr.refdef.num_entities;
+ 		  tr.currentEntityNum++ ) {
+ 		ent = tr.currentEntity = &tr.refdef.entities[tr.currentEntityNum];
++#ifdef SHADEREMU
++		if ( se_entity_filter && ( se_entity_filter == 1 ) != SE_EntityIsGhoul( ent ) )
++			continue;
++#endif
+ 
+ 		ent->needDlights = qfalse;
+ 
+@@ -1550,4 +1577,183 @@ void R_RenderView (viewParms_t *parms) {
+ 
+ 	// draw main system development information (surface outlines, etc)
+ 	R_DebugGraphics();
+-}
+\ No newline at end of file
++}
++
++#ifdef SHADEREMU
++// ShaderEmu: the front end on the drawing's worker (docs/games/jk2.md, "The front end on the worker"). At the scene this
++// core sets the view up and makes only its Ghoul2 entities' surfaces: their bones are evaluated in the models' caches,
++// which the game's and the client's bolts set up again in the next frame (and SE_RSBones evaluates them at the give).
++// The rest (the world's walk, the polygons, the other entities, the sort) is a command of the frame, RC_SE_VIEW, which
++// the drawing's worker makes when it comes to it and draws at once: the surfaces' keys hold their entities, and the
++// world's and the polygons' are added in their order, so the sorted list is the one R_RenderView made. While the worker
++// makes it this core runs the game's next frame, which changes nothing it reads (a new shader's place settles the
++// drawing first, tr_shader.cpp); the next frame's RE_BeginFrame waits for it. A world with portals, or a scene with a
++// portal or no world is made here as before. JK2_FRONT=worker turns it on (off by default, see SE_FrontOn).
++typedef struct {
++	int commandId, first, count, viewCount;
++	unsigned seq, check, checkCount, unused;
++	trRefdef_t refdef;
++	viewParms_t viewParms;
++} seViewCommand_t;
++void *R_SE_CommandBuffer( int bytes );
++const void *RB_DrawSurfs( const void *data );
++extern "C" void SE_FrontRest( void );
++static drawSurf_t se_front_surfs[MAX_DRAWSURFS];	// (the worker's)
++static struct { unsigned seq, last, target, unused; } __attribute__(( aligned( 16 ) )) se_views;	// (this core's)
++static struct { volatile unsigned made, unused[3]; } __attribute__(( aligned( 16 ) )) se_views_made;	// (the worker's)
++static const world_t *se_portal_world;
++static int se_portal_world_has;
++static int SE_FrontOn( void )	// 0 here (the default), 1 JK2_FRONT=worker, 2 JK2_FRONT=check
++{	// (off by default: JK2_FRONT=check said most views' lists not as made whole on 4 November 2026, not yet explained)
++	static int on = -1;
++	if ( on < 0 ) {
++		const char *e = getenv( "JK2_FRONT" );
++		on = e && !strcmp( e, "worker" ) ? 1 : e && !strcmp( e, "check" ) ? 2 : 0;
++	}
++	return on;
++}
++// (JK2_FRONT=check: this core makes the view whole as R_RenderView does and sums its sorted list; the worker sums its
++// own and counts those that differ. The keys, and the surfaces but a Ghoul2 surface's, made anew at each making.)
++int R_SE_IsRS( const void *p );
++static unsigned SE_FrontSum( const drawSurf_t *s, int n )
++{
++	unsigned h = 2166136261u;
++	for ( int i = 0 ; i < n ; i++ ) {
++		h = ( h ^ s[i].sort ) * 16777619u;
++		h = ( h ^ ( R_SE_IsRS( s[i].surface ) ? 1u : (unsigned)(uintptr_t)s[i].surface ) ) * 16777619u;
++	}
++	return h;
++}
++static struct { unsigned views, wrong, unused[2]; } __attribute__(( aligned( 16 ) )) se_front_check;	// (the worker's)
++static int SE_FrontNot( int why )	// (JK2_FRONT_LOG=1: why a view is made here, the first 8 times)
++{
++	static int log = -1, logged;
++	if ( log < 0 )
++		log = getenv( "JK2_FRONT_LOG" ) != 0;
++	if ( log && logged < 8 )
++		logged++, ri.Printf( PRINT_ALL, "jk2front: a view made here (%d; rdflags %x, sky portal %d)\n", why, tr.refdef.rdflags, why == 1 );
++	return 0;
++}
++int R_SE_RenderViewSplit( viewParms_t *parms, int sky_portal )
++{
++	if ( !SE_FrontOn() )
++		return 0;
++	(void)sky_portal;	// (the sky box's portal is the back end's: its flags are read where the view is drawn, as before)
++	if ( !tr.world || ( tr.refdef.rdflags & RDF_NOWORLDMODEL ) )
++		return 0;
++	if ( parms->viewportWidth <= 0 || parms->viewportHeight <= 0 || r_debugStyle->integer >= 0 || r_portalOnly->integer )
++		return SE_FrontNot( 3 );
++	if ( se_portal_world != tr.world ) {
++		se_portal_world = tr.world, se_portal_world_has = 0;
++		for ( int i = 0 ; i < tr.world->numsurfaces ; i++ )
++			if ( tr.world->surfaces[i].shader && tr.world->surfaces[i].shader->sort <= SS_PORTAL )
++				se_portal_world_has++;
++	}
++	int R_SE_PortalMaybeSeen( const vec3_t origin );
++	if ( se_portal_world_has && R_SE_PortalMaybeSeen( parms->pvsOrigin ) )
++		return SE_FrontNot( 1000 + se_portal_world_has );
++	for ( int i = 0 ; i < tr.refdef.num_entities ; i++ )
++		if ( tr.refdef.entities[i].e.reType == RT_PORTALSURFACE )
++			return SE_FrontNot( 5 );
++	seViewCommand_t *cmd = (seViewCommand_t *)R_SE_CommandBuffer( sizeof( *cmd ) );
++	if ( !cmd )
++		return SE_FrontNot( 6 );
++	unsigned check = 0;
++	int check_count = 0;
++	if ( SE_FrontOn() == 2 ) {	// (the view whole, as R_RenderView makes it, summed and let go)
++		const int was = tr.refdef.numDrawSurfs;
++		tr.viewCount++;
++		tr.viewParms = *parms;
++		tr.viewParms.frameSceneNum = tr.frameSceneNum;
++		tr.viewParms.frameCount = tr.frameCount;
++		tr.viewCount++;
++		R_RotateForViewer();
++		R_SetupFrustum();
++		R_SetViewFogIndex();
++		R_GenerateDrawSurfs();
++		check_count = tr.refdef.numDrawSurfs - was;
++		if ( check_count > 0 ) {
++			R_RadixSort( tr.refdef.drawSurfs + was, check_count );
++			check = SE_FrontSum( tr.refdef.drawSurfs + was, check_count );
++		}
++		tr.refdef.numDrawSurfs = was;
++	}
++
++	// (R_RenderView's start)
++	tr.viewCount++;
++	tr.viewParms = *parms;
++	tr.viewParms.frameSceneNum = tr.frameSceneNum;
++	tr.viewParms.frameCount = tr.frameCount;
++	const int first = tr.refdef.numDrawSurfs;
++	tr.viewCount++;
++	R_RotateForViewer();
++	R_SetupFrustum();
++	R_SetViewFogIndex();
++	// (the Ghoul2 entities: a model's level of detail goes by the projection's terms of the field of view, not its far plane)
++	R_SetupProjection();
++	se_entity_filter = 1;
++	R_AddEntitySurfaces();
++	se_entity_filter = 0;
++
++	cmd->commandId = RC_SE_VIEW;
++	cmd->first = first, cmd->count = tr.refdef.numDrawSurfs - first, cmd->viewCount = tr.viewCount;
++	cmd->seq = se_views.last = ++se_views.seq;
++	cmd->check = check, cmd->checkCount = (unsigned)check_count;
++	cmd->refdef = tr.refdef;
++	cmd->viewParms = tr.viewParms;
++	return 1;
++}
++// (the drawing's worker, or this core drawing the frame itself: the view made and drawn)
++const void *R_SE_FrontView( const void *data )
++{
++	const seViewCommand_t *cmd = (const seViewCommand_t *)data;
++	tr.refdef = cmd->refdef;
++	tr.viewParms = cmd->viewParms;
++	tr.viewCount = cmd->viewCount;
++	int n = cmd->count > MAX_DRAWSURFS ? MAX_DRAWSURFS : cmd->count;
++	if ( n > 0 )
++		memcpy( se_front_surfs, cmd->refdef.drawSurfs + cmd->first, n * sizeof( drawSurf_t ) );
++	tr.refdef.drawSurfs = se_front_surfs;
++	tr.refdef.numDrawSurfs = n;
++	R_AddWorldSurfaces();
++	R_AddPolygonSurfaces();
++	R_SetupProjection();
++	se_entity_filter = 2;
++	R_AddEntitySurfaces();
++	se_entity_filter = 0;
++	n = tr.refdef.numDrawSurfs > MAX_DRAWSURFS ? MAX_DRAWSURFS : tr.refdef.numDrawSurfs;
++	if ( n > 0 )
++		R_RadixSort( se_front_surfs, n );
++	if ( SE_FrontOn() == 2 ) {
++		se_front_check.views++;
++		if ( (unsigned)n != cmd->checkCount || ( n > 0 && SE_FrontSum( se_front_surfs, n ) != cmd->check ) )
++			se_front_check.wrong++;	// (no print here: the first core prints the counts, R_SE_FrontWait)
++	}
++	drawSurfsCommand_t dc;
++	dc.commandId = RC_DRAW_SURFS;
++	dc.drawSurfs = se_front_surfs;
++	dc.numDrawSurfs = n;
++	dc.refdef = tr.refdef;
++	dc.viewParms = tr.viewParms;
++	se_views_made.made = cmd->seq;	// (made: the first core may go on with its frame)
++	RB_DrawSurfs( &dc );
++	return (const void *)( cmd + 1 );
++}
++// (at the give: the views of the given list are waited for at the next frame's start; a list drawn here is made already)
++void R_SE_FrontGiven( int given )
++{
++	se_views.target = given ? se_views.last : 0;
++	se_views.last = 0;
++}
++void R_SE_FrontWait( void )
++{
++	if ( !se_views.target )
++		return;
++	while ( (int)( se_views_made.made - se_views.target ) < 0 )
++		SE_FrontRest();
++	se_views.target = 0;
++	static unsigned printed;
++	if ( SE_FrontOn() == 2 && se_front_check.views >= printed + 100 )
++		printed = se_front_check.views, ri.Printf( PRINT_ALL, "jk2front: %u views checked, %u not as made whole\n", se_front_check.views, se_front_check.wrong );
++}
++#endif
+\ No newline at end of file
 diff --git a/code/rd-vanilla/tr_marks.cpp b/code/rd-vanilla/tr_marks.cpp
-index 2da2512a..97658329 100644
+index 2da2512a..bf5820c6 100644
 --- a/code/rd-vanilla/tr_marks.cpp
 +++ b/code/rd-vanilla/tr_marks.cpp
 @@ -45,8 +45,14 @@ Out must have space for two more vertexes than in
@@ -4510,6 +5523,98 @@ index 2da2512a..97658329 100644
  	int			counts[3];
  	float		dot;
  	int			i, j;
+@@ -135,7 +141,26 @@ R_BoxSurfaces_r
+ 
+ =================
+ */
++#ifdef SHADEREMU
++#include "../../shared/qcommon/se_slot.h"
++// What a mark's search has seen: a slot's own count and marks of the world's surfaces, not the renderer's tr.viewCount
++// and surf->viewCount, which the front end's view uses (the players' marks are made on worker cores, se_slot.h; the
++// first core's are its slot 0). Made by the first core for the world loaded; a slot finding none ends its job.
++static int *se_mark_seen[SE_SLOTS + 1];
++static int se_mark_count[SE_SLOTS + 1][4] __attribute__(( aligned( 16 ) ));
++static const world_t *se_mark_world;
++static int se_mark_surfaces;
++#endif
+ void R_BoxSurfaces_r(mnode_t *node, vec3_t mins, vec3_t maxs, surfaceType_t **list, int listsize, int *listlength, vec3_t dir) {
++#ifdef SHADEREMU
++	const int se_slot = SE_Slot();
++	int *const se_seen = se_mark_seen[se_slot];
++	const int se_count = se_mark_count[se_slot][0];
++#define SE_MARKSEEN( surf ) se_seen[ ( surf ) - tr.world->surfaces ]
++#define SE_VIEWCOUNT_SET( surf ) ( SE_MARKSEEN( surf ) = se_count )
++#else
++#define SE_VIEWCOUNT_SET( surf ) ( ( surf )->viewCount = tr.viewCount )
++#endif
+ 
+ 	int			s, c;
+ 	msurface_t	*surf, **mark;
+@@ -165,28 +190,32 @@ void R_BoxSurfaces_r(mnode_t *node, vec3_t mins, vec3_t maxs, surfaceType_t **li
+ 		// check if the surface has NOIMPACT or NOMARKS set
+ 		if ( ( surf->shader->surfaceFlags & ( SURF_NOIMPACT | SURF_NOMARKS ) )
+ 			|| ( surf->shader->contentFlags & CONTENTS_FOG ) ) {
+-			surf->viewCount = tr.viewCount;
++			SE_VIEWCOUNT_SET( surf );
+ 		}
+ 		// extra check for surfaces to avoid list overflows
+ 		else if (*(surf->data) == SF_FACE) {
+ 			// the face plane should go through the box
+ 			s = BoxOnPlaneSide( mins, maxs, &(( srfSurfaceFace_t * ) surf->data)->plane );
+ 			if (s == 1 || s == 2) {
+-				surf->viewCount = tr.viewCount;
++				SE_VIEWCOUNT_SET( surf );
+ 			} else if (DotProduct((( srfSurfaceFace_t * ) surf->data)->plane.normal, dir) > -0.5) {
+ 			// don't add faces that make sharp angles with the projection direction
+-				surf->viewCount = tr.viewCount;
++				SE_VIEWCOUNT_SET( surf );
+ 			}
+ 		}
+ 		else if (*(surfaceType_t *) (surf->data) != SF_GRID
+ 			&& *(surfaceType_t *) (surf->data) != SF_TRIANGLES )
+ 		{
+-			surf->viewCount = tr.viewCount;
++			SE_VIEWCOUNT_SET( surf );
+ 		}
+ 		// check the viewCount because the surface may have
+ 		// already been added if it spans multiple leafs
++		#ifdef SHADEREMU
++		if ( SE_MARKSEEN( surf ) != se_count ) {
++#else
+ 		if (surf->viewCount != tr.viewCount) {
+-			surf->viewCount = tr.viewCount;
++#endif
++			SE_VIEWCOUNT_SET( surf );
+ 			list[*listlength] = (surfaceType_t *) surf->data;
+ 			(*listlength)++;
+ 		}
+@@ -274,8 +303,26 @@ int R_MarkFragments( int numPoints, const vec3_t *points, const vec3_t projectio
+ 	vec3_t			projectionDir;
+ 	vec3_t			v1, v2;
+ 
++#ifdef SHADEREMU
++	{
++		const int se_slot = SE_Slot();
++		if ( se_mark_world != tr.world || !tr.world || se_mark_surfaces != tr.world->numsurfaces ) {
++			if ( se_slot || !tr.world )
++				SE_SlotAbort( SE_WHY_MARKS );	// (made by the first core: the first core's first mark is before any job)
++			for ( int k = 0 ; k <= SE_SLOTS ; k++ ) {
++				if ( se_mark_seen[k] )
++					free( se_mark_seen[k] );
++				se_mark_seen[k] = (int *)calloc( tr.world->numsurfaces + 1, sizeof( int ) );
++				se_mark_count[k][0] = 1;
++			}
++			se_mark_world = tr.world, se_mark_surfaces = tr.world->numsurfaces;
++		}
++		se_mark_count[se_slot][0]++;	// (this search's count, for double check prevention)
++	}
++#else
+ 	//increment view count for double check prevention
+ 	tr.viewCount++;
++#endif
+ 
+ 	//
+ 	VectorNormalize2( projection, projectionDir );
 diff --git a/code/rd-vanilla/tr_model.cpp b/code/rd-vanilla/tr_model.cpp
 index a6d5bc7b..d2304e22 100644
 --- a/code/rd-vanilla/tr_model.cpp
@@ -4558,6 +5663,21 @@ index a6d5bc7b..d2304e22 100644
  	static CachedModels_t singleton;	// sorry vv, your dynamic allocation was a (false) memory leak
  	CachedModels = &singleton;
  
+diff --git a/code/rd-vanilla/tr_scene.cpp b/code/rd-vanilla/tr_scene.cpp
+index d0b6b549..7fcd3869 100644
+--- a/code/rd-vanilla/tr_scene.cpp
++++ b/code/rd-vanilla/tr_scene.cpp
+@@ -402,6 +402,10 @@ void RE_RenderScene( const refdef_t *fd ) {
+ 	VectorCopy( fd->vieworg, parms.pvsOrigin );
+ 
+ 	recursivePortalCount = 0;
++#ifdef SHADEREMU
++	int R_SE_RenderViewSplit( viewParms_t *parms, int sky_portal );
++	if ( !R_SE_RenderViewSplit( &parms, skyboxportal || drawskyboxportal ) )
++#endif
+ 	R_RenderView( &parms );
+ 
+ 	// the next scene rendered in this frame will tack on after this one
 diff --git a/code/rd-vanilla/tr_shade.cpp b/code/rd-vanilla/tr_shade.cpp
 index 48f3ed13..fb04dac9 100644
 --- a/code/rd-vanilla/tr_shade.cpp
@@ -4819,10 +5939,27 @@ index 48f3ed13..fb04dac9 100644
  	//
  	// draw debugging stuff
 diff --git a/code/rd-vanilla/tr_shader.cpp b/code/rd-vanilla/tr_shader.cpp
-index 89910449..d75fc01c 100644
+index 89910449..117538cc 100644
 --- a/code/rd-vanilla/tr_shader.cpp
 +++ b/code/rd-vanilla/tr_shader.cpp
-@@ -3757,6 +3757,34 @@ a single large text block that can be scanned for shader names
+@@ -2763,10 +2763,16 @@ shaders.
+ Sets shader->sortedIndex
+ ==============
+ */
++#ifdef SHADEREMU
++extern "C" void jk2RenderSettle( void );
++#endif
+ static void SortNewShader( void ) {
+ 	int		i;
+ 	float	sort;
+ 	shader_t	*newShader;
++#ifdef SHADEREMU
++	jk2RenderSettle();	// (the frame out on the drawing's worker sorts and draws by the shaders' sorted indices)
++#endif
+ 
+ 	newShader = tr.shaders[ tr.numShaders - 1 ];
+ 	sort = newShader->sort;
+@@ -3757,6 +3763,34 @@ a single large text block that can be scanned for shader names
  =====================
  */
  #define	MAX_SHADER_FILES	4096
@@ -4857,7 +5994,7 @@ index 89910449..d75fc01c 100644
  static void ScanAndLoadShaderFiles( void )
  {
  	char **shaderFiles;
-@@ -3778,6 +3806,38 @@ static void ScanAndLoadShaderFiles( void )
+@@ -3778,6 +3812,38 @@ static void ScanAndLoadShaderFiles( void )
  	if ( numShaderFiles > MAX_SHADER_FILES ) {
  		numShaderFiles = MAX_SHADER_FILES;
  	}
@@ -4896,7 +6033,7 @@ index 89910449..d75fc01c 100644
  
  	// load and store shader files
  	for ( i = 0; i < numShaderFiles; i++ )
-@@ -3790,6 +3850,9 @@ static void ScanAndLoadShaderFiles( void )
+@@ -3790,6 +3856,9 @@ static void ScanAndLoadShaderFiles( void )
  		summand = ri.FS_ReadFile( filename, (void **)&buffers[i] );
  		if ( !buffers[i] )
  			ri.Error( ERR_DROP, "Couldn't load %s", filename );
@@ -4906,7 +6043,7 @@ index 89910449..d75fc01c 100644
  
  		if ( buffers[i] )
  			sum += summand;
-@@ -3814,12 +3877,30 @@ static void ScanAndLoadShaderFiles( void )
+@@ -3814,12 +3883,30 @@ static void ScanAndLoadShaderFiles( void )
  
  	COM_Compress( s_shaderText );
  
@@ -5086,6 +6223,84 @@ index 1e51e71c..ca14c6db 100644
  }
  
  
+diff --git a/code/rd-vanilla/tr_world.cpp b/code/rd-vanilla/tr_world.cpp
+index 4a472e24..ebb99393 100644
+--- a/code/rd-vanilla/tr_world.cpp
++++ b/code/rd-vanilla/tr_world.cpp
+@@ -679,6 +679,59 @@ static const byte *R_ClusterPVS (int cluster) {
+ 	return tr.world->vis + cluster * tr.world->clusterBytes;
+ }
+ 
++#ifdef SHADEREMU
++// ShaderEmu: whether a view may see one of the world's portal or mirror surfaces (tr_main.cpp's R_SE_RenderViewSplit:
++// a view that may is made by this core as before, R_SortDrawSurfs rendering the portal's view). By the clusters of the
++// leaves the surfaces lie in, against the view's cluster's PVS; a surface no leaf names, or no vis, counts as seen.
++static const world_t *se_pw;
++static int se_pn, se_pall, se_pclusters[32];
++int R_SE_PortalMaybeSeen( const vec3_t origin )
++{
++	if ( se_pw != tr.world ) {
++		se_pw = tr.world, se_pn = 0, se_pall = 0;
++		const msurface_t *found[32];
++		int nfound = 0, total = 0;
++		for ( int i = 0 ; i < tr.world->numsurfaces ; i++ )
++			if ( tr.world->surfaces[i].shader && tr.world->surfaces[i].shader->sort <= SS_PORTAL )
++				total++;
++		for ( int n = 0 ; n < tr.world->numnodes && !se_pall ; n++ ) {
++			const mnode_t *leaf = &tr.world->nodes[n];
++			if ( leaf->contents == -1 )
++				continue;
++			for ( int m = 0 ; m < leaf->nummarksurfaces ; m++ ) {
++				const msurface_t *surf = leaf->firstmarksurface[m];
++				if ( !surf->shader || surf->shader->sort > SS_PORTAL )
++					continue;
++				int k;
++				for ( k = 0 ; k < nfound && found[k] != surf ; k++ ) {}
++				if ( k == nfound ) {
++					if ( nfound == 32 ) { se_pall = 1; break; }
++					found[nfound++] = surf;
++				}
++				if ( leaf->cluster < 0 ) { se_pall = 1; break; }
++				for ( k = 0 ; k < se_pn && se_pclusters[k] != leaf->cluster ; k++ ) {}
++				if ( k == se_pn ) {
++					if ( se_pn == 32 ) { se_pall = 1; break; }
++					se_pclusters[se_pn++] = leaf->cluster;
++				}
++			}
++		}
++		if ( nfound < total )
++			se_pall = 1;
++	}
++	if ( se_pall || r_novis->integer || !tr.world->vis )
++		return 1;
++	const mnode_t *leaf = R_PointInLeaf( (float *)origin );
++	if ( leaf->cluster < 0 )
++		return 1;
++	const byte *vis = R_ClusterPVS( leaf->cluster );
++	for ( int k = 0 ; k < se_pn ; k++ )
++		if ( vis[se_pclusters[k] >> 3] & ( 1 << ( se_pclusters[k] & 7 ) ) )
++			return 1;
++	return 0;
++}
++#endif
++
+ /*
+ =================
+ R_inPVS
+diff --git a/code/server/server.h b/code/server/server.h
+index 71b7ed2a..3e701db8 100644
+--- a/code/server/server.h
++++ b/code/server/server.h
+@@ -52,6 +52,9 @@ typedef struct svEntity_s {
+ 	int			lastCluster;		// if all the clusters don't fit in clusternums
+ 	int			areanum, areanum2;
+ 	int			snapshotCounter;	// used to prevent double adding from portal views
++#ifdef SHADEREMU
++	vec3_t		seAbsmin, seAbsmax;	// the game entity's bounds as it was linked (SV_AreaEntities_r reads these, not the gentity)
++#endif
+ } svEntity_t;
+ 
+ typedef enum {
 diff --git a/code/server/sv_game.cpp b/code/server/sv_game.cpp
 index 8cd596fb..b8e4be48 100644
 --- a/code/server/sv_game.cpp
@@ -5211,6 +6426,86 @@ index c9dd4880..139ce40f 100644
  }
  
  
+diff --git a/code/server/sv_world.cpp b/code/server/sv_world.cpp
+index be960b52..cdc4b8af 100644
+--- a/code/server/sv_world.cpp
++++ b/code/server/sv_world.cpp
+@@ -210,6 +210,9 @@ SV_LinkEntity
+ */
+ #define MAX_TOTAL_ENT_LEAFS		128
+ void SV_LinkEntity( gentity_t *gEnt ) {
++#ifdef SHADEREMU
++	SE_NOT_AHEAD( SE_WHY_SPAWN );	// (not for a player made ahead: se_slot.h)
++#endif
+ 	worldSector_t	*node;
+ 	int			leafs[MAX_TOTAL_ENT_LEAFS];
+ 	int			cluster;
+@@ -361,6 +364,10 @@ void SV_LinkEntity( gentity_t *gEnt ) {
+ 	ent->worldSector = node;
+ 	ent->nextEntityInWorldSector = node->entities;
+ 	node->entities = ent;
++#ifdef SHADEREMU
++	VectorCopy( gEnt->absmin, ent->seAbsmin );
++	VectorCopy( gEnt->absmax, ent->seAbsmax );
++#endif
+ 
+ 	gEnt->linked = qtrue;
+ }
+@@ -389,13 +396,46 @@ SV_AreaEntities_r
+ 
+ ====================
+ */
++#ifdef SHADEREMU
++// ShaderEmu: the walk reads the bounds the entity was linked with, kept in its svEntity_t (a few words a texel), not
++// the gentity's (two texels far apart in a large struct, and the gentity's address made from its number): the same
++// test, as only SV_LinkEntity sets a linked entity's absmin and absmax. JK2_AREA_CHECK=1 compares the two and counts.
++static int se_area_check = -1;
++unsigned se_area_wrong;
++#endif
+ void SV_AreaEntities_r( worldSector_t *node, areaParms_t *ap ) {
+ 	svEntity_t	*check, *next;
+ 	gentity_t	*gcheck;
++#ifdef SHADEREMU
++	if ( se_area_check < 0 )
++		se_area_check = getenv( "JK2_AREA_CHECK" ) != NULL;
++#endif
+ 
+ 	for ( check = node->entities  ; check ; check = next ) {
+ 		next = check->nextEntityInWorldSector;
+ 
++#ifdef SHADEREMU
++		if ( check->seAbsmin[0] > ap->maxs[0]
++		|| check->seAbsmin[1] > ap->maxs[1]
++		|| check->seAbsmin[2] > ap->maxs[2]
++		|| check->seAbsmax[0] < ap->mins[0]
++		|| check->seAbsmax[1] < ap->mins[1]
++		|| check->seAbsmax[2] < ap->mins[2]) {
++			if ( se_area_check ) {
++				gcheck = SV_GEntityForSvEntity( check );
++				if ( !VectorCompare( gcheck->absmin, check->seAbsmin ) || !VectorCompare( gcheck->absmax, check->seAbsmax ) ) {
++					if ( se_area_wrong++ < 4 )
++						Com_Printf( "jk2area: entity %d's bounds are not as linked\n", gcheck->s.number );
++				}
++			}
++			continue;
++		}
++		gcheck = SV_GEntityForSvEntity( check );
++		if ( se_area_check && ( !VectorCompare( gcheck->absmin, check->seAbsmin ) || !VectorCompare( gcheck->absmax, check->seAbsmax ) ) ) {
++			if ( se_area_wrong++ < 4 )
++				Com_Printf( "jk2area: entity %d's bounds are not as linked\n", gcheck->s.number );
++		}
++#else
+ 		gcheck = SV_GEntityForSvEntity( check );
+ 
+ 		if ( gcheck->absmin[0] > ap->maxs[0]
+@@ -406,6 +446,7 @@ void SV_AreaEntities_r( worldSector_t *node, areaParms_t *ap ) {
+ 		|| gcheck->absmax[2] < ap->mins[2]) {
+ 			continue;
+ 		}
++#endif
+ 
+ 		if ( ap->count == ap->maxcount ) {
+ 			Com_DPrintf ("SV_AreaEntities: reached maxcount (%d)\n",ap->maxcount);
 diff --git a/code/ui/ui_main.cpp b/code/ui/ui_main.cpp
 index 4a20f0ee..27bb06df 100644
 --- a/code/ui/ui_main.cpp
@@ -5313,6 +6608,94 @@ index 0b83bc19..6b3b6d7c 100644
  		VectorNormalize( norm );
  
  		theFxScheduler.PlayEffect( mDeathFxID, mOrigin1, norm );
+diff --git a/codeJK2/cgame/FxScheduler.cpp b/codeJK2/cgame/FxScheduler.cpp
+index fd4f9cef..936c579e 100644
+--- a/codeJK2/cgame/FxScheduler.cpp
++++ b/codeJK2/cgame/FxScheduler.cpp
+@@ -491,6 +491,9 @@ static void ReportPlayEffectError(int id)
+ //------------------------------------------------------
+ void CFxScheduler::PlayEffect( int id, vec3_t origin )
+ {
++#ifdef SHADEREMU
++	SE_NOT_AHEAD( SE_WHY_FX );	// (not for a player made ahead: se_slot.h)
++#endif
+ 	vec3_t	axis[3];
+ 
+ 	VectorSet( axis[0], 0, 0, 1 );
+@@ -514,6 +517,9 @@ void CFxScheduler::PlayEffect( int id, vec3_t origin )
+ //------------------------------------------------------
+ void CFxScheduler::PlayEffect( int id, vec3_t origin, vec3_t forward )
+ {
++#ifdef SHADEREMU
++	SE_NOT_AHEAD( SE_WHY_FX );	// (not for a player made ahead: se_slot.h)
++#endif
+ 	vec3_t	axis[3];
+ 
+ 	// Take the forward vector and create two arbitrary but perpendicular vectors
+@@ -538,6 +544,9 @@ void CFxScheduler::PlayEffect( int id, vec3_t origin, vec3_t forward )
+ //------------------------------------------------------
+ void CFxScheduler::PlayEffect( const char *file, vec3_t origin, vec3_t axis[3], const int boltInfo, const int entNum )
+ {
++#ifdef SHADEREMU
++	SE_NOT_AHEAD( SE_WHY_FX );	// (not for a player made ahead: se_slot.h)
++#endif
+ 	char	sfile[MAX_QPATH];
+ 
+ 	// Get an extenstion stripped version of the file
+@@ -576,6 +585,9 @@ void CFxScheduler::PlayEffect( const char *file, vec3_t origin, vec3_t axis[3],
+ //------------------------------------------------------
+ void CFxScheduler::PlayEffect( const char *file, int clientID )
+ {
++#ifdef SHADEREMU
++	SE_NOT_AHEAD( SE_WHY_FX );	// (not for a player made ahead: se_slot.h)
++#endif
+ 	char	sfile[MAX_QPATH];
+ 	int		id;
+ 
+@@ -840,6 +852,9 @@ void CFxScheduler::CreateEffect( CPrimitiveTemplate *fx, int clientID, int delay
+ //------------------------------------------------------
+ void CFxScheduler::PlayEffect( int id, vec3_t origin, vec3_t axis[3], const int boltInfo, const int entNum )
+ {
++#ifdef SHADEREMU
++	SE_NOT_AHEAD( SE_WHY_FX );	// (not for a player made ahead: se_slot.h)
++#endif
+ 	SEffectTemplate			*fx;
+ 	CPrimitiveTemplate		*prim;
+ 	int						i = 0;
+@@ -1012,6 +1027,9 @@ void CFxScheduler::PlayEffect( int id, vec3_t origin, vec3_t axis[3], const int
+ //------------------------------------------------------
+ void CFxScheduler::PlayEffect( const char *file, vec3_t origin )
+ {
++#ifdef SHADEREMU
++	SE_NOT_AHEAD( SE_WHY_FX );	// (not for a player made ahead: se_slot.h)
++#endif
+ 	char	sfile[MAX_QPATH];
+ 
+ 	// Get an extenstion stripped version of the file
+@@ -1041,6 +1059,9 @@ void CFxScheduler::PlayEffect( const char *file, vec3_t origin )
+ //------------------------------------------------------
+ void CFxScheduler::PlayEffect( const char *file, vec3_t origin, vec3_t forward )
+ {
++#ifdef SHADEREMU
++	SE_NOT_AHEAD( SE_WHY_FX );	// (not for a player made ahead: se_slot.h)
++#endif
+ 	char	sfile[MAX_QPATH];
+ 
+ 	// Get an extenstion stripped version of the file
+diff --git a/codeJK2/cgame/cg_camera.cpp b/codeJK2/cgame/cg_camera.cpp
+index a2502085..566b64f2 100644
+--- a/codeJK2/cgame/cg_camera.cpp
++++ b/codeJK2/cgame/cg_camera.cpp
+@@ -1224,6 +1224,9 @@ CGCam_Shake
+ 
+ void CGCam_Shake( float intensity, int duration )
+ {
++#ifdef SHADEREMU
++	SE_NOT_AHEAD( SE_WHY_CAMERA );	// (not for a player made ahead: se_slot.h)
++#endif
+ 	if ( intensity > MAX_SHAKE_INTENSITY )
+ 		intensity = MAX_SHAKE_INTENSITY;
+ 
 diff --git a/codeJK2/cgame/cg_effects.cpp b/codeJK2/cgame/cg_effects.cpp
 index 63add3c3..41e7273b 100644
 --- a/codeJK2/cgame/cg_effects.cpp
@@ -5350,6 +6733,295 @@ index 63add3c3..41e7273b 100644
  
  	CPoly *pol = FX_AddPoly(p, uv, 4,			// verts, ST, vertCount
  			vel, accel,				// motion
+diff --git a/codeJK2/cgame/cg_ents.cpp b/codeJK2/cgame/cg_ents.cpp
+index bad8c736..738258e1 100644
+--- a/codeJK2/cgame/cg_ents.cpp
++++ b/codeJK2/cgame/cg_ents.cpp
+@@ -118,7 +118,12 @@ Also called by event processing code
+ ======================
+ */
+ vec3_t *CG_SetEntitySoundPosition( centity_t *cent ) {
++#ifdef SHADEREMU
++	static vec3_t se_v3Return[SE_SLOTS + 1][2] __attribute__(( aligned( 16 ) ));	// (a job slot's: se_slot.h)
++#define v3Return ( se_v3Return[SE_Slot()][0] )
++#else
+ 	static vec3_t v3Return;
++#endif
+ 	if ( cent->currentState.solid == SOLID_BMODEL ) {
+ 		vec3_t	origin;
+ 		float	*v;
+@@ -2073,7 +2078,26 @@ CG_AddCEntity
+ 
+ ===============
+ */
++#ifdef SHADEREMU
++extern "C" int SE_SlotMode( void );
++extern "C" void SE_CGRandFor( int number, int time );
++extern "C" void SE_CGRandEnd( void );
++static void CG_AddCEntity_( centity_t *cent );
++// (a player draws from a random state of its own, made from its number and the frame's time: cg_rand.c)
+ static void CG_AddCEntity( centity_t *cent )
++{
++	if ( cent->currentState.eType != ET_PLAYER || !SE_SlotMode() ) {
++		CG_AddCEntity_( cent );
++		return;
++	}
++	SE_CGRandFor( cent->currentState.number, cg.time );
++	CG_AddCEntity_( cent );
++	SE_CGRandEnd();
++}
++static void CG_AddCEntity_( centity_t *cent )
++#else
++static void CG_AddCEntity( centity_t *cent )
++#endif
+ {
+ 	// event-only entities will have been dealt with already
+ 	if ( cent->currentState.eType >= ET_EVENTS ) {
+@@ -2162,6 +2186,214 @@ CG_AddPacketEntities
+ 
+ ===============
+ */
++#ifdef SHADEREMU
++// ---- the players made ahead (docs/games/jk2.md, "The players on workers"; se_slot.h)
++// Before the entities' loop, every player of the snapshot (ET_PLAYER: the player and the NPCs, a tenth of a million
++// instructions each a frame of play, their Ghoul2 bones and bolts, shadows and angles) is made by CG_AddCEntity on a
++// worker core of its own (or on this one, when none is free), what it asks of the engine recorded (cl_cgame.cpp); then
++// the loop makes every entity in its turn, a player made ahead by replaying what it recorded. So the engine is asked
++// the same things in the same order as when each is made in its turn, and what a player reads of the others is as it
++// was in its turn: of a player before it the new (it waits for that player: a "wave" after it), of one after it the
++// frame before's (copied first: CG_SE_LookPoint), and a look target that is not a player is placed first. A player that
++// asks what cannot be recorded ends its job (SE_SlotAbort), is put back as it was and is made in its turn, and so is
++// any player waiting on it. A player draws its random numbers from a state of its own (cg_rand.c), in its turn too.
++// JK2_PLAYERS=core: as before, every entity in its turn; =inline: ahead, all on this core. JK2_PLAYERS_LOG=N: a line
++// every N frames (made ahead, by workers, ended and why).
++#include <setjmp.h>
++extern "C" {
++void SE_RecBegin( void *buf, int size );
++int SE_RecEnd( void );
++void SE_RecReplay( const void *buf, int bytes );
++int SE_SlotGive( int slot, void ( *fn )( void * ), void *arg );
++void SE_SlotJoin( int handle );
++int SE_SlotMode( void );		// 0: JK2_PLAYERS=core, 1: on this core, 2: on workers
++void SE_CGRandFor( int number, int time );
++void SE_CGRandEnd( void );
++struct seAbort_t { jmp_buf *jb; int why, unused[2]; } __attribute__(( aligned( 16 ) ));
++extern seAbort_t se_abort[SE_SLOTS + 1];
++}
++#define SE_PLAYERS 32
++#define SE_PLAYER_REC ( 12 * 1024 )
++struct sePlayer_t {
++	centity_t *cent;
++	int num, wave, slot, handle;	// (the first core's)
++	int look, unused[3];	// look: the player it waits for, or -1
++	struct { int state, why, bytes, unused; } __attribute__(( aligned( 16 ) )) out;	// (the maker's) state: 0 not yet, 1 made ahead (to replay), 2 to make in its turn
++	__attribute__(( aligned( 16 ) )) centity_t cent_was;
++	gentity_t gent_was;
++	gclient_t client_was;
++	unsigned char rec[SE_PLAYER_REC];
++} __attribute__(( aligned( 16 ) ));
++static sePlayer_t se_players[SE_PLAYERS];
++static int se_nplayers;
++static short se_order[MAX_GENTITIES];		// an entity's place in the snapshot's list this frame, or -1
++static int se_order_frame = -1;
++struct seLook_t { vec3_t eye, lerp; int frame, unused[1]; } __attribute__(( aligned( 16 ) ));
++static seLook_t se_look[MAX_GENTITIES];	// what a player made after another read of it: the frame before's
++static unsigned se_counts[SE_WHY_COUNT + 4];	// [0] players, [1] made ahead, [2] by workers, [3] waited on an ended one, 4.. why
++static int se_frames_logged;
++static int se_ahead_frame;		// cg.time of the players made ahead (CG_SE_LookPoint asks within it)
++
++static void se_player_run( void *arg )
++{
++	sePlayer_t *p = (sePlayer_t *)arg;
++	const int slot = SE_Slot();
++	centity_t *cent = p->cent;
++	memcpy( &p->cent_was, cent, sizeof( centity_t ) );
++	memcpy( &p->gent_was, cent->gent, sizeof( gentity_t ) );
++	if ( cent->gent->client )
++		memcpy( &p->client_was, cent->gent->client, sizeof( gclient_t ) );
++	jmp_buf jb;
++	if ( setjmp( jb ) ) {
++		// (ended: put back as it was, made in its turn)
++		se_abort[slot].jb = NULL;
++		SE_RecEnd();
++		SE_CGRandEnd();
++		memcpy( cent, &p->cent_was, sizeof( centity_t ) );
++		gclient_t *client = cent->gent->client;
++		memcpy( cent->gent, &p->gent_was, sizeof( gentity_t ) );
++		if ( client )
++			memcpy( client, &p->client_was, sizeof( gclient_t ) );
++		p->out.why = se_abort[slot].why;
++		p->out.state = 2;
++		return;
++	}
++	se_abort[slot].jb = &jb;
++	SE_RecBegin( p->rec, SE_PLAYER_REC );
++	CG_AddCEntity( cent );
++	p->out.bytes = SE_RecEnd();
++	se_abort[slot].jb = NULL;
++	p->out.state = 1;
++}
++
++// What a player reads of the one it looks at (cg_players.cpp's CG_CheckLookTarget): its eye, or its place when it is not
++// a client, as that entity's turn has left it
++const float *CG_SE_LookPoint( const centity_t *cent, const centity_t *look, qboolean eye )
++{
++	const int n = look->currentState.number, me = cent->currentState.number;
++	if ( se_ahead_frame == cg.time && se_order_frame == cg.time && se_look[n].frame == cg.time &&
++		 se_order[n] >= 0 && se_order[me] >= 0 && se_order[n] > se_order[me] )
++		return eye ? se_look[n].eye : se_look[n].lerp;	// (its turn comes after this one's: the frame before's)
++	return eye ? look->gent->client->renderInfo.eyePoint : look->lerpOrigin;
++}
++
++static void CG_SE_PlayersAhead( void )
++{
++	const int mode = SE_SlotMode();
++	se_nplayers = 0;
++	se_ahead_frame = cg.time;
++	se_order_frame = cg.time;
++	for ( int i = 0; i < MAX_GENTITIES; i++ )
++		se_order[i] = -1;
++	for ( int num = 0 ; num < cg.snap->numEntities ; num++ ) {
++		centity_t *cent = &cg_entities[ cg.snap->entities[ num ].number ];
++		se_order[cent->currentState.number] = (short)num;
++		if ( cent->currentState.eType != ET_PLAYER || !cent->gent || !cent->gent->client || se_nplayers >= SE_PLAYERS )
++			continue;
++		sePlayer_t *p = &se_players[se_nplayers++];
++		p->cent = cent, p->num = num, p->out.state = 0, p->out.why = 0, p->out.bytes = 0, p->look = -1, p->wave = 0, p->handle = 0;
++	}
++	// what a player made after another reads of it is the frame before's: kept first
++	for ( int i = 0; i < se_nplayers; i++ ) {
++		centity_t *cent = se_players[i].cent;
++		seLook_t *l = &se_look[cent->currentState.number];
++		VectorCopy( cent->gent->client->renderInfo.eyePoint, l->eye );
++		VectorCopy( cent->lerpOrigin, l->lerp );
++		l->frame = cg.time;
++	}
++	for ( int i = 0; i < se_nplayers; i++ ) {
++		sePlayer_t *p = &se_players[i];
++		const renderInfo_t *ri = &p->cent->gent->client->renderInfo;
++		if ( ri->lookMode != LM_ENT || ri->lookTarget < 0 || ri->lookTarget >= ENTITYNUM_WORLD )
++			continue;
++		centity_t *look = &cg_entities[ri->lookTarget];
++		const int at = se_order[ri->lookTarget];
++		if ( !look->gent || at < 0 )
++			continue;
++		if ( !look->gent->client ) {
++			// (an entity placed in its turn before this player's: placed now, as again in its turn; one after: the
++			// frame before's, kept)
++			seLook_t *l = &se_look[ri->lookTarget];
++			if ( l->frame != cg.time ) {
++				VectorCopy( look->lerpOrigin, l->lerp );
++				VectorClear( l->eye );
++				l->frame = cg.time;
++			}
++			if ( at < p->num && look->currentState.eType < ET_EVENTS )
++				CG_CalcEntityLerpPositions( look );
++			continue;
++		}
++		for ( int k = 0; k < i; k++ )
++			if ( se_players[k].cent == look ) {
++				p->look = k;
++				p->wave = se_players[k].wave + 1;
++			}
++	}
++	// the waves: a player after the one it waits for, on workers while there are free ones, else here
++	for ( int wave = 0; ; wave++ ) {
++		int any = 0, slot = 0;
++		for ( int i = 0; i < se_nplayers; i++ ) {
++			sePlayer_t *p = &se_players[i];
++			if ( p->wave != wave )
++				continue;
++			any = 1;
++			if ( p->look >= 0 && se_players[p->look].out.state != 1 ) {
++				p->out.state = 2;	// (the one it waits for is made in its turn: so is this one)
++				se_counts[3]++;
++				continue;
++			}
++			if ( mode == 2 && slot < SE_SLOTS && ( p->handle = SE_SlotGive( slot + 1, se_player_run, p ) ) ) {
++				p->slot = ++slot;
++				se_counts[2]++;
++				continue;
++			}
++			p->slot = 0;
++			se_recording0 = 1;
++			se_player_run( p );
++			se_recording0 = 0;
++		}
++		for ( int i = 0; i < se_nplayers; i++ )
++			if ( se_players[i].wave == wave && se_players[i].handle ) {
++				SE_SlotJoin( se_players[i].handle );
++				se_players[i].handle = 0;
++			}
++		if ( !any )
++			break;
++	}
++	for ( int i = 0; i < se_nplayers; i++ ) {
++		se_counts[0]++;
++		if ( se_players[i].out.state == 1 )
++			se_counts[1]++;
++		else if ( se_players[i].out.why > 0 && se_players[i].out.why < SE_WHY_COUNT )
++			se_counts[4 + se_players[i].out.why]++;
++	}
++	static int every = -1;
++	if ( every < 0 ) {
++		const char *e = getenv( "JK2_PLAYERS_LOG" );
++		every = e && *e ? atoi( e ) : 0;
++	}
++	if ( every > 0 && ++se_frames_logged % every == 0 ) {
++		char why[256] = "";
++		static const char *names[SE_WHY_COUNT] = { "", "malloc", "print", "call", "fx", "local", "mark", "camera", "spawn",
++			"task", "event", "saber", "chair", "rand", "box", "subbsp", "full", "lookup", "trace", "set", "cmd", "marks" };
++		for ( int k = 1; k < SE_WHY_COUNT; k++ )
++			if ( se_counts[4 + k] )
++				Q_strcat( why, sizeof why, va( " %s %u", names[k], se_counts[4 + k] ) );
++		Com_Printf( "jk2players: %u players, %u made ahead, %u on workers, %u waited on one in its turn; in its turn:%s\n",
++			se_counts[0], se_counts[1], se_counts[2], se_counts[3], why );
++		memset( se_counts, 0, sizeof se_counts );
++	}
++}
++
++// whether this entity was made ahead this frame (then its record is replayed)
++static sePlayer_t *CG_SE_MadeAhead( centity_t *cent, int num )
++{
++	for ( int i = 0; i < se_nplayers; i++ )
++		if ( se_players[i].num == num )
++			return se_players[i].cent == cent && se_players[i].out.state == 1 ? &se_players[i] : NULL;
++	return NULL;
++}
++#endif
+ void CG_AddPacketEntities( void ) {
+ 	int					num;
+ 	centity_t			*cent;
+@@ -2209,10 +2441,29 @@ void CG_AddPacketEntities( void ) {
+ //	CG_AddCEntity( cent );					//
+ 
+ 	// add each entity sent over by the server
++#ifdef SHADEREMU
++	const int se_mode = SE_SlotMode();
++	if ( se_mode ) {
++		CG_SE_PlayersAhead();
++	} else {
++		se_nplayers = 0;
++	}
++#endif
+ 	for ( num = 0 ; num < cg.snap->numEntities ; num++ ) {
+ 		cent = &cg_entities[ cg.snap->entities[ num ].number ];
++#ifdef SHADEREMU
++		if ( se_mode ) {
++			if ( sePlayer_t *p = CG_SE_MadeAhead( cent, num ) ) {
++				SE_RecReplay( p->rec, p->out.bytes );
++				continue;
++			}
++		}
++#endif
+ 		CG_AddCEntity( cent );
+ 	}
++#ifdef SHADEREMU
++	se_ahead_frame = -1;
++#endif
+ }
+ 
+ //rww - This function is not currently called. Use it as the client-side ROFF
 diff --git a/codeJK2/cgame/cg_info.cpp b/codeJK2/cgame/cg_info.cpp
 index bdb72696..0919f611 100644
 --- a/codeJK2/cgame/cg_info.cpp
@@ -5363,6 +7035,20 @@ index bdb72696..0919f611 100644
  	{
  		char	text[1024]={0};
  		cgi_SP_GetStringTextString( "INGAME_ALONGTIME", text, sizeof(text) );
+diff --git a/codeJK2/cgame/cg_localents.cpp b/codeJK2/cgame/cg_localents.cpp
+index dd1a72ec..60f4f652 100644
+--- a/codeJK2/cgame/cg_localents.cpp
++++ b/codeJK2/cgame/cg_localents.cpp
+@@ -79,6 +79,9 @@ Will allways succeed, even if it requires freeing an old active entity
+ ===================
+ */
+ localEntity_t	*CG_AllocLocalEntity( void ) {
++#ifdef SHADEREMU
++	SE_NOT_AHEAD( SE_WHY_LOCAL );	// (not for a player made ahead: se_slot.h)
++#endif
+ 	localEntity_t	*le;
+ 
+ 	if ( !cg_freeLocalEntities ) {
 diff --git a/codeJK2/cgame/cg_main.cpp b/codeJK2/cgame/cg_main.cpp
 index 9be003e9..2ff22402 100644
 --- a/codeJK2/cgame/cg_main.cpp
@@ -5389,21 +7075,34 @@ index 9be003e9..2ff22402 100644
  	for ( i = 1 ; i < MAX_SOUNDS ; i++ ) {
  		soundName = CG_ConfigString( CS_SOUNDS+i );
 diff --git a/codeJK2/cgame/cg_marks.cpp b/codeJK2/cgame/cg_marks.cpp
-index f4bcfa8d..ba92f91b 100644
+index f4bcfa8d..69d7b6ba 100644
 --- a/codeJK2/cgame/cg_marks.cpp
 +++ b/codeJK2/cgame/cg_marks.cpp
-@@ -128,6 +128,10 @@ passed to the renderer.
+@@ -87,6 +87,9 @@ Will allways succeed, even if it requires freeing an old active mark
+ ===================
+ */
+ markPoly_t	*CG_AllocMark( void ) {
++#ifdef SHADEREMU
++	SE_NOT_AHEAD( SE_WHY_MARK );	// (not for a player made ahead: se_slot.h)
++#endif
+ 	markPoly_t	*le;
+ 	int time;
+ 
+@@ -128,6 +131,13 @@ passed to the renderer.
  #define	MAX_MARK_FRAGMENTS	128
  #define	MAX_MARK_POINTS		384
  
 +#ifdef SHADEREMU
-+void ( *se_mark_kept )( int numPoints, const polyVert_t *verts );	// a temporary mark's polygons, told as they are added
++// a temporary mark's polygons, told as they are added: one a job slot (se_slot.h)
++struct seMarkKept_t { void ( *fn )( int numPoints, const polyVert_t *verts ); int unused[3]; } __attribute__(( aligned( 16 ) ));
++seMarkKept_t se_mark_kept_s[SE_SLOTS + 1];
++#define se_mark_kept ( se_mark_kept_s[SE_Slot()].fn )
 +#endif
 +
  void CG_ImpactMark( qhandle_t markShader, const vec3_t origin, const vec3_t dir,
  				   float orientation, float red, float green, float blue, float alpha,
  				   qboolean alphaFade, float radius, qboolean temporary ) {
-@@ -202,6 +206,11 @@ void CG_ImpactMark( qhandle_t markShader, const vec3_t origin, const vec3_t dir,
+@@ -202,6 +212,11 @@ void CG_ImpactMark( qhandle_t markShader, const vec3_t origin, const vec3_t dir,
  		// if it is a temporary (shadow) mark, add it immediately and forget about it
  		if ( temporary ) {
  			cgi_R_AddPolyToScene( markShader, mf->numPoints, verts );
@@ -5416,7 +7115,7 @@ index f4bcfa8d..ba92f91b 100644
  		}
  
 diff --git a/codeJK2/cgame/cg_players.cpp b/codeJK2/cgame/cg_players.cpp
-index ef21d32f..183dd4f9 100644
+index ef21d32f..879d98e4 100644
 --- a/codeJK2/cgame/cg_players.cpp
 +++ b/codeJK2/cgame/cg_players.cpp
 @@ -231,10 +231,19 @@ static const char *GetCustomSound_VariantCapped(const char *ppsTable[], int iEnt
@@ -5439,7 +7138,31 @@ index ef21d32f..183dd4f9 100644
  	for ( int i=0 ; i<iTableEntries; i++ )
  	{
  		const char *s = GetCustomSound_VariantCapped(ppsTable,i, qfalse);
-@@ -2861,7 +2870,80 @@ void CG_PlayerPowerups( centity_t *cent )
+@@ -1606,11 +1615,23 @@ static qboolean CG_CheckLookTarget( centity_t *cent, vec3_t	lookAngles, float *l
+ 				}
+ 				else if ( lookCent->gent->client )
+ 				{
++#ifdef SHADEREMU
++					// (as in the entities' turns: a player made after this one gives its eye of the frame before,
++					// docs/games/jk2.md, "The players on workers")
++					extern const float *CG_SE_LookPoint( const centity_t *cent, const centity_t *look, qboolean eye );
++					VectorCopy( CG_SE_LookPoint( cent, lookCent, qtrue ), lookOrg );
++#else
+ 					VectorCopy( lookCent->gent->client->renderInfo.eyePoint, lookOrg );
++#endif
+ 				}
+ 				else if ( lookCent->gent->s.pos.trType == TR_INTERPOLATE )
+ 				{
++#ifdef SHADEREMU
++					extern const float *CG_SE_LookPoint( const centity_t *cent, const centity_t *look, qboolean eye );
++					VectorCopy( CG_SE_LookPoint( cent, lookCent, qfalse ), lookOrg );
++#else
+ 					VectorCopy( lookCent->lerpOrigin, lookOrg );
++#endif
+ 				}
+ 				else if ( lookCent->gent->inuse && !VectorCompare( lookCent->gent->currentOrigin, vec3_origin ) )
+ 				{
+@@ -2861,7 +2882,93 @@ void CG_PlayerPowerups( centity_t *cent )
  }
  
  #define	SHADOW_DISTANCE		128
@@ -5458,9 +7181,18 @@ index ef21d32f..183dd4f9 100644
 +	qboolean	result, whole;
 +	polyVert_t	verts[SE_SHADOW_POLYS][SE_SHADOW_POINTS];
 +} seShadow_t;
-+static seShadow_t se_shadows[SE_SHADOWS], *se_shadow_now;
-+static int se_shadow_clock, se_shadow_off = -1;
-+extern void ( *se_mark_kept )( int numPoints, const polyVert_t *verts );
++// (the first core's 32, and a few for each job slot of the players made ahead, se_slot.h: a player is made by the same
++// slot frame after frame while the players are as many)
++#define SE_SLOT_SHADOWS		4
++static seShadow_t se_shadows0[SE_SHADOWS], se_shadows_s[SE_SLOTS][SE_SLOT_SHADOWS];
++struct seShadowSlot_t { seShadow_t *now; int clock, unused[2]; } __attribute__(( aligned( 16 ) ));
++static seShadowSlot_t se_shadow_slot[SE_SLOTS + 1];
++#define se_shadow_now ( se_shadow_slot[SE_Slot()].now )
++#define se_shadow_clock ( se_shadow_slot[SE_Slot()].clock )
++static int se_shadow_off = -1;
++struct seMarkKept_t { void ( *fn )( int numPoints, const polyVert_t *verts ); int unused[3]; } __attribute__(( aligned( 16 ) ));
++extern seMarkKept_t se_mark_kept_s[SE_SLOTS + 1];
++#define se_mark_kept ( se_mark_kept_s[SE_Slot()].fn )
 +static void se_shadow_keep( int numPoints, const polyVert_t *verts ) {
 +	seShadow_t *e = se_shadow_now;
 +	if ( !e || e->polys >= SE_SHADOW_POLYS || numPoints > SE_SHADOW_POINTS ) {
@@ -5476,14 +7208,18 @@ index ef21d32f..183dd4f9 100644
 +static qboolean _PlayerShadowMade( const vec3_t origin, const float orientation, float *const shadowPlane, const float radius );
 +static qboolean _PlayerShadow( const vec3_t origin, const float orientation, float *const shadowPlane, const float radius ) {
 +	if ( se_shadow_off < 0 ) {
++		SE_NOT_AHEAD( SE_WHY_SET );	// (the first core's first shadow reads the switch)
 +		const char *s = getenv( "JK2_SHADOWS" );
 +		se_shadow_off = s && !strcmp( s, "made" );
 +	}
 +	if ( se_shadow_off || cg_shadows.integer != 1 || !cg_addMarks.integer ) {
 +		return _PlayerShadowMade( origin, orientation, shadowPlane, radius );
 +	}
++	const int se_slot = SE_Slot();
++	seShadow_t *const se_shadows = se_slot ? se_shadows_s[se_slot - 1] : se_shadows0;
++	const int se_n = se_slot ? SE_SLOT_SHADOWS : SE_SHADOWS;
 +	seShadow_t *e, *oldest = &se_shadows[0];
-+	for ( e = se_shadows ; e < se_shadows + SE_SHADOWS ; e++ ) {
++	for ( e = se_shadows ; e < se_shadows + se_n ; e++ ) {
 +		if ( e->used && e->origin[0] == origin[0] && e->origin[1] == origin[1] && e->origin[2] == origin[2] &&
 +			 e->orientation == orientation && e->radius == radius ) {
 +			e->used = ++se_shadow_clock;
@@ -5520,7 +7256,7 @@ index ef21d32f..183dd4f9 100644
  	vec3_t		end, mins = {-7, -7, 0}, maxs = {7, 7, 2};
  	trace_t		trace;
  	float		alpha;
-@@ -3007,11 +3089,13 @@ void _PlayerSplash( const vec3_t origin, const vec3_t velocity, const float radi
+@@ -3007,11 +3114,13 @@ void _PlayerSplash( const vec3_t origin, const vec3_t velocity, const float radi
  
  	float alpha = ( t / 8192.0f ) * 0.6f + 0.2f;
  
@@ -5535,7 +7271,7 @@ index ef21d32f..183dd4f9 100644
  								cgs.media.wakeMarkShader, FX_ALPHA_LINEAR | FX_SIZE_LINEAR );
  }
  
-@@ -3349,7 +3433,9 @@ static void CG_ForceElectrocution( centity_t *cent, const vec3_t origin, vec3_t
+@@ -3349,7 +3458,9 @@ static void CG_ForceElectrocution( centity_t *cent, const vec3_t origin, vec3_t
  	{
  		// Just use the lerp Origin and a random direction
  		VectorCopy( cent->lerpOrigin, fxOrg );
@@ -5546,8 +7282,41 @@ index ef21d32f..183dd4f9 100644
  		if ( cent->gent && cent->gent->client )
  		{
  			switch ( cent->gent->client->NPC_class )
+@@ -4042,7 +4153,12 @@ void CG_GetTagWorldPosition( refEntity_t *model, char *tag, vec3_t pos, vec3_t a
+ 	}
+ }
+ 
++#ifdef SHADEREMU
++static qboolean se_calcedMp[SE_SLOTS + 1][4];	// (a job slot's: se_slot.h)
++#define calcedMp ( se_calcedMp[SE_Slot()][0] )
++#else
+ static qboolean calcedMp = qfalse;
++#endif
+ 
+ /*
+ -------------------------
+@@ -4825,6 +4941,9 @@ void CG_Player( centity_t *cent ) {
+ 
+ 	if ( cent->currentState.vehicleModel != 0 )
+ 	{//Using an alternate (md3 for now) model
++#ifdef SHADEREMU
++		SE_NOT_AHEAD( SE_WHY_CALL );
++#endif
+ 		refEntity_t			ent;
+ 		vec3_t				tempAngles = {0, 0, 0}, velocity = {0, 0, 0};
+ 		float				speed;
+@@ -5013,6 +5132,9 @@ Ghoul2 Insert Start
+ //---------------
+ 		if ( cent->currentState.eFlags & EF_LOCKED_TO_WEAPON && cent->gent && cent->gent->health > 0 && cent->gent->owner )
+ 		{
++#ifdef SHADEREMU
++			SE_NOT_AHEAD( SE_WHY_CHAIR );	// (the chair is another entity: made in this one's turn)
++#endif
+ 			centity_t	*chair = &cg_entities[cent->gent->owner->s.number];
+ 			if ( chair && chair->gent )
+ 			{
 diff --git a/codeJK2/cgame/cg_predict.cpp b/codeJK2/cgame/cg_predict.cpp
-index 8c73e521..3f6d6457 100644
+index 8c73e521..df8d9ee3 100644
 --- a/codeJK2/cgame/cg_predict.cpp
 +++ b/codeJK2/cgame/cg_predict.cpp
 @@ -70,6 +70,17 @@ void CG_BuildSolidList( void )
@@ -5615,6 +7384,34 @@ index 8c73e521..3f6d6457 100644
  			cmodel = cgi_CM_TempBoxModel( bmins, bmaxs );//, cent->gent->contents );
  			VectorCopy( vec3_origin, angles );
  			VectorCopy( cent->lerpOrigin, origin );
+@@ -150,6 +187,9 @@ CG_Trace
+ */
+ void	CG_Trace( trace_t *result, const vec3_t start, const vec3_t mins, const vec3_t maxs, const vec3_t end,
+ 					 const int skipNumber, const int mask, const EG2_Collision eG2TraceType/*=G2_NOCOLLIDE*/, const int useLod/*=0*/) {
++#ifdef SHADEREMU
++	SE_NOT_AHEAD( SE_WHY_TRACE );	// (not for a player made ahead: se_slot.h)
++#endif
+ 	trace_t	t;
+ 
+ 	cgi_CM_BoxTrace ( &t, start, end, mins, maxs, 0, mask);
+diff --git a/codeJK2/game/AI_Stormtrooper.cpp b/codeJK2/game/AI_Stormtrooper.cpp
+index 8d4a2d83..17f87529 100644
+--- a/codeJK2/game/AI_Stormtrooper.cpp
++++ b/codeJK2/game/AI_Stormtrooper.cpp
+@@ -736,6 +736,13 @@ qboolean NPC_CheckPlayerTeamStealth( void )
+ 	gentity_t *enemy;
+ 	for ( int i = 0; i < ENTITYNUM_WORLD; i++ )
+ 	{
++#ifdef SHADEREMU
++		if ( !( i & 31 ) && !g_entityInUseBits[i >> 5] )
++		{	// (ShaderEmu: none of these 32 in use; once a call of every NPC's frame, over all the entities)
++			i += 31;
++			continue;
++		}
++#endif
+ 		if(!PInUse(i))
+ 			continue;
+ 		enemy = &g_entities[i];
 diff --git a/codeJK2/game/NPC.cpp b/codeJK2/game/NPC.cpp
 index b57d6347..52e98d9e 100644
 --- a/codeJK2/game/NPC.cpp
@@ -5630,11 +7427,86 @@ index b57d6347..52e98d9e 100644
  		NPCInfo->greetingDebounceTime = 0;
  	}
  
+diff --git a/codeJK2/game/NPC_senses.cpp b/codeJK2/game/NPC_senses.cpp
+index 57e7febf..64b4387e 100644
+--- a/codeJK2/game/NPC_senses.cpp
++++ b/codeJK2/game/NPC_senses.cpp
+@@ -598,6 +598,9 @@ AddSoundEvent
+ qboolean RemoveOldestAlert( void );
+ void AddSoundEvent( gentity_t *owner, vec3_t position, float radius, alertEventLevel_e alertLevel, qboolean needLOS )
+ {
++#ifdef SHADEREMU
++	SE_NOT_AHEAD( SE_WHY_EVENT );	// (not for a player made ahead: se_slot.h)
++#endif
+ 	//FIXME: Handle this in another manner?
+ 	if ( level.numAlertEvents >= MAX_ALERT_EVENTS )
+ 	{
+@@ -645,6 +648,9 @@ AddSightEvent
+ 
+ void AddSightEvent( gentity_t *owner, vec3_t position, float radius, alertEventLevel_e alertLevel, float addLight )
+ {
++#ifdef SHADEREMU
++	SE_NOT_AHEAD( SE_WHY_EVENT );	// (not for a player made ahead: se_slot.h)
++#endif
+ 	//FIXME: Handle this in another manner?
+ 	if ( level.numAlertEvents >= MAX_ALERT_EVENTS )
+ 	{
+diff --git a/codeJK2/game/Q3_Interface.cpp b/codeJK2/game/Q3_Interface.cpp
+index 24c8e819..683c69ae 100644
+--- a/codeJK2/game/Q3_Interface.cpp
++++ b/codeJK2/game/Q3_Interface.cpp
+@@ -566,6 +566,9 @@ void Q3_TaskIDComplete( gentity_t *ent, taskID_t taskType )
+ */
+ void Q3_TaskIDComplete( gentity_t *ent, taskID_t taskType )
+ {
++#ifdef SHADEREMU
++	SE_NOT_AHEAD( SE_WHY_TASK );	// (not for a player made ahead: se_slot.h)
++#endif
+ 	if ( taskType < TID_CHAN_VOICE || taskType >= NUM_TIDS )
+ 	{
+ 		return;
+diff --git a/codeJK2/game/g_local.h b/codeJK2/game/g_local.h
+index 221cf26d..f87c9246 100644
+--- a/codeJK2/game/g_local.h
++++ b/codeJK2/game/g_local.h
+@@ -503,7 +503,17 @@ void QDECL G_Error( const char *fmt, ... );
+ void ClearAllInUse(void);
+ void SetInUse(gentity_t *ent);
+ void ClearInUse(gentity_t *ent);
++#ifdef SHADEREMU
++// (inline: a call each of the 1,023 entities NPC_CheckPlayerTeamStealth asks about for every NPC, 40 thousand
++// instructions a frame of the walk; docs/games/jk2.md, "Fewer instructions")
++extern unsigned int g_entityInUseBits[];
++static inline qboolean PInUse(unsigned int entNum)
++{
++	return (qboolean)((g_entityInUseBits[entNum / 32] & (1u << (entNum & 0x1f))) != 0);
++}
++#else
+ qboolean PInUse(unsigned int entNum);
++#endif
+ qboolean PInUse2(gentity_t *ent);
+ void WriteInUseBits(void);
+ void ReadInUseBits(void);
 diff --git a/codeJK2/game/g_main.cpp b/codeJK2/game/g_main.cpp
-index 671b309a..6945ab39 100644
+index 671b309a..ba34c9e6 100644
 --- a/codeJK2/game/g_main.cpp
 +++ b/codeJK2/game/g_main.cpp
-@@ -1482,7 +1482,83 @@ void G_RunFrame( int levelTime ) {
+@@ -74,12 +74,14 @@ void ClearInUse(gentity_t *ent)
+ 	g_entityInUseBits[entNum/32]&=~(((unsigned int)1)<<(entNum&0x1f));
+ }
+ 
++#ifndef SHADEREMU
+ qboolean PInUse(unsigned int entNum)
+ {
+ 	assert(entNum>=0);
+ 	assert(entNum<MAX_GENTITIES);
+ 	return (qboolean)((g_entityInUseBits[entNum / 32] & (1u << (entNum & 0x1f))) != 0);
+ }
++#endif
+ 
+ qboolean PInUse2(gentity_t *ent)
+ {
+@@ -1482,8 +1484,84 @@ void G_RunFrame( int levelTime ) {
  		ValidateInUseBits();
  	}
  #endif
@@ -5653,8 +7525,8 @@ index 671b309a..6945ab39 100644
 +{
 +	h ^= (unsigned)v;
 +	return h * 16777619u;
-+}
-+
+ }
+ 
 +static int se_eighth( float f )
 +{
 +	return (int)( f * 8.0f + ( f < 0 ? -0.5f : 0.5f ) );
@@ -5713,11 +7585,12 @@ index 671b309a..6945ab39 100644
 +	h = se_mix( h, (int)se_rand_state );
 +	gi.Printf( "jk2sum: frame %d time %d entities %d sum %08x draws %08x\n", level.framenum, level.time, count, h,
 +		(unsigned)SE_Holdrand() );
- }
++}
 +#endif
++
  
  
- 
+ extern qboolean player_locked;
 diff --git a/codeJK2/game/g_misc_model.cpp b/codeJK2/game/g_misc_model.cpp
 index 657ed823..bf34d99f 100644
 --- a/codeJK2/game/g_misc_model.cpp
@@ -6054,7 +7927,7 @@ index 660e571a..6c2b8cb1 100644
  		// parse value
  		com_token = COM_Parse( data );
 diff --git a/codeJK2/game/g_utils.cpp b/codeJK2/game/g_utils.cpp
-index 95a70c62..1c9e2a35 100644
+index 95a70c62..6686f1f0 100644
 --- a/codeJK2/game/g_utils.cpp
 +++ b/codeJK2/game/g_utils.cpp
 @@ -60,6 +60,18 @@ int G_FindConfigstringIndex( const char *name, int start, int max, qboolean crea
@@ -6076,7 +7949,17 @@ index 95a70c62..1c9e2a35 100644
  	for ( i=1 ; i<max ; i++ ) {
  		gi.GetConfigstring( start + i, s, sizeof( s ) );
  		if ( !s[0] ) {
-@@ -747,6 +759,16 @@ gentity_t *G_Spawn( void )
+@@ -729,6 +741,9 @@ angles and bad trails.
+ */
+ gentity_t *G_Spawn( void )
+ {
++#ifdef SHADEREMU
++	SE_NOT_AHEAD( SE_WHY_SPAWN );	// (not for a player made ahead: se_slot.h)
++#endif
+ 	int			i, force;
+ 	gentity_t	*e;
+ 
+@@ -747,6 +762,16 @@ gentity_t *G_Spawn( void )
  //			}
  		for ( i = MAX_CLIENTS ; i<globals.num_entities ; i++)
  		{
@@ -6109,10 +7992,20 @@ index 8f073d71..b62fe72a 100644
  	missile->e_ThinkFunc = thinkF_WP_flechette_alt_blow;
  
 diff --git a/codeJK2/game/wp_saber.cpp b/codeJK2/game/wp_saber.cpp
-index 04c5aa25..c80c7579 100644
+index 04c5aa25..b2cd3da1 100644
 --- a/codeJK2/game/wp_saber.cpp
 +++ b/codeJK2/game/wp_saber.cpp
-@@ -3622,7 +3622,9 @@ void WP_SaberImpact( gentity_t *owner, gentity_t *saber, trace_t *trace )
+@@ -2516,6 +2516,9 @@ void WP_SaberDamageTrace( gentity_t *ent )
+ #define MAX_SABER_SWING_INC 0.33f
+ void WP_SaberDamageTrace( gentity_t *ent )
+ {
++#ifdef SHADEREMU
++	SE_NOT_AHEAD( SE_WHY_SABER );	// (not for a player made ahead: se_slot.h)
++#endif
+ 	vec3_t		mp1, mp2, md1, md2, baseOld, baseNew, baseDiff, endOld, endNew, bladePointOld, bladePointNew;
+ 	float		tipDmgMod = 1.0f;
+ 	float		baseDamage;
+@@ -3622,7 +3625,9 @@ void WP_SaberImpact( gentity_t *owner, gentity_t *saber, trace_t *trace )
  			VectorCopy( saber->currentAngles, saber->s.apos.trBase );
  			saber->s.apos.trType = TR_LINEAR;
  			saber->s.apos.trTime = level.time;
@@ -6123,7 +8016,7 @@ index 04c5aa25..c80c7579 100644
  		}
  		//see if we stopped
  		else if ( saber->s.pos.trType == TR_STATIONARY )
-@@ -4312,7 +4314,9 @@ void WP_SaberDrop( gentity_t *self, gentity_t *saber )
+@@ -4312,7 +4317,9 @@ void WP_SaberDrop( gentity_t *self, gentity_t *saber )
  	VectorCopy( saber->currentAngles, saber->s.apos.trBase );
  	saber->s.apos.trType = TR_LINEAR;
  	saber->s.apos.trTime = level.time;
@@ -6134,7 +8027,7 @@ index 04c5aa25..c80c7579 100644
  	if ( !saber->s.apos.trDelta[1] )
  	{
  		saber->s.apos.trDelta[1] = Q_irand( -300, 300 );
-@@ -6772,7 +6776,9 @@ void ForceTelepathy( gentity_t *self )
+@@ -6772,7 +6779,9 @@ void ForceTelepathy( gentity_t *self )
  			{
  				if ( traceEnt->client->NPC_class == CLASS_GALAKMECH )
  				{
@@ -6145,7 +8038,7 @@ index 04c5aa25..c80c7579 100644
  				}
  			}
  			else if ( self->client->ps.forcePowerLevel[FP_TELEPATHY] > FORCE_LEVEL_3 )
-@@ -6970,7 +6976,9 @@ void ForceGrip( gentity_t *self )
+@@ -6970,7 +6979,9 @@ void ForceGrip( gentity_t *self )
  		switch ( traceEnt->client->NPC_class )
  		{
  		case CLASS_GALAKMECH://cant grip him, he's in armor
@@ -6569,7 +8462,7 @@ index e93e46c8..65f97178 100644
          if (pfile_in_zip_read_info->crc32 != pfile_in_zip_read_info->crc32_wait)
              err=UNZ_CRCERROR;
 diff --git a/shared/qcommon/q_math.c b/shared/qcommon/q_math.c
-index b15b3dba..c1d43b55 100644
+index b15b3dba..3158ac0e 100644
 --- a/shared/qcommon/q_math.c
 +++ b/shared/qcommon/q_math.c
 @@ -21,6 +21,7 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
@@ -6590,11 +8483,41 @@ index b15b3dba..c1d43b55 100644
  
  void Rand_Init( int seed )
  {
+@@ -241,6 +245,9 @@ float flrand(float min, float max)
+ 
+ float Q_flrand( float min, float max )
+ {
++#ifdef SHADEREMU
++	SE_NOT_AHEAD( SE_WHY_RAND );	// (not for a player made ahead: se_slot.h)
++#endif
+ 	return flrand(min, max);
+ }
+ 
+@@ -261,6 +268,9 @@ int irand( int min, int max )
+ 
+ int Q_irand( int value1, int value2 )
+ {
++#ifdef SHADEREMU
++	SE_NOT_AHEAD( SE_WHY_RAND );	// (not for a player made ahead: se_slot.h)
++#endif
+ 	return irand(value1, value2);
+ }
+ 
 diff --git a/shared/qcommon/q_math.h b/shared/qcommon/q_math.h
-index f52e45dd..ad496db1 100644
+index f52e45dd..c0c87569 100644
 --- a/shared/qcommon/q_math.h
 +++ b/shared/qcommon/q_math.h
-@@ -243,13 +243,55 @@ extern vec3_t vec3_origin;
+@@ -21,6 +21,9 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
+ ===========================================================================
+ */
+ #pragma once
++#ifdef SHADEREMU
++#include "se_slot.h"
++#endif
+ 
+ #include "q_platform.h"
+ 
+@@ -243,13 +246,55 @@ extern vec3_t vec3_origin;
  #define VectorClearM(dst) \
  	memset((dst), 0, sizeof((dst)[0]) * 3)
  
@@ -6651,7 +8574,7 @@ index f52e45dd..ad496db1 100644
  float VectorLength( const vec3_t vec );
  float VectorLengthSquared( const vec3_t vec );
  void VectorNormalizeFast( vec3_t vec );
-@@ -259,8 +301,10 @@ void VectorAdvance( const vec3_t veca, const float scale, const vec3_t vecb, vec
+@@ -259,8 +304,10 @@ void VectorAdvance( const vec3_t veca, const float scale, const vec3_t vecb, vec
  void VectorInc( vec3_t vec );
  void VectorDec( vec3_t vec );
  void VectorInverse( vec3_t vec );
@@ -6773,6 +8696,48 @@ index e7652fb3..731695b2 100644
  
  		/**
  		Conversion using std::istream's operator>>
+diff --git a/shared/qcommon/se_slot.h b/shared/qcommon/se_slot.h
+new file mode 100755
+index 00000000..5ba67bf6
+--- /dev/null
++++ b/shared/qcommon/se_slot.h
+@@ -0,0 +1,36 @@
++// ShaderEmu: which job slot this core is in (docs/games/jk2.md, "The players on workers"). 0: the first core, and any
++// core not running a job of the client game's; 1 to SE_SLOTS: a job of the client game's (a player's CG_AddCEntity on a
++// worker core, codeJK2/cgame/cg_ents.cpp), told by the stack it runs on (sys_shaderemu.cpp's se_slot_stacks, one a
++// slot). What such a job writes that is not its own entity's is kept a slot (statics indexed by SE_Slot()) or recorded
++// and done by the first core in the order of the entities; what it cannot do so (an allocation, a print, an effect, an
++// entity spawned...) ends the job with SE_SlotAbort(), its entity put back as it was, and the first core makes that
++// entity itself in its turn. The first core records too while it makes a player ahead (SE_Recording()).
++#pragma once
++#include <stdint.h>
++#define SE_SLOTS 8
++#define SE_SLOT_STACK ( 128 * 1024 )
++#ifdef __cplusplus
++extern "C" {
++#endif
++extern unsigned char se_slot_stacks[];
++extern int se_recording0;		// the first core makes a player ahead: what it records goes to that player's list
++void SE_SlotAbort( int why ) __attribute__(( noreturn ));
++int SE_OnFirstCore( void );	// not a worker, nor the drawing's own stack
++#ifdef __cplusplus
++}
++#endif
++static inline int SE_Slot( void )
++{
++	unsigned char here;
++	const uint32_t d = (uint32_t)( (uintptr_t)&here - (uintptr_t)se_slot_stacks );
++	return d < (uint32_t)( SE_SLOTS * SE_SLOT_STACK ) ? 1 + (int)( d / SE_SLOT_STACK ) : 0;
++}
++// whether this core makes a player ahead (a job, or the first core recording): then nothing that cannot be recorded
++static inline int SE_Recording( void ) { return SE_Slot() || ( se_recording0 && SE_OnFirstCore() ); }
++// what a player made ahead must not do: the job ends, and the first core makes the player in its turn
++#define SE_NOT_AHEAD( why ) do { if ( SE_Recording() ) SE_SlotAbort( why ); } while ( 0 )
++enum {		// why a player was not made ahead (JK2_PLAYERS_LOG counts them)
++	SE_WHY_MALLOC = 1, SE_WHY_PRINT, SE_WHY_CALL, SE_WHY_FX, SE_WHY_LOCAL, SE_WHY_MARK, SE_WHY_CAMERA, SE_WHY_SPAWN,
++	SE_WHY_TASK, SE_WHY_EVENT, SE_WHY_SABER, SE_WHY_CHAIR, SE_WHY_RAND, SE_WHY_BOX, SE_WHY_SUBBSP, SE_WHY_FULL,
++	SE_WHY_LOOKUP, SE_WHY_TRACE, SE_WHY_SET, SE_WHY_CMD, SE_WHY_MARKS, SE_WHY_COUNT
++};
 diff --git a/shared/sys/sys_loadlib.h b/shared/sys/sys_loadlib.h
 index 97d2ef4f..1588a702 100644
 --- a/shared/sys/sys_loadlib.h

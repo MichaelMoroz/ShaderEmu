@@ -811,7 +811,10 @@ public static partial class ShaderEmuBuilder
             camera.allowHDR = true;
             camera.nearClipPlane = 0.05f;
             camera.farClipPlane = 600f;
-            camera.RenderToCubemap(picture);
+            // linear and HDR (CaptureHdr, ShaderEmuWeather.cs: straight into the asset it was 8-bit sRGB)
+            CubemapFace[] faces = { CubemapFace.PositiveX, CubemapFace.NegativeX, CubemapFace.PositiveY, CubemapFace.NegativeY, CubemapFace.PositiveZ, CubemapFace.NegativeZ };
+            Color[][] taken = CaptureHdr(camera, faces);
+            for (int f = 0; f < 6; f++) picture.SetPixels(taken[f], faces[f]);
             Object.DestroyImmediate(camera.gameObject);
             picture.Apply(true);
             EditorUtility.SetDirty(picture);

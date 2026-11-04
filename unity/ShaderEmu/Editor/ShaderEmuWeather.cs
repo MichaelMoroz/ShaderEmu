@@ -13,7 +13,6 @@ using VRCLightVolumes;
 // volume, so that what moves is lit as the room is.
 public static partial class ShaderEmuBuilder
 {
-    const string FakeGlass = "Assets/Silent/FakeGlass/Shader";
 
     static void WeatherMaterials(Dictionary<string, Material> made)
     {
@@ -24,30 +23,23 @@ public static partial class ShaderEmuBuilder
         made["Rain"] = rain;
     }
 
-    // The pane: clear, with drops running down it. What is behind a drop is bent out of the
-    // room's baked reflection probe, not out of a grab of the screen (Fake Glass, by Silent).
+    // The pane: clear, with water on it that bends the city as water does (WindowRain.shader:
+    // BigWings's "Heartfelt" drops as the water's height, traced into the window probe's picture). Silent's Fake Glass had it before: its drops barely showed.
     static Material GlassMaterial()
     {
-        Material glass = Mat("Glass", "Silent/FakeGlass Rain");
+        Material glass = Mat("Glass", "ShaderEmu/WindowRain");
         glass.shaderKeywords = new string[0];
-        glass.SetColor("_Color", new Color(1, 1, 1, 0));
-        glass.SetFloat("_Smoothness", 1f);
-        glass.SetFloat("_Metallic", 0f);
-        glass.SetFloat("_IOR", 1f);
-        glass.SetFloat("_Refraction", 0.05f);
-        glass.SetFloat("_InteriorDiffuseStrength", 0f);
-        glass.SetTexture("_RainPattern", AssetDatabase.LoadAssetAtPath<Texture2D>(FakeGlass + "/RainAssets/RainPattern_mask.png"));
-        glass.SetTexture("_RippleNormals", AssetDatabase.LoadAssetAtPath<Texture2D>(FakeGlass + "/RainAssets/RainPattern_top_nrm.png"));
-        glass.SetTexture("_DropletNormals", AssetDatabase.LoadAssetAtPath<Texture2D>(FakeGlass + "/RainAssets/RainPattern_drop_nrm.png"));
-        glass.SetTexture("_DFG", AssetDatabase.LoadAssetAtPath<Texture2D>(FakeGlass + "/dfg-ms.exr"));
-        glass.SetTextureScale("_RainPattern", new Vector2(3f, 1.25f));   // the pane is 3.6 m by 1.5: a tile of drops 1.2 m
-        glass.SetFloat("_RainSpeed", 0.33f);
-        glass.SetFloat("_StreakTiling", 1f);
-        glass.SetFloat("_StreakLength", 1f);
-        glass.SetFloat("_RainFade", 1f);
-        glass.SetInt("_CullMode", (int)CullMode.Off);
-        glass.SetInt("_ZWrite", 0);
-        glass.SetFloat("_LTCGI", 0f);
+        glass.SetTexture("_Sky", AssetDatabase.LoadAssetAtPath<Cubemap>(Generated + "/Reflection probe window picture.cubemap"));   // (WindowProbe makes it again)
+        // every number set here: a material keeps another shader's numbers of the same names (Fake Glass's _IOR of 1 bent nothing)
+        // Heartfelt's drops (WindowRain.shader: BigWings's, CC BY-NC-SA 3.0), on the pane in metres
+        glass.SetFloat("_Scale", 0.48f);   // (as tuned in the editor)
+        glass.SetFloat("_Rain", 0.672f);
+        glass.SetFloat("_Height", 0.83f);
+        glass.SetFloat("_IOR", 1.333f);
+        glass.SetColor("_Clear", new Color(0.93f, 0.96f, 1f, 1f));
+        glass.SetFloat("_Rim", 0.738f);
+        glass.SetFloat("_Flash", 2f);
+        glass.SetFloat("_Debug", 0f);
         glass.renderQueue = -1;
         glass.globalIlluminationFlags = MaterialGlobalIlluminationFlags.EmissiveIsBlack;
         return glass;
@@ -58,6 +50,32 @@ public static partial class ShaderEmuBuilder
     // faces, the sheets of rain put away meanwhile), and every pane takes it by its anchor.
     // The lit room is in it at an eighth: whole, every drop's steep side was the colour of the walls.
     const float RoomInGlass = 0.12f;
+
+    // The camera's six faces as they are in the scene: linear and HDR. (RenderToCubemap straight into a
+    // Cubemap asset went through an 8-bit sRGB target: every value clamped at 1 and kept sRGB-encoded,
+    // which the glass then read as linear, the city's dark walls 0.006 coming out 0.071: washed out.)
+    static Color[][] CaptureHdr(Camera camera, CubemapFace[] faces)
+    {
+        RenderTexture cube = new RenderTexture(256, 256, 24, RenderTextureFormat.ARGBHalf, RenderTextureReadWrite.Linear);
+        cube.dimension = UnityEngine.Rendering.TextureDimension.Cube;
+        cube.Create();
+        camera.RenderToCubemap(cube);
+        Texture2D face = new Texture2D(256, 256, TextureFormat.RGBAHalf, false, true);
+        Color[][] result = new Color[faces.Length][];
+        RenderTexture before = RenderTexture.active;
+        for (int f = 0; f < faces.Length; f++)
+        {
+            Graphics.SetRenderTarget(cube, 0, faces[f]);
+            face.ReadPixels(new Rect(0, 0, 256, 256), 0, 0);
+            face.Apply();
+            result[f] = face.GetPixels();   // (in a Cubemap's own row order: checked against RenderToCubemap's)
+        }
+        RenderTexture.active = before;
+        Object.DestroyImmediate(face);
+        cube.Release();
+        Object.DestroyImmediate(cube);
+        return result;
+    }
 
     static void WindowProbe(Transform world, Material glass)
     {
@@ -91,20 +109,18 @@ public static partial class ShaderEmuBuilder
         camera.allowHDR = true;
         camera.nearClipPlane = 0.05f;
         camera.farClipPlane = 3000f;
-        camera.RenderToCubemap(picture);
-        // again with nothing but the city and the sky, and the two mixed
         CubemapFace[] faces = { CubemapFace.PositiveX, CubemapFace.NegativeX, CubemapFace.PositiveY, CubemapFace.NegativeY, CubemapFace.PositiveZ, CubemapFace.NegativeZ };
-        Color[][] whole = new Color[6][];
-        for (int f = 0; f < 6; f++) whole[f] = picture.GetPixels(faces[f]);
+        Color[][] whole = CaptureHdr(camera, faces);
+        // again with nothing but the city and the sky, and the two mixed
         Transform city = world.Find("Models/City");
         List<Renderer> hidden = new List<Renderer>();
         foreach (Renderer renderer in Object.FindObjectsOfType<Renderer>())
             if (renderer.enabled && (city == null || !renderer.transform.IsChildOf(city))) { renderer.enabled = false; hidden.Add(renderer); }
-        camera.RenderToCubemap(picture);
+        Color[][] cityOnly = CaptureHdr(camera, faces);
         foreach (Renderer renderer in hidden) renderer.enabled = true;
         for (int f = 0; f < 6; f++)
         {
-            Color[] outside = picture.GetPixels(faces[f]);
+            Color[] outside = cityOnly[f];
             for (int i = 0; i < outside.Length; i++) outside[i] = Color.LerpUnclamped(outside[i], whole[f][i], RoomInGlass);
             picture.SetPixels(outside, faces[f]);
         }
@@ -115,6 +131,8 @@ public static partial class ShaderEmuBuilder
         probe.mode = ReflectionProbeMode.Custom;
         probe.customBakedTexture = picture;
         probe.boxProjection = false;   // (a direction's colour: the city is far)
+        glass.SetTexture("_Sky", picture);   // what the drops bend (WindowRain.shader takes it itself: the probe Unity binds did not reach it)
+        EditorUtility.SetDirty(glass);
 
         foreach (MeshRenderer renderer in world.GetComponentsInChildren<MeshRenderer>(true))
         {
