@@ -90,7 +90,8 @@ struct Options {
     double ips = 3700000;    // what the shader machine runs while it runs
     double passMs = 0.25;    // and what a pass costs it besides
     bool passModel = false;  // --pass-model: in their place, a card's ms a pass (tools/calibrate.py):
-    double model[4] = {};    // fixed + core 0's per thousand instructions + the workers' per thousand + per GPU list
+    double model[5] = {};    // fixed + core 0's per thousand instructions + the workers' per thousand + per GPU list, and
+                             // the fixed part of a pass that made a copy from RAM (copy_pass) in place of the first (or the same)
     int cores = 256;         // core 0 and 255 workers, as the shader machine
     long long sweep = -1;
     int circleX = -1, circleY = 0, circleR = 0;    // --pointer-circle: the sweep's own circle
@@ -801,7 +802,8 @@ static bool csr_write(Core& c, u32 n, u32 v, Trap& t) {
 // the highest that has one; from its end when its destination lies inside its source ahead.
 static const u32 COPY_CHUNK = 16384;   // texels: STAGE_CHUNK
 static std::atomic<u64> copies_made{0}, copies_long{0}, copy_most{0};   // (memop runs on the workers' threads)
-static u64 copy_chunks = 0, copy_waits = 0;
+static u64 copy_chunks = 0, copy_waits = 0, copy_passes = 0;   // (copy_passes: passes that made a chunk)
+static u64 count_copy_passes = 0;
 static bool copy_chunk(Core& c) {
     const u32 texels = RAM_SIZE / 16;
     u32 dst = c.copy_dst - RAM_BASE, src = c.copy_src, n = c.copy_n;
@@ -834,6 +836,7 @@ static void copy_pass() {
     for (Core& c : cores)
         if (c.copying) served = &c, copy_waits++;
     if (!served) return;
+    copy_passes++;
     copy_waits--;
     if (copy_chunk(*served)) served->copying = false;
 }
@@ -2852,6 +2855,7 @@ static void count_mark() {
     count_pass = frame_no;
     count_seconds = guest_seconds;
     count_lists = word(CTRL + 0x1c);
+    count_copy_passes = copy_passes;
     if (opt.untilTimes > 1 && script_at >= opt.script.size()) expect_from = console_text.size();
 }
 
@@ -3031,7 +3035,9 @@ int main(int argc, char** argv) {
         else if (a == "--pass-ms") opt.passMs = atof(next("--pass-ms").c_str());
         else if (a == "--pass-model") {
             std::string v = next("--pass-model");
-            opt.passModel = sscanf(v.c_str(), "%lf,%lf,%lf,%lf", &opt.model[0], &opt.model[1], &opt.model[2], &opt.model[3]) == 4;
+            int got = sscanf(v.c_str(), "%lf,%lf,%lf,%lf,%lf", &opt.model[0], &opt.model[1], &opt.model[2], &opt.model[3], &opt.model[4]);
+            opt.passModel = got >= 4;
+            if (got == 4) opt.model[4] = opt.model[0];
             if (!opt.passModel) { fprintf(stderr, "rvc_cpu: --pass-model A,B,C,D\n"); return 2; }
         }
         else if (a == "--pointer-sweep") opt.sweep = atoll(next("--pointer-sweep").c_str());
@@ -3182,7 +3188,7 @@ int main(int argc, char** argv) {
     pc_sampling = !opt.pcLog.empty() && opt.pcFrom.empty();
     u64 passes_run = 0;
     bool stopped = false;   // (by --max-passes or --save-after: to be gone on with)
-    u64 model_workers = 0;
+    u64 model_workers = 0, model_copies = 0;
     for (size_t i = 1; i < cores.size(); i++) model_workers += cores[i].clock;
     u32 model_lists = word(CTRL + 0x1c);
     for (;;) {
@@ -3198,7 +3204,9 @@ int main(int argc, char** argv) {
             u64 all_now = 0;
             for (size_t i = 1; i < cores.size(); i++) all_now += cores[i].clock;
             u32 lists_now = word(CTRL + 0x1c);
-            guest_seconds += (opt.model[0] + opt.model[1] * (double)(c0.clock - clock_was) / 1000.0 + opt.model[2] * (double)(all_now - model_workers) / 1000.0 +
+            bool copied = copy_passes != model_copies;   // (a pass that made a copy's chunk: its own fixed part, model[4])
+            model_copies = copy_passes;
+            guest_seconds += (opt.model[copied ? 4 : 0] + opt.model[1] * (double)(c0.clock - clock_was) / 1000.0 + opt.model[2] * (double)(all_now - model_workers) / 1000.0 +
                               opt.model[3] * (double)(u32)(lists_now - model_lists)) / 1000.0;
             model_workers = all_now, model_lists = lists_now;
         } else
@@ -3270,9 +3278,10 @@ int main(int argc, char** argv) {
             if (n) ran++;
             if (i && n > most) most = n;
         }
-        fprintf(stderr, "COUNT from \"%s\": core 0 %llu, all cores %llu, %d cores ran, the busiest worker %llu, %llu passes, %.3f s of guest time, %u GPU lists\n",
+        fprintf(stderr, "COUNT from \"%s\": core 0 %llu, all cores %llu, %d cores ran, the busiest worker %llu, %llu passes, %.3f s of guest time, %u GPU lists, %llu copy passes\n",
                 opt.countFrom.c_str(), (unsigned long long)c0n, (unsigned long long)all, ran, (unsigned long long)most,
-                (unsigned long long)(frame_no - count_pass), guest_seconds - count_seconds, (u32)(word(CTRL + 0x1c) - count_lists));
+                (unsigned long long)(frame_no - count_pass), guest_seconds - count_seconds, (u32)(word(CTRL + 0x1c) - count_lists),
+                (unsigned long long)(copy_passes - count_copy_passes));
     } else if (!opt.countFrom.empty()) fprintf(stderr, "COUNT never: the console did not say \"%s\"\n", opt.countFrom.c_str());
     fprintf(stderr, "[cpu] stops: workers' faults %llu, %llu of them on a clear accessed or written bit; core 0's on such a bit %llu%s",
             (unsigned long long)stops[0], (unsigned long long)stops[1], (unsigned long long)stops[2], count_marked ? "" : "\n");

@@ -326,6 +326,9 @@ def run(name, g, image, log, calls, salt, show, profile=None, plain=False, guest
     lists = re.search(r'of guest time, (\d+) GPU lists', err)
     if lists:
         r.update(lists=int(lists[1]) / frames, passes_total=passes)
+    copied = re.search(r'GPU lists, (\d+) copy passes', err)
+    if copied:   # (passes that made a copy's chunk from RAM: the model's fifth value, tools/calibrate.py)
+        r.update(copy_passes=int(copied[1]) / frames)
     extra = g['extra'](after) if 'extra' in g else ''
     s = re.search(r'\[cpu\] stops:.*; from the mark (\d+), (\d+), (\d+)', err)
     if s:   # (workers' faults from the mark, those on a clear accessed or written bit, core 0's on one)

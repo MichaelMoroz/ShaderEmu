@@ -3,8 +3,10 @@
 goes into the run (--pass-model), not over its counts.
 
     python tools/calibrate.py card GAME [GAME ...]   the games on the card through game_par.py, once each: build/calibrate/card.jsonl
-    python tools/calibrate.py fit                    ms a pass = fixed + core 0's + the workers' + a GPU list's, by least squares
-                                                     over the card's runs; each game also left out and predicted; tools/card_model.json
+    python tools/calibrate.py fit [--copy-ms MS]     ms a pass = fixed + core 0's + the workers' + a GPU list's, by least squares
+                                                     over the card's runs; each game also left out and predicted; tools/card_model.json.
+                                                     A pass that makes a copy's chunk from RAM (256 KB) has its own fixed part, MS
+                                                     (the model's fifth value): nxperf's memcpy on the card says it (docs/apps/bench.md)
     python tools/calibrate.py check GAME [GAME ...]  the games under the model on rvc_cpu against their card runs
 
 A card's runs and its model are that card's (and that fxc2's): fit again for another.
@@ -50,9 +52,9 @@ def cmd_card(names):
                                         core0=float(m[6]), workers=float(m[7]))) + '\n')
 
 
-def design(s, lists_a_pass):
+def design(s, lists_a_pass, copies_a_pass=0.0):
     k = 1000.0 / s['passes_s']    # thousands of instructions a pass, from millions a second
-    return [1.0, s['core0'] * k, s['workers'] * k, lists_a_pass]
+    return [1.0 - copies_a_pass, s['core0'] * k, s['workers'] * k, lists_a_pass]
 
 
 def nonnegative(a, b):
@@ -67,18 +69,21 @@ def nonnegative(a, b):
         use.remove(min(bad, key=lambda i: x[i]))
 
 
-def cmd_fit():
+def cmd_fit(copy_ms=None):
     sam = samples()
-    lists = {}
+    lists, copies = {}, {}
     for g in sam:
         r = counts(g)
         if not r or 'lists' not in r:
             print(f'{g}: no counts from rvc_cpu, left out')
             continue
         lists[g] = r['lists'] / r['passes']
+        copies[g] = r.get('copy_passes', 0.0) / r['passes'] if copy_ms is not None else 0.0
     names = list(lists)
-    a = np.array([design(sam[g], lists[g]) for g in names])
-    b = np.array([1000.0 / sam[g]['passes_s'] for g in names])
+    a = np.array([design(sam[g], lists[g], copies[g]) for g in names])
+    b = np.array([1000.0 / sam[g]['passes_s'] - (copy_ms or 0.0) * copies[g] for g in names])
+    for g in names:
+        if copies[g]: print(f'{g}: {copies[g] * 100:.2f}% of passes make a copy')
     x = nonnegative(a, b)
     print(f'ms a pass = {x[0]:.4f} + {x[1]:.4f} a thousand of core 0 + {x[2]:.5f} a thousand of the workers + {x[3]:.4f} a GPU list ({len(names)} games)')
     print(f"{'game':16} {'card ms':>8} {'fitted':>8} {'left out':>9} {'error':>7}")
@@ -91,7 +96,8 @@ def cmd_fit():
         worst = max(worst, abs(e))
         print(f'{g:16} {b[i]:8.3f} {float(a[i] @ x):8.3f} {out:9.3f} {e:+6.1f}%')
     print(f'the worst left out: {worst:.1f}%')
-    json.dump(dict(model=[float(v) for v in x], games=names, worst_left_out=worst), open(MODEL, 'w'), indent=1)
+    model = [float(v) for v in x] + ([float(copy_ms)] if copy_ms is not None else [])
+    json.dump(dict(model=model, games=names, worst_left_out=worst), open(MODEL, 'w'), indent=1)
     print('wrote', os.path.relpath(MODEL, ROOT))
 
 
@@ -113,4 +119,5 @@ def cmd_check(names):
 if __name__ == '__main__':
     if len(sys.argv) < 2 or sys.argv[1] not in ('card', 'fit', 'check'):
         sys.exit(__doc__)
-    {'card': lambda: cmd_card(sys.argv[2:]), 'fit': cmd_fit, 'check': lambda: cmd_check(sys.argv[2:])}[sys.argv[1]]()
+    copy_ms = float(sys.argv[sys.argv.index('--copy-ms') + 1]) if '--copy-ms' in sys.argv else None
+    {'card': lambda: cmd_card(sys.argv[2:]), 'fit': lambda: cmd_fit(copy_ms), 'check': lambda: cmd_check(sys.argv[2:])}[sys.argv[1]]()
