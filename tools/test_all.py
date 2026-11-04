@@ -811,6 +811,14 @@ CASES = [
     # a clean close asks nothing
     case('wm-close', 'desktop wm', WMC + "nxwintest plain p & sleep 2; nxkey alt+f4 4000; nxwintest list", wall=120,
          has=[r'^wins \d'], never=[r'^nxbar: not responding', r'^nxbar: outlives', r'^win \d p ']),
+    # the close box takes the frame's corner, past its picture (wm_on_caption_box in wmaction.c): a press there closes
+    case('wm-close-corner', 'desktop wm', WMC + "nxwintest plain p & sleep 2; nxwintest list; set -- $(nxwintest list | awk '/^win [0-9]+ p /{split($4,a,\",\"); split($5,b,\"x\"); print a[1]+b[1]-1\",\"a[2]+1}'); "
+         "echo CORNER $1; nxkey $1 2000; nxwintest list", wall=120,
+         has=[r'^CORNER \d+,\d+', r'^wins \d'], count=[(r'^win \d+ p ', 1)]),
+    # a button under the pointer is lit and put back when the pointer leaves (ui_hot_* in ui.h): Settings' tabs
+    case('ui-hover', 'desktop wm', WM + "export UI_HOVER_PRINT=1; nxsettings & sleep 5; "
+         "nxkey $(for y in 40 52 64 76 88 100 112 124; do echo at:200,$y at:260,$y; done) at:790,560 1000", wall=120,
+         has=[r'^ui: lit \d+,6 \d+x22', r'^ui: unlit']),
     # a dead client's windows go, with its button
     case('wm-kill', 'desktop wm', WM + "nxwintest two a & P=$!; sleep 2; nxwintest list; kill -9 $P; sleep 2; nxwintest list", wall=120,
          has=[r'^win 0 second', r'^nxbar: buttons: \s*$'], count=[(r'^win \d second', 1)]),

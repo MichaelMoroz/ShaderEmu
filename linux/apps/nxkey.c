@@ -3,7 +3,8 @@
  * shift+ before it for keys held meanwhile, a number of milliseconds to wait, X,Y (or ctrl+X,Y) for a click
  * of the left button there, r:X,Y for the right one, or drag:X,Y:X,Y for the left one held
  * from the first place to the second (rdrag:X,Y:X,Y the right one), wheel:X,Y:N for N notches of the wheel there (up is
- * positive), down:KEY and up:KEY for a key held over what comes between:
+ * positive), at:X,Y for the pointer moved there with no button (a button under it is lit), down:KEY and up:KEY for a
+ * key held over what comes between:
  *   nxkey meta down enter 500 alt+tab 60,200 r:300,200 wheel:300,200:-2 down:ctrl tab tab 800 up:ctrl */
 #include <fcntl.h>
 #include <stdint.h>
@@ -138,6 +139,10 @@ main(int argc, char **argv)
 		if ((!strncmp(argv[i], "hold:", 5) || !strncmp(argv[i], "to:", 3) || !strncmp(argv[i], "drop:", 5)) &&
 		    sscanf(strchr(argv[i], ':'), ":%d,%d", &x0, &y0) == 2) {
 			point(x0, y0, 0x110, argv[i][0] != 'd');
+			continue;
+		}
+		if (sscanf(argv[i], "at:%d,%d", &x0, &y0) == 2) {
+			point(x0, y0, 0x110, 0);
 			continue;
 		}
 		if (sscanf(argv[i], "wheel:%d,%d:%d", &x0, &y0, &x1) == 3) {

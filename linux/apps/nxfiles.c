@@ -683,7 +683,7 @@ draw_desktop_icon(int i)
 		int tx = e->x + (CELL_W - e->line_w[k]) / 2, ty = e->y + 37 + k * 13;
 
 		if (lit)
-			ui_fill(GR_ROOT_WINDOW_ID, tx - 2, ty, e->line_w[k] + 4, 13, MWRGB(10, 36, 106));
+			ui_fill(GR_ROOT_WINDOW_ID, tx - 2, ty, e->line_w[k] + 4, 13, ui_accent(MWRGB(10, 36, 106), ui_seven ? 0 : -64));
 		else
 			ui_text(GR_ROOT_WINDOW_ID, tx + 1, ty + 1, e->line[k], -1, BLACK, 0);	/* a shadow: any picture may be behind */
 		ui_text(GR_ROOT_WINDOW_ID, tx, ty, e->line[k], -1, WHITE, 0);
@@ -753,7 +753,7 @@ draw_tile(int i)
 		draw_desktop_icon(i);
 		return;
 	}
-	ui_fill(window, x, y, w, h, e->chosen ? MWRGB(10, 36, 106) : WHITE);
+	ui_fill(window, x, y, w, h, e->chosen ? ui_accent(MWRGB(10, 36, 106), ui_seven ? 0 : -64) : WHITE);
 	if (details) {
 		draw_icon(window, x + 2, y + 1, e, 16);
 		fitted(e->label, 40, w - 190, name, sizeof name);

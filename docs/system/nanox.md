@@ -481,9 +481,11 @@ running session, one word of the window manager's page of GPU memory (word 24 of
 style 1 for Windows 7. **The windows' colour** is the word after it (`WM_TINT`, word 25, `0x864`): `0x01RRGGBB`, or 0
 for the look's own blue, the registry's `desktop.color` (`RRGGBB` or `default`) and Settings' swatches (`nxsettings color
 RRGGBB|default` from a script). An active frame is painted from it (`tint_mix`, `tint_caption` in `nxpaintnc.c`): the
-classic caption in 16 bands from the colour darkened to lightened (its white text stays readable), the Windows 7 frame's
-edges and its caption in bands of the colour mixed with white (black text). Inactive frames keep the look's grey. The bar takes it too (`bar_tint`, `tint_mix` in `nxbar.c`,
-read with the look once a second): Windows 7's bar in bands of the colour darkened, its buttons' glass and the lit desktop
+classic caption from the colour darkened to lightened (its white text stays readable) in bands of 4 pixels or more, as
+many as 160, the Windows 7 frame's edges and its caption a row each of the colour mixed with white (black text); shares are
+256ths, rounded (`tint_mix256`): bands of sixteenths, 16 across a caption and 2 rows each down it, were steps one saw.
+Inactive frames keep the look's grey. The bar takes it too (`bar_tint`, `tint_mix256` in `nxbar.c`,
+read with the look once a second): Windows 7's bar a row each of the colour darkened, its buttons' glass and the lit desktop
 cell of it; the classic bar's face the colour lightened, its bevels and black text as they were. 0 there (nobody set it) is the classic style with the smooth text, as a
 bare `nano-X` for a test has it (`ui_look_read`, and `LOOK_SMOOTH` for the captions: the bitmap
 font only when Settings chose it, 4 November 2026); `nx` writes the registry's look (Windows 7
@@ -502,6 +504,24 @@ and smooth unless it says otherwise) before the desktop starts (`nxbar --look`).
 - **The widgets** of `ui.h` (buttons, bevels, the focus box, scroll bars, sliders), menus and
   questions have a Windows 7 drawing: `UI_FACE`, `UI_SHADOW` and `UI_SELECTED` are its colours
   then (240 grey, 160 grey, 51/153/255 blue), so a program that uses them follows.
+- **The accent follows the windows' colour** (`ui_accent(look's, k)` in `ui_look.h`, `ui_tint` read with the look):
+  a selection (`UI_SELECTED`: the colour itself in Windows 7, darkened in classic), the focus box (`UI_ACCENT`), a pressed
+  button or a chosen tab (Windows 7's pale halves and dark line), a menu's lit row, a lit icon of the desktop and Files,
+  the bar's calendar and volume, the decoding bar. With no colour chosen each is the look's own as before. A program that
+  calls `ui_restyle()` follows a new colour at once, the others at their next start.
+- **Buttons under the pointer** are lit (`ui_hot_*` in `ui.h`): every button `ui_button` or `ui_button_seven` draws is kept
+  with its window (64 at most), and such a window is asked for the pointer's coming and going and, while the pointer is over
+  it, for its latest place (`GR_EVENT_MASK_MOUSE_POSITION`: one such event waits at most, where every move is one with
+  `MOUSE_MOTION`). The button under it gets an edge in the accent, drawn over its own (Windows 7: the dark line and two rings
+  inside; classic: the ring inside the bevel), so what the program drew in it stays; the edge is put back when the pointer
+  leaves. `ui.h` wraps `GrSelectEvents`, `GrGetNextEvent`, `GrGetNextEventTimeout`, `GrCheckNextEvent`, `GrPeekEvent`,
+  `GrServiceSelect`, `GrFillRect`, `GrClearArea` and `GrDestroyWindow` by their names: the events a program did not ask
+  for never reach it, and a fill or a clear that covers a kept button forgets it (a button not drawn again is not lit).
+  A button drawn into a pixmap and copied is not lit. `UI_HOVER=0` turns it off.
+- **The caption's boxes** take more than their pictures of 18 pixels (`wm_on_caption_box` in `wmaction.c`): each the
+  caption's whole height and the gap on its left, the close box the frame's corner too, and a press's release counts 8
+  pixels round its box. A beam in VRChat or a pad's pointer shakes between the press and the release: the release had to
+  be in the same 18 pixels, and 5 of the corner's were no box.
 - With the smooth font, text is drawn a pixel higher (`ui_text`): Selawik 12's ascent is 12
   where the bitmap font's is 11, and the baseline stays where layouts expect it.
 - The fixed font (`ui_fixed`: the editor's and the IDE's text, nxcalc's, nxperf's) is Liberation
@@ -685,7 +705,8 @@ Everything on the desktop can be worked without a pointer.
 500 ctrl+tab` (names or characters, `ctrl+`, `alt+`, `shift+` before one, a number to wait
 that many milliseconds, `X,Y` for a click of the left button there, `r:X,Y` for the right
 one, `drag:X,Y:X,Y` for the left one held from the first place to the second, `wheel:X,Y:N`
-for N notches of the wheel there, up positive). The first window a server gets has its
+for N notches of the wheel there, up positive, `at:X,Y` for the pointer moved there with no button: a
+button under it is lit). The first window a server gets has its
 inside at 43,46; a second one is stepped across the screen, so a test that clicks starts
 one program a server. A press and its release are two reports: the pointer's driver hands the window system one
 state at a time once a button changes, so a click made while the server draws is seen.

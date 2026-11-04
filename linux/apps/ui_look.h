@@ -60,17 +60,39 @@ ui_look_now(void)
 	return (look & 0xffff0000u) == UI_LOOK_MAGIC ? look : 0;
 }
 
-/* Reads the look into ui_seven and ui_smooth; true when it is another than they said. */
+static unsigned ui_tint_now(void);
+
+/* The windows' colour as this program last read it (ui_look_read): 0xRRGGBB | UI_TINT_SET, or 0. */
+static unsigned ui_tint;
+
+/* Reads the look into ui_seven, ui_smooth and ui_tint; true when it is another than they said. */
 static int
 ui_look_read(void)
 {
-	unsigned look = ui_look_now();
+	unsigned look = ui_look_now(), tint = ui_tint_now();
 	int seven = (look & 0xff) == UI_STYLE_SEVEN, smooth = !look || (look >> 8 & 0xff) == 1;
-	int changed = seven != ui_seven || smooth != ui_smooth;
+	int changed = seven != ui_seven || smooth != ui_smooth || tint != ui_tint;
 
-	ui_seven = seven, ui_smooth = smooth;
+	ui_seven = seven, ui_smooth = smooth, ui_tint = tint;
 	return changed;
 }
+
+#ifdef MWRGB
+/* A colour of the accent (a selection, a pressed button, a focus, a lit row): `look`, the look's own,
+ * with no windows' colour; with one, that colour k/256 of the way to white (k > 0) or to black (k < 0).
+ * Settings' colours are dark enough for white text on them and light enough, mixed with white, for black. */
+static unsigned long
+ui_accent(unsigned long look, int k)
+{
+	int c[3] = { (int)(ui_tint >> 16 & 255), (int)(ui_tint >> 8 & 255), (int)(ui_tint & 255) }, i;
+
+	if (!ui_tint)
+		return look;
+	for (i = 0; i < 3; i++)
+		c[i] = k >= 0 ? c[i] + ((255 - c[i]) * k + 128) / 256 : (c[i] * (256 + k) + 128) / 256;
+	return MWRGB(c[0], c[1], c[2]);
+}
+#endif
 
 static void
 ui_look_set(int style, int smooth)

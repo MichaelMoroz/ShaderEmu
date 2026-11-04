@@ -46,7 +46,7 @@ A program's start is measured as the first window of a session and as a later on
 
 ## 5. Test it
 
-**Scripted input.** `nxkey`, through the keyboard's device: `nxkey meta down enter 500 ctrl+tab`; a number waits; `X,Y` clicks; `r:X,Y`, `drag:X,Y:X,Y`, `wheel:X,Y:N`, `hold:X,Y to:X,Y drop:X,Y` for a server that drops fast moves. The first window of a server has its inside at 43,46; a second is stepped across, so a test that clicks starts one program a server. Characters need their keys: `'shift+;'` for a colon.
+**Scripted input.** `nxkey`, through the keyboard's device: `nxkey meta down enter 500 ctrl+tab`; a number waits; `X,Y` clicks; `r:X,Y`, `drag:X,Y:X,Y`, `wheel:X,Y:N`, `at:X,Y` (a move with no button: a button under it is lit), `hold:X,Y to:X,Y drop:X,Y` for a server that drops fast moves. The first window of a server has its inside at 43,46; a second is stepped across, so a test that clicks starts one program a server. Characters need their keys: `'shift+;'` for a colon.
 
 Programs print state for tests: `NXFILES_PRINT=1`, `NXWEB_DUMP=1`, `NXPAINT_SCRIPT="new:200x120 ... sum quit"`, `UI_ASK_PRINT=1`, `NXMON_PRINT=1`, `MICROPOLIS_REPORT=1` (places of windows). Give a new program such a switch from the start, plus a sum of what it made.
 

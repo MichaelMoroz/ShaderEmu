@@ -264,15 +264,23 @@ bevel(GR_WINDOW_ID w, int x, int y, int width, int height, int pressed)
 /* The windows' colour Settings chose (ui_look.h: 0x01RRGGBB, 0 for the look's own), as the bar was last drawn in it. */
 static unsigned bar_tint;
 
-/* The colour a share k/16 of the way from the tint (k 0) to white (k 16), or to black (k -16): nxpaintnc.c's tint_mix. */
+/* The colour a share k/256 of the way from the tint (k 0) to white (k 256), or to black (k -256), rounded:
+ * nxpaintnc.c's tint_mix256. */
 static GR_COLOR
-tint_mix(int k)
+tint_mix256(int k)
 {
 	int c[3] = { bar_tint >> 16 & 255, bar_tint >> 8 & 255, bar_tint & 255 }, i;
 
 	for (i = 0; i < 3; i++)
-		c[i] = k >= 0 ? c[i] + (255 - c[i]) * k / 16 : c[i] * (16 + k) / 16;
+		c[i] = k >= 0 ? c[i] + ((255 - c[i]) * k + 128) / 256 : (c[i] * (256 + k) + 128) / 256;
 	return MWRGB(c[0], c[1], c[2]);
+}
+
+/* The same in sixteenths. */
+static GR_COLOR
+tint_mix(int k)
+{
+	return tint_mix256(k * 16);
 }
 
 /* Part of the bar's ground, x on for width: Windows 7's strip (bar7.ppm), or with a windows' colour
@@ -295,9 +303,9 @@ bar_strip(int x, int width)
 	}
 	GrSetGCForeground(gc, tint_mix(-1));
 	GrFillRect(bar, gc, x, 0, width, 1);
-	for (band = 1; band < BAR_HEIGHT; band += 2) {
-		GrSetGCForeground(gc, tint_mix(-5 - 5 * band / BAR_HEIGHT));
-		GrFillRect(bar, gc, x, band, width, band + 2 > BAR_HEIGHT ? 1 : 2);
+	for (band = 1; band < BAR_HEIGHT; band++) {	/* (a row each: rows of two in sixteenths were steps) */
+		GrSetGCForeground(gc, tint_mix256(-80 - 80 * band / BAR_HEIGHT));
+		GrFillRect(bar, gc, x, band, width, 1);
 	}
 }
 
@@ -1845,9 +1853,9 @@ draw_calendar(void)
 		int cell = lead + day - 1, x = 8 + cell % 7 * 26, y = 48 + cell / 7 * 18;
 
 		if (day == today.tm_mday && cal_month == today.tm_mon && cal_year == today.tm_year + 1900) {
-			GrSetGCForeground(gc, ui_seven ? MWRGB(204, 232, 255) : MWRGB(10, 36, 106));
+			GrSetGCForeground(gc, ui_seven ? ui_accent(MWRGB(204, 232, 255), 200) : ui_accent(MWRGB(10, 36, 106), -64));
 			GrFillRect(calendar, gc, x + 1, y - 1, 24, 17);
-			GrSetGCForeground(gc, ui_seven ? MWRGB(51, 153, 255) : MWRGB(10, 36, 106));
+			GrSetGCForeground(gc, ui_seven ? ui_accent(MWRGB(51, 153, 255), 0) : ui_accent(MWRGB(10, 36, 106), -64));
 			GrRect(calendar, gc, x + 1, y - 1, 24, 17);
 			GrSetGCForeground(gc, ui_seven ? BLACK : WHITE);
 		} else
@@ -1924,11 +1932,11 @@ draw_volume(void)
 	/* the track, and its knob */
 	GrSetGCForeground(gc, MWRGB(176, 176, 176));
 	GrRect(volume, gc, VOL_POP_W / 2 - 2, 28, 5, track);
-	GrSetGCForeground(gc, ui_seven ? MWRGB(51, 153, 255) : MWRGB(10, 36, 106));
+	GrSetGCForeground(gc, ui_seven ? ui_accent(MWRGB(51, 153, 255), 0) : ui_accent(MWRGB(10, 36, 106), -64));
 	GrFillRect(volume, gc, VOL_POP_W / 2 - 1, at, 3, 28 + track - at);
 	GrSetGCForeground(gc, ui_seven ? MWRGB(230, 236, 244) : FACE);
 	GrFillRect(volume, gc, VOL_POP_W / 2 - 10, at - 4, 21, 9);
-	GrSetGCForeground(gc, ui_seven ? MWRGB(44, 98, 139) : BLACK);
+	GrSetGCForeground(gc, ui_seven ? ui_accent(MWRGB(44, 98, 139), -64) : BLACK);
 	GrRect(volume, gc, VOL_POP_W / 2 - 10, at - 4, 21, 9);
 	/* the mute button: the icon, under the track */
 	ui_icon(volume, gc, (VOL_POP_W - 16) / 2, VOL_POP_H - 26, ui_icon_of(level ? "volume" : "volume-muted"), 16);
