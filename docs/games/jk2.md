@@ -8,8 +8,8 @@ rd-vanilla over Half-Life's OpenGL ("The picture"); keys and the pointer drive i
 script of keys plays its start from the menu as a test. **It is far too slow to play** ("Speed", 3 November 2026): on
 the card's calibrated clock the menu runs at 7.1 frames a second (1.2 before) and a frame of play takes 1 to 1.4 s (3 to
 4 before), and the load to the level is 11.5 billion instructions. What bounds it is the game itself on the first
-core ("What bounds it"). It goes into an image only when asked: `pwsh tools\make_image.ps1 --jk2` (the shared
-image, with `--aoe` too if wanted) or a private one.
+core ("What bounds it"). It goes into every image (`pwsh tools\make_image.ps1`, since 4 November 2026; `JK2_IMAGE=0`
+makes a private test image without it).
 
     wsl -- python3 linux/jk2/data.py host ~/jk2-host/data --accept-eula   (the demo, fetched once into a cache; its licence)
     wsl -- bash linux/jk2/host_sum.sh                                     (builds the build computer's program, plays, sums)

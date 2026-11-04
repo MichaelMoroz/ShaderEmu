@@ -1,4 +1,4 @@
-"""Star Wars Jedi Knight II: Jedi Outcast's 2002 demo, only when asked (docs/games/jk2.md, "The demo's data"): the
+"""Star Wars Jedi Knight II: Jedi Outcast's 2002 demo, in every image (docs/games/jk2.md, "The demo's data"): the
 official installer fetched and checked against its sums into a cache outside the tree. Nothing of it goes into the
 repository or linux/prebuilt. An image gets the installer itself, byte for byte (the licence, license.txt, LucasArts
 2002: copies only in its original form and for no money; no changed or added files, no new levels or derived works):

@@ -6,8 +6,8 @@ EULA ... not for commercial purposes") and LucasArts' 2002 demo of Jedi Outcast 
 copies "only in its original form", no files added, changed or deleted). So since 2 November 2026 an image made with
 either game holds the **installer itself, byte for byte**, in the ROM, and nothing taken out of it; the machine shows
 the licence read out of the installer, and once it is accepted unpacks the files the game reads into memory, every
-session. `linux/aoe/data.py` and `linux/jk2/data.py` put the installer in; the games stay out of `ALL` and `linux/prebuilt`, and go into an image only when
-asked (`image.py --aoe`, `--jk2`).
+session. `linux/aoe/data.py` and `linux/jk2/data.py` put the installer in; the games stay out of `ALL` and `linux/prebuilt`, and go into every image
+(`image.py`, since 4 November 2026; `AOE_IMAGE=0` and `JK2_IMAGE=0` make a private test image without them).
 
     cabinst [--title TEXT] [--licence NAME] [--key KEY] INSTALLER DEST WANTED...
 

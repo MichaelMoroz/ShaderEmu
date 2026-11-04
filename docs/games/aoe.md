@@ -6,10 +6,10 @@ The decompiled game (`github.com/dcostap/aoe1-decomp`, pinned at `6d6d8b1`; the 
 
 ## Making it
 
-The game goes into an image only when asked:
+The game goes into every image (since 4 November 2026; `AOE_IMAGE=0` makes a private test image without it):
 
-    pwsh tools\make_image.ps1 --aoe                                  # or AOE_IMAGE=1
-    python linux/nommu/image.py NAME ROOT KERNEL --aoe
+    pwsh tools\make_image.ps1
+    python linux/nommu/image.py NAME ROOT KERNEL
 
 The licence is the trial's EULA, the one that came with Microsoft's 1997 trial of Age of Empires. The source is `archive.org/details/aoe-trial-1997` (`MSAoE.exe`, 24,786,864 bytes). That item states no licence of its own. The EULA allows copies of the whole trial, with the EULA, not for commercial purposes, and it limits reverse engineering and decompiling as far as the law allows: the decompiled code comes from the upstream project and is fetched, not kept here. So since 2 November 2026 an image holds **the installer itself, byte for byte**, and nothing taken out of it: the machine shows the EULA read out of it, and once it is accepted there unpacks the trial into memory ("The trial in the machine", `docs/system/install.md`).
 
@@ -474,7 +474,7 @@ The notes are made as OpenTTD's are: `linux/userland/shaderemu_fm.h` has the ban
 
 `--wav FILE` writes what those words sound like: `tools/sound_reference.py`'s FM, in the card's integers, with the effects' samples from the ROM at the clock values in the log (not interpolated). It is that model's mix and not a capture of the shader, since `rvc_cpu` mixes nothing and a capture wants the card. A song at the default level peaks at 5,442 of 32,767 alone, and with the effects of those runs at 22,119, none clipped. **Nobody has listened to it yet**: whether the instruments sound right is not checked by any of this, and it has not run on the card or in a world. The options' slider was not moved in a run, and `won.mid` and `lost.mid` were not reached by play: the first level the mixer gets is the only one exercised, and those two songs' notes were only read from the files.
 
-A MIDI file is game data: it is unpacked from the trial's installer in the machine with the rest (`*.mid` of the starter's list), and the installer goes only into an image made with `--aoe`.
+A MIDI file is game data: it is unpacked from the trial's installer in the machine with the rest (`*.mid` of the starter's list), and the installer goes into every image.
 
 ## What ends a round
 

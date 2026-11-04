@@ -1,4 +1,4 @@
-"""Age of Empires into an image's overlay, only when asked (linux/nommu/image.py NAME --aoe, or AOE_IMAGE=1): the
+"""Age of Empires into an image's overlay, every image's (linux/nommu/image.py; AOE_IMAGE=0 for a private test one): the
 1997 trial's installer fetched and checked against its sums into a cache outside the tree, put into the image byte for
 byte (its EULA allows copies of the whole trial, with the EULA, not for commercial purposes), and the program built
 (program.sh). The machine shows the EULA read out of the installer, and unpacks the trial into memory once it is

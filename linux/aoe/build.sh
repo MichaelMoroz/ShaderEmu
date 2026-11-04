@@ -2,7 +2,7 @@
 # Age of Empires (dcostap/aoe1-decomp on the machine, the 1997 trial's data). docs/games/aoe.md.
 #   wsl -- bash linux/nommu/build.sh aoe/build.sh
 # Neither the code nor the data is kept in this repository. The code is fetched here; the data only
-# when an image asks for the game (data.py, image.py --aoe).
+# when an image is made (data.py, called by image.py for every image).
 # AOE_TREE=keep leaves the tree as it is (then write its diff to aoe.patch). AOE_CHECK=1 only says
 # what does not compile, one line a kind of error.
 set -euo pipefail

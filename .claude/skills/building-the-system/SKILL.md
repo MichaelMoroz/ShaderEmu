@@ -65,7 +65,7 @@ Builds copy no `.claude` (`--exclude /.claude`): a worktree there held 15 GB.
 
 ## Private images
 
-`linux/nommu/image.py [NAME [ROOT [KERNEL]]]` makes `build/images/NAME` from a flat root and a kernel, on the shared image, and leaves `build/images/nommu` alone. It **replaces** `NAME/overlay` with ROOT each time, and adds Uplink's data unless `HALFLIFE_DATA=0`. To try one program beside a baseline:
+`linux/nommu/image.py [NAME [ROOT [KERNEL]]]` makes `build/images/NAME` from a flat root and a kernel, on the shared image, and leaves `build/images/nommu` alone. It **replaces** `NAME/overlay` with ROOT each time, and adds every game's data: Uplink's (`HALFLIFE_DATA=0` leaves it out), the installers of Age of Empires and Jedi Outcast with their programs (`AOE_IMAGE=0`, `JK2_IMAGE=0`; one it cannot have stops the image). Leave them out of a private test image only. To try one program beside a baseline:
 
     cp -a build/nommu/flatroot ROOT                              # a copy of the baseline's root
     (the flat program over its copy in ROOT/usr/bin)             # from root.sh in a private home, or flat.py on a folder
