@@ -850,6 +850,7 @@ void jk2_glTexSubImage2D(GLenum t, GLint l, GLint x, GLint y, GLsizei w, GLsizei
     ON_THEN(s_glTexSubImage2D(t, l, x, y, w, h, format, type, p));
 }
 void jk2_glTranslatef(GLfloat x, GLfloat y, GLfloat z) { ON_THEN(s_glTranslatef(x, y, z)); }
+void jk2_glScalef(GLfloat x, GLfloat y, GLfloat z) { ON_THEN(s_glScalef(x, y, z)); }
 void jk2_glVertex2f(GLfloat x, GLfloat y) { ON_THEN(s_glVertex2f(x, y)); }
 void jk2_glVertex3f(GLfloat x, GLfloat y, GLfloat z) { ON_THEN(s_glVertex3f(x, y, z)); }
 void jk2_glVertex3fv(const GLfloat* v) { ON_THEN(s_glVertex3fv(v)); }

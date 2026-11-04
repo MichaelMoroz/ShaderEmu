@@ -24,7 +24,7 @@ NOTHING(glNewList) NOTHING(glOrtho) NOTHING(glPolygonMode) NOTHING(glPolygonOffs
 NOTHING(glPushMatrix) NOTHING(glScissor) NOTHING(glShadeModel) NOTHING(glStencilFunc) NOTHING(glStencilMask)
 NOTHING(glStencilOp) NOTHING(glTexCoord2f) NOTHING(glTexCoord2fv) NOTHING(glTexCoordPointer) NOTHING(glTexEnvf)
 NOTHING(glTexImage2D) NOTHING(glTexParameterf) NOTHING(glTexParameterfv) NOTHING(glTexParameteri)
-NOTHING(glTexSubImage2D) NOTHING(glTranslatef) NOTHING(glVertex2f) NOTHING(glVertex3f) NOTHING(glVertex3fv)
+NOTHING(glTexSubImage2D) NOTHING(glTranslatef) NOTHING(glScalef) NOTHING(glVertex2f) NOTHING(glVertex3f) NOTHING(glVertex3fv)
 NOTHING(glVertexPointer) NOTHING(glViewport)
 
 static GLuint lists = 1;

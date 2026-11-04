@@ -2834,6 +2834,78 @@ index d105742d..b3819598 100644
  	unzClose(thepak->handle);
  	Z_Free(thepak->buildBuffer);
  	Z_Free(thepak);
+diff --git a/code/qcommon/msg.cpp b/code/qcommon/msg.cpp
+index 8740abe3..b4337507 100644
+--- a/code/qcommon/msg.cpp
++++ b/code/qcommon/msg.cpp
+@@ -152,6 +152,33 @@ void MSG_WriteBits( msg_t *msg, int value, int bits ) {
+ 		bits = -bits;
+ 	}
+ 
++#ifdef SHADEREMU
++	// (whole bytes at once, the same bytes: docs/games/jk2.md, "Fewer instructions"; JK2_MSG=bits: a piece a byte as before)
++	static int se_msg_bits = -1;
++	if ( se_msg_bits < 0 ) {
++		const char *e = getenv( "JK2_MSG" );
++		se_msg_bits = e && !strcmp( e, "bits" );
++	}
++	if ( !se_msg_bits ) {
++		uint32_t v = bits == 32 ? (uint32_t)value : (uint32_t)value & ( ( 1u << bits ) - 1 );
++		byte *d = msg->data;
++		int n = msg->cursize, b = msg->bit, left = bits;
++		msg->bit = ( b + bits ) & 7;
++		if ( b ) {
++			d[n - 1] |= (byte)( v << b );
++			const int put = 8 - b;
++			if ( put >= left )
++				return;
++			v >>= put, left -= put;
++		}
++		for ( ; left >= 8 ; left -= 8, v >>= 8 )
++			d[n++] = (byte)v;
++		if ( left )
++			d[n++] = (byte)( v & ( ( 1u << left ) - 1 ) );
++		msg->cursize = n;
++		return;
++	}
++#endif
+ 	while ( bits ) {
+ 		if ( msg->bit == 0 ) {
+ 			msg->data[msg->cursize] = 0;
+@@ -186,6 +213,33 @@ int MSG_ReadBits( msg_t *msg, int bits ) {
+ 		sgn = qfalse;
+ 	}
+ 
++#ifdef SHADEREMU
++	static int se_msg_bits = -1;
++	if ( se_msg_bits < 0 ) {
++		const char *e = getenv( "JK2_MSG" );
++		se_msg_bits = e && !strcmp( e, "bits" );
++	}
++	if ( !se_msg_bits ) {
++		const byte *d = msg->data;
++		uint32_t v = 0;
++		int rc = msg->readcount, b = msg->bit, got = 0;
++		msg->bit = ( b + bits ) & 7;
++		if ( b ) {
++			const int g = 8 - b < bits ? 8 - b : bits;
++			v = ( (uint32_t)d[rc - 1] >> b ) & ( ( 1u << g ) - 1 );
++			got = g;
++		}
++		for ( ; bits - got >= 8 ; got += 8 )
++			v |= (uint32_t)d[rc++] << got;
++		if ( got < bits ) {
++			v |= ( (uint32_t)d[rc++] & ( ( 1u << ( bits - got ) ) - 1 ) ) << got;
++		}
++		msg->readcount = rc;
++		valueBits = bits;
++		value = (int)v;
++	}
++	else
++#endif
+ 	while ( valueBits < bits ) {
+ 		if ( msg->bit == 0 ) {
+ 			msg->readcount++;
 diff --git a/code/qcommon/ojk_saved_game.cpp b/code/qcommon/ojk_saved_game.cpp
 index d58e2322..cab2c6ae 100644
 --- a/code/qcommon/ojk_saved_game.cpp
@@ -7232,7 +7304,7 @@ index 89910449..117538cc 100644
  
  /*
 diff --git a/code/rd-vanilla/tr_sky.cpp b/code/rd-vanilla/tr_sky.cpp
-index 4c4dfcfb..ad9e8829 100644
+index 4c4dfcfb..0c670192 100644
 --- a/code/rd-vanilla/tr_sky.cpp
 +++ b/code/rd-vanilla/tr_sky.cpp
 @@ -371,6 +371,43 @@ static void DrawSkySide( struct image_s *image, const int mins[2], const int max
@@ -7279,6 +7351,97 @@ index 4c4dfcfb..ad9e8829 100644
  
  	for ( t = mins[1]+HALF_SKY_SUBDIVISIONS; t < maxs[1]+HALF_SKY_SUBDIVISIONS; t++ )
  	{
+@@ -389,8 +426,80 @@ static void DrawSkySide( struct image_s *image, const int mins[2], const int max
+ 	}
+ }
+ 
++#ifdef SHADEREMU
++// The outer box whole (docs/games/jk2.md, "The sky"): every side's grid of a box of size 1, made once, drawn under a scale of
++// the view's zFar / 1.75, as MakeSkyVec places its points, at depth 1: what the sky's surfaces did not show of the box is
++// behind the world. So the sky's triangles are not clipped onto the box and no point is made in a frame. Only for a
++// sky with no clouds (whose layers are made from the clipped sides). JK2_SKY=clip: the sides as the sky shows them.
++static int se_sky_whole = -1;
++static int SE_SkyWhole( const shader_t *shader )
++{
++	if ( se_sky_whole < 0 ) {
++		const char *e = getenv( "JK2_SKY" );
++		const char *d = getenv( "JK2_SKY_DRAW" );
++		se_sky_whole = !( e && !strcmp( e, "clip" ) ) && !( d && !strcmp( d, "begin" ) );
++	}
++	return se_sky_whole && !( shader->sky->cloudHeight && shader->numUnfoggedPasses );
++}
++static void SE_DrawSkyWhole( shader_t *shader )
++{
++	enum { SE_ROW = SKY_SUBDIVISIONS + 1 };
++	static int made;
++	static float pts[6][SE_ROW][SE_ROW][3], st[6][SE_ROW][SE_ROW][2];
++	static uint32_t rgba[SE_ROW * SE_ROW];
++	static glIndex_t idx[SKY_SUBDIVISIONS * SKY_SUBDIVISIONS * 6];
++	if ( !made ) {
++		static const int st_to_vec[6][3] = { {3,-1,2}, {-3,1,2}, {1,3,2}, {-1,-3,2}, {-2,-1,3}, {2,-1,-3} };
++		for ( int i = 0; i < 6; i++ )
++			for ( int t = 0; t < SE_ROW; t++ )
++				for ( int k = 0; k < SE_ROW; k++ ) {
++					const float fs = ( k - HALF_SKY_SUBDIVISIONS ) / (float)HALF_SKY_SUBDIVISIONS;
++					const float ft = ( t - HALF_SKY_SUBDIVISIONS ) / (float)HALF_SKY_SUBDIVISIONS;
++					const float b[3] = { fs, ft, 1.0f };
++					for ( int j = 0; j < 3; j++ ) {
++						const int v = st_to_vec[i][j];
++						pts[i][t][k][j] = v < 0 ? -b[-v - 1] : b[v - 1];
++					}
++					float ss = ( fs + 1 ) * 0.5f, tt = ( ft + 1 ) * 0.5f;	// (sky_min 0, sky_max 1: DrawSkyBox's)
++					st[i][t][k][0] = ss, st[i][t][k][1] = 1.0f - tt;
++				}
++		int n = 0;
++		for ( int t = 0; t < SKY_SUBDIVISIONS; t++ )
++			for ( int k = 0; k < SKY_SUBDIVISIONS; k++ ) {
++				const glIndex_t a = t * SE_ROW + k, c = ( t + 1 ) * SE_ROW + k;
++				idx[n++] = a, idx[n++] = c, idx[n++] = a + 1;
++				idx[n++] = a + 1, idx[n++] = c, idx[n++] = c + 1;
++			}
++		made = 1;
++	}
++	byteAlias_t ba;
++	ba.b[0] = ba.b[1] = ba.b[2] = tr.identityLightByte, ba.b[3] = 255;
++	for ( int k = 0; k < SE_ROW * SE_ROW; k++ )
++		rgba[k] = ba.ui;
++	const float size = backEnd.viewParms.zFar / 1.75;
++	qglScalef( size, size, size );
++	qglEnableClientState( GL_TEXTURE_COORD_ARRAY );
++	qglEnableClientState( GL_COLOR_ARRAY );
++	qglColorPointer( 4, GL_UNSIGNED_BYTE, 0, rgba );
++	for ( int i = 0; i < 6; i++ ) {
++		GL_Bind( shader->sky->outerbox[i] );
++		qglVertexPointer( 3, GL_FLOAT, sizeof( pts[0][0][0] ), pts[i] );
++		qglTexCoordPointer( 2, GL_FLOAT, 0, st[i] );
++		qglDrawElements( GL_TRIANGLES, SKY_SUBDIVISIONS * SKY_SUBDIVISIONS * 6, GL_INDEX_TYPE, idx );
++	}
++	qglVertexPointer( 3, GL_FLOAT, 16, tess.xyz );	// (back to tess's, as the stages set them)
++	qglTexCoordPointer( 2, GL_FLOAT, 0, tess.svars.texcoords[0] );
++	qglColorPointer( 4, GL_UNSIGNED_BYTE, 0, tess.svars.colors );
++}
++#endif
+ static void DrawSkyBox( shader_t *shader )
+ {
++#ifdef SHADEREMU
++	if ( SE_SkyWhole( shader ) ) {
++		SE_DrawSkyWhole( shader );
++		return;
++	}
++#endif
+ 	int		i;
+ 
+ 	sky_min = 0.0f;
+@@ -808,6 +917,9 @@ void RB_StageIteratorSky( void ) {
+ 	// go through all the polygons and project them onto
+ 	// the sky box to see which blocks on each side need
+ 	// to be drawn
++#ifdef SHADEREMU
++	if ( !SE_SkyWhole( tess.shader ) )
++#endif
+ 	RB_ClipSkyPolygons( &tess );
+ 
+ 	// r_showsky will let all the sky blocks be drawn in
 diff --git a/code/rd-vanilla/tr_stl.cpp b/code/rd-vanilla/tr_stl.cpp
 index f3648d1b..203a6e0d 100644
 --- a/code/rd-vanilla/tr_stl.cpp

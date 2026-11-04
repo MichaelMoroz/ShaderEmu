@@ -816,6 +816,16 @@ death and the autosave's load.
   shadow was 147 thousand instructions. `JK2_MARKS=chop` is the way before. With the wave above, the walk with
   `JK2_SOUND=mix` (4 November 2026): 503 to 466 passes a frame, the longest player 270 to 165 thousand, core 0's joins
   46 to 69 passes a frame to 17 to 41; captured at frame 1450, the same pixels as both ways before but the dials.
+- **The sky's box whole** (`SE_DrawSkyWhole` in `tr_sky.cpp`): every frame the sky's triangles in view (about 30) were
+  clipped onto the box's six planes to find which squares of each side show, and those squares' points made again
+  (`MakeSkyVec`, about 317 a frame): 160 thousand instructions of the drawing's worker a frame, for a box whose points go
+  only by `zFar`. Now each side's whole grid is made once at size 1 and drawn under a `glScalef` of `zFar / 1.75` (the
+  translation to the eye was already the GL's), at depth 1 as before: what the sky's surfaces did not show of it is
+  behind the world. Not for a sky with clouds, whose layers are made from the clipped sides. `JK2_SKY=clip` is the way
+  before (and `JK2_SKY_DRAW=begin`). The walk with `JK2_SOUND=mix`: the drawing's worker 1.38 to 1.29 million a frame.
+- **A message's bits a byte at once** (`MSG_WriteBits`, `MSG_ReadBits`): Jedi Outcast's messages have no Huffman coder,
+  but the loop took a piece a byte with a mask each; now whole bytes, the same bytes (Quake III's "Traces and messages
+  made cheaper"). `JK2_MSG=bits` is the way before. Captured at frame 1450 with both: the same pixels but the dials.
 - **The particles and the sky drawn from arrays** (`CParticleCloud::Render`, `DrawSkySide`): one `glDrawElements` of
   triangles, cut as the shim cuts quads and strips, not a call a vertex. `JK2_WEATHER_DRAW=begin` and
   `JK2_SKY_DRAW=begin` are the ways before.
