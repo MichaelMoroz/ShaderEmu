@@ -34,10 +34,9 @@ Limits: VRChat, D3D11 DXBC, no UAVs in the fragment shader, no texture arrays. f
 
 The card refuses a tick it has not seen in software: `rvc_harness` says so and exits 3 unless `warp_ok` in the processor's folder holds its sources' hash.
 
-    bin\rvc_harness.exe --rvc shader_vm --stamp
-    python tools\test_card.py mctest-3 --warp --parts --max-wall 240 --mark-ok
+    python tools\warp_stamp.py
 
-WARP is about 300 thousand instructions a second, so `--parts` (45 s runs, resumed). The stamp is of the sources: a `--define` is the same tick checked. Commit `warp_ok`'s change with its own message (`WARP stamp for ...: mctest-3 passed in 25 s parts`).
+About 42 s: three snapshots of a busy machine (mctest's workers, glxgears' draws) made on the processor at random moments, each run 6 s on WARP; all going on with no fault writes the stamp (`bin\rvc_harness.exe --rvc shader_vm --stamp` prints the hash). Whole cases on WARP (`python tools\test_card.py mctest-3 --warp --parts --max-wall 240 --mark-ok`, WARP being about 300 thousand instructions a second) are for what a case must print, not for the stamp. The stamp is of the sources: a `--define` is the same tick checked. Commit `warp_ok`'s change with its own message (`WARP stamp for ...: tools/warp_stamp.py, 3 snapshots`).
 
 Then on the card: `python tools\test_card.py mctest-3 fptest` and a same-state check: a cold boot of the same frames under `--fixed-dt` under each build, same instructions and console.
 

@@ -59,7 +59,7 @@ Never change a value only because the test says otherwise: `nxpath-balls`' `CARD
     python tools\test_card.py mctest-3 fptest               # through gpu_queue, one at a time
     python tools\test_card.py machine --list                # chosen, and why one is skipped
     python tools\test_card.py mctest-255 cc-bytes --parts   # runs of --part-secs, the machine saved between
-    python tools\test_card.py mctest-3 --warp --parts --max-wall 240 --mark-ok
+    python tools\warp_stamp.py                              # the WARP stamp: 3 random snapshots, 6 s each on WARP (42 s)
 
 - It resumes a shell snapshot (`build/test_card/shell.snap`). After a layout change or a new image: `--snapshot`.
 - A case is skipped for another image, for host words that change as it runs, for `rvc_cpu`'s own devices, or for being too long without `--parts`. "11 of 11, 4 skipped" is a full pass if the four are the known ones: say so.

@@ -797,7 +797,7 @@ index f3e0cf3a..212817f2 100644
      this->update_map_info(in_map);
      this->create_shared_resources();
 diff --git a/src/scr_game.cpp b/src/scr_game.cpp
-index 92412fb6..a3196cc3 100644
+index 92412fb6..13b8da63 100644
 --- a/src/scr_game.cpp
 +++ b/src/scr_game.cpp
 @@ -1,3 +1,4 @@
@@ -841,7 +841,52 @@ index 92412fb6..a3196cc3 100644
  void TRIBE_Screen_Game::set_map_buttons_redraw(TPanel::RedrawMode redraw_mode) {
      if (this->pnl_wid < 800) {
          this->button_panel[5]->set_redraw(redraw_mode);
-@@ -1083,6 +1104,66 @@ long TRIBE_Screen_Game::handle_idle() {
+@@ -827,23 +848,26 @@ long TRIBE_Screen_Game::handle_size(long win_wid, long win_hgt) {
+         this->more_frame = 0xB;
+         final_frame = 0xA;
+     } else {
+-        if (this->pnl_wid >= 800 && this->pnl_hgt >= 600) {
++        if (this->pnl_wid >= 800 && this->pnl_hgt >= 440) {
++            // The port: the window may have another shape than 4:3 (port/window.c, aoe_win_game_height): what is below
++            // the top band keeps its place from the bottom, dy rows from 800 x 600's, and the view is taller or shorter
++            long dy = this->pnl_hgt - 600;
+             this->pop_panel->set_positioning(TPanel::PositionLeftTop, 320, 4, 4, 4, 160, 160, 20, 20, 0, 0, 0, 0);
+ 
+             if (this->tool_box->active != 0) {
+                 this->tool_box->set_fixed_position(0, 20, 800, 30);
+-                this->main_view->set_fixed_position(0, 50, 800, 424);
++                this->main_view->set_fixed_position(0, 50, 800, 424 + dy);
+             } else {
+-                this->main_view->set_fixed_position(0, 20, 800, 454);
++                this->main_view->set_fixed_position(0, 20, 800, 454 + dy);
+             }
+ 
+-            this->map_view->set_fixed_position(571, 480, 220, 114);
++            this->map_view->set_fixed_position(571, 480 + dy, 220, 114);
+             this->age_panel->set_fixed_position(270, 2, 268, 16);
+             this->fps_panel->set_fixed_position(2, 2, 280, 16);
+             this->inven_panel->set_fixed_position(0, 0, 270, 20);
+-            this->object_panel->set_fixed_position(5, 481, 127, 114);
++            this->object_panel->set_fixed_position(5, 481 + dy, 127, 114);
+ 
+-            panel_y = 482;
++            panel_y = 482 + dy;
+             for (int panel_row = 0; panel_row < 2; ++panel_row) {
+                 panel_x = 136;
+                 int button_index = panel_row * 6;
+@@ -859,9 +883,9 @@ long TRIBE_Screen_Game::handle_size(long win_wid, long win_hgt) {
+             this->button_panel[12]->set_fixed_position(548, 0, 72, 19);
+             this->button_panel[13]->set_fixed_position(620, 0, 108, 19);
+             this->button_panel[14]->set_fixed_position(728, 0, 72, 19);
+-            this->button_panel[15]->set_fixed_position(765, 564, 30, 30);
++            this->button_panel[15]->set_fixed_position(765, 564 + dy, 30, 30);
+             this->button_panel[15]->tribe_button_type = 3;
+-            this->button_panel[16]->set_fixed_position(765, 482, 30, 30);
++            this->button_panel[16]->set_fixed_position(765, 482 + dy, 30, 30);
+             this->button_panel[16]->tribe_button_type = 3;
+ 
+             this->more_cancel_pic = this->button_cmd_pic;
+@@ -1083,6 +1107,66 @@ long TRIBE_Screen_Game::handle_idle() {
      return result;
  }
  
@@ -908,7 +953,7 @@ index 92412fb6..a3196cc3 100644
  void TRIBE_Screen_Game::handle_game_update() {
      int update_counter = 0;
  
-@@ -1142,7 +1223,20 @@ void TRIBE_Screen_Game::handle_game_update() {
+@@ -1142,7 +1226,20 @@ void TRIBE_Screen_Game::handle_game_update() {
              } else if (this->game_ended != 0) {
                  game_state = 1;
              } else {
@@ -930,7 +975,16 @@ index 92412fb6..a3196cc3 100644
                  if (out_of_sync2 != 0) {
                      return;
                  }
-@@ -2270,11 +2364,12 @@ void TRIBE_Screen_Game::player_changed(int old_player_id, int new_player_id) {
+@@ -2262,7 +2359,7 @@ void TRIBE_Screen_Game::player_changed(int old_player_id, int new_player_id) {
+                 } else {
+                     game_pic_id = culture + 0xC635;
+                 }
+-            } else if (this->pnl_wid >= 800 && this->pnl_hgt >= 600) {
++            } else if (this->pnl_wid >= 800 && this->pnl_hgt >= 440) {
+                 sprintf(str, s_game_b_format, culture);
+                 if (culture == RGE_CULTURE_ROMAN) {
+                     game_pic_id = 0xCF13;
+@@ -2270,11 +2367,12 @@ void TRIBE_Screen_Game::player_changed(int old_player_id, int new_player_id) {
                      game_pic_id = culture + 0xC631;
                  }
              } else {
@@ -946,9 +1000,24 @@ index 92412fb6..a3196cc3 100644
                  }
              }
              this->game_screen_pic = new TShape(str, game_pic_id);
-@@ -3502,8 +3597,7 @@ void TRIBE_Screen_Game::draw() {
+@@ -2283,7 +2381,7 @@ void TRIBE_Screen_Game::player_changed(int old_player_id, int new_player_id) {
+                 this->button_panel[i]->border_pic = (i < 0x0C) ? this->button_border1_pic : this->button_border2_pic;
+             }
+ 
+-            if (this->pnl_wid >= 800 && this->pnl_hgt >= 600) {
++            if (this->pnl_wid >= 800 && this->pnl_hgt >= 440) {
+                 this->more_cancel_pic = this->button_cmd_pic;
+             } else {
+                 this->more_cancel_pic = this->button_other_pic;
+@@ -3498,12 +3596,11 @@ void TRIBE_Screen_Game::draw() {
+                 if (this->pnl_wid >= 1024 && this->pnl_hgt >= 768) {
                      this->game_screen_pic->shape_draw(this->render_area, 0, 0, 0, 0, 0);
-                     this->game_screen_pic->shape_draw(this->render_area, 0, 474, 1, 0, 0);
+                     this->game_screen_pic->shape_draw(this->render_area, 0, 642, 1, 0, 0);
+-                } else if (this->pnl_wid >= 800 && this->pnl_hgt >= 600) {
++                } else if (this->pnl_wid >= 800 && this->pnl_hgt >= 440) {
+                     this->game_screen_pic->shape_draw(this->render_area, 0, 0, 0, 0, 0);
+-                    this->game_screen_pic->shape_draw(this->render_area, 0, 474, 1, 0, 0);
++                    this->game_screen_pic->shape_draw(this->render_area, 0, 474 + (this->pnl_hgt - 600), 1, 0, 0);
                  } else {
 -                    this->game_screen_pic->shape_draw(this->render_area, 0, 0, 0, 0, 0);
 -                    this->game_screen_pic->shape_draw(this->render_area, 0, 354, 1, 0, 0);
@@ -956,7 +1025,7 @@ index 92412fb6..a3196cc3 100644
                  }
                  this->render_area->Unlock(s_scr_game_draw2);
              }
-@@ -3520,6 +3614,30 @@ void TRIBE_Screen_Game::draw() {
+@@ -3520,15 +3617,45 @@ void TRIBE_Screen_Game::draw() {
          this->draw_setup(flag);
          if (this->game_screen_pic) {
              if (this->render_area->Lock(s_scr_game_draw3, 1)) {
@@ -987,9 +1056,11 @@ index 92412fb6..a3196cc3 100644
                  if (this->pnl_wid >= 1024 && this->pnl_hgt >= 768) {
                      this->game_screen_pic->shape_draw(this->render_area, 0, 0, 0, 0, 0);
                      this->game_screen_pic->shape_draw(this->render_area, 0, 642, 1, 0, 0);
-@@ -3527,8 +3645,14 @@ void TRIBE_Screen_Game::draw() {
+-                } else if (this->pnl_wid >= 800 && this->pnl_hgt >= 600) {
++                } else if (this->pnl_wid >= 800 && this->pnl_hgt >= 440) {
                      this->game_screen_pic->shape_draw(this->render_area, 0, 0, 0, 0, 0);
-                     this->game_screen_pic->shape_draw(this->render_area, 0, 474, 1, 0, 0);
+-                    this->game_screen_pic->shape_draw(this->render_area, 0, 474, 1, 0, 0);
++                    this->game_screen_pic->shape_draw(this->render_area, 0, 474 + (this->pnl_hgt - 600), 1, 0, 0);
                  } else {
 -                    this->game_screen_pic->shape_draw(this->render_area, 0, 0, 0, 0, 0);
 -                    this->game_screen_pic->shape_draw(this->render_area, 0, 354, 1, 0, 0);

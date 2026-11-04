@@ -104,17 +104,17 @@ ui_menu_draw(int k)
 		}
 		if (lit && ui_seven) {
 			/* a light blue box with rounded corners round the row */
-			GrSetGCForeground(ui_menu_gc, MWRGB(232, 240, 251));
+			GrSetGCForeground(ui_menu_gc, ui_accent(MWRGB(232, 240, 251), 228));
 			GrFillRect(w, ui_menu_gc, 3, y + 2, width - 6, UI_MENU_ROW / 2 - 1);
-			GrSetGCForeground(ui_menu_gc, MWRGB(219, 232, 249));
+			GrSetGCForeground(ui_menu_gc, ui_accent(MWRGB(219, 232, 249), 208));
 			GrFillRect(w, ui_menu_gc, 3, y + 1 + UI_MENU_ROW / 2, width - 6, UI_MENU_ROW / 2 - 2);
-			GrSetGCForeground(ui_menu_gc, MWRGB(168, 202, 240));
+			GrSetGCForeground(ui_menu_gc, ui_accent(MWRGB(168, 202, 240), 150));
 			GrLine(w, ui_menu_gc, 3, y + 1, width - 4, y + 1);
 			GrLine(w, ui_menu_gc, 3, y + UI_MENU_ROW - 1, width - 4, y + UI_MENU_ROW - 1);
 			GrLine(w, ui_menu_gc, 2, y + 2, 2, y + UI_MENU_ROW - 2);
 			GrLine(w, ui_menu_gc, width - 3, y + 2, width - 3, y + UI_MENU_ROW - 2);
 		} else if (lit) {
-			GrSetGCForeground(ui_menu_gc, MWRGB(10, 36, 106));
+			GrSetGCForeground(ui_menu_gc, ui_accent(MWRGB(10, 36, 106), -64));
 			GrFillRect(w, ui_menu_gc, 2, y + 1, width - 4, UI_MENU_ROW - 1);
 		}
 		if (item->icon_file && item->icon_file[0])

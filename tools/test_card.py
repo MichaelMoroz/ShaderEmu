@@ -3,7 +3,7 @@ time through tools\\gpu_queue.ps1, each console checked by test_all's own rules.
 
     python tools/test_card.py CASE_OR_TAG ... [--image build/images/nommu] [--max-wall 55] [--wall-scale 1]
     python tools/test_card.py games --list
-    python tools/test_card.py mctest-3 lanetest fptest --warp --mark-ok --max-wall 0   # the WARP stamp (below)
+    python tools/test_card.py mctest-3 lanetest fptest --warp --mark-ok --max-wall 0   # cases on WARP (the stamp: tools/warp_stamp.py)
 
 The harness runs in real time: a case's wall is the guest's seconds it may take. The card boots in some 50 s, so
 every case starts from a snapshot of the shell (made once on the processor, rvc_harness --cpu --save-state, as
@@ -14,7 +14,8 @@ cannot run it as rvc_cpu does: another image (`lazy`, `zero-tail`), the host's w
 tick's) go in CARD, each with the runs that showed them.
 
 The card runs a processor folder only when its warp_ok holds its stamp (its sources hashed, `rvc_harness --stamp`):
---warp runs the cases on WARP, and --mark-ok writes the stamp when every one passed.
+--warp runs the cases on WARP, and --mark-ok writes the stamp when every one passed; tools/warp_stamp.py writes it in
+about a minute from random snapshots of a busy machine.
 """
 import argparse, os, re, subprocess, sys, time
 

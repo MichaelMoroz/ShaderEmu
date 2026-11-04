@@ -20,13 +20,16 @@ COMMIT=260c59c2907187af555a676fe0cc798893bf7757
 JOBS=${JK2_JOBS:-4}
 T0=$(date +%s); step() { echo "== [$(( $(date +%s) - T0 )) s] $*"; }
 
+# (a player made ahead neither allocates nor frees: sys_shaderemu.cpp's __wrap_malloc and the rest; docs/games/jk2.md,
+# "The players on workers")
+SE_WRAP="-Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc -Wl,--wrap=free"
 if [ "${JK2_HOST:-}" = 1 ]; then
     WORK=${JK2_WORK:-$HOME/jk2-host}
     mkdir -p "$WORK"
     CC=gcc; CXX=g++; LD=ld; OBJCOPY=objcopy; NM=nm; ARCH=x86_64
     # the machine's float flags (below), so that the game computes the same: its sums are compared
     OPT="-O2 -g -fno-strict-aliasing -fno-math-errno -fsingle-precision-constant -ffp-contract=off ${JK2_CFLAGS:-}"
-    LIBS="-lm ${JK2_LINK:-}"
+    LIBS="-lm $SE_WRAP ${JK2_LINK:-}"
     BUILD=$WORK/build
     OUT=$WORK
 else
@@ -55,7 +58,8 @@ if [ "${JK2_TREE:-}" != keep ]; then
     : > "$P.files"
     if [ -s "$HERE/jk2.patch" ]; then
         git -C "$SRC" apply --numstat "$HERE/jk2.patch" | cut -f3 > "$P.files"
-        while read -r f; do mkdir -p "$P/$(dirname "$f")"; git -C "$SRC" show "$COMMIT:$f" > "$P/$f"; done < "$P.files"
+        # (a file the patch adds is not in the commit: git apply makes it)
+        while read -r f; do mkdir -p "$P/$(dirname "$f")"; git -C "$SRC" show "$COMMIT:$f" > "$P/$f" 2>/dev/null || rm -f "$P/$f"; done < "$P.files"
         (cd "$P" && git apply "$HERE/jk2.patch")
         while read -r f; do put "$P/$f" "$SRC/$f"; done < "$P.files"
     fi
@@ -158,10 +162,13 @@ GF="$OPT $COMMON -fno-gnu-unique -DJK2_MODE -DSP_GAME -I$S/codeJK2 -I$S/codeJK2/
 step "the game"
 compile game \
     "$(lines game "$CXX $CXXSTD $GF" $(for f in $GAME; do echo "$S/codeJK2/game/$f.cpp"; done) \
-        $(for f in $CGAME; do echo "$S/codeJK2/cgame/$f.cpp"; done) $(for f in $ICARUS; do echo "$S/codeJK2/icarus/$f.cpp"; done) \
+        $(for f in $ICARUS; do echo "$S/codeJK2/icarus/$f.cpp"; done) \
         "$S/code/ui/gameinfo.cpp" "$S/code/qcommon/tri_coll_test.cpp" "$S/code/qcommon/q_shared.cpp" "$S/code/Rufl/hstring.cpp" \
         $(for f in $SHARED_CXX; do echo "$S/shared/$f.cpp"; done))" \
-    "$(lines game "$CC $GF" $(for f in $SHARED_C; do echo "$S/shared/$f.c"; done) "$HERE/se_rand.c" "$HERE/cg_rand.c")"
+    "$(lines game "$CC $GF" $(for f in $SHARED_C; do echo "$S/shared/$f.c"; done) "$HERE/se_rand.c" "$HERE/cg_rand.c")" \
+    "$(lines game "$CXX $CXXSTD $GF -DSE_CG_UNIT" $(for f in $CGAME; do echo "$S/codeJK2/cgame/$f.cpp"; done))"
+# (SE_CG_UNIT: the client's game's files, which read the game's entities through se_cg_gents, g_shared.h: the copy the
+# game gives it, docs/games/jk2.md, "The game's frame apart")
 # the client's game draws its random numbers from states of its own (cg_rand.c says why): its objects' calls renamed
 for o in "$BUILD"/game/cgame_*.o; do
     $OBJCOPY --redefine-sym Q_flrand=CG_flrand --redefine-sym Q_irand=CG_irand --redefine-sym rand=CG_rand "$o"
@@ -236,8 +243,8 @@ if [ "${JK2_HOST:-}" != 1 ]; then
         $OBJCOPY --set-section-alignment '.data*=16' --set-section-alignment '.sdata*=16' --set-section-alignment '.bss*=16' \
             --set-section-alignment '.sbss*=16' "$o"
     done
-    # (every strtod and atof through sys_shaderemu.cpp's __wrap_strtod: musl's parses in software long doubles)
-    MACHINE="$BUILD/window/*.o $MW/src/lib/libnano-X.a $MEDIA -Wl,--wrap=strtod"
+    # (every strtod and atof through sys_shaderemu.cpp's __wrap_strtod and __wrap_atof: musl's parses in software long doubles)
+    MACHINE="$BUILD/window/*.o $MW/src/lib/libnano-X.a $MEDIA -Wl,--wrap=strtod -Wl,--wrap=atof $SE_WRAP"
 fi
 
 step "the program"
@@ -254,10 +261,15 @@ else
     # its licence is accepted; what the game writes where the host keeps it
     cat > "$OUT/usr/bin/jk2" <<'EOF'
 #!/bin/sh
-# Jedi Outcast's demo (docs/games/jk2.md): LucasArts' installer lies unchanged in the ROM, and its pak is unpacked into
-# memory once a session, after the licence read out of it is accepted (cabinst, docs/system/install.md)
-cabinst --title "Jedi Outcast (demo)" --licence Disk1/Install/license.txt --key jk2.eula /usr/share/jk2/jk2demo.exe /tmp/jk2 \
+# Jedi Outcast's demo (docs/games/jk2.md): its pak lies decoded in the ROM and is linked into /tmp/jk2 at each start,
+# after its licence is accepted (cabinst, docs/system/install.md); the links are deleted when the game ends
+# (the image has the installer decoded since 4 November 2026, linux/jk2/data.py: the licence shown, the pak linked into place)
+if [ -d /usr/share/jk2/installed ]; then
+    cabinst --title "Jedi Outcast (demo)" --licence Disk1/Install/license.txt --key jk2.eula --installed /usr/share/jk2/installed /tmp/jk2 || exit $?
+else
+    cabinst --title "Jedi Outcast (demo)" --licence Disk1/Install/license.txt --key jk2.eula /usr/share/jk2/jk2demo.exe /tmp/jk2 \
     Disk1/GameData/demo/assets0.pk3=base/assets0.pk3 || exit $?
+fi
 [ "$1" = --unpack ] && exit 0	# (only that: a test unpacks first, then plays)
 # settings and saved games in the folder the host keeps, else in /tmp
 P=/persistence; mkdir -p $P/jk2 2>/dev/null || P=/tmp
@@ -265,12 +277,22 @@ P=/persistence; mkdir -p $P/jk2 2>/dev/null || P=/tmp
 # quotes keep the engine's command line from cutting the bind at its +); pictures a quarter of their size each way, the
 # GPU's memory being 36 MB of RAM (gl_jk2.c); triangles as glDrawElements, not strips of glArrayElement (four thousand
 # primitives a frame, each a draw of its own)
-exec jk2.bin +set fs_basepath /tmp/jk2 +set fs_homepath $P/jk2 +set com_demo 1 +bind CTRL '"+attack"' +set r_picmip 2 +set r_primitives 2 "$@"
+# (not exec: the shell waits, and deletes the pak however the game ends)
+trap 'rm -rf /tmp/jk2' EXIT; trap 'exit 143' TERM INT HUP
+jk2.bin +set fs_basepath /tmp/jk2 +set fs_homepath $P/jk2 +set com_demo 1 +bind CTRL '"+attack"' +set r_picmip 2 +set r_primitives 2 "$@"
 EOF
     chmod 755 "$OUT/usr/bin/jk2"
     # the Start menu's entry; data.py puts it into an image with the demo, never into the shared one
     mkdir -p "$OUT/usr/share"
     echo "Games/Jedi Outcast (demo)=jk2" > "$OUT/usr/share/nxapps.77-jk2"
     ls -l "$OUT/usr/bin/jk2.bin"
+    # JK2_SKINTEST=1: skintest, the GPU's skinned draws against this core's (skintest.c; a test, not in the image)
+    if [ "${JK2_SKINTEST:-}" = 1 ]; then
+        step "skintest"
+        $CC $WF -ffp-contract=off -DSEGL_FLOAT -idirafter $PROGRAMS/linux/include -I$MW/src/include -I$PROGRAMS/linux -I$REPO/linux/quake3 \
+            -o "$BUILD/skintest" "$HERE/skintest.c" "$BUILD/window/quake3_gpu_shaderemu.o" "$BUILD/window/mc_mcw.o" \
+            $MW/src/lib/libnano-X.a -lm
+        cp "$BUILD/skintest" "$OUT/usr/bin/skintest"
+    fi
 fi
 step done

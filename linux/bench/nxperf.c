@@ -15,6 +15,7 @@
  * --cli draws its GPU tests into a window of its own when there is a window system, and does not
  * touch the registry unless --save is given.
  */
+#include <math.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,8 +28,8 @@
 #include "ui.h"
 #include "ui_single.h"
 
-#define WIDTH 620
-#define HEIGHT 450
+#define WIDTH 700	/* (the score page's table: seven machines' names and eight parts of up to seven digits) */
+#define HEIGHT 540
 #define TOP 46
 #define ROW 19
 #define LEFT 144
@@ -38,7 +39,7 @@
 #define PIC_W 120
 #define PIC_H 90
 
-struct result { float value, cpo; int ok, have; char note[72]; };
+struct result { float value, cpo; int ok, have, runs; char note[72]; };
 static struct result *results;
 static int workers_wanted = 255;
 
@@ -89,14 +90,28 @@ static void score_keep(void)
 	if (!best_run.have || this_run.all > best_run.all) score_write("nxperf.best", &this_run);
 }
 
-/* what the machine was: the field has lanes on the card's lean tick only */
+/* The host's processor short: CPUID's brand string without " Processor" and a "16-Core" (AMD Ryzen 9 9950X3D). */
+static const char *host_short(void)
+{
+	static char name[52];
+	char *at;
+
+	snprintf(name, sizeof name, "%s", perf_host_name[0] ? perf_host_name : "the host");
+	if ((at = strstr(name, " Processor"))) *at = 0;
+	if ((at = strstr(name, "-Core")))
+		for (*at = 0; at > name && at[-1] != ' '; at--) at[-1] = 0;
+	for (at = name + strlen(name); at > name && at[-1] == ' ';) *--at = 0;
+	return name;
+}
+
+/* what the machine was, in parts the score page puts on lines of their own: the field has lanes on the card's lean tick only */
 static void machine_text(char *to, int room, const struct kept_score *k)
 {
 	if (k->lanes == -2)
-		snprintf(to, (size_t)room, "rvc_cpu on %s, by its clock, %d workers", perf_host_name[0] ? perf_host_name : "the host", k->workers);
-	else if (k->lanes > 0) snprintf(to, (size_t)room, "the card (%d lanes in the field), %d workers", k->lanes, k->workers);
-	else if (k->lanes == 0) snprintf(to, (size_t)room, "no lanes: rvc_cpu or a tick without them, %d workers", k->workers);
-	else snprintf(to, (size_t)room, "%d workers (the field not run)", k->workers);
+		snprintf(to, (size_t)room, "rvc_cpu, by the host's clock, on %s, %d workers", host_short(), k->workers);
+	else if (k->lanes > 0) snprintf(to, (size_t)room, "the card, %d lanes in the field, %d workers", k->lanes, k->workers);
+	else if (k->lanes == 0) snprintf(to, (size_t)room, "no lanes, rvc_cpu or a tick without them, %d workers", k->workers);
+	else snprintf(to, (size_t)room, "%d workers, the field not run", k->workers);
 }
 
 static void date_text(char *to, int room, long when)
@@ -125,11 +140,8 @@ static void score_print(const struct kept_score *k, int n)
 	for (m = 0; m < PERF_MACHINES; m++) {
 		float all = perf_machine_score(m, parts, counted);
 
-		if (all <= 0) {
-			printf("nxperf: beside it: %-9s - (%s: not measured)\n", perf_machines[m].name, perf_machines[m].note);
-			continue;
-		}
-		printf("nxperf: beside it: %-9s %6.0f (%s;", perf_machines[m].name, (double)all, perf_machines[m].note);
+		if (all <= 0) continue;	/* (no values yet: not said) */
+		printf("nxperf: beside it: %-26s %7.0f (%s;", perf_machines[m].name, (double)all, perf_machines[m].note);
 		for (p = 0; p < PERF_PARTS; p++)
 			if (counted[p]) printf(" %s %.0f", perf_parts[p], (double)parts[p]);
 		printf(")\n");
@@ -183,7 +195,8 @@ static void run_one(int i)
 		r.ok = -1;
 		snprintf(r.note, sizeof r.note, "no window to draw in");
 	} else
-		t->run(&r);
+		perf_run_test(i, &r);
+	s->runs = r.runs;
 	s->value = r.ok < 0 ? 0 : r.value, s->cpo = r.cpo, s->ok = r.ok, s->have = 1;
 	memcpy(s->note, r.note, sizeof s->note);
 }
@@ -268,8 +281,10 @@ static int cli(int argc, char **argv, int save)
 		run_one(i);
 		value_text(v, sizeof v, s->value);
 		if (s->cpo > 0) snprintf(c, sizeof c, "%.2f i/op", (double)s->cpo);
-		printf("nxperf: %-12s %10s %-8s %-11s %s (%s)\n", perf_tests[i].name, s->ok < 0 ? "-" : v, perf_tests[i].unit, c,
+		printf("nxperf: %-12s %10s %-8s %-11s %s (%s)", perf_tests[i].name, s->ok < 0 ? "-" : v, perf_tests[i].unit, c,
 		       s->ok > 0 ? "OK" : s->ok == 0 ? "FAIL" : "not run", s->note);
+		if (s->runs > 1) printf(" %d runs", s->runs);
+		printf("\n");
 		fflush(stdout);
 		ok += s->ok > 0, failed += s->ok == 0, skipped += s->ok < 0;
 		if (save) save_result(i);
@@ -397,11 +412,21 @@ static void draw_rows(void)
 
 /* ---- the score page: the whole large, a bar for each part (a click shows its group), the other machines beside it */
 
-#define PART_X 214
+#define PART_X 224
 #define PART_Y (TOP + 6)
 #define PART_H 28
-#define PART_BAR 220
+#define PART_BAR 300
 #define TABLE_Y (PART_Y + PERF_PARTS * PART_H + 10)
+/* the bars are logarithmic, 10 to 10 million: the card model's 1,000 a third of the way, rvc_cpu's tens of
+ * thousands and a part of millions in view, where a bar by the largest part made every other one 0 pixels */
+#define BAR_DECADES 6.0f
+
+static int bar_width(float v)
+{
+	float w = v > 10.0f ? (float)PART_BAR * (log10f(v) - 1.0f) / BAR_DECADES : 0;
+
+	return w < 0 ? 0 : w > PART_BAR ? PART_BAR : (int)(w + 0.5f);
+}
 
 /* the group a part's tests are in */
 static int part_group(int p)
@@ -423,7 +448,7 @@ static void draw_score(void)
 {
 	const struct kept_score *k = this_run.have ? &this_run : &last_run;
 	char text[96], when[40];
-	float most = 2000, parts[PERF_PARTS], all;
+	float parts[PERF_PARTS];
 	int p, m, y, failed = 0, i;
 
 	ui_fill(window, 0, TOP, WIDTH, HEIGHT - 24 - TOP, UI_FACE);
@@ -440,16 +465,18 @@ static void draw_score(void)
 	date_text(when, sizeof when, k->when);
 	ui_text(window, 16, TOP + 96, when, -1, BLACK, 0);
 	machine_text(text, sizeof text, k);
-	{	/* (the machine's words on two lines) */
-		char *comma = strchr(text, ',');
+	y = TOP + 114;
+	{	/* (the machine's words a line each: one line was wider than the panel) */
+		char *part = text, *comma;
 
-		if (comma) *comma = 0;
-		ui_text(window, 16, TOP + 114, text, -1, BLACK, 0);
-		if (comma) ui_text(window, 16, TOP + 130, comma + 2, -1, BLACK, 0);
+		for (; part; part = comma ? comma + 2 : NULL, y += 16) {
+			if ((comma = strstr(part, ", "))) *comma = 0;
+			ui_text(window, 16, y, part, -1, BLACK, 0);
+		}
 	}
 	snprintf(text, sizeof text, failed ? "%d checks FAILED" : "every check held", failed);
-	ui_text(window, 16, TOP + 150, text, -1, failed ? MWRGB(200, 0, 0) : MWRGB(0, 120, 0), 0);
-	y = TOP + 176;
+	ui_text(window, 16, y + 4, text, -1, failed ? MWRGB(200, 0, 0) : MWRGB(0, 120, 0), 0);
+	y += 30;
 	if (k == &this_run && last_run.have) {
 		date_text(when, sizeof when, last_run.when);
 		snprintf(text, sizeof text, "last run: %.0f", (double)last_run.all);
@@ -464,50 +491,70 @@ static void draw_score(void)
 		ui_text(window, 16, y + 16, this_run.have && this_run.all > best_run.all ? "this run" : when, -1, UI_SHADOW, 0);
 	}
 	/* the parts */
-	for (p = 0; p < PERF_PARTS; p++)
-		if (k->parts[p] > most) most = k->parts[p];
 	for (p = 0; p < PERF_PARTS; p++) {
 		int w, yy = PART_Y + p * PART_H;
 
 		ui_fill(window, PART_X, yy, WIDTH - PART_X - 8, PART_H - 4, WHITE);
 		ui_text(window, PART_X + 6, yy + 7, perf_parts[p], -1, BLACK, 0);
 		ui_fill(window, PART_X + 100, yy + 6, PART_BAR, PART_H - 16, MWRGB(230, 230, 230));
-		w = k->parts[p] > 0 ? (int)(PART_BAR * k->parts[p] / most + 0.5f) : 0;
-		if (w > 0) ui_fill(window, PART_X + 100, yy + 6, w > PART_BAR ? PART_BAR : w, PART_H - 16, MWRGB(60, 140, 220));
+		w = bar_width(k->parts[p]);
+		if (w > 0) ui_fill(window, PART_X + 100, yy + 6, w, PART_H - 16, MWRGB(60, 140, 220));
 		/* the reference's 1,000 */
-		ui_fill(window, PART_X + 100 + (int)(PART_BAR * 1000 / most), yy + 3, 1, PART_H - 10, MWRGB(120, 120, 120));
+		ui_fill(window, PART_X + 100 + bar_width(1000), yy + 3, 1, PART_H - 10, MWRGB(120, 120, 120));
 		number_text(text, sizeof text, k->parts[p]);
 		ui_text(window, PART_X + 110 + PART_BAR, yy + 7, text, -1, BLACK, 0);
 	}
-	/* the machines side by side: this run, then the others of perf_machines */
-	ui_fill(window, 8, TABLE_Y, WIDTH - 16, 7 * 16 + 6, WHITE);
-	ui_text(window, 12, TABLE_Y + 3, "machine", -1, UI_SHADOW, 0);
-	ui_text(window, 112, TABLE_Y + 3, "score", -1, UI_SHADOW, 0);
-	for (p = 0; p < PERF_PARTS; p++) {
+	/* the machines side by side: this run, then the others of perf_machines, each column as wide as its widest text */
+	{
 		static const char *const heads[PERF_PARTS] = {"single", "FPU", "memory", "multi", "lanes", "numbers", "media", "GPU"};
+		float shown[PERF_MACHINES + 1][PERF_PARTS + 1];
+		const char *name[PERF_MACHINES + 1] = {"this run"};
+		int x[PERF_PARTS + 2], width[PERF_PARTS + 2], rows = 1, c, yy;
 
-		ui_text(window, 162 + 56 * p, TABLE_Y + 3, heads[p], -1, UI_SHADOW, 0);
-	}
-	for (m = -1; m < PERF_MACHINES; m++) {
-		int yy = TABLE_Y + 20 + (m + 1) * 16;
-		const float *shown = parts;
+		shown[0][0] = k->have ? k->all : 0;
+		memcpy(&shown[0][1], k->parts, sizeof k->parts);
+		for (m = 0; m < PERF_MACHINES; m++) {	/* (a machine with no values yet is not shown) */
+			if ((shown[rows][0] = perf_machine_score(m, parts, NULL)) <= 0) continue;
+			memcpy(&shown[rows][1], parts, sizeof parts);
+			name[rows++] = perf_machines[m].name;
+		}
+		/* column 0 the names, 1 the score, then the parts */
+		width[0] = ui_width(&ui_var_widths, ui_var, "machine", 7);
+		for (m = 1; m < rows; m++) {
+			int w = ui_width(&ui_var_widths, ui_var, name[m], (int)strlen(name[m]));
 
-		if (m < 0) {
-			all = k->have ? k->all : 0;
-			shown = k->parts;
-			ui_text(window, 12, yy, "this run", -1, BLACK, 0);
-		} else {
-			all = perf_machine_score(m, parts, NULL);
-			ui_text(window, 12, yy, perf_machines[m].name, -1, BLACK, 0);
+			if (w > width[0]) width[0] = w;
 		}
-		number_text(text, sizeof text, all);
-		ui_text(window, 112, yy, text, -1, BLACK, 1);
-		for (p = 0; p < PERF_PARTS; p++) {
-			number_text(text, sizeof text, shown[p]);
-			ui_text(window, 162 + 56 * p, yy, text, -1, BLACK, 1);
+		for (c = 1; c < PERF_PARTS + 2; c++) {
+			const char *head = c == 1 ? "score" : heads[c - 2];
+
+			width[c] = ui_width(&ui_var_widths, ui_var, head, (int)strlen(head));
+			for (m = 0; m < rows; m++) {
+				number_text(text, sizeof text, shown[m][c - 1]);
+				if ((int)strlen(text) * ui_fw > width[c]) width[c] = (int)strlen(text) * ui_fw;
+			}
 		}
+		x[0] = 14;
+		for (c = 1; c < PERF_PARTS + 2; c++) x[c] = x[c - 1] + width[c - 1] + (c == 1 ? 14 : 10);
+		ui_fill(window, 8, TABLE_Y, WIDTH - 16, HEIGHT - 28 - TABLE_Y, WHITE);
+		ui_text(window, x[0], TABLE_Y + 3, "machine", -1, UI_SHADOW, 0);
+		for (c = 1; c < PERF_PARTS + 2; c++)
+			ui_text(window, x[c], TABLE_Y + 3, c == 1 ? "score" : heads[c - 2], -1, UI_SHADOW, 0);
+		for (m = 0; m < rows; m++) {
+			GR_COLOR ink = m == 0 ? MWRGB(20, 70, 150) : BLACK;
+
+			yy = TABLE_Y + 22 + m * 17;
+			ui_text(window, x[0], yy, name[m], -1, ink, 0);
+			for (c = 1; c < PERF_PARTS + 2; c++) {
+				number_text(text, sizeof text, shown[m][c - 1]);
+				ui_text(window, x[c], yy, text, -1, ink, 1);
+			}
+		}
+		yy = TABLE_Y + 22 + rows * 17 + 6;
+		ui_text(window, x[0], yy, "486DX-33: estimates from published numbers (docs/apps/bench.md); - is not measured there.", -1, UI_SHADOW, 0);
+		ui_text(window, x[0], yy + 16, "native: the tests compiled for the host, with no workers, lanes or GPU; 1,000 is the card model.", -1,
+			UI_SHADOW, 0);
 	}
-	ui_text(window, 12, TABLE_Y + 20 + 5 * 16 + 2, "486DX-33: estimates from published numbers (docs/apps/bench.md); - is not measured there", -1, UI_SHADOW, 0);
 }
 
 /* ---- every result: three columns of name, value, unit and check (a click shows the test's group) */

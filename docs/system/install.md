@@ -6,10 +6,25 @@ EULA ... not for commercial purposes") and LucasArts' 2002 demo of Jedi Outcast 
 copies "only in its original form", no files added, changed or deleted). So since 2 November 2026 an image made with
 either game holds the **installer itself, byte for byte**, in the ROM, and nothing taken out of it; the machine shows
 the licence read out of the installer, and once it is accepted unpacks the files the game reads into memory, every
-session. `linux/aoe/data.py` and `linux/jk2/data.py` put the installer in; the games stay out of `ALL` and `linux/prebuilt`, and go into an image only when
-asked (`image.py --aoe`, `--jk2`).
+session. `linux/aoe/data.py` and `linux/jk2/data.py` put the installer in; the games stay out of `ALL` and `linux/prebuilt`, and go into every image
+(`image.py`, since 4 November 2026; `AOE_IMAGE=0` and `JK2_IMAGE=0` make a private test image without them).
 
     cabinst [--title TEXT] [--licence NAME] [--key KEY] INSTALLER DEST WANTED...
+    cabinst [--title TEXT] [--licence NAME] [--key KEY] --installed DIR DEST
+
+**Decoded on the build computer (4 November 2026).** The developer chose to have both installers decoded into the image, so a
+game starts without minutes of unpacking: `data.py` decodes them (Age of Empires by 7-Zip into the cache's `decoded`, the
+files above and `eula.txt`; Jedi Outcast's pak and licence by its own reader, checked by their SHA-256) into
+`/usr/share/aoe/installed` and `/usr/share/jk2/installed`, and the installers are no longer in the image. The starters call
+`cabinst --installed DIR`: the licence is read from `DIR/NAME` and shown and asked exactly as before (Accept only at its
+end, the registry's key), and then every file of `DIR` is linked into `DEST`, nothing unpacked and no RAM taken for the
+files. The installer's way below is kept for an image made before.
+
+**Half-Life: Uplink's licence (4 November 2026).** Uplink's Wise installer showed Sierra's licence before it installed
+(`TEMP/EULAFILE`, 8,678 bytes, CRC-32 `8676e153`), which the image had not kept. `linux/halflife/data.sh` keeps it as
+`eula.txt`, `data.py` puts it in `/usr/share/halflife/licence`, and the `halflife` starter asks it the same way, with
+`cabinst --installed /usr/share/halflife/licence -` (DEST `-`: the game's files lie in place, nothing is linked) and the
+registry's key `halflife.eula`; `halflife --licence` does only that. `test_all.py halflife-licence` holds it.
 
 `WANTED` is `NAME[=PATH]` (a file of the cabinet, `/` or `\` between folders, any case), `*` or `*.ext`. The starters
 (`aoe`, `jk2`) call it first; `aoe --unpack` and `jk2 --unpack` do only that.
@@ -29,8 +44,10 @@ keys (arrows, Page Up and Down, Home, End), and **Accept greyed and refused unti
 end** ("Read the licence to its end (scroll down) to accept it."); Decline, Escape or the frame's close is 1, and the
 starter ends. Without a window system the text is printed on the terminal and `yes` typed accepts it. An acceptance is
 the registry's key (`registry.h`) set to the licence's CRC-32: while `/persistence` is kept the window is not shown
-again for the same text, but the files are unpacked every session (they are in memory; `/persistence` holds 96,000
-bytes). `DEST/.unpacked` says the files are there this session, and the next start goes straight to the game.
+again for the same text, but the files are unpacked at every start (they are in memory; `/persistence` holds 96,000
+bytes). `DEST/.unpacked` says the files are there. The starters delete `DEST` when the game ends, however it ends (a
+`trap` on the shell's exit; the game is not `exec`ed): 34 and 64 MB of RAM are not left behind for the next program
+(4 November 2026). `aoe --unpack` and `jk2 --unpack` (a test's) unpack and end, leaving the files for the run after.
 
 ## Unpacking on the workers
 

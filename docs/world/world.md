@@ -9,6 +9,7 @@ in Blender by scripts in `world/`; furniture, plants and the main surfaces come 
 
     python world\install_packages.py C:\Development\VRChat\ShaderEmu
     python world\fetch.py
+    python world\gameboxes.py
     python world\textures.py
     python world\sounds.py
     & "C:\Program Files\Blender Foundation\Blender 5.2\blender.exe" -b --python world\build.py
@@ -19,6 +20,15 @@ in Blender by scripts in `world/`; furniture, plants and the main surfaces come 
   repository) and writes what Unity needs of them:
   `Textures/World/{Parquet,Plaster,Ceiling,Wood,Walnut,Velvet,Linen}.png`, a model's textures
   in `Textures/Assets`, and `Models/materials.txt`.
+- `gameboxes.py` fetches scans of the decade's games, software and magazines into `build/gameboxes`
+  and writes `Textures/Fetched/{GameBoxes,GameBoxes2,Magazines}.png` (and their `_p`), which are
+  not in the repository (`.gitignore`): the pictures are their publishers', and the sites only
+  show them. Boxes come from bigboxcollection.com (six faces and gloss maps a box, its size from
+  its page) and bigboxdb.com (a box's model; the software: MS-DOS 6, Windows 3.1 and 95, Netscape
+  Navigator, Flight Simulator 5, the Entertainment Pack), the Command & Conquer box from
+  gamebox.museum; magazines are archive.org's scans of Computer Gaming World, BYTE, PC Computing
+  and Linux Journal (the cover, the last page that is not the cover again, a drawn spine and
+  page edges). `world/gameboxes.json` (each one's size, atlas and faces) is in the repository.
 - `textures.py` computes the rest (plastic, metal, rugs, book spines, the atlas of small printed
   things, the city's windows and streets, the sky, clouds, rain) and `world/atlas.json`.
 - **Plastic close to** (`plastic_detail` in `fetch.py`, `PlasticDetail` in `ShaderEmuModels.cs`):
@@ -133,8 +143,10 @@ lightmap, which shows a line wherever two pieces of a wall meet and at every cor
   ray every 4 mm). A cardboard box's top is its flaps, under its bounds' top. A game's box leans till its top meets the wall (`leaning_box`).
 - Small printed things are one atlas, `Details.png`; `world/atlas.json` says where each is, and
   `quad(..., decal=NAME)` uses it. The packer stops if the atlas is full.
-- Books are `Books.png`: sixteen spines, each drawn at its own size (`world/bookdesigns.py`),
-  and a book is modelled at the size it was drawn, so its text is never stretched.
+- The shelf's books are boxes and magazines (`world/gameboxes.py`): games and software stand
+  spine out (`shelf_row` in `furniture.py`), magazines lie in piles (`pile`), and the same lie on the
+  low table, the desk, seven of the classroom's towers (`ON_TOWERS`; not the hubs') and in the
+  holodecks' corridor. The drawn spines of `Books.png` (`world/bookdesigns.py`) are no longer used.
 - The screens, keyboards, panels and lights are still the builder's own. `world/computer.py`
   repeats their rectangles at its top: a screen moved in the builder must be moved there too.
 - The builder's boxes stay where they stop a player, without their renderers (`StripBoxes`):
@@ -181,9 +193,39 @@ lightmap, which shows a line wherever two pieces of a wall meet and at every cor
 
 ## The storm
 
-- The window's pane is Silent's Fake Glass with rain (`GlassMaterial` in `ShaderEmuWeather.cs`):
-  drops run down it, and what is behind a drop is bent out of the room's baked reflection probe,
-  so nothing grabs the screen.
+- The window's pane is `WindowRain.shader` (`GlassMaterial` in `ShaderEmuWeather.cs`): the drops are
+  BigWings's "Heartfelt" (shadertoy.com/view/dslczf), ported to HLSL; that file is under its licence,
+  CC BY-NC-SA 3.0, not the repository's MIT. Its value is the water's height on the glass (`_Scale`
+  metres a unit of its picture, `_Height` mm at 1), the normal from its differences, and the eye's ray
+  is traced through that water: bent into it at the glass and out of it at its surface (index 1.333),
+  the city looked up in that direction in the window probe's picture, given to the material as `_Sky`
+  (a camera's picture taken outside the pane, `WindowProbe`, linear and HDR: captured into a half-float
+  cube target, as `RenderToCubemap` into the asset gave 8-bit sRGB values the glass read as linear, the
+  city washed out), and what the surface reflects mirrored back out (`_Rim`). Between the drops the pane
+  is clear. Against aliasing: no screen derivatives in the water (taken over 2 x 2 blocks of pixels they
+  drew a grid); a drop is never narrower than a pixel's footprint, from the projection; the water is
+  taken on a 3 x 3 lattice across the pixel with Heartfelt's exact gradient at each point (`HeartfeltD`,
+  its steps carried with their derivatives; `_Debug` 6 checks it against differences), each quarter's
+  shares and rays its corners' (a rim, a fifth of a drop, is thinner than a quarter from a few metres:
+  its mean slope had reflected a fifth of the light), each lookup blurred over what its rays sweep.
+  Measured against an 8 x 8 supersampled picture (`_Footprint`, `_Widen`, `_Layers`, `_Test` are that
+  test's; 4 November 2026): the shimmer under half-pixel moves 0.78 to 1.11 of the reference's, the
+  reflection 0.81 to 0.94 of it, what goes through 7 to 14% too bright; 0.40 ms a pane at 1080p. What a drop's surface reflects goes back into the room and shows the room, a picture of its own (`_Room`,
+  `Reflection probe window room.cubemap`, the panes put away while it is taken). The dry glass has Heartfelt's
+  fog (`_Mist`, `_MistBlur`): the city behind it blurred, cleared by a drop and by his trail value, so a drop
+  stands out of it; the room's reflection alone hardly showed (a shallow drop reflects 2% but at its rim), and
+  drops 2.7 mm high (a puddle's height) blurred into the city from afar. Lightning reaches the drops as a second picture of the city lit by a flash of 1 (`_SkyFlash`),
+  mixed by the flash. The outside's own light is a third of what it was (`Night`, 4 November 2026): City.shader's
+  `_Night` takes what is under a quarter of blooming to a third and leaves what blooms (1 and above), the
+  haze, the sky and the rain sheets are a third, and lightning lights each as before (`_HazeFlash`, `_CityGlow`). The material sets every number of its own: a value left from
+  another shader of the same name (Fake Glass's `_IOR` of 1) bent nothing. Anything of the
+  room's on a pane makes its drops white paint: a lightmap, light probes, the room's probe. A pane
+  is held, not set once (`ShaderEmuGlass.cs`): every pane named `Window glass…` (Blender adds
+  `.001` in some build orders) is put back unlit by the room, anchored to that probe, and the probe
+  to its picture, when a model is imported, the scene opened or saved, scripts reloaded, a bake
+  done, every two seconds in the editor, and at play and at a build, where a pane still wrong fails
+  the build. "ShaderEmu/Check the windows' glass" says what it finds. Model copies, a bake of a
+  static pane and Unity's own bake of the probe had each undone it.
 - Rain is sheets of scrolling streaks at four distances (`Rain` in `world/city.py`,
   `Rain.shader`), and haze that hides the far towers (a vertex's alpha, 480 m).
 - The sky is `Sky.shader`: the panorama under a layer of cloud that drifts.

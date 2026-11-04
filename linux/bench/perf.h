@@ -16,6 +16,7 @@ struct perf_run {
 	/* the timed part's */
 	uint64_t t0, ns;
 	uint32_t c0, cycles;
+	int runs;		/* perf_run_test: how many times the test ran to be timed long enough */
 };
 
 #define PERF_WORKERS 1		/* wants the worker cores */
@@ -42,11 +43,22 @@ int perf_gpu_init(unsigned window);
 uint64_t perf_now_ns(void);
 static inline uint32_t perf_cycles(void)
 {
+#ifdef __riscv
 	uint32_t c;
 
 	__asm__ volatile("rdcycle %0" : "=r"(c));
 	return c;
+#else
+	return 0;	/* (the build computer's native run: perf_host.c) */
+#endif
 }
+/* A test run until its timed parts are PERF_MIN_NS together (once for most on the machine), the runs' work over their
+ * time: a test shorter than the clock's step (the world's guest clock moves once a Unity frame) timed 0 before. */
+#define PERF_MIN_NS 200000000u
+/* the most runs: 64 on the machine (each run makes its data again: under rvc_cpu that, not the timed part, is the
+ * time), 4,096 natively (perf_host.c: a test of 40 us is otherwise timed for 3 ms, warming up, 9% slow) */
+extern int perf_most_runs;
+void perf_run_test(int test, struct perf_run *r);
 void perf_begin(struct perf_run *r);
 void perf_end(struct perf_run *r);
 /* value = amount a second over the timed part, in units of `scale` (1e6: millions) */
@@ -72,7 +84,7 @@ int perf_part_of(int test);
 float perf_ratio(int test, float value);
 float perf_score(const float *value, float *parts, int *counted);
 /* other machines' scores of the same tests, beside a run's */
-#define PERF_MACHINES 4
+#define PERF_MACHINES 8	/* (one with no values yet, the world's, is not shown) */
 struct perf_machine { const char *name, *note; int column; };
 extern const struct perf_machine perf_machines[PERF_MACHINES];
 float perf_machine_score(int m, float *parts, int *counted);

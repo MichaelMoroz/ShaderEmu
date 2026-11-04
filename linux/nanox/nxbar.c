@@ -261,8 +261,77 @@ bevel(GR_WINDOW_ID w, int x, int y, int width, int height, int pressed)
 	GrLine(w, gc, x + width - 1, y, x + width - 1, y + height - 1);
 }
 
+/* The windows' colour Settings chose (ui_look.h: 0x01RRGGBB, 0 for the look's own), as the bar was last drawn in it. */
+static unsigned bar_tint;
+
+/* The colour a share k/256 of the way from the tint (k 0) to white (k 256), or to black (k -256), rounded:
+ * nxpaintnc.c's tint_mix256. */
+static GR_COLOR
+tint_mix256(int k)
+{
+	int c[3] = { bar_tint >> 16 & 255, bar_tint >> 8 & 255, bar_tint & 255 }, i;
+
+	for (i = 0; i < 3; i++)
+		c[i] = k >= 0 ? c[i] + ((255 - c[i]) * k + 128) / 256 : (c[i] * (256 + k) + 128) / 256;
+	return MWRGB(c[0], c[1], c[2]);
+}
+
+/* The same in sixteenths. */
+static GR_COLOR
+tint_mix(int k)
+{
+	return tint_mix256(k * 16);
+}
+
+/* The Start orb's cell of look7.ppm: the look's (8, 9 pressed), or in the windows' colour, Settings' nearest
+ * (tools/make_icons.py's LOOK7_TINTS, nxsettings.c's order: 10 + 2 * i, and the pressed one after it). */
+static int
+start_cell(int open)
+{
+	static const unsigned tints[] = { 0x2858a8, 0x1f8080, 0x2e8040, 0x6c7820, 0xc06010, 0xb02828, 0xb03070, 0x6a3aa8, 0x505860 };
+	int i, best = -1, d, nearest = 0;
+
+	if (!bar_tint)
+		return open ? 9 : 8;
+	for (i = 0; i < (int)(sizeof tints / sizeof tints[0]); i++) {
+		int r = (int)(bar_tint >> 16 & 255) - (int)(tints[i] >> 16), g = (int)(bar_tint >> 8 & 255) - (int)(tints[i] >> 8 & 255),
+			b = (int)(bar_tint & 255) - (int)(tints[i] & 255);
+
+		d = r * r + g * g + b * b;
+		if (best < 0 || d < nearest)
+			best = i, nearest = d;
+	}
+	return 10 + 2 * best + (open != 0);
+}
+
+/* Part of the bar's ground, x on for width: Windows 7's strip (bar7.ppm), or with a windows' colour
+ * that colour darkened in bands down the bar, lighter at its top edge as the strip is; classic: the face. */
+static void
+bar_strip(int x, int width)
+{
+	int band;
+
+	if (!ui_seven) {
+		GrSetGCForeground(gc, bar_tint ? tint_mix(11) : FACE);
+		GrFillRect(bar, gc, x, 0, width, BAR_HEIGHT);
+		return;
+	}
+	if (!bar_tint) {
+		GrSetGCForeground(gc, MWRGB(36, 52, 74));
+		GrFillRect(bar, gc, x, 0, width, BAR_HEIGHT);
+		GrDrawImageFromFile(bar, gc, x, 0, width, BAR_HEIGHT, "/usr/share/bar7.ppm", 0);
+		return;
+	}
+	GrSetGCForeground(gc, tint_mix(-1));
+	GrFillRect(bar, gc, x, 0, width, 1);
+	for (band = 1; band < BAR_HEIGHT; band++) {	/* (a row each: rows of two in sixteenths were steps) */
+		GrSetGCForeground(gc, tint_mix256(-80 - 80 * band / BAR_HEIGHT));
+		GrFillRect(bar, gc, x, band, width, 1);
+	}
+}
+
 /* Windows 7's button on the bar: a lighter glass box with rounded corners; brighter for the
- * window in front, none for one put away. */
+ * window in front, none for one put away. In the windows' colour when one is chosen. */
 static void
 glass(int x, int y, int width, int height, int how)
 {
@@ -271,6 +340,18 @@ glass(int x, int y, int width, int height, int how)
 
 	if (how < 0)
 		return;
+	if (bar_tint) {
+		GrSetGCForeground(gc, tint_mix(how ? 2 : -4));
+		GrFillRect(bar, gc, x + 1, y + 1, width - 2, height / 2 - 1);
+		GrSetGCForeground(gc, tint_mix(how ? -2 : -7));
+		GrFillRect(bar, gc, x + 1, y + height / 2, width - 2, height - height / 2 - 1);
+		GrSetGCForeground(gc, tint_mix(how ? 7 : 1));
+		GrLine(bar, gc, x + 1, y, x + width - 2, y);
+		GrLine(bar, gc, x + 1, y + height - 1, x + width - 2, y + height - 1);
+		GrLine(bar, gc, x, y + 1, x, y + height - 2);
+		GrLine(bar, gc, x + width - 1, y + 1, x + width - 1, y + height - 2);
+		return;
+	}
 	GrSetGCForeground(gc, top[how]);
 	GrFillRect(bar, gc, x + 1, y + 1, width - 2, height / 2 - 1);
 	GrSetGCForeground(gc, bottom[how]);
@@ -416,9 +497,9 @@ draw_speed(void)
 
 	if (ui_seven) {
 		/* (the bar's own strip behind it again, this part of it) */
-		GrDrawImageFromFile(bar, gc, x, 0, SPEED_WIDTH, BAR_HEIGHT, "/usr/share/bar7.ppm", 0);
+		bar_strip(x, SPEED_WIDTH);
 	} else {
-		GrSetGCForeground(gc, FACE);
+		GrSetGCForeground(gc, bar_tint ? tint_mix(11) : FACE);
 		GrFillRect(bar, gc, x, 3, SPEED_WIDTH, BAR_HEIGHT - 6);
 		bevel(bar, x, 3, SPEED_WIDTH, BAR_HEIGHT - 6, 1);
 	}
@@ -505,11 +586,9 @@ draw_bar(void)
 
 	make_buttons();
 	width = task_width();
-	GrSetGCForeground(gc, ui_seven ? MWRGB(36, 52, 74) : FACE);
-	GrFillRect(bar, gc, 0, 0, screen.cols, BAR_HEIGHT);
+	bar_strip(0, screen.cols);
 	if (ui_seven) {
-		GrDrawImageFromFile(bar, gc, 0, 0, screen.cols, BAR_HEIGHT, "/usr/share/bar7.ppm", 0);
-		GrDrawImageFromFile(bar, gc, 3, 1, 24, 24, LOOK7_SHEET_BAR, GR_IMAGE_CELL(24, open ? 9 : 8));
+		GrDrawImageFromFile(bar, gc, 3, 1, 24, 24, LOOK7_SHEET_BAR, GR_IMAGE_CELL(24, start_cell(open)));
 	} else {
 		GrSetGCForeground(gc, WHITE);
 		GrLine(bar, gc, 0, 0, screen.cols - 1, 0);
@@ -523,9 +602,9 @@ draw_bar(void)
 	for (i = 0; i < pinned_count; i++)
 		ui_icon_draw(bar, gc, quick_x(i) + (QUICK_W - 16) / 2, 5, &pinned[i].icon, 16);
 	if (pinned_count) {
-		GrSetGCForeground(gc, ui_seven ? MWRGB(20, 28, 40) : SHADOW);
+		GrSetGCForeground(gc, ui_seven ? (bar_tint ? tint_mix(-12) : MWRGB(20, 28, 40)) : SHADOW);
 		GrLine(bar, gc, quick_x(pinned_count) + 2, 4, quick_x(pinned_count) + 2, BAR_HEIGHT - 5);
-		GrSetGCForeground(gc, ui_seven ? MWRGB(90, 110, 140) : WHITE);
+		GrSetGCForeground(gc, ui_seven ? (bar_tint ? tint_mix(-2) : MWRGB(90, 110, 140)) : WHITE);
 		GrLine(bar, gc, quick_x(pinned_count) + 3, 4, quick_x(pinned_count) + 3, BAR_HEIGHT - 5);
 	}
 	for (i = 0; i < button_count; i++) {
@@ -566,7 +645,8 @@ draw_bar(void)
 
 		for (j = 0; j < task_count; j++)
 			some |= tasks[j].desk == i;
-		GrSetGCForeground(gc, i == desktop ? (ui_seven ? MWRGB(118, 150, 192) : WHITE) : (ui_seven ? MWRGB(44, 58, 80) : FACE));
+		GrSetGCForeground(gc, i == desktop ? (ui_seven ? (bar_tint ? tint_mix(4) : MWRGB(118, 150, 192)) : WHITE) :
+			(ui_seven ? (bar_tint ? tint_mix(-9) : MWRGB(44, 58, 80)) : bar_tint ? tint_mix(11) : FACE));
 		GrFillRect(bar, gc, x, 5, PAGER_CELL - 1, BAR_HEIGHT - 10);
 		GrSetGCForeground(gc, ui_seven ? MWRGB(20, 28, 40) : SHADOW);
 		GrRect(bar, gc, x, 5, PAGER_CELL - 1, BAR_HEIGHT - 10);
@@ -600,9 +680,9 @@ draw_bar(void)
 	}
 	/* the strip that shows the desktop */
 	if (ui_seven) {
-		GrSetGCForeground(gc, MWRGB(20, 28, 40));
+		GrSetGCForeground(gc, bar_tint ? tint_mix(-12) : MWRGB(20, 28, 40));
 		GrLine(bar, gc, DESK_X, 0, DESK_X, BAR_HEIGHT - 1);
-		GrSetGCForeground(gc, MWRGB(104, 124, 152));
+		GrSetGCForeground(gc, bar_tint ? tint_mix(-2) : MWRGB(104, 124, 152));
 		GrLine(bar, gc, DESK_X + 1, 0, DESK_X + 1, BAR_HEIGHT - 1);
 	} else
 		bevel(bar, DESK_X, 3, DESK_W - 2, BAR_HEIGHT - 6, desk_hidden_count > 0);
@@ -1057,6 +1137,18 @@ ui_launch_any_window(pid_t pid)
 	return shown;
 }
 
+/* Whether the Start menu has this command under Games (a pinned one, the desktop's icon too). */
+static int
+is_game(const char *command)
+{
+	int i;
+
+	for (i = 0; i < item_count; i++)
+		if (!strncmp(items[i].path, "Games/", 6) && !strcmp(items[i].command, command))
+			return 1;
+	return 0;
+}
+
 /* Starts a command for a click: the note says so until a window comes (ui_launch.h), and a
  * failure is reported. */
 static void
@@ -1069,6 +1161,8 @@ start(const char *label, const char *command)
 	ui_icon_of_command(command, &icon);
 	ui_launch_will_run(command);
 	ui_launch_begin(label, &icon, GR_EVENT_MASK_CHLD_UPDATE);
+	ui_launch_maximise = is_game(command);
+	ui_launch_env();
 	child = launch(command);
 	ui_launch_started(child);
 	if (child > 0 && !ui_exec_errno)
@@ -1444,9 +1538,9 @@ preview(GR_WINDOW_ID frame, int zone)
 		else
 			x = zone & 1 ? 0 : cols - w, y = zone >= 5 ? rows - h : 0;
 		preview_window = GrNewWindowEx(GR_WM_PROPS_NODECORATE | GR_WM_PROPS_NOMOVE | GR_WM_PROPS_NOAUTOMOVE | GR_WM_PROPS_NOFOCUS,
-			"snap", GR_ROOT_WINDOW_ID, x, y, w, h, MWRGB(153, 196, 240));
+			"snap", GR_ROOT_WINDOW_ID, x, y, w, h, ui_accent(MWRGB(153, 196, 240), 150));
 		GrMapWindow(preview_window);
-		GrSetGCForeground(gc, MWRGB(51, 120, 200));
+		GrSetGCForeground(gc, ui_accent(MWRGB(51, 120, 200), 0));
 		GrRect(preview_window, gc, 0, 0, w, h);
 		GrRect(preview_window, gc, 1, 1, w - 2, h - 2);
 		GrRaiseWindow(preview_window);
@@ -1468,13 +1562,13 @@ switcher_draw(void)
 	int cell = 40, across = switch_count < 12 ? switch_count : 12, width = across * cell + 12, i;
 	const char *title = tasks[switch_order[switch_at]].title;
 
-	GrSetGCForeground(gc, ui_seven ? MWRGB(36, 52, 74) : FACE);
+	GrSetGCForeground(gc, ui_seven ? (bar_tint ? tint_mix(-9) : MWRGB(36, 52, 74)) : FACE);
 	GrFillRect(switcher, gc, 0, 0, width < 200 ? 200 : width, 72);
-	GrSetGCForeground(gc, ui_seven ? MWRGB(118, 138, 166) : BLACK);
+	GrSetGCForeground(gc, ui_seven ? (bar_tint ? tint_mix(2) : MWRGB(118, 138, 166)) : BLACK);
 	GrRect(switcher, gc, 0, 0, width < 200 ? 200 : width, 72);
 	for (i = 0; i < across; i++) {
 		if (i == switch_at % 12) {
-			GrSetGCForeground(gc, ui_seven ? MWRGB(118, 150, 192) : WHITE);
+			GrSetGCForeground(gc, ui_seven ? (bar_tint ? tint_mix(4) : MWRGB(118, 150, 192)) : WHITE);
 			GrFillRect(switcher, gc, 6 + i * cell, 4, cell, cell);
 		}
 		ui_icon_draw(switcher, gc, 6 + i * cell + 4, 8, &tasks[switch_order[i]].icon, 32);
@@ -1733,7 +1827,7 @@ popup(int x, int width, int height)
 static void
 popup_edge(GR_WINDOW_ID w, int width, int height)
 {
-	GrSetGCForeground(gc, ui_seven ? MWRGB(118, 138, 166) : BLACK);
+	GrSetGCForeground(gc, ui_seven ? ui_accent(MWRGB(118, 138, 166), 96) : BLACK);
 	GrRect(w, gc, 0, 0, width, height);
 }
 
@@ -1780,9 +1874,9 @@ draw_calendar(void)
 		int cell = lead + day - 1, x = 8 + cell % 7 * 26, y = 48 + cell / 7 * 18;
 
 		if (day == today.tm_mday && cal_month == today.tm_mon && cal_year == today.tm_year + 1900) {
-			GrSetGCForeground(gc, ui_seven ? MWRGB(204, 232, 255) : MWRGB(10, 36, 106));
+			GrSetGCForeground(gc, ui_seven ? ui_accent(MWRGB(204, 232, 255), 200) : ui_accent(MWRGB(10, 36, 106), -64));
 			GrFillRect(calendar, gc, x + 1, y - 1, 24, 17);
-			GrSetGCForeground(gc, ui_seven ? MWRGB(51, 153, 255) : MWRGB(10, 36, 106));
+			GrSetGCForeground(gc, ui_seven ? ui_accent(MWRGB(51, 153, 255), 0) : ui_accent(MWRGB(10, 36, 106), -64));
 			GrRect(calendar, gc, x + 1, y - 1, 24, 17);
 			GrSetGCForeground(gc, ui_seven ? BLACK : WHITE);
 		} else
@@ -1859,11 +1953,11 @@ draw_volume(void)
 	/* the track, and its knob */
 	GrSetGCForeground(gc, MWRGB(176, 176, 176));
 	GrRect(volume, gc, VOL_POP_W / 2 - 2, 28, 5, track);
-	GrSetGCForeground(gc, ui_seven ? MWRGB(51, 153, 255) : MWRGB(10, 36, 106));
+	GrSetGCForeground(gc, ui_seven ? ui_accent(MWRGB(51, 153, 255), 0) : ui_accent(MWRGB(10, 36, 106), -64));
 	GrFillRect(volume, gc, VOL_POP_W / 2 - 1, at, 3, 28 + track - at);
 	GrSetGCForeground(gc, ui_seven ? MWRGB(230, 236, 244) : FACE);
 	GrFillRect(volume, gc, VOL_POP_W / 2 - 10, at - 4, 21, 9);
-	GrSetGCForeground(gc, ui_seven ? MWRGB(44, 98, 139) : BLACK);
+	GrSetGCForeground(gc, ui_seven ? ui_accent(MWRGB(44, 98, 139), -64) : BLACK);
 	GrRect(volume, gc, VOL_POP_W / 2 - 10, at - 4, 21, 9);
 	/* the mute button: the icon, under the track */
 	ui_icon(volume, gc, (VOL_POP_W - 16) / 2, VOL_POP_H - 26, ui_icon_of(level ? "volume" : "volume-muted"), 16);
@@ -2208,6 +2302,7 @@ main(int argc, char **argv)
 	gc = GrNewGC();
 	GrSetGCUseBackground(gc, GR_FALSE);
 	restyle();
+	bar_tint = ui_tint_now();	/* (the windows' colour: the bar in it too) */
 	load_items();
 	load_pinned();
 
@@ -2323,6 +2418,10 @@ main(int argc, char **argv)
 			watch_focus();
 		}
 		i = restyle();	/* (a word of memory: Settings may have changed the look) */
+		if (ui_tint_now() != bar_tint) {	/* (or the windows' colour) */
+			bar_tint = ui_tint_now();
+			draw_bar();
+		}
 		if (i) {	/* its icons: the menu's, the pinned programs', the windows' */
 			row_count = 0;
 			top_count = build("", &top);

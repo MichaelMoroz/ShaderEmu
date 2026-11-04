@@ -15,6 +15,7 @@
  */
 #include <dirent.h>
 #include <errno.h>
+#include <limits.h>
 #include <stdarg.h>
 #include <signal.h>
 #include <strings.h>
@@ -682,7 +683,7 @@ draw_desktop_icon(int i)
 		int tx = e->x + (CELL_W - e->line_w[k]) / 2, ty = e->y + 37 + k * 13;
 
 		if (lit)
-			ui_fill(GR_ROOT_WINDOW_ID, tx - 2, ty, e->line_w[k] + 4, 13, MWRGB(10, 36, 106));
+			ui_fill(GR_ROOT_WINDOW_ID, tx - 2, ty, e->line_w[k] + 4, 13, ui_accent(MWRGB(10, 36, 106), ui_seven ? 0 : -64));
 		else
 			ui_text(GR_ROOT_WINDOW_ID, tx + 1, ty + 1, e->line[k], -1, BLACK, 0);	/* a shadow: any picture may be behind */
 		ui_text(GR_ROOT_WINDOW_ID, tx, ty, e->line[k], -1, WHITE, 0);
@@ -752,7 +753,7 @@ draw_tile(int i)
 		draw_desktop_icon(i);
 		return;
 	}
-	ui_fill(window, x, y, w, h, e->chosen ? MWRGB(10, 36, 106) : WHITE);
+	ui_fill(window, x, y, w, h, e->chosen ? ui_accent(MWRGB(10, 36, 106), ui_seven ? 0 : -64) : WHITE);
 	if (details) {
 		draw_icon(window, x + 2, y + 1, e, 16);
 		fitted(e->label, 40, w - 190, name, sizeof name);
@@ -1081,7 +1082,9 @@ start_shortcut(const struct entry *e)
 	FILE *file = fopen(e->name, "r");
 
 	while (file && fgets(line, sizeof line, file))
-		if (!strncmp(line, "run=", 4)) {
+		if (!strncmp(line, "game=1", 6))
+			ui_launch_maximise = 1;	/* (a line before run=: a game opens maximised, ui_launch.h) */
+		else if (!strncmp(line, "run=", 4)) {
 			line[strcspn(line, "\r\n")] = 0;
 			fclose(file);
 			return run_command(line + 4);
@@ -1119,6 +1122,8 @@ run_command(const char *command)
 		*at++ = 0;
 	}
 	words[n] = NULL;
+	if (n)
+		ui_launch_env();	/* (a game=1 shortcut's: SE_MAXIMISED, ui_launch.h) */
 	if (!n || (child = real_vfork()) != 0)
 		return n ? child : 0;
 	signal(SIGCHLD, SIG_DFL);	/* (ignored here, and that would be the started program's too: its children gone unseen) */
@@ -2570,8 +2575,25 @@ run_shortcut(const char *path)
 	if (!e.run[0])
 		return 1;
 	signal(SIGCHLD, SIG_IGN);
+	{
+		/* (start_shortcut reads the file again for its game=1 line: by its whole name, from /root) */
+		char here[PATH_MAX], whole[PATH_MAX + 130];
+
+		if (e.name[0] != '/' && getcwd(here, sizeof here)) {
+			snprintf(whole, sizeof whole, "%s/%s", strcmp(here, "/") ? here : "", e.name);
+			if (strlen(whole) < sizeof e.name)
+				strcpy(e.name, whole);
+		}
+	}
 	chdir("/root");
-	start_shortcut(&e);
+	/* (the server for a game=1 shortcut: its size is asked before it starts, and the window
+	 * manager told after, ui_launch.h) */
+	if (GrOpen() < 0) {
+		start_shortcut(&e);
+		return 0;
+	}
+	ui_launch_started(start_shortcut(&e));
+	GrClose();
 	return 0;
 }
 

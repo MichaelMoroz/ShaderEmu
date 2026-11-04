@@ -26,6 +26,11 @@ WMC = 'export NXBAR_CLOSE_MS=1000; ' + WM   # a second for a close
 F10 = '\x1b[21~'   # (the console's TERM is linux)
 CC = 'mkdir -p /tmp/classicube; echo singleplayerphysics=false >> /tmp/classicube/options.txt; ' + X
 TD = 'TDAWN_AUTO=1 TDAWN_SEED=7 TDAWN_NO_DELAY=1 '
+# where place X, Y of a SW x SH game screen is on the display, the game's window (title T) shown scaled by one factor in the middle
+# (docs/games/tdawn.md, "The window's size"): at SW SH X Y clicks there
+WIN_AT = ('at() { SW=$1; SH=$2; X=$3; Y=$4; set -- $(nxwintest list | grep "$T"); P=${5%,*}; Q=${5#*,}; S=$6; A=$((${S%x*}-6)); '
+          'B=$((${S#*x}-29)); if [ $((A*SH)) -le $((B*SW)) ]; then PW=$A; PH=$((A*SH/SW)); else PH=$B; PW=$((B*SW/SH)); fi; '
+          'nxkey $((P+3+(A-PW)/2+X*PW/SW)),$((Q+26+(B-PH)/2+Y*PH/SH)); }; ')
 Q3 = 'QUAKE3_STATS_FRAMES=100 quake3 +set fixedtime 33 +devmap q3dm17'
 NES = X + 'NES_SUM=1 NES_PPU=inline '
 NES_RUNS = (('thwaite-120', 'NES_FRAMES=120 nes thwaite', '31a18295', 'afcb4a98'),
@@ -41,7 +46,9 @@ KINDS_T = ('mkdir -p /tmp/t; cd /tmp/t; cp "/root/Music/Grieg - Hall of the Moun
 # Age of Empires' script at its window's size (tools/game_par.py has the same)
 # Age of Empires' trial unpacked from its installer in the ROM before the window system starts: its licence asked on the terminal,
 # answered (docs/system/install.md); the game reads the files in /tmp/aoe
-AOE_UNPACK = 'if [ -f /usr/share/aoe/MSAoE.exe ]; then echo yes | aoe --unpack > /dev/null; fi; '
+AOE_UNPACK = 'if [ -d /usr/share/aoe/installed ]; then echo yes | aoe --unpack > /dev/null; fi; '
+# Half-Life's licence answered on the terminal before the window system starts (docs/system/install.md): then the game starts at once
+HL_LICENCE = 'if [ -f /usr/share/halflife/licence/eula.txt ]; then echo yes | halflife --licence > /dev/null; fi; '
 AOE_640 = '3000 click 320 196;3000 click 320 138;3000 click 190 454;2000 click 289 58;1000 rclick 425 110;1000 click 290 155;1000 click 163 388'
 
 
@@ -173,7 +180,7 @@ CASES = [
         # the inventory on the sheet: the grip opens it, then the right hand's beam moves onto row 6 and its trigger picks a block
         ('vr-pick', '90000133,0,0,c0000000,04bea3da,0,04bea026,2400fc72',
          ['--host-from', '20', '90000133,0,0,c0000000,84bea3da,0,04bea026,2400fc72',
-          '--host-from', '24', '90000133,0,0,c0000000,84bea3da,0,44bea026,2600f8e4'], 'holds 58', r'seat: 1 .* holds 58 raw 1 menu 0'))],
+          '--host-from', '24', '90000133,0,0,c0000000,84bea3da,0,44bea026,2600f8e4'], 'holds 58 raw 1 menu 0', r'seat: 1 .* holds 58 raw 1 menu 0'))],
     # docs/games/classicube.md, "Sound": a dig sound on the card, and the tune decoded on workers into its stream
     case('classicube-sound', 'games classicube sound', CC + 'CLASSICUBE_SOUND_LOG=1 CLASSICUBE_SEAT=1 CLASSICUBE_SEED=7 classicube', True,
          until='ccmusic: 16 of', more=['--host', '00000112,e0000000,0,0,0,0,0,0', '--host-from', '20', '00000112,e0000000,0,0,0,0,40000000,0'],
@@ -188,25 +195,26 @@ CASES = [
     case('tdawn-move', 'games tdawn long', X + TD + 'TDAWN_SCEN=3 TDAWN_MOVE=100,8,0 TDAWN_SUMS=1 TDAWN_FRAMES=600 tdawn FROMINSTALL', True, count=[(r'^tdsum: ', 600)]),
     case('tdawn-move-refresh', 'games tdawn long', X + TD + 'TDAWN_SCEN=3 TDAWN_MOVE=100,8,0 TDAWN_SUMS=1 TDAWN_REFRESH=1 TDAWN_FRAMES=600 tdawn FROMINSTALL', True,
          same=[(r'^(tdsum: .*)', 'tdawn-move')]),
-    # docs/games/tdawn.md, "The window's size": the sidebar opened (Tab), the window maximised: the screen laid out at 392 x 272 with the
-    # sidebar at its right edge, a click on a unit of the map selects it and one on the sidebar's Repair (where it is now) presses it;
-    # put back, 320 x 200 again and Repair where it always was
-    case('tdawn-window', 'games tdawn desktop', 'nx; sleep 3; (' + TD + 'TDAWN_SCEN=10 TDAWN_INPUT_LOG=1 tdawn FROMINSTALL 2>&1 | grep -v tdstat &); '
-         'sleep 60; nxkey tab; sleep 3; nxkey ctrl+f10; sleep 20; set -- $(nxwintest list | grep Tiberian); P=${5%,*}; Q=${5#*,}; S=$6; W=${S%x*}; '
-         'H=${S#*x}; nxkey $((P+3+82*(W-6)/392)),$((Q+26+89*(H-29)/272)); sleep 5; nxkey $((P+3+330*(W-6)/392)),$((Q+26+84*(H-29)/272)); sleep 5; '
-         'nxkey ctrl+f10; sleep 20; set -- $(nxwintest list | grep Tiberian); P=${5%,*}; Q=${5#*,}; nxkey $((P+3+258*2)),$((Q+26+84*2)); sleep 5; '
-         'killall game', True, wall=600,
-         has=[r'tdawn: the screen laid out at 392x272 \(the view 312x264\)', r'tdawn: 1 selected', r'tdawn: the screen laid out at 320x200 \(the view 240x192\)'],
+    # docs/games/tdawn.md, "The window's size": the window made wide (792 x 300): the screen laid out at 528 x 200 (its height kept, the
+    # picture scaled by 1.5); the sidebar opened (Tab), the window maximised (794 x 545, narrower than the game's shape): 320 x 220, as tall as
+    # the window's shape (no black above and below), a click on a unit selects it and one on the sidebar's Repair presses it, both through that
+    # scaling; put back, 528 x 200 and Repair at the right edge. WIN_AT says where a place of a SW x SH screen is on the display.
+    case('tdawn-window', 'games tdawn desktop', WIN_AT + 'nx; sleep 3; (' + TD + 'TDAWN_SCEN=10 TDAWN_INPUT_LOG=1 TDAWN_RESIZE=792x300 tdawn FROMINSTALL '
+         '2>&1 | grep -v tdstat &); T=Tiberian; sleep 60; nxkey tab; sleep 3; nxkey ctrl+f10; sleep 20; at 320 220 82 89; sleep 5; at 320 220 258 84; '
+         'sleep 5; nxkey ctrl+f10; sleep 20; at 528 200 466 84; sleep 5; killall game', True, wall=600,
+         has=[r'tdawn: the screen laid out at 528x200 \(the view 528x192\)', r'tdawn: the screen laid out at 320x220 \(the view 240x212\)',
+              r'tdawn: 1 selected', r'tdawn: the screen laid out at 528x200 \(the view 448x192\)'],
          count=[(r'tdawn: the sidebar.s repair button pressed', 2)]),
-    # docs/games/ralert.md, "The window's size": the same for Red Alert (scale 1): maximised 792 x 544 (the view 624 x 528), a soldier
-    # selected, Repair pressed where the sidebar now has it; put back, 640 x 400 and Repair where it always was
-    case('ralert-window', 'games ralert desktop', 'nx; sleep 3; (TDAWN_AUTO=1 RALERT_SIDE=allies RALERT_SEED=7 TDAWN_INPUT_LOG=1 ralert 2>&1 | grep -v ralstat &); '
-         'sleep 90; nxkey ctrl+f10; sleep 25; set -- $(nxwintest list | grep "Red Alert"); P=${5%,*}; Q=${5#*,}; S=$6; W=${S%x*}; H=${S#*x}; '
-         'nxkey $((P+3+214*(W-6)/792)),$((Q+26+199*(H-29)/544)); sleep 5; nxkey $((P+3+660*(W-6)/792)),$((Q+26+158*(H-29)/544)); sleep 5; '
-         'nxkey ctrl+f10; sleep 25; set -- $(nxwintest list | grep "Red Alert"); P=${5%,*}; Q=${5#*,}; nxkey $((P+3+508)),$((Q+26+158)); sleep 5; '
-         'killall game', True, wall=600,
-         has=[r'ralert: the screen laid out at 792x544 \(the view 624x528\)', r'ralert: [1-9]\d* selected', r'ralert: the screen laid out at 640x400 \(the view 480x384\)'],
-         count=[(r'ralert: the sidebar.s repair button pressed', 2)]),
+    # docs/games/ralert.md, "The window's size": the same for Red Alert: wide, 1,056 x 400 (scaled by 0.75), a soldier selected and Repair pressed
+    # at the right edge through the scaling; maximised, 640 x 440, as tall as the window's shape (the view 480 x 424), and Repair where it always was;
+    # put back, 1,056 x 400 again (going wide moves the view to the map's left edge, as Set_View_Dimensions confines it: the clicks on the map
+    # come first)
+    case('ralert-window', 'games ralert desktop', WIN_AT + 'nx; sleep 3; (TDAWN_AUTO=1 RALERT_SIDE=allies RALERT_SEED=7 TDAWN_INPUT_LOG=1 '
+         'TDAWN_RESIZE=792x300 ralert 2>&1 | grep -v ralstat &); T="Red Alert"; sleep 90; at 1056 400 631 199; sleep 5; at 1056 400 924 158; sleep 5; '
+         'nxkey ctrl+f10; sleep 25; at 640 440 508 158; sleep 5; nxkey ctrl+f10; sleep 25; killall game', True, wall=600,
+         has=[r'ralert: the screen laid out at 1056x400 \(the view \d+x384\)', r'ralert: the screen laid out at 640x440 \(the view 480x424\)',
+              r'ralert: [1-9]\d* selected'],
+         count=[(r'ralert: the sidebar.s repair button pressed', 2), (r'ralert: the screen laid out at 1056x400', 2)]),
     # docs/games/tdawn.md, "A mission won": the demo's first mission won, its score screen, the next mission played
     case('tdawn-won', 'games tdawn', X + TD + 'TDAWN_SCEN=1 TDAWN_WIN=100 TDAWN_FRAMES=300 tdawn FROMINSTALL', True, wall=400,
          has=[r'^tdawn: score: ends', r'done at frame 300: SCG10EA, .* state 325b1830'], never=[r'Segmentation fault', r'out of memory']),
@@ -288,7 +296,7 @@ CASES = [
     # against one drawn whole, not a pixel apart; with the way back an odd move, and on the first core alone. The 8-bit
     # blitter's (OPENTTD_DRAW=cpu): rvc_cpu draws no GPU list, and the GPU's picture is checked under rvc_harness --cpu --warp
     # ("The picture on the GPU")
-    # Age of Empires is on images made with --aoe only (docs/games/aoe.md): an image without its data says so and passes
+    # Age of Empires is on every image (docs/games/aoe.md); a private one made with AOE_IMAGE=0 has no data, says so and passes
     case('aoe', 'games aoe', AOE_UNPACK + X + 'if [ -f /tmp/aoe/Empires.dat ]; then AOE_SIZE=800 AOE_VIEW=inline AOE_TICK_MS=33 AOE_SUM_EVERY=500 AOE_SUM_END=1000 '
          'AOE_SCRIPT="3000 click 400 245;3000 click 400 172;3000 click 237 568;2000 click 369 118;1000 rclick 505 170;1000 click 370 215;1000 click 163 508" aoe; else echo AOE-NO-DATA; fi',
          wall=120, has=[r'^(aoesum: update 1000 time 99900 objects 4357 sum 5032c153|AOE-NO-DATA)']),
@@ -335,28 +343,28 @@ CASES = [
          'nxkey $((OX+320*W/640)),$((OY+138*H/480));sleep 8;killall aoe.bin;else echo AOE-NO-DATA; fi', wall=600,
          has=[r'^(SIZE (?!640 480)\d+ \d+|AOE-NO-DATA)', r'^(aoe: panel Single Player Menu|AOE-NO-DATA)', r'^(aoe: panel MP Setup Screen|AOE-NO-DATA)',
               r'^(aoe: Main Menu made again at 800 x 600|AOE-NO-DATA)', r'^(aoe: Single Player Menu made again at 640 x 480|AOE-NO-DATA)']),
-    # the layout follows the window in play ("Two layouts"): maximised it is 800 x 600, put back 640 x 480, the game goes on and a click in
+    # the layout follows the window in play ("Two layouts"): maximised it is 800 x 548 (the window's shape), put back 640 x 480, the game goes on and a click in
     # the window's middle is the picture's middle in each; the menus before the game kept theirs
     case('aoe-layout', 'games aoe desktop', AOE_UNPACK + 'nx; sleep 3; if [ -f /tmp/aoe/Empires.dat ]; then AOE_TICK_MS=33 AOE_INPUT_LOG=1 '
          'AOE_STATS_MS=5000 AOE_SCRIPT="' + AOE_640.rsplit(';', 4)[0] + ';3000 ready" aoe & while [ ! -e /tmp/aoe-ready ];do sleep 1;done;sleep 2;'
          'nxkey ctrl+f10;sleep 12;read OX OY W H </tmp/aoe-size;echo SIZE $W $H;nxkey $((OX+W/2)),$((OY+H/2));sleep 6;'
          'nxkey ctrl+f10;sleep 12;read OX OY W H </tmp/aoe-size;echo SIZE $W $H;nxkey $((OX+W/2)),$((OY+H/2));sleep 6;killall aoe.bin;'
          'else echo AOE-NO-DATA; fi', wall=600,
-         has=[r'^(aoe: layout 800 x 600 at Game Screen \(from 640 x 480\)|AOE-NO-DATA)', r'^(aoeinput: press 1 (39\d|40\d) (29\d|30\d)|AOE-NO-DATA)',
-              r'^(aoe: layout 640 x 480 at Game Screen \(from 800 x 600\)|AOE-NO-DATA)', r'^(aoeinput: press 1 (31\d|32\d) (23\d|24\d)|AOE-NO-DATA)']),
+         has=[r'^(aoe: layout 800 x 54\d at Game Screen \(from 640 x 480\)|AOE-NO-DATA)', r'^(aoeinput: press 1 (39\d|40\d) (26\d|27\d|28\d)|AOE-NO-DATA)',
+              r'^(aoe: layout 640 x 480 at Game Screen \(from 800 x 54\d\)|AOE-NO-DATA)', r'^(aoeinput: press 1 (31\d|32\d) (23\d|24\d)|AOE-NO-DATA)']),
     # the trial's first start on the desktop (docs/system/install.md): its EULA read out of the installer in a window, Accept refused until
     # the text has been scrolled to its end, then accepted by Tab and Enter, the bar to the last of 105 files, and aoeprep's strings and faces
-    case('aoe-install', 'games aoe desktop', X + 'if [ -f /usr/share/aoe/MSAoE.exe ]; then (sleep 6; nxkey a; sleep 1; nxkey pagedown; sleep 1; nxkey end; '
+    case('aoe-install', 'games aoe desktop', X + 'if [ -d /usr/share/aoe/installed ]; then (sleep 6; nxkey a; sleep 1; nxkey pagedown; sleep 1; nxkey end; '
          'sleep 1; nxkey tab enter) & CABINST_PRINT=1 aoe --unpack; echo INSTALL=$?; ls /tmp/aoe | wc -l; else echo AOE-NO-DATA; fi', True, wall=300,
          has=[r'^(cabinst: licence eula\.txt: 5065 bytes, CRC-32 b81b406b|AOE-NO-DATA)', r'^(cabinst: licence shown, \d+ lines|AOE-NO-DATA)',
               r'^(cabinst: accept refused: the licence is not read to its end|AOE-NO-DATA)', r'^(cabinst: licence at line \d+ of \d+, its end|AOE-NO-DATA)',
-              r'^(cabinst: accepted|AOE-NO-DATA)', r'^(cabinst: round 6: 34085752 of 34085752 bytes of the files, 105 of 105 whole|AOE-NO-DATA)',
-              r'^(aoeprep: 2276 strings .* 174 fonts|AOE-NO-DATA)', r"^(aoeprep: 1 menus' pictures brought to 640 x 480|AOE-NO-DATA)", r'^(INSTALL=0|AOE-NO-DATA)', r'^(109|AOE-NO-DATA)']),
+              r'^(cabinst: accepted|AOE-NO-DATA)', r'^(cabinst: Age of Empires \(trial\): 10\d files linked from /usr/share/aoe/installed|AOE-NO-DATA)',
+              r'^(aoeprep: 2276 strings .* 174 fonts|AOE-NO-DATA)', r"^(aoeprep: 1 menus' pictures brought to 640 x 480|AOE-NO-DATA)", r'^(INSTALL=0|AOE-NO-DATA)', r'^(1[01]\d|AOE-NO-DATA)']),
     # Jedi Outcast's demo, on images made with its installer only (docs/games/jk2.md, "Checking it"): its start played by a script of
     # keys from the menu (new game, a walk, a turn, a shot, the death and the autosave's load), and the build computer's sums;
     # no window, so the picture is nullgl's and the sound mixed into nothing (the card's pace would move the sums)
     # (its pak unpacked first, the licence answered on the terminal: no window system)
-    case('jk2', 'games jk2 long', 'if [ -f /usr/share/jk2/jk2demo.exe ]; then JK2_KEYS="250:enter 330:at500,455 340:mouse1 1500:w+ 1700:w- '
+    case('jk2', 'games jk2 long', 'if [ -d /usr/share/jk2/installed ]; then JK2_KEYS="250:enter 330:at500,455 340:mouse1 1500:w+ 1700:w- '
          '1700:right+ 1730:right- 1740:w+ 1900:w- 1900:mouse1+ 2000:mouse1-" JK2_FRAMES=2400 JK2_SUM=200 JK2_SEED=7 jk2 +set fixedtime 50 '
          '+set com_maxfps 0; else echo JK2-NO-DATA; fi', wall=600, more=['--expect', 'Type yes', '--send', 'yes\\n'],
          has=[r'^.*(jk2sum: frame 800 time 41250 entities 645 sum b7b63862 draws cf778cae|JK2-NO-DATA)',
@@ -366,29 +374,54 @@ CASES = [
     # the demo's first start on the desktop (docs/system/install.md): LucasArts' licence read out of the installer in a window, Accept
     # refused until it is scrolled to its end, the pak unpacked into memory with the bar, and its CRC-32 7-Zip's (239abc19)
     # the menus' cursor is the pointer (docs/games/jk2.md, "Input"): the pointer's place in the window, not its travel, at the window's place
-    case('jk2-pointer', 'games jk2 desktop long', X + 'if [ -f /usr/share/jk2/jk2demo.exe ]; then (sleep 6; nxkey pagedown; sleep 1; nxkey end; sleep 1; '
+    case('jk2-pointer', 'games jk2 desktop long', X + 'if [ -d /usr/share/jk2/installed ]; then (sleep 6; nxkey pagedown; sleep 1; nxkey end; sleep 1; '
          'nxkey tab enter) & jk2 --unpack; JK2_POINTER_LOG=1 JK2_FRAMES=150 jk2; else echo JK2-NO-DATA; fi', True, wall=1800,
          more=['--pointer-sweep', '0', '--pointer-circle', '400,300,100'],
          has=[r'(jk2pointer: (\d+),(\d+) of the display to \d+,\d+ of the menu \(window at \d+,\d+, 640x480\)|JK2-NO-DATA)']),
     # the window maximised at the main menu: the renderer restarted at the window's size (docs/games/jk2.md, "The window's size"), then
     # New and a click on Begin Game where the stretched menu has it (500, 455 of 640 x 480) in the window's place: the level loads
-    case('jk2-resize', 'games jk2 desktop long', 'nx; sleep 3; if [ -f /usr/share/jk2/jk2demo.exe ]; then (sleep 6; nxkey pagedown; sleep 1; '
+    case('jk2-resize', 'games jk2 desktop long', 'nx; sleep 3; if [ -d /usr/share/jk2/installed ]; then (sleep 6; nxkey pagedown; sleep 1; '
          'nxkey end; sleep 1; nxkey tab enter) & jk2 --unpack; (JK2_POINTER_LOG=1 jk2 &); sleep 320; nxkey ctrl+alt+up; sleep 120; '
          'set -- $(nxwintest list | grep Jedi); P=${5%,*}; Q=${5#*,}; S=$6; W=${S%x*}; H=${S#*x}; echo PLACE $P $Q $W $H; nxkey enter; sleep 40; '
-         'nxkey $((P+3+500*(W-6)/640)),$((Q+26+455*(H-29)/480)); sleep 200; killall jk2.bin; else echo JK2-NO-DATA; fi', True, wall=2400,
+         'C=$((W-6)); D=$((H-29)); nxkey $((P+3+500*D/480+(C-640*D/480)/2)),$((Q+26+455*D/480)); sleep 200; killall jk2.bin; else echo JK2-NO-DATA; fi', True, wall=2400,
          has=[r'(jk2: the window is \d+x\d+: the renderer restarted at \d+x\d+|JK2-NO-DATA)', r'(^PLACE \d+ \d+ \d+ \d+|JK2-NO-DATA)',
               r'(jk2pointer: \d+,\d+ of the display to (49\d|50\d),(44\d|45\d|46\d) of the menu|JK2-NO-DATA)',
               r'(Server Initialization|SpawnServer|JK2-NO-DATA)']),
-    case('jk2-install', 'games jk2 desktop', X + 'if [ -f /usr/share/jk2/jk2demo.exe ]; then (sleep 6; nxkey a; sleep 1; nxkey pagedown; sleep 1; nxkey end; '
+    case('jk2-install', 'games jk2 desktop', X + 'if [ -d /usr/share/jk2/installed ]; then (sleep 6; nxkey a; sleep 1; nxkey pagedown; sleep 1; nxkey end; '
          'sleep 1; nxkey tab enter) & CABINST_PRINT=1 CABINST_SUMS=1 jk2 --unpack; echo INSTALL=$?; else echo JK2-NO-DATA; fi', True, wall=300,
-         has=[r'^(cabinst: licence \\Disk1\\Install\\license\.txt: 3529 bytes, CRC-32 4361c574|JK2-NO-DATA)', r'^(cabinst: licence shown, \d+ lines|JK2-NO-DATA)',
+         has=[r'^(cabinst: licence Disk1/Install/license\.txt: 3529 bytes, CRC-32 4361c574|JK2-NO-DATA)', r'^(cabinst: licence shown, \d+ lines|JK2-NO-DATA)',
               r'^(cabinst: accept refused: the licence is not read to its end|JK2-NO-DATA)', r'^(cabinst: licence at line \d+ of \d+, its end|JK2-NO-DATA)',
-              r'^(cabinst: accepted|JK2-NO-DATA)', r'^(cabinst: round 9: 64001989 of 64001989 bytes of the files, 1 of 1 whole|JK2-NO-DATA)',
-              r'^(cabinst: sum 239abc19 64001989 \\Disk1\\GameData\\demo\\assets0\.pk3|JK2-NO-DATA)', r'^(INSTALL=0|JK2-NO-DATA)']),
-    case('jk2-sums', 'games jk2 long', 'if [ -f /usr/share/jk2/jk2demo.exe ]; then JK2_FRAMES=4000 JK2_SUM=400 JK2_SEED=7 jk2 +set fixedtime 50 '
+              r'^(cabinst: accepted|JK2-NO-DATA)', r'^(cabinst: Jedi Outcast \(demo\): \d+ files linked from /usr/share/jk2/installed|JK2-NO-DATA)', r'^(INSTALL=0|JK2-NO-DATA)']),
+    # Half-Life's licence (docs/system/install.md): Sierra's, as Uplink's installer showed it, in a window before the game, Accept refused
+    # until it is read to its end, then accepted; nothing to link (the game's files lie in place)
+    case('halflife-licence', 'games halflife desktop', X + 'if [ -f /usr/share/halflife/licence/eula.txt ]; then (sleep 6; nxkey a; sleep 1; '
+         'nxkey pagedown; sleep 1; nxkey end; sleep 1; nxkey tab enter) & CABINST_PRINT=1 halflife --licence; echo LICENCE=$?; else echo HL-NO-DATA; fi',
+         True, wall=300,
+         has=[r'^(cabinst: licence eula\.txt: 8678 bytes, CRC-32 8676e153|HL-NO-DATA)', r'^(cabinst: licence shown, \d+ lines|HL-NO-DATA)',
+              r'^(cabinst: accept refused: the licence is not read to its end|HL-NO-DATA)', r'^(cabinst: accepted|HL-NO-DATA)',
+              r'^(cabinst: Half-Life: Uplink: licence accepted, nothing to link|HL-NO-DATA)', r'^(LICENCE=0|HL-NO-DATA)']),
+    # the starters delete what they unpacked when the game ends (docs/system/install.md): 34 and 64 MB of RAM
+    case('aoe-cleanup', 'games aoe', AOE_UNPACK + X + 'if [ -f /tmp/aoe/Empires.dat ]; then AOE_TICK_MS=33 AOE_SCRIPT="3000 quit" aoe > /dev/null; '
+         'echo AOE=$?; ls -d /tmp/aoe 2>&1; else echo AOE-NO-DATA; fi', True, wall=300,
+         has=[r'^(AOE=0|AOE-NO-DATA)', r'(/tmp/aoe: No such file|AOE-NO-DATA)']),
+    case('jk2-cleanup', 'games jk2', 'if [ -d /usr/share/jk2/installed ]; then echo yes | jk2 --unpack > /dev/null; ls /tmp/jk2/base; '
+         'JK2_FRAMES=60 jk2 +set fixedtime 50 < /dev/null > /dev/null; echo JK2=$?; ls -d /tmp/jk2 2>&1; else echo JK2-NO-DATA; fi', True, wall=300,
+         has=[r'(assets0\.pk3|JK2-NO-DATA)', r'^(JK2=0|JK2-NO-DATA)', r'(/tmp/jk2: No such file|JK2-NO-DATA)']),
+    case('jk2-sums', 'games jk2 long', 'if [ -d /usr/share/jk2/installed ]; then JK2_FRAMES=4000 JK2_SUM=400 JK2_SEED=7 jk2 +set fixedtime 50 '
          '+set com_maxfps 0 +map demo; else echo JK2-NO-DATA; fi', wall=1200, more=['--expect', 'Type yes', '--send', 'yes\\n'],
          has=[r'^.*(jk2sum: frame 3200 time 161250 entities 639 sum 559c85a7 draws 810d9e76|JK2-NO-DATA)',
               r'^.*(jk2sum: frame 3600 time 181250 entities 639 sum 286e9b16 draws 274198c2|JK2-NO-DATA)']),
+    # the same with the client's game on the copy the game gives it, what it writes given back by its fields (JK2_SPLIT=check: every word by difference) (docs/games/jk2.md, "The game's frame apart")
+    case('jk2-split', 'games jk2 long', 'if [ -d /usr/share/jk2/installed ]; then JK2_SPLIT=copy JK2_FRAMES=4000 JK2_SUM=400 JK2_SEED=7 jk2 +set fixedtime 50 '
+         '+set com_maxfps 0 +map demo; else echo JK2-NO-DATA; fi', wall=1200, more=['--expect', 'Type yes', '--send', 'yes\\n'],
+         has=[r'^.*(jk2sum: frame 3200 time 161250 entities 639 sum 559c85a7 draws 810d9e76|JK2-NO-DATA)',
+              r'^.*(jk2sum: frame 3600 time 181250 entities 639 sum 286e9b16 draws 274198c2|JK2-NO-DATA)']),
+    # the game's next frame made after the client's game has its copy, before the client's frame (JK2_SPLIT=ahead): other sums, the
+    # build computer's in the same order (host_sum.sh with JK2_SPLIT=ahead) (docs/games/jk2.md, "The game's frame apart")
+    case('jk2-ahead', 'games jk2 long', 'if [ -d /usr/share/jk2/installed ]; then JK2_SPLIT=ahead JK2_FRAMES=4000 JK2_SUM=400 JK2_SEED=7 jk2 +set fixedtime 50 '
+         '+set com_maxfps 0 +map demo; else echo JK2-NO-DATA; fi', wall=1200, more=['--expect', 'Type yes', '--send', 'yes\\n'],
+         has=[r'^.*(jk2sum: frame 3200 time 161250 entities 639 sum 1530a9f9 draws 9367bd09|JK2-NO-DATA)',
+              r'^.*(jk2sum: frame 3600 time 181250 entities 639 sum ff07869a draws afc9cdbd|JK2-NO-DATA)']),
     case('openttd-scroll', 'games openttd', X + 'OPENTTD_DRAW=cpu OPENTTD_PLAY=1 OPENTTD_PLAY_ODD=1 OPENTTD_PAUSE=1 OPENTTD_CHECK=1 openttd -g /usr/share/openttd/busy.sav',
          True, wall=400, has=[r'openttd: play round 1: .*checked (19\d|200), 0 differ \(0 pixels']),
     case('openttd-scroll-serial', 'games openttd', X + 'OPENTTD_DRAW=cpu OPENTTD_PLAY=1 OPENTTD_PAUSE=1 OPENTTD_CHECK=1 OPENTTD_WORKERS=0 openttd -g /usr/share/openttd/busy.sav',
@@ -599,7 +632,7 @@ CASES = [
     # the script languages (docs/system/scripts.md): QuickJS's pi example, MicroPython with its built-in modules
     # the benchmark (docs/apps/bench.md): every test's own check, the GPU's in a window of its own; some 30 s of the guest's
     case('nxperf', 'programs', X + 'nxperf --cli', True, has=[r'^nxperf: 61 results: 61 OK, 0 FAIL, 0 not run', r'^nxperf: score \d+ of 61 results', r'^nxperf: part GPU +\d+ \(5 results\)',
-                                                                    r'^nxperf: beside it: RTX 3090 +\d+'],
+                                                                    r'^nxperf: beside it: RTX 3090, harness +\d+', r'^nxperf: beside it: 9950X3D, native +\d+'],
          never=[r'^nxperf: .* FAIL \(', r'Segmentation fault']),
     case('qjs', 'programs', "qjs /examples/pi.js 50; qjs --std -e 'print([1, 2, 3].map(x => x * x).join(), std.getenv(\"HOME\"))'",
          has=[r'^3\.14159265358979323846264338327950288419716939937510\r?$', r'^1,4,9 /root']),
@@ -789,6 +822,14 @@ CASES = [
     # a clean close asks nothing
     case('wm-close', 'desktop wm', WMC + "nxwintest plain p & sleep 2; nxkey alt+f4 4000; nxwintest list", wall=120,
          has=[r'^wins \d'], never=[r'^nxbar: not responding', r'^nxbar: outlives', r'^win \d p ']),
+    # the close box takes the frame's corner, past its picture (wm_on_caption_box in wmaction.c): a press there closes
+    case('wm-close-corner', 'desktop wm', WMC + "nxwintest plain p & sleep 2; nxwintest list; set -- $(nxwintest list | awk '/^win [0-9]+ p /{split($4,a,\",\"); split($5,b,\"x\"); print a[1]+b[1]-1\",\"a[2]+1}'); "
+         "echo CORNER $1; nxkey $1 2000; nxwintest list", wall=120,
+         has=[r'^CORNER \d+,\d+', r'^wins \d'], count=[(r'^win \d+ p ', 1)]),
+    # a button under the pointer is lit and put back when the pointer leaves (ui_hot_* in ui.h): Settings' tabs
+    case('ui-hover', 'desktop wm', WM + "export UI_HOVER_PRINT=1; nxsettings & sleep 5; "
+         "nxkey $(for y in 40 52 64 76 88 100 112 124; do echo at:200,$y at:260,$y; done) at:790,560 1000", wall=120,
+         has=[r'^ui: lit \d+,6 \d+x22', r'^ui: unlit']),
     # a dead client's windows go, with its button
     case('wm-kill', 'desktop wm', WM + "nxwintest two a & P=$!; sleep 2; nxwintest list; kill -9 $P; sleep 2; nxwintest list", wall=120,
          has=[r'^win 0 second', r'^nxbar: buttons: \s*$'], count=[(r'^win \d second', 1)]),
@@ -854,20 +895,20 @@ CASES = [
               r'volume_frames: frames: .*empty worlds over a second: 0', r'volume_frames: exit 0']),
     # Jedi Outcast from the seat (an image with the demo; docs/world/holodeck.md): the level loaded flat, then the sitter's stick walks
     # it ("seat: 2 ... move 127 0 0", JK2_SEAT=1), the world with its HUD, no empty world over a second
-    case('jk2-seat', 'games jk2 holodeck', 'if [ -f /usr/share/jk2/jk2demo.exe ]; then jk2 --unpack; nano-X -p & sleep 2; JK2_SEAT=1 jk2 +map demo; '
+    case('jk2-seat', 'games jk2 holodeck', 'if [ -d /usr/share/jk2/installed ]; then jk2 --unpack; nano-X -p & sleep 2; JK2_SEAT=1 jk2 +map demo; '
          "else echo Type y''es; read x; echo JK2-NO-DATA move 127 0 $((0)); fi", until='move 127 0 0', wall=600, volume=True,   # (no data: what it waits for at once, not typed whole)
          more=['--expect', 'Type yes', '--send', 'yes\\n', '--host', '00000112,0,0,0,0,00007f00,0,0'],
          has=[r'(seat: 2 aim .* move 127 0 0|JK2-NO-DATA)', r'(volume_frames: exit 0|JK2-NO-DATA)']),
     # Half-Life from the seat (an image with Uplink's data): the menu at the level's second 10 (flat) closed by Escape at the guest's
     # 125 s, a kill at 20, a new level at 30 (HL_SCRIPT; the script's text split so that the shell's echo is not the marks it waits for)
-    case('halflife-seated', 'games halflife holodeck', X + 'if [ -f /usr/share/halflife/valve/pak0.PAK ]; then S=10:togglemenu; '
+    case('halflife-seated', 'games halflife holodeck', HL_LICENCE + X + 'if [ -f /usr/share/halflife/valve/pak0.PAK ]; then S=10:togglemenu; '
          'S="$S|20:kill|30:map hl"; HL_SCRIPT="${S}demo2|40:echo SEAT-$((1+1))" halflife -dev 1 +map hldemo1; else echo HL-NO-$((0))DATA; echo SEAT-$((1+1)); fi',
          True, until='SEAT-2', wall=900, volume=True,
          more=['--host', '00000112,0,0,0,0,00007f00,0,0', '--input-event', '125,80000001', '--input-event', '125.3,1'],
          has=[r'(Spawn Server: hldemo2|HL-NO-0DATA)', r'(script 20\.\d+: kill|HL-NO-0DATA)', r'(volume_frames: .*flat screen|HL-NO-0DATA)',
               r'(volume_frames: exit 0|HL-NO-0DATA)']),
     # Half-Life (an image with Uplink's data; else HL-NO-DATA): the hands' buttons as its keys, A the jump and B the use (HL_PAD_LOG)
-    case('pad-halflife', 'games halflife', X + 'if [ -f /usr/share/halflife/valve/pak0.PAK ]; then HL_PAD_LOG=1 halflife -dev 1 +map hldemo1 & '
+    case('pad-halflife', 'games halflife', HL_LICENCE + X + 'if [ -f /usr/share/halflife/valve/pak0.PAK ]; then HL_PAD_LOG=1 halflife -dev 1 +map hldemo1 & '
          'sleep 150; killall halflife.bin; else echo HL-NO-DATA; fi', True, wall=900, more=['--pointer-button', '0x18080,120,120.5'],
          has=[r'(halflife: pad down 18080|HL-NO-DATA)']),
     case('pad-quake3', 'games quake3', X + 'QUAKE3_PAD_LOG=1 ' + Q3, True, until='pad down 10080', wall=400,
@@ -885,6 +926,17 @@ CASES = [
          more=['--pointer-button', '0x80,5,20', '--pointer-button', '0x100,8,8.5', '--pointer-button', '0x400,9,9.5', '--pointer-button', '0x10000,10,11'],
          has=[r'^nxpinball: left flipper held', r'^nxpinball: left flipper let go', r'^nxpinball: right flipper held', r'^nxpinball: plunger held',
               r'^nxpinball: plunger let go']),
+    # 2048 played by itself, then by keys (linux/apps/nx2048.c); Life's generations on the workers and on the first core
+    # alone, which must come to the same grid (linux/apps/nxlife.c)
+    case('nx2048', 'desktop games', X + 'NX2048_PRINT=1 NX2048_SEED=3 NX2048_AUTO=60 nx2048 & sleep 4; nxkey left 300 up 300 right; sleep 2; '
+         'killall nx2048', wall=120,
+         has=[r'^nx2048: auto 60 moves: score \d+, tile \d+, free \d+, sum [0-9a-f]{8}$', r'^nx2048: left: score', r'^nx2048: up: score']),
+    # (ten generations: on the first core alone one is about 2.4 million instructions, a second of the machine's)
+    case('nxlife', 'desktop games', X + 'NXLIFE_SEED=7 NXLIFE_GENS=10 nxlife & sleep 8; killall nxlife', True, wall=120,
+         has=[r'^nxlife: 10 generations, population \d+, sum [0-9a-f]{8}, [1-9]\d* workers']),
+    case('nxlife-core0', 'desktop games', X + 'NXLIFE_CORES=0 NXLIFE_SEED=7 NXLIFE_GENS=10 nxlife & sleep 25; killall nxlife', wall=120,
+         has=[r'^nxlife: 10 generations, .* 0 workers'],
+         same=[(r'^nxlife: 10 generations, (population \d+, sum [0-9a-f]{8})', 'nxlife')]),
     case('pad-mines', 'desktop games', X + 'NXMINE_PRINT=1 NXMINE_SEED=5 nxmine & sleep 11; killall nxmine', wall=120,
          more=['--pointer-sweep', '0', '--pointer-circle', '120,150,0', '--pointer-button', '0x80,5,20', '--scroll', '8,lx,2', '--scroll', '8.3,ly,-1',
                '--pointer-button', '0x10000,9,9.3'],
@@ -907,6 +959,17 @@ CASES = [
     # a title said while another window has the keyboard reaches the bar's button (GR_WM_TELL_TITLE)
     case('wm-retitle', 'desktop wm', WM + "echo 'BEGIN{printf \"%c]0;Retitled%c\",27,7}' > /tmp/a.awk; (echo '#!/bin/sh'; echo 'sleep 6'; echo 'awk -f /tmp/a.awk'; echo 'sleep 3') > /tmp/rt; chmod +x /tmp/rt; nxterm /tmp/rt & sleep 2; nxwintest plain b & sleep 8; killall nxterm", wall=120,
          has=[r'^nxbar: buttons: .*\[Retitled x1']),
+    # a game the bar starts opens maximised (GR_WMC_MAXIMISE, wmclients.c), and those it starts; not with wm.maximise_games 0
+    case('wm-game', 'desktop wm', "echo '#!/bin/sh' > /tmp/g; echo 'nxwintest plain g' >> /tmp/g; chmod +x /tmp/g; echo 'Games/Test game=/tmp/g' > /usr/share/nxapps.99-test; "
+         "nxreg set bar.pinned /tmp/g; " + WM + "nxkey 49,586; sleep 4; nxwintest list; nxkey alt+f4 2000; nxreg set wm.maximise_games 0; "
+         "nxkey 49,586; sleep 4; nxwintest list; nxreg unset bar.pinned; nxreg unset wm.maximise_games", wall=120,
+         # (opened at its maximised size, SE_MAXIMISED: so the window manager's maximise is no resize)
+         has=[r'^win 0 g 0,0 800x574 mapped maximised', r'^win 0 g [\d,]+ 246x149 mapped focus', r'^opened 794x545'],
+         never=[r'^resized'], count=[(r'^opened', 1)]),
+    # a desktop shortcut with game=1 (nxfiles --run, as a double click): the same, the file read again by its whole name
+    case('wm-game-shortcut', 'desktop wm', "true; echo game=1 > /tmp/q.lnk; echo run=nxwintest plain q >> /tmp/q.lnk; " + WM +
+         "nxfiles --run /tmp/q.lnk; sleep 4; nxwintest list", wall=90,
+         has=[r'^win 0 q 0,0 800x574 mapped maximised', r'^opened 794x545'], never=[r'^resized']),
     case('wm-single', 'desktop wm', WM + "nxsettings & sleep 4; nxwintest plain b & sleep 2; nxwintest list; nxsettings; echo SECOND=$?; sleep 1; nxwintest list", wall=120,
          has=[r'^SECOND=0', r'^win 0 Settings .* focus'], count=[(r'^win \d Settings', 2)]),
 ]
@@ -1006,7 +1069,7 @@ def zerotail_nommu():
               ' && python3 linux/nommu/flat.py build/test_all-root/usr/bin')
     subprocess.run(['wsl', '-e', 'bash', '-c', script], check=True, capture_output=True)   # (-e: no shell between to expand $)
     subprocess.run([sys.executable, os.path.join(ROOT, 'linux', 'nommu', 'image.py'), name, root], check=True, capture_output=True,
-                   env=dict(os.environ, HALFLIFE_DATA='0'))
+                   env=dict(os.environ, HALFLIFE_DATA='0', AOE_IMAGE='0', JK2_IMAGE='0'))
     return f'build/images/{name}'
 
 

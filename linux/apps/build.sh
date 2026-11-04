@@ -41,6 +41,8 @@ build_one() {
     [ $p = nxview ] || [ $p = nxmon ] || [ $p = nxpaint ] || [ $p = nxweb ] && more="-I$REPO/programs/mc $REPO/programs/mc/mcw.c"
     # pictures of every kind, decoded and encoded on the worker cores (linux/libmedia, docs/system/media.md)
     # (cabinst: a game's installer unpacked on them, docs/system/install.md)
+    # (Life makes its generations on the worker cores: mcwx.h's loop)
+    [ $p = nxlife ] && more="-I$REPO/programs/mc $WORK/src/libmedia/mcw.o $WORK/src/libmedia/mcwx.o"
     case $p in nxview|nxpaint|nxfiles|nxsettings|nxicon|nxweb|cabinst)
         more="-I$REPO/linux/libmedia -I$REPO/programs/mc $MEDIA $WORK/src/libmedia/mcw.o $WORK/src/libmedia/mcwx.o -lm -Wl,--gc-sections" ;;
     esac
@@ -48,7 +50,7 @@ build_one() {
     riscv32-linux-strip -o "$OUT/bin/$p" "$WORK/src/apps/$p"
 }
 pids=()
-for p in nxedit nxfiles nxpaint nxview nxsettings nxmon nxweb nxkey nxinput nxfuzz nxicon nxask nxnet open nxpersist nxreg nxtetris nxmine nxpinball nxsolitaire nxeyes nxclock nxterm nxcalc cabinst; do
+for p in nxedit nxfiles nxpaint nxview nxsettings nxmon nxweb nxkey nxinput nxfuzz nxicon nxask nxnet open nxpersist nxreg nxtetris nxmine nxpinball nxsolitaire nx2048 nxlife nxeyes nxclock nxterm nxcalc cabinst; do
     build_one $p & pids+=($!)
 done
 # archives unpacked on the worker cores (unarc.c: open --unpack runs it first, docs/system/open.md)
@@ -62,6 +64,7 @@ for pid in "${pids[@]}"; do wait $pid || failed=1; done
 printf '%s\n' "Utilities/Editor=nxedit" "Utilities/Files=nxfiles" "Utilities/Paint=nxpaint" "Other/Web=nxweb" "Utilities/Monitor=nxmon" "Utilities/Network=nxnet" "Utilities/Settings=nxsettings" > "$OUT/share/nxapps.20-apps"
 # the card game among the games of linux/nanox/build.sh's list (after Pinball)
 echo "Games/Solitaire=nxsolitaire" > "$OUT/share/nxapps.11-solitaire"
+printf '%s\n' "Games/2048=nx2048" "Games/Life=nxlife" > "$OUT/share/nxapps.12-tiles"
 # two pictures for the viewer and for its test (tools/make_test_pictures.py made them)
 cp "$HERE"/pictures/picture-*.png "$HERE"/pictures/picture-*.jpg "$OUT/share/" 2>/dev/null || true
 # the Start menu's last folder: the desktop over again, and the machine stopped
@@ -79,6 +82,7 @@ chmod +x "$OUT/bin/nxgame"
 printf '%s\n' "Games/Network/Quake: host a game=nxgame quake host" "Games/Network/Quake: join a game=nxgame quake join" \
     "Games/Network/Quake III: host a game=nxgame quake3 host" "Games/Network/Quake III: join a game=nxgame quake3 join" \
     "Games/Network/OpenTTD: host a game=nxgame openttd host" "Games/Network/OpenTTD: join a game=nxgame openttd join" \
+    "Games/Network/ClassiCube: host a game=nxgame classicube host" "Games/Network/ClassiCube: join a game=nxgame classicube join" \
     "Games/Network/Doom: network game=nxgame doom host" > "$OUT/share/nxapps.75-network"
 # the browser's pages: its home lists the sites of web/sites.txt (the VRChat world can ask for
 # no others, so its builder reads the same file)

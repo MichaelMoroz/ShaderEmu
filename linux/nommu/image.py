@@ -2,22 +2,20 @@
 no-MMU kernel (kernel.sh), and RAM in the device tree from the kernel's address, after the devices, to
 0x92000000 (docs/system/nommu.md, "Memory"). Without a build
 in build/nommu, linux/prebuilt/nommu: its kernel and the files that differ from linux/prebuilt/root.
-   python linux/nommu/image.py [NAME [ROOT [KERNEL]]] [--save-prebuilt] [--aoe] [--jk2]
---aoe (or AOE_IMAGE=1) fetches the Age of Empires trial and accepts its EULA (docs/games/aoe.md); not with --save-prebuilt.
---jk2 (or JK2_IMAGE=1) fetches Jedi Outcast's demo installer (docs/games/jk2.md); its licence is accepted in the machine."""
+   python linux/nommu/image.py [NAME [ROOT [KERNEL]]] [--save-prebuilt]
+Every game is in every image (4 November 2026): Half-Life with Uplink's data, Age of Empires with its trial's installer
+(docs/games/aoe.md) and Jedi Outcast with its demo's (docs/games/jk2.md), fetched once into a cache outside the tree and
+checked against their sums; the machine shows each installer's licence and unpacks it. One that cannot be had stops the
+image. They go into the image's overlay only, never into linux/prebuilt (--save-prebuilt saves the flat root, which has none
+of them). A private image for a test may leave them out: HALFLIFE_DATA=0, AOE_IMAGE=0, JK2_IMAGE=0.
+(--aoe and --jk2, which once asked for the two, are taken and do nothing.)"""
 import filecmp, os, shutil, struct, subprocess, sys
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PREBUILT = os.path.join(ROOT, 'linux', 'prebuilt', 'nommu')
 save = '--save-prebuilt' in sys.argv
-aoe = '--aoe' in sys.argv or os.environ.get('AOE_IMAGE') == '1'
-jk2 = '--jk2' in sys.argv or os.environ.get('JK2_IMAGE') == '1'
+aoe = os.environ.get('AOE_IMAGE') != '0'
+jk2 = os.environ.get('JK2_IMAGE') != '0'
 argv = [a for a in sys.argv[1:] if a not in ('--save-prebuilt', '--aoe', '--jk2')]
-if aoe and save:
-    print('Age of Empires is never saved with a prebuilt: this image is made without it')
-    aoe = False
-if jk2 and save:
-    print('Jedi Outcast is never saved with a prebuilt: this image is made without it')
-    jk2 = False
 built = os.path.join(ROOT, 'build', 'nommu')
 own = os.path.exists(os.path.join(built, 'Image')) and os.path.isdir(os.path.join(built, 'flatroot'))
 name = argv[0] if len(argv) > 0 else 'nommu'
@@ -30,7 +28,17 @@ share = os.path.join(flat, 'usr', 'share')
 if not os.path.abspath(flat).startswith(PREBUILT) and os.path.isdir(share):
     subprocess.run([sys.executable, os.path.join(ROOT, 'tools', 'make_icons.py')], env=dict(os.environ, ICONS_OUT=share),
                    check=True, stdout=subprocess.DEVNULL)
-    if not os.path.exists(os.path.join(share, 'font-ui-12.sef')):
+    # every face's distance fields: the shared root's sans, serif and mono are old 4-bit bitmaps
+    # with no atlas, which a root with font-ui-12.sef alone kept (and the window system drew them so)
+    def fields(face, size):
+        try:
+            with open(os.path.join(share, 'font-%s-%d.sef' % (face, size)), 'rb') as f:
+                head = f.read(10)
+        except OSError:
+            return False
+        return head[:4] == b'SEF1' and int.from_bytes(head[8:10], 'little') == 24 and \
+            os.path.exists(os.path.join(share, 'font-%s.msdf' % face))
+    if not all(fields(face, 13 if face[:2] != 'ui' else 12) for face in ('ui', 'ui-b', 'sans', 'sans-b', 'serif', 'serif-b', 'mono', 'mono-b')):
         subprocess.run([sys.executable, os.path.join(ROOT, 'tools', 'make_fonts.py'), share], check=True, stdout=subprocess.DEVNULL)
 D = os.path.join(ROOT, 'build', 'images', name)
 if os.path.isdir(os.path.join(D, 'overlay')):
@@ -38,16 +46,18 @@ if os.path.isdir(os.path.join(D, 'overlay')):
 os.makedirs(D, exist_ok=True)
 shutil.copytree(flat, os.path.join(D, 'overlay'), symlinks=True)
 shutil.copy(kernel, os.path.join(D, 'Image'))
-# Half-Life's engine wants Uplink's data, fetched into this image only (HALFLIFE_DATA=0: none)
+# Every game's data into this image's overlay (never linux/prebuilt): each script says what it could not have
+games = []
 if os.path.exists(os.path.join(D, 'overlay', 'usr', 'bin', 'halflife.bin')) and os.environ.get('HALFLIFE_DATA') != '0':
-    if subprocess.run([sys.executable, os.path.join(ROOT, 'linux', 'halflife', 'data.py'), os.path.join(D, 'overlay')]).returncode:
-        print('Uplink\'s data could not be fetched: the image has Half-Life without it')
-# Age of Empires only when asked: linux/aoe/data.py says why not, and the image goes on without it
-if aoe:
-    subprocess.run([sys.executable, os.path.join(ROOT, 'linux', 'aoe', 'data.py'), os.path.join(D, 'overlay')])
-# Jedi Outcast likewise: linux/jk2/data.py puts in the installer as LucasArts made it, and the program
-if jk2:
-    subprocess.run([sys.executable, os.path.join(ROOT, 'linux', 'jk2', 'data.py'), os.path.join(D, 'overlay')])
+    games.append(('Half-Life (Uplink\'s data)', 'halflife'))
+if aoe:   # the trial's installer as Microsoft made it, and the program (linux/aoe/program.sh)
+    games.append(('Age of Empires (the trial\'s installer)', 'aoe'))
+if jk2:   # the demo's installer as LucasArts made it, and the program (linux/jk2/program.sh)
+    games.append(('Jedi Outcast (the demo\'s installer)', 'jk2'))
+for what, game in games:
+    if subprocess.run([sys.executable, os.path.join(ROOT, 'linux', game, 'data.py'), os.path.join(D, 'overlay')]).returncode:
+        raise SystemExit('%s could not be put in: see linux/%s/data.py\'s line above (%s=0 makes a private image without it)'
+                         % (what, game, {'halflife': 'HALFLIFE_DATA', 'aoe': 'AOE_IMAGE', 'jk2': 'JK2_IMAGE'}[game]))
 r = subprocess.run([sys.executable, os.path.join(ROOT, 'tools', 'private_image.py'), name], cwd=ROOT, capture_output=True, text=True)
 print(r.stdout[-600:], r.stderr[-600:])
 if r.returncode:

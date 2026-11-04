@@ -1,11 +1,12 @@
 /*
  * ClassiCube on the world's LAN (docs/games/classicube.md, "Played together"): a player's own singleplayer world served to
  * others in ClassiCube's own protocol (Classic, version 7), so that a joiner is the stock client connecting to
- * 10.0.0.N:25565. The host is this game's own loop: twenty times a second (the singleplayer server's tick) it takes new
+ * 10.0.0.N:25565. The host is this game's own loop: sixty times a second (the singleplayer server's task) it takes new
  * players, reads what they sent and writes what is owed, all without waiting:
  *   - a joiner gets the level gzipped by libmedia's deflate on the worker cores (media_gzip), in 1,024-byte chunks;
  *   - a block placed or taken away by anybody goes to everybody as one SetBlock of 8 bytes (the host applies a joiner's);
- *   - every player's place goes to the others when it moved, at most 10 times a second, 10 bytes each;
+ *   - every player's place goes to the others when it moved, 20 times a second (a client's tick: at 10 its interpolation
+ *     moved a player one tick and stood the next), 10 bytes each;
  *   - the host shows joiners with its protocol's own handlers (models, names, smoothed moves), as a client would.
  * A beacon a few times a second (UDP broadcast, port 25566) says a game is hosted, which "Join a LAN game" listens for and
  * then runs the stock client against it. CLASSICUBE_LAN=host hosts from the start; CLASSICUBE_LAN_LOG=1 says each join,
@@ -39,7 +40,7 @@
 #define LAN_PORT 25565
 #define LAN_BEACON_PORT 25566
 #define LAN_MOST 8                 /* joiners at once */
-#define LAN_POS_MS 100             /* a player's place told at most this often */
+#define LAN_POS_MS 45              /* a player's place told at most this often: every third of the 60 calls a second */
 
 uint32_t SE_Milliseconds(void);
 void Protocol_SE_Install(void);    /* classicube.patch: the protocol's handlers in a singleplayer game */
@@ -127,6 +128,53 @@ static void spawn_packet(uint8_t *pkt, int id, const char *name, const uint8_t *
 /* The host shows what a client would be told: its protocol's own handlers (models, names, smoothing) */
 static void host_handle(const uint8_t *pkt) {
 	if (Protocol.Handlers[pkt[0]]) Protocol.Handlers[pkt[0]]((cc_uint8 *)pkt + 1);
+}
+
+/*
+ * Arms that swing: a player who places or takes away a block swings its right arm, on everybody's screen. The protocol has
+ * no word for it. The host knows who sent each block (lan_read); a joiner, to whom every block comes from the host, takes
+ * the other player nearest the block within reach, but not for the echo of a block it sent itself (classicube.patch calls
+ * SE_BlockSent and SE_BlockArrived in Protocol.c, and adds SE_ArmSwing to the right arm in AnimatedComp_GetCurrent).
+ */
+#define SWING_MS 300
+#define SWING_REACH 7.0f           /* blocks from the eye: a click reaches 5 */
+static uint32_t swing_at[MAX_NET_PLAYERS];
+static int sent_x = -1, sent_y, sent_z;
+static uint32_t sent_ms;
+
+static void swing(int id) {
+	if (id >= 0 && id < MAX_NET_PLAYERS) swing_at[id] = SE_Milliseconds() | 1;
+}
+
+float SE_ArmSwing(struct Entity* e) {
+	uint32_t t;
+	int i;
+	for (i = Entities_SE_First; i < MAX_NET_PLAYERS; i++)
+		if (Entities.List[i] == e) break;
+	if (i >= MAX_NET_PLAYERS || !swing_at[i]) return 0;
+	t = SE_Milliseconds() - swing_at[i];
+	if (t >= SWING_MS) { swing_at[i] = 0; return 0; }
+	return -1.5f * Math_SinF(MATH_PI * (float)t / SWING_MS);   /* forward and back */
+}
+
+void SE_BlockSent(int x, int y, int z) {
+	sent_x = x, sent_y = y, sent_z = z, sent_ms = SE_Milliseconds();
+}
+
+void SE_BlockArrived(int x, int y, int z) {
+	float best = SWING_REACH * SWING_REACH;
+	int i, who = -1;
+	if (Server.IsSinglePlayer) return;
+	if (x == sent_x && y == sent_y && z == sent_z && SE_Milliseconds() - sent_ms < 3000) { sent_x = -1; return; }
+	for (i = Entities_SE_First; i < MAX_NET_PLAYERS; i++) {
+		struct Entity *e = Entities.List[i];
+		float dx, dy, dz, d;
+		if (!e) continue;
+		dx = e->Position.x - (x + 0.5f), dy = e->Position.y + 1.6f - (y + 0.5f), dz = e->Position.z - (z + 0.5f);
+		d = dx * dx + dy * dy + dz * dz;
+		if (d < best) best = d, who = i;
+	}
+	swing(who);
 }
 
 static void lan_drop(struct lan_player *p, const char *why) {
@@ -254,6 +302,7 @@ static void lan_read(struct lan_player *p) {
 			uint8_t set[8] = { OPCODE_SET_BLOCK };
 			if (World_Contains(x, y, z)) {
 				Game_UpdateBlock(x, y, z, block);
+				swing(p->id);
 				lan_gen++;
 				memcpy(set + 1, pkt + 1, 6);
 				set[7] = (uint8_t)block;
@@ -359,7 +408,7 @@ void SE_LanChat(const cc_string* text) {
 	lan_send_all(msg, 66, -1);
 }
 
-/* The singleplayer server's tick (20 a second) */
+/* The singleplayer server's task (60 a second) */
 void SE_LanTick(void) {
 	uint32_t now;
 	int i, fd;
@@ -384,7 +433,7 @@ void SE_LanTick(void) {
 	}
 	for (i = 0; i < LAN_MOST; i++)
 		if (lan_players[i].fd >= 0) lan_read(&lan_players[i]);
-	/* places: each joiner's to the others and the host's screen; the host's to everybody; when moved, 10 a second */
+	/* places: each joiner's to the others and the host's screen; the host's to everybody; when moved, 20 a second */
 	for (i = 0; i < LAN_MOST; i++) {
 		struct lan_player *p = &lan_players[i];
 		if (p->fd < 0 || p->named != 2 || !p->pos_new || now - p->pos_told_ms < LAN_POS_MS) continue;
@@ -457,4 +506,16 @@ void SE_LanJoin(void) {
 	lan_say(text);
 	execl("/usr/bin/classicube", "classicube", name, "lan", ip, port, (char *)NULL);
 	lan_say("The client could not be started");
+}
+
+/* Every TCP connection the game makes (the stock client's to a host) sends what it is given at once: TCP_NODELAY. Without
+ * it a client's place, sent 20 times a second, always had a packet not yet acknowledged, so each block or place waited for
+ * that ACK (Nagle), a round trip of the world's LAN, about 230 ms. build.sh links with --wrap=connect. */
+int __real_connect(int fd, const struct sockaddr *to, socklen_t n);
+int __wrap_connect(int fd, const struct sockaddr *to, socklen_t n) {
+	int one = 1, type = 0;
+	socklen_t type_n = sizeof type;
+	if (to && to->sa_family == AF_INET && !getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &type_n) && type == SOCK_STREAM)
+		setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
+	return __real_connect(fd, to, n);
 }

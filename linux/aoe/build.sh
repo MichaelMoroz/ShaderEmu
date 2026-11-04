@@ -2,7 +2,7 @@
 # Age of Empires (dcostap/aoe1-decomp on the machine, the 1997 trial's data). docs/games/aoe.md.
 #   wsl -- bash linux/nommu/build.sh aoe/build.sh
 # Neither the code nor the data is kept in this repository. The code is fetched here; the data only
-# when an image asks for the game (data.py, image.py --aoe).
+# when an image is made (data.py, called by image.py for every image).
 # AOE_TREE=keep leaves the tree as it is (then write its diff to aoe.patch). AOE_CHECK=1 only says
 # what does not compile, one line a kind of error.
 set -euo pipefail
@@ -92,18 +92,25 @@ cp "$OBJ/aoe.bin" "$OUT/usr/bin/aoe.bin"
 riscv32-linux-strip -o "$OUT/usr/bin/aoeprep" "$OBJ/aoeprep"
 cat > "$OUT/usr/bin/aoe" <<'EOF'
 #!/bin/sh
-# Age of Empires (docs/games/aoe.md): Microsoft's trial lies unchanged in the ROM. The files the game reads are unpacked into
-# memory once a session, after the licence read out of it is accepted (cabinst, docs/system/install.md), and its strings and
-# its faces' pixels and its menus' pictures at its window's size are made from them (aoeprep)
+# Age of Empires (docs/games/aoe.md): Microsoft's trial lies decoded in the ROM (linux/aoe/data.py). Its licence is shown
+# and accepted at each start (cabinst, docs/system/install.md), then the files are linked into /tmp/aoe, and its strings and
+# its faces' pixels and its menus' pictures at its window's size are made from them (aoeprep); the folder is deleted when
+# the game ends. An image with the installer itself (from before 4 November 2026) is unpacked as before
 D=/tmp/aoe
-cabinst --title "Age of Empires (trial)" --licence eula.txt --key aoe.eula /usr/share/aoe/MSAoE.exe $D '*.drs' '*.ai' '*.per' \
+if [ -d /usr/share/aoe/installed ]; then
+    cabinst --title "Age of Empires (trial)" --licence eula.txt --key aoe.eula --installed /usr/share/aoe/installed $D || exit $?
+else
+    cabinst --title "Age of Empires (trial)" --licence eula.txt --key aoe.eula /usr/share/aoe/MSAoE.exe $D '*.drs' '*.ai' '*.per' \
     '*.rps' '*.cty' '*.col' '*.scn' '*.cpn' '*.ply' '*.mid' '*.wav' '*.inf' Tileedge.dat Empires.dat language.dll '*.ttf' || exit $?
+fi
 [ -f $D/aoe-fonts.bin ] && [ -f $D/aoe-menus.bin ] || aoeprep $D || exit 2
 # (the music's instruments are not the trial's: DMXOPL's bank, in the ROM beside the installer)
 [ -e $D/genmidi.op2 ] || ln -s /usr/share/aoe/genmidi.op2 $D/genmidi.op2 2>/dev/null
 [ "$1" = --unpack ] && exit 0	# (only that: a test unpacks first, then plays)
 P=/persistence; mkdir -p $P/aoe 2>/dev/null || P=/tmp; mkdir -p $P/aoe
-AOE_DATA=${AOE_DATA:-$D} AOE_HOME=${AOE_HOME:-$P/aoe} exec aoe.bin "$@"
+# (not exec: the shell waits, and deletes what was unpacked however the game ends)
+trap 'rm -rf $D' EXIT; trap 'exit 143' TERM INT HUP
+AOE_DATA=${AOE_DATA:-$D} AOE_HOME=${AOE_HOME:-$P/aoe} aoe.bin "$@"
 EOF
 chmod +x "$OUT/usr/bin/aoe"
 mkdir -p "$OUT/usr/share"

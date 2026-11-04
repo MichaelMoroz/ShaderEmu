@@ -128,6 +128,7 @@ RGB24, WORDS = 0, 1
 RAW, JPEG, PNG = 0, 1, 2      # how a texture or a sheet lies in the file
 KEY = 0xff000000         # a texel that is a hole, in a texture of words
 textures, texture_of = [], {}
+texture_copies = []      # (row, the texture it is a copy of): a stage's frames are rows one after another (stage_textures)
 packed_report = {'jpeg': [0, 0, 0, 0.0, 0], 'png': [0, 0, 0]}   # sheets, texels' bytes, files' bytes (and JPEG's error, worst)
 
 def q3pack(*a):
@@ -365,6 +366,17 @@ def stage_textures(s, most, pass_, invert, over=None, alpha_kept=False):
                 else: px[..., 3] = 255 - px[..., 3]
             texture(px, kind, key)
         out.append(texture_of[key])
+    if len(out) > 1 and out != list(range(out[0], out[0] + len(out))):
+        # The renderer takes a stage's pictures as textures one after another (st->texture + frame): a frame made
+        # before (by another stage, or the same picture twice in an animMap) is a row of its own here, a copy of that
+        # texture's, made once the sheets have placed it. Taken as they were, the frames after it were whatever
+        # textures came next: railexplosion's last frames were rocketexplosion's (opaque, by alpha), launchpad_diamond's
+        # arrows three pictures of other shaders, bulletexplosion's and rocketexplosion's last frames whole squares.
+        first = len(textures)
+        for t in out:
+            textures.append(None)
+            texture_copies.append((len(textures) - 1, t))
+        out = list(range(first, first + len(out)))
     return out
 
 def shader(name, context='3d'):
@@ -766,6 +778,8 @@ def tables(base):
     return out
 
 make_sheets()
+for row, of in texture_copies:
+    textures[row] = list(textures[of])
 HEADER = 16 + 32 * 12
 sizes = tables(0)
 base = HEADER + sum(len(v) + (-len(v) % 16) for v in sizes.values())

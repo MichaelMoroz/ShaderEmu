@@ -3,7 +3,8 @@
 Command & Conquer: Red Alert (1996) runs in the Linux image, from the same source tree as
 Tiberian Dawn ([Vanilla Conquer](https://github.com/TheAssemblyArmada/Vanilla-Conquer)) and
 on the same layer under it (`docs/games/tdawn.md`, `linux/tdawn`): a Nano-X window, the map drawn by
-the GPU, the sound card. Its screen is 640 x 400, shown one to one.
+the GPU, the sound card. Its screen is 640 x 400, shown one to one in its first window and scaled by one factor in
+another ("The window's size").
 
     wsl -- bash linux/nommu/build.sh tdawn/build.sh     (first: it makes the C++ driver)
     wsl -- bash linux/nommu/build.sh ralert/build.sh    (two minutes; the first time it also fetches)
@@ -241,15 +242,20 @@ From the command to the menu and to a mission's first frame is most of the wait:
 
 ## The window's size
 
-Since 4 November 2026 Red Alert is laid out again at the window's size as Tiberian Dawn is (`docs/games/tdawn.md`, "The window's
-size"; `TDAWN_LAYOUT=stretch` the way before). It opens at scale 1 on the 800 x 600 desktop, so a maximised window is a 792 x 544 screen
-(up to twice the first, 1,280 x 800). Its layout was written in 320 units times `RESFACTOR`, the sidebar's left edge a constant
-(`SIDE_X`, 240 units): that edge and the power bar's (`POWER_X`) are now statics placed 80 units from the screen's right edge
-(`SidebarClass::ShaderEmu_Layout`), the strips', Repair's, Sell's and Map's places go by `SIDE_X`, and the tabs (`tab.cpp`), the
-scroll's pull at the pointer (`scroll.cpp`) and the view beside the sidebar (`Activate`) go by the screen's width in those units
-instead of 320. The sidebar's picture keeps its 400 rows; below it is black. `test_all.py ralert-window`: maximised, 792 x 544 (the
-view 624 x 528, 26 cells), a soldier selected by a click, Repair pressed where the sidebar now has it, put back 640 x 400 (the view
-480 x 384) and Repair where it always was; the `ralert-*` sums as before, `ralert-window` under `RVC_RACES` 0 undone; captures of both.
+Since 4 November 2026 Red Alert is laid out again at the window's size as Tiberian Dawn is, and shown scaled by one factor
+(`docs/games/tdawn.md`, "The window's size"; `TDAWN_LAYOUT=stretch` the way before): the screen keeps the first one's 400 rows and is
+as wide as the window's shape wants at that height, from 640 up to 1,280, and the window shows it as large as fits, black round it,
+every pointer place through the same scaling. A maximised window on the 800 x 600 desktop (792 x 544, narrower than 8:5) is the
+640 x 400 screen shown 792 x 495; a wide one (792 x 300) is 1,056 x 400 shown at 0.75. The first form made the screen the window's
+size at scale 1, up to 1,280 x 800: the playfield at 1:1, the sidebar's picture (400 rows) with black below it, and a view taller than
+the mission's map (32 rows of cells), which then could not scroll that way and showed black past the map's edge. Now the view is 16 rows of cells, as the game was made for, and on a very wide window may still
+be wider than a small map: past its edge is black, as in the game. Its layout was written in 320 units times `RESFACTOR`, the
+sidebar's left edge a constant (`SIDE_X`, 240 units): that edge and the power bar's (`POWER_X`) are statics placed 80 units from the
+screen's right edge (`SidebarClass::ShaderEmu_Layout`), the strips', Repair's, Sell's and Map's places go by `SIDE_X`, and the tabs
+(`tab.cpp`), the scroll's pull at the pointer (`scroll.cpp`) and the view beside the sidebar (`Activate`) go by the screen's width in
+those units instead of 320. `test_all.py ralert-window`: made 792 x 300, laid out at 1,056 x 400, a soldier selected by a click and
+Repair pressed at the right edge, both through the scaling; maximised, 640 x 400 (the view 480 x 384) and Repair where it always was;
+put back, 1,056 x 400 again (going wide moves the view to the map's left edge, where `Set_View_Dimensions` confines it); the `ralert-*` sums as before; captures of the wide, the maximised and the default window.
 
 The counts (4 November 2026). Red Alert is now compiled with paths from where the compiler runs (`tdawn-relative`, as Tiberian
 Dawn): a function that is not public is known in the counts by a sum with its source's path, which with whole paths held only in

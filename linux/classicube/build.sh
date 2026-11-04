@@ -72,7 +72,7 @@ rv32-cc -O2 -fno-pie -fno-common -fdata-sections -msmall-data-limit=0 -c zz_pad.
 sed 's/se_pad_/se_pad_s/g' zz_pad.c > zz_pads.c
 rv32-cc -O2 -fno-pie -fno-common -fdata-sections -msmall-data-limit=64 -c zz_pads.c -o zz_pad_small.o
 for o in Builder_w[1-7].o mcw.o mcwx.o zz_pad_large.o zz_pad_small.o; do riscv32-linux-objcopy $ALIGN16 "$o"; done
-rv32-cc -O2 $FPU -w $PGO $COUNTS $(ls *.o | grep -v '^zz_') zz_pad_large.o zz_pad_small.o "$MEDIA" "$MW/src/lib/libnano-X.a" -lm -o classicube
+rv32-cc -O2 $FPU -w $PGO $COUNTS $(ls *.o | grep -v '^zz_') zz_pad_large.o zz_pad_small.o "$MEDIA" "$MW/src/lib/libnano-X.a" -lm -Wl,--wrap=connect -o classicube
 mkdir -p "$OUT/usr/bin" "$OUT/usr/share"
 riscv32-linux-strip -o "$OUT/usr/bin/classicube.bin" classicube
 riscv32-linux-nm -n classicube > "$WORK/src/classicube.nm"

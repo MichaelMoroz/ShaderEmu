@@ -58,9 +58,12 @@ rm g_game_demo.c
 # The frame goes to the GPU (doom_video.c): the port's frame and palette functions under other
 # names, as the fallback, and its window handle made reachable.
 # The window's size is ours to choose unless -1, -2 or -3 says (doom_video.c).
-{ sed 's/^    w = SCREENWIDTH \* multiply;$/    multiply = doom_window_scale(multiply, M_CheckParm("-1") || M_CheckParm("-2") || M_CheckParm("-3")); w = SCREENWIDTH * multiply;/' "$DOOM/i_video.c"
+# SE_MAXIMISED=WxH (the desktop's, for a game started maximised) is the window's size from the start (doom_window_size).
+{ sed 's/^    w = SCREENWIDTH \* multiply;$/    multiply = doom_window_scale(multiply, M_CheckParm("-1") || M_CheckParm("-2") || M_CheckParm("-3")); w = SCREENWIDTH * multiply;/
+       s/^    h = SCREENHEIGHT \* multiply;$/    h = SCREENHEIGHT * multiply; doom_window_size(\&w, \&h, M_CheckParm("-1") || M_CheckParm("-2") || M_CheckParm("-3"));/' "$DOOM/i_video.c"
   echo 'GR_WINDOW_ID doom_window(void) { return win; }'; } > i_video_ours.c
 grep -q 'doom_window_scale' i_video_ours.c || { echo "i_video.c: the window's size was not found"; exit 1; }
+grep -q 'doom_window_size(&w, &h' i_video_ours.c || { echo "i_video.c: the window's height was not found"; exit 1; }
 rv32-cc $OPT -w -c -fsigned-char -DALWAYS=1 -DI_FinishUpdate=I_FinishUpdate_port -DI_SetPalette=I_SetPalette_port -DI_InitGraphics=I_InitGraphics_port -DI_StartTic=I_StartTic_port    -I"$DOOM" -I"$MW/src/include" i_video_ours.c -o i_video.o
 rm i_video_ours.c
 # The 3D view goes to the GPU too (doom_gl.c): the renderer's entry points under other names,

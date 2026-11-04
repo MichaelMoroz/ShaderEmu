@@ -6,10 +6,10 @@ The decompiled game (`github.com/dcostap/aoe1-decomp`, pinned at `6d6d8b1`; the 
 
 ## Making it
 
-The game goes into an image only when asked:
+The game goes into every image (since 4 November 2026; `AOE_IMAGE=0` makes a private test image without it):
 
-    pwsh tools\make_image.ps1 --aoe                                  # or AOE_IMAGE=1
-    python linux/nommu/image.py NAME ROOT KERNEL --aoe
+    pwsh tools\make_image.ps1
+    python linux/nommu/image.py NAME ROOT KERNEL
 
 The licence is the trial's EULA, the one that came with Microsoft's 1997 trial of Age of Empires. The source is `archive.org/details/aoe-trial-1997` (`MSAoE.exe`, 24,786,864 bytes). That item states no licence of its own. The EULA allows copies of the whole trial, with the EULA, not for commercial purposes, and it limits reverse engineering and decompiling as far as the law allows: the decompiled code comes from the upstream project and is fetched, not kept here. So since 2 November 2026 an image holds **the installer itself, byte for byte**, and nothing taken out of it: the machine shows the EULA read out of it, and once it is accepted there unpacks the trial into memory ("The trial in the machine", `docs/system/install.md`).
 
@@ -24,7 +24,7 @@ If any step fails it says which, the image goes on without the game, and `test_a
 
 ## The trial in the machine
 
-The starter runs `cabinst` (`docs/system/install.md`): the EULA in a window, Accept only once it has been scrolled to its end, the registry's `aoe.eula` keeping an acceptance, then 105 of the cabinet's 129 files (34,085,752 bytes: the DRS files, the AI and personality files, maps, campaigns, songs, waves, `Empires.dat`, `language.dll`, the six faces) unpacked on the workers into `/tmp/aoe`, every session. The game reads the trial's own files from there (`AOE_DATA=/tmp/aoe`), with two made by `aoeprep` (`linux/aoe/prep.c`) the first time:
+The starter runs `cabinst` (`docs/system/install.md`): the EULA in a window, Accept only once it has been scrolled to its end, the registry's `aoe.eula` keeping an acceptance, then 105 of the cabinet's 129 files (34,085,752 bytes: the DRS files, the AI and personality files, maps, campaigns, songs, waves, `Empires.dat`, `language.dll`, the six faces) unpacked on the workers into `/tmp/aoe` at every start, and deleted when the game ends (the starter waits for it). The game reads the trial's own files from there (`AOE_DATA=/tmp/aoe`), with two made by `aoeprep` (`linux/aoe/prep.c`) the first time:
 
 - `language.txt`, from `language.dll`'s string table: the same bytes `make_data.py` made (2,276 strings).
 - `aoe-fonts.bin`, the six faces at 8 to 36 pixels, on the workers, by `linux/aoe/ttf.h`: the outlines' coverage without hinting, where `make_data.py` had FreeType's hinting through Pillow. Line heights and ascents are the same in all 174 fonts, 97.3% of the cells' widths and 97.1% of the pixels of cells of one width; side by side the text reads the same. FreeType is not in the machine, and a font library fetched and run was not wanted. So the menus' pictures are not the bytes they were; the state sums do not move.
@@ -416,6 +416,15 @@ and the view's job finished first. The window's page is kept for each size (`aoe
 more GPU memory. `test_all.py aoe-layout` plays to the game, maximises the window (794 x 545: 800 x 600 at the game screen), clicks its
 middle (400, 299 of the picture), puts it back (640 x 480) and clicks again (320, 240): 41 to 43 world updates every 5 s throughout.
 
+The game screen in the window's shape (4 November 2026). Stretched, the layout was up to 9% off its shape in a maximised
+window (800 x 600 over 794 x 545). The 800 layout's game screen now has the window's height for its width (`aoe_win_game_height`
+in `port/window.c`: in whole 2s, from 9:16 of the width to the width; 800 x 548 maximised), so the picture is scaled by one
+factor: in `TRIBE_Screen_Game::handle_size` everything below the top band is placed from the bottom, `dy` rows from 800 x 600's,
+and the view takes what is between (aoe.patch, scr_game.cpp; the 800 pictures are chosen from 440 rows up). The menus stay 4:3,
+their pictures being 800 x 600: going between a remade menu and the game screen changes the height (`aoe_layout_height_wrong`,
+`aoe_panel_changed`), and four pages are kept. The 640 layout stays 4:3. Started maximised from the desktop (`SE_MAXIMISED`), the
+game starts in the 800 layout at once (`aoe_start_width`). `AOE_LAYOUT=43` is 4:3 always.
+
 The menus (4 November 2026). A menu is laid out once, when it is made (`TEasy_Panel` scales its places from 640 x 480 to the size
 then), and given another size it kept its places on the larger page, so a click went to the button below. So a menu that holds nothing
 chosen is made again at the new size, as the game makes it when it goes there from another menu: the main menu, the single player menu
@@ -474,7 +483,7 @@ The notes are made as OpenTTD's are: `linux/userland/shaderemu_fm.h` has the ban
 
 `--wav FILE` writes what those words sound like: `tools/sound_reference.py`'s FM, in the card's integers, with the effects' samples from the ROM at the clock values in the log (not interpolated). It is that model's mix and not a capture of the shader, since `rvc_cpu` mixes nothing and a capture wants the card. A song at the default level peaks at 5,442 of 32,767 alone, and with the effects of those runs at 22,119, none clipped. **Nobody has listened to it yet**: whether the instruments sound right is not checked by any of this, and it has not run on the card or in a world. The options' slider was not moved in a run, and `won.mid` and `lost.mid` were not reached by play: the first level the mixer gets is the only one exercised, and those two songs' notes were only read from the files.
 
-A MIDI file is game data: it is unpacked from the trial's installer in the machine with the rest (`*.mid` of the starter's list), and the installer goes only into an image made with `--aoe`.
+A MIDI file is game data: it is unpacked from the trial's installer in the machine with the rest (`*.mid` of the starter's list), and the installer goes into every image.
 
 ## What ends a round
 

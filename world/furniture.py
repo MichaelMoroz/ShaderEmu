@@ -1,42 +1,18 @@
 # What stands in the room. The sofa, tables, stools, plants, laptop, television, boxes and
-# some of the books are Poly Haven's models (assets.py); the rest is modelled here.
+# the encyclopedia are Poly Haven's models (assets.py); the games, the software and the magazines
+# are scans of the real things (world/gameboxes.py); the rest is modelled here.
 import json
 import math
 import os
 
 import bmesh
 
-from bookdesigns import CELLS, CELL_H, CELL_W, DESIGNS, size as book_size
 from room import HALF_D, HALF_W, frame, on_wall
 import drape
 import lib
 import pc
 from mathutils import Vector
 from pc import office_chair
-
-
-def book(b, at, cell, deep, rot=(0, 0, 0)):
-    """Book `cell` of the atlas standing on `at`, its spine towards -z, at the size it was drawn."""
-    thick, tall = book_size(cell)
-    w, h = DESIGNS[cell]
-    t, d = thick / 2, deep / 2
-    u0, u1, v1 = cell / CELLS, (cell + w / CELL_W) / CELLS, h / CELL_H
-    plain = ((cell + 0.5 * w / CELL_W) / CELLS, 0.02)   # a spot of bare cloth, for the covers
-    round_ = min(0.004, t * 0.4)   # the spine's edges are rounded
-    v = [(-t + round_, 0, -d), (t - round_, 0, -d), (t - round_, tall, -d), (-t + round_, tall, -d),
-         (-t, 0, -d + round_), (t, 0, -d + round_), (t, tall, -d + round_), (-t, tall, -d + round_),
-         (-t, 0, d), (t, 0, d), (t, tall, d), (-t, tall, d)]
-    lip = round_ / thick * (u1 - u0)
-    spine = [(u0 + lip, 0), (u1 - lip, 0), (u1 - lip, v1), (u0 + lip, v1)]
-    flat = [plain] * 4
-    b.mesh(v, [(0, 1, 2, 3), (4, 0, 3, 7), (1, 5, 6, 2), (4, 7, 11, 8), (5, 9, 10, 6)],
-           [spine, [(u0, 0), (u0 + lip, 0), (u0 + lip, v1), (u0, v1)], [(u1 - lip, 0), (u1, 0), (u1, v1), (u1 - lip, v1)], flat, flat],
-           "Books", at, rot, normal='out')
-    inset = 0.004
-    p = [(-t + 0.003, inset, -d + 0.006), (t - 0.003, inset, -d + 0.006), (t - 0.003, tall - inset, -d + 0.006), (-t + 0.003, tall - inset, -d + 0.006),
-         (-t + 0.003, inset, d - inset), (t - 0.003, inset, d - inset), (t - 0.003, tall - inset, d - inset), (-t + 0.003, tall - inset, d - inset)]
-    zero = [(0, 0)] * 4
-    b.mesh(p, [(3, 2, 6, 7), (0, 1, 5, 4), (4, 5, 6, 7)], [zero, zero, zero], "Paper", at, rot, normal='out')
 
 
 def mug(b, at, mat="Ceramic", turn=0):
@@ -93,14 +69,10 @@ def low_table(b):
     with b.at(at):
         top = 0.401
         mug(b, (0.32, top, 0.08), turn=40)
-        y = top
-        for cell in (5, 11, 2):   # a stack, the widest lowest
-            thick, tall = book_size(cell)
-            book(b, (-0.16 - tall / 2 * 0, y + thick / 2, -0.04), cell, 0.19, rot=(0, b.rand(-14, 14), 90))
-            y += thick + 0.001
-        for i, turn in enumerate((8, -5)):
-            b.box((0.02, top + 0.004 + i * 0.008, 0.16), (0.21, 0.007, 0.28), "Paper", rot=(0, turn + 90, 0))
-        b.quad((0.02, top + 0.0165, 0.16), (0.21, 0.276), "Details", rot=(90, 85, 0), decal="magazine_1")
+        # a game and the software it wants, and magazines spread where the papers were
+        pile(b, ["windows95", "half_life"], (-0.17, top, -0.05), (-12, 7))
+        pile(b, ["computer_gaming_world_issue_156", "pc_computing_magazine_v8i11"], (0.03, top, 0.15), (96, 81), drift=0.03)
+        lying(b, "bytevol1808199307pentiumpcs", (0.25, top, -0.12), 64)
 
 
 # The classroom in the middle of the den: three rows of two tables in the main desk's oak, an
@@ -156,7 +128,71 @@ def game_box(b, game, at, rot=(0, 0, 0)):
             s, q = (loop.vert.co.dot(r) / hr + 1) / 2, (loop.vert.co.dot(t) / ht + 1) / 2
             loop[uv].uv = (u0 + s * (u1 - u0), v0 + q * (v1 - v0))
     b.random.random(), b.random.random()   # what a plain box drew for its texture: the books after it stay where they were
-    b._emit(bm, "GameBoxes", at, rot)
+    b._emit(bm, box.get("atlas", "GameBoxes"), at, rot)
+
+
+def thing_size(name):
+    """A box's or a magazine's width, height and thickness (world/gameboxes.json)."""
+    return GAME_BOXES[name]["size"]
+
+
+def lying(b, name, at, turn):
+    """A box or a magazine lying face up, its underside's middle at `at`, turned about up."""
+    w, h, t = thing_size(name)
+    game_box(b, name, (at[0], at[1] + t / 2, at[2]), rot=(90, turn, 0))
+
+
+def pile(b, names, at, turns, drift=0.006):
+    """Things lying one on another from `at` up, the first lowest, each turned its own way and a
+    little off the one under it. Gives the pile's top."""
+    x, y, z = at
+    for i, (name, turn) in enumerate(zip(names, turns)):
+        lying(b, name, (x + drift * math.sin(i * 2.3), y, z + drift * math.cos(i * 1.7)), turn)
+        y += thing_size(name)[2] + 0.0004
+    return y
+
+
+def standing(b, name, x, y, z, lean=0.0):
+    """A box upright on y with its spine (its left side) towards -z, as on a shelf: its foot's
+    edge towards -x at x, its middle at z. `lean` tips it that way about that edge, onto a
+    neighbour. Gives where along x it ends."""
+    w, h, t = thing_size(name)
+    with b.at((x, y, z), (0, 0, lean)):
+        game_box(b, name, (t / 2, h / 2, 0), rot=(0, -90, 0))
+    return x + t * math.cos(math.radians(lean))
+
+
+def shelf_row(b, names, left, right, y, front, rng, most=99):
+    """Boxes standing spine out along a shelf from `left`, taken from `names` while they fit (and
+    no more than `most`),
+    their spines a little in or out from `front`; the last leans on the one before when there is
+    room. Gives where the row ends."""
+    x, stood = left, 0
+    while names and stood < most:
+        stood += 1
+        w, h, t = thing_size(names[0])
+        if x + t > right or w > 0.3:
+            break
+        name = names.pop(0)
+        x = standing(b, name, x, y, front + w / 2 + rng.uniform(0, 0.02)) + 0.001
+        if names and rng.random() < 0.25:   # now and then a little gap
+            x += rng.uniform(0.01, 0.03)
+    if names and stood < most:
+        w, h, t = thing_size(names[0])
+        lean = 14.0
+        if x + h * math.sin(math.radians(lean)) + t + 0.01 < right and w <= 0.3:
+            name = names.pop(0)
+            x = standing(b, name, x + h * math.sin(math.radians(lean)), y, front + w / 2 + 0.01, lean)
+    return x
+
+
+SHELF_GAMES = ["doom2", "ultimate_doom", "heretic", "hexen", "duke3d", "descent", "dark_forces", "jedi_knight", "quake2", "half_life", "unreal",
+               "thief", "system_shock", "underworld", "ultima7", "arena", "daggerfall", "baldurs_gate", "fallout", "fallout2", "diablo",
+               "warcraft2", "civ2", "simcity", "simcity2000", "settlers2", "age_of_empires", "syndicate", "xwing", "wing_commander3",
+               "monkey2", "tentacle", "sam_max", "full_throttle", "the_dig", "grim_fandango", "broken_sword", "flashback", "alone_dark",
+               "lost_vikings", "lemmings2", "worms", "rayman", "earthworm_jim"]
+SOFTWARE = ["msdos6", "windows31", "windows95", "netscape", "flight_sim5", "entertainment_pack"]
+MAGAZINES = [name for name, thing in GAME_BOXES.items() if thing.get("atlas") == "Magazines"]
 
 
 def leaning_box(b, x, y, wall, turn, lean, game):
@@ -168,6 +204,10 @@ def leaning_box(b, x, y, wall, turn, lean, game):
         game_box(b, game, (0, 0, 0))
 
 
+# a place: the boxes and magazines lying on its tower, the lowest first, and their turns (the hubs' towers, 1 and 9, have none)
+ON_TOWERS = {0: (["doom2"], (3,)), 2: (["computer_gaming_world_issue_132", "computer_gaming_world_issue_101"], (-4, 6)),
+             4: (["msdos6", "windows31"], (2, -5)), 6: (["bytevolume22number01"], (-7,)), 7: (["warcraft2"], (5,)),
+             10: (["pc_computing_magazine_v7i9", "simcity2000"], (4, -3)), 11: (["computer_gaming_world_issue_180"], (8,))}
 HUB_HOSTS = {0: 1, 2: 9}   # a row: the place whose tower its hub stands on (the middle row's is on the floor)
 LAN_R = 0.003
 
@@ -431,6 +471,10 @@ def classroom(b):
                 # (a hub stands on some towers, and its leads hang down their right sides)
                 pc.station(b, "rest", lie, desk=desk, seed=index, stuck=random.Random(300 + index).randint(2, 4),
                            bare=("tower top", "tower right") if index in HUB_HOSTS.values() else (), supply=index in HUB_SUPPLY.values())
+                if index in ON_TOWERS:   # what was left on the tower's top (not where a hub stands)
+                    b.obj("Classroom things")
+                    things, turns = ON_TOWERS[index]
+                    pile(b, things, (pc.TOWER_X, pc.TOWER_HIGH, pc.TOWER_Z + pc.FRONT + pc.TOWER_DEEP / 2 + 0.01), turns)
             pc.MODE = "full"
             places.append({"x": at[0], "z": at[2], "turn": turn, "keyboard": list(lie["keyboard"])})
             frames.append(world)
@@ -475,6 +519,10 @@ def shelf(b):
             for s in range(6):
                 b.box((0, 0.05 + s * 0.40, -deep / 2), (wide - 0.06, 0.03, deep - 0.012), "WoodOak", bevel=0.003, segs=1, grain=0)
             b.box((0, 1.25 + 0.2, -deep / 2), (0.025, 0.37, deep - 0.03), "WoodOak", grain=1)   # a divider on the games' shelf
+            import random
+            rng = random.Random(41)   # (its own: the room's other chances stay what they were)
+            games, software, magazines = list(SHELF_GAMES), list(SOFTWARE), list(MAGAZINES)
+            front = -deep + 0.03   # where the spines stand
             for s in range(5):
                 y = 0.05 + s * 0.40 + 0.015
                 if s == 3:   # games, face out, and a radio of its decade
@@ -483,7 +531,7 @@ def shelf(b):
                         leaning_box(b, -0.78 + i * 0.24, y, -0.014, 0, 8, game)
                     b.asset("boombox", (0.5, y, -0.17), rot=(0, 180, 0), size=(0.56, None, None))
                     continue
-                # an encyclopedia at one end, single books for the rest, a few leaning or lying
+                # an encyclopedia at one end of three shelves; games and software standing spine out, and piles of magazines
                 b.obj("Books")
                 left = -wide / 2 + 0.05
                 right = wide / 2 - 0.05
@@ -495,26 +543,19 @@ def shelf(b):
                         left += set_wide + 0.01
                     else:
                         right -= set_wide + 0.01
-                x = left
-                while x < right - 0.07:
-                    roll = b.random.random()
-                    cell = b.random.randrange(CELLS)
-                    thick, tall = book_size(cell)
-                    depth = b.rand(0.17, 0.24)
-                    if roll < 0.08:           # a gap
-                        x += b.rand(0.06, 0.16)
-                    elif roll < 0.16 and x + tall + 0.02 < right:   # a few lying flat, one on another
-                        yy = y
-                        for _ in range(b.random.randint(2, 4)):
-                            cell = b.random.randrange(CELLS)
-                            thick, tall2 = book_size(cell)
-                            book(b, (x + tall2 + b.rand(0, 0.01), yy + thick / 2, -deep + 0.04 + 0.1), cell, 0.19, rot=(0, b.rand(-4, 4), 90))
-                            yy += thick + 0.0005
-                        x += tall + 0.02
-                    else:
-                        lean = b.rand(4, 9) if roll > 0.93 else 0.0
-                        book(b, (x + thick / 2, y, -deep + 0.03 + b.rand(0, 0.035) + depth / 2), cell, depth, rot=(0, 0, -lean))
-                        x += thick + 0.0015 + tall * math.sin(math.radians(lean))
+                if s == 0:   # the bottom shelf: the software, then magazines in two piles
+                    end = shelf_row(b, software, left, right - 0.62, y, front, rng)
+                    for k, at in enumerate((end + 0.17, end + 0.45)):
+                        some = [magazines.pop(0) for _ in range(4 if k == 0 else 3)]
+                        pile(b, some, (at, y, -deep / 2 - 0.01), [rng.uniform(-6, 6) for _ in some])
+                elif s == 4:   # a pile of magazines first, then games
+                    some = [magazines.pop(0) for _ in range(5)]
+                    pile(b, some, (left + 0.15, y, -deep / 2 - 0.01), [90 + rng.uniform(-5, 5) for _ in some])
+                    shelf_row(b, games, left + 0.32, right, y, front, rng)
+                else:   # (the games over three shelves: on this one alone they filled it and left the top bare)
+                    shelf_row(b, games, left, right, y, front, rng, most=18 if s == 1 else 14)
+            b.obj("Books")   # on the shelf's top: a box too large for a shelf
+            lying(b, "id_anthology", (-0.45, high + 0.027, -0.17), 4)
             b.asset("cardboard_box_01", (0.5, high + 0.027, -0.17), rot=(0, 98, 0), size=(0.4, 0.3, 0.5), limit=5000)
 
 

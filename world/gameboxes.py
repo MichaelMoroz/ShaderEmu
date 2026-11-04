@@ -1,11 +1,17 @@
-# The games in their boxes on the shelf and the desk, from scans of real boxes:
+# The games and the software of the decade in their boxes, and its magazines, from scans of the
+# real things, fetched when the world is made and never kept in the repository (their pictures
+# are the publishers'; the sites that scanned them only show them):
 #   python world/gameboxes.py
-# Downloads go to build/gameboxes. Written: Textures/World/GameBoxes.png (every box's six faces)
-# and GameBoxes_p.png (their gloss), and world/gameboxes.json (each box's size and faces).
+# Downloads go to build/gameboxes. Written: Textures/Fetched/GameBoxes.png and GameBoxes2.png (every box's six faces),
+# Textures/Fetched/Magazines.png (every magazine's), their gloss (_p), and world/gameboxes.json
+# (each thing's size, atlas and faces), which world/furniture.py, computer.py and annex.py place.
+import concurrent.futures
 import json
 import os
+import re
 import struct
 import subprocess
+import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 
@@ -14,7 +20,7 @@ from PIL import Image
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CACHE = os.path.join(HERE, "..", "build", "gameboxes")
-OUT = os.path.join(HERE, "..", "unity", "ShaderEmu", "Textures", "World")
+OUT = os.path.join(HERE, "..", "unity", "ShaderEmu", "Textures", "Fetched")   # out of git: .gitignore
 FACES = ("front", "back", "left", "right", "top", "bottom")
 ATLAS = 4096
 GUTTER = 8   # pixels between faces, filled with each face's own edge
@@ -38,17 +44,54 @@ BOXES = {
         "right": ((35, 3062), (1655, 3062), (1655, 2615), (35, 2615)),
         "top": ((3042, 2603), (3042, 2155), (1718, 2155), (1718, 2603)),
         "bottom": ((1718, 2618), (1718, 3060), (3044, 3060), (3044, 2618))}),
+    # the software of the decade, bigboxdb.com's variants of it
+    "msdos6": dict(bbdb="ms-dos-6-upgrade", variant=625, gloss=0.8),
+    "windows31": dict(bbdb="windows-3-1", variant=628, gloss=0.8),
+    "windows95": dict(bbdb="windows-95-upgrade", variant=629, gloss=0.85),
+    "netscape": dict(bbdb="netscape-navigator", variant=626, gloss=0.8),
+    "flight_sim5": dict(bbdb="microsoft-flight-simulator-5-0", variant=434, gloss=0.8),
+    "entertainment_pack": dict(bbdb="microsoft-entertainment-pack-the-best-of", variant=564, gloss=0.8),
 }
+# More games of the decade from bigboxcollection.com, by its name for each: a size is read from the
+# box's page there, and a box without gloss maps of its own takes the site's default.
+for _name, _bbc in (("doom2", "Doom2"), ("ultimate_doom", "DoomUltimate"), ("duke3d", "DukeNukem3D"), ("heretic", "Heretic"), ("hexen", "Hexen"),
+                    ("quake2", "Quake2"), ("half_life", "HalfLife"), ("descent", "Descent1"), ("dark_forces", "DarkForces"),
+                    ("system_shock", "SystemShock"), ("fallout", "Fallout"), ("fallout2", "Fallout2"), ("baldurs_gate", "BaldursGate"),
+                    ("diablo", "DiabloUS"), ("warcraft2", "WarCraft2"), ("civ2", "Civilization2"), ("simcity", "SimCityClassic"),
+                    ("simcity2000", "SimCity2000DE"), ("monkey2", "MonkeyIsland2"), ("tentacle", "DayOfTheTentacle"), ("sam_max", "SamNMax"),
+                    ("full_throttle", "Vollgas"), ("grim_fandango", "GrimFandango"), ("the_dig", "TheDigDE"), ("syndicate", "Syndicate"),
+                    ("underworld", "UltimaUnderworldEU"), ("ultima7", "Ultima7"), ("wing_commander3", "WingCommanderIII"), ("xwing", "SWXWing"),
+                    ("lost_vikings", "LostVikings"), ("lemmings2", "Lemmings2"), ("worms", "WormsEU"), ("rayman", "Rayman"),
+                    ("earthworm_jim", "EarthwormJim"), ("arena", "TESArena"), ("daggerfall", "DaggerfallDE"), ("settlers2", "Settlers2"),
+                    ("age_of_empires", "AgeOfEmpires"), ("unreal", "UnrealUK"), ("id_anthology", "idAnthology"), ("broken_sword", "BrokenSword"),
+                    ("flashback", "Flashback"), ("alone_dark", "AitD1"), ("jedi_knight", "JediKnight"), ("thief", "DarkProject")):
+    BOXES[_name] = dict(bbc=_bbc)
+
+# Magazines of the decade, as archive.org has their scans (its collections computergamingworld,
+# byte-magazine, pc-computing-magazine, linuxjournalmagazine): the front is the cover, the back the
+# last page, the spine the cover's own edge colour, the pages' edges drawn, 0.05 mm a leaf.
+MAGAZINES = ["Computer_Gaming_World_Issue_101", "Computer_Gaming_World_Issue_116", "Computer_Gaming_World_Issue_124",
+             "Computer_Gaming_World_Issue_132", "Computer_Gaming_World_Issue_140", "Computer_Gaming_World_Issue_148",
+             "Computer_Gaming_World_Issue_156", "Computer_Gaming_World_Issue_164", "Computer_Gaming_World_Issue_180",
+             "BYTEVolume20Number12", "BYTE-1993-03", "ByteVol21No11", "BYTEVol1808199307PentiumPCs", "BYTEVolume22NUmber01", "ByteV19N9",
+             "pc-computing-magazine-v7i9", "pc-computing-magazine-v8i11", "pc-computing-magazine-v7i3",
+             "pc-computing-magazine-v10i6", "PC_Computing_1998_05", "LinuxJournalIssue58"]
+MAGAZINE_WIDE = 1600   # the scans are fetched this wide
 
 
-def get(url, name, data=None):
+def get(url, name, data=None, missing_ok=False):
     path = os.path.join(CACHE, name)
-    if os.path.exists(path) and os.path.getsize(path) > 0:
+    if os.path.exists(path) and (os.path.getsize(path) > 0 or missing_ok):   # (what may be missing may be an empty answer too)
         return path
     os.makedirs(os.path.dirname(path), exist_ok=True)
     request = urllib.request.Request(url, data=data, headers={"User-Agent": "Mozilla/5.0 ShaderEmu-world-build"})
-    with urllib.request.urlopen(request, timeout=120) as response, open(path + ".part", "wb") as out:
-        out.write(response.read())
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response, open(path + ".part", "wb") as out:
+            out.write(response.read())
+    except urllib.error.HTTPError as e:
+        if e.code == 404 and missing_ok:
+            return None
+        raise
     os.replace(path + ".part", path)
     return path
 
@@ -59,13 +102,68 @@ def quad(img, corners, size):
     return img.transform(size, Image.QUAD, (*a, *b, *c, *d), Image.BICUBIC)
 
 
+def bbc_size(name):
+    """A box's size in millimetres, as its page at bigboxcollection.com says it."""
+    page = open(get("https://bigboxcollection.com/generateBoxView.php?box=" + name, name + "/page.html"), encoding="utf-8", errors="replace").read()
+    found = re.search(r"(\d+(?:\.\d+)?) &times; (\d+(?:\.\d+)?) &times; (\d+(?:\.\d+)?) mm", page)
+    return tuple(float(v) for v in found.groups())
+
+
 def from_bbc(box):
     faces, gloss = {}, {}
     for face in FACES:
-        faces[face] = Image.open(get(BBC + "textures/%s/%s.webp" % (face, box["bbc"]), "%s/%s.webp" % (box["bbc"], face))).convert("RGB")
-        g = box["gloss"] if box["gloss"].startswith("_") else "%s/%s" % (face, box["gloss"])
-        gloss[face] = Image.open(get(BBC + "specularmaps/%s.webp" % g, "%s/gloss_%s.webp" % (box["bbc"], face))).convert("L")
-    return faces, gloss
+        path = get(BBC + "textures/%s/%s.webp" % (face, box["bbc"]), "%s/%s.webp" % (box["bbc"], face), missing_ok=face in ("top", "bottom"))
+        if path is None:   # a box scanned without its top or bottom: plain card the colour of the front's edge there
+            front = np.asarray(faces["front"])
+            edge = front[: max(2, front.shape[0] // 80)] if face == "top" else front[-max(2, front.shape[0] // 80):]
+            faces[face] = Image.new("RGB", (256, 64), tuple(int(v) for v in np.median(edge.reshape(-1, 3), 0)))
+        else:
+            faces[face] = Image.open(path).convert("RGB")
+        g = box.get("gloss") or box["bbc"]
+        g = g if g.startswith("_") else "%s/%s" % (face, g)
+        path = get(BBC + "specularmaps/%s.webp" % g, "%s/gloss_%s.webp" % (box["bbc"], face), missing_ok=True)
+        if path is None or os.path.getsize(path) == 0:   # no gloss maps of its own (or an empty answer)
+            path = get(BBC + "specularmaps/_default/14.webp", "_default/gloss_14.webp")
+        gloss[face] = Image.open(path).convert("L")
+    return faces, gloss, box.get("mm") or bbc_size(box["bbc"])
+
+
+def from_archive(ident):
+    """A magazine: its cover and its last page as archive.org's reader has them, its spine and its pages' edges drawn."""
+    meta = json.load(open(get("https://archive.org/metadata/%s/metadata" % ident, "mag/%s/meta.json" % ident)))["result"]
+    pages = int(meta.get("imagecount", 100))
+    page = lambda n: Image.open(get("https://archive.org/download/%s/page/n%d_w%d.jpg" % (ident, n, MAGAZINE_WIDE),
+                                    "mag/%s/n%d.jpg" % (ident, n))).convert("RGB")
+    w, h = 213.0, 276.0   # a magazine's trim; a scan with more round it is cut to that shape about its middle
+
+    def trim(img):
+        x, y = img.size
+        if y / x > h / w:
+            cut = int((y - x * h / w) / 2)
+            return img.crop((0, cut, x, y - cut))
+        cut = int((x - y * w / h) / 2)
+        return img.crop((cut, 0, x - cut, y))
+    front = trim(page(0))
+    look = lambda img: np.asarray(img.resize((32, 40), Image.BILINEAR), np.float32)
+    for n in range(pages - 1, pages - 4, -1):   # the back: the last page that is not the cover again (some scans end with it)
+        back = trim(page(n))
+        if np.abs(look(back) - look(front)).mean() > 20:
+            break
+    d = max(1.5, round(pages / 2 * 0.05, 1))
+    edge = np.asarray(front)[:, : max(2, front.size[0] // 60)].reshape(-1, 3)
+    spine = np.median(edge, 0) * 0.92
+    rng = np.random.default_rng(len(ident))
+
+    def paper(across):
+        """The pages' edges: off-white, a faint line a leaf along the face."""
+        n = max(4, pages // 2)
+        shade = np.repeat(0.94 + 0.05 * rng.random(n), int(np.ceil(256 / n)))[:256]
+        img = np.outer(shade, np.ones(256)) if across else np.outer(np.ones(256), shade)
+        return Image.fromarray((img[..., None] * np.array([232, 228, 216])).clip(0, 255).astype(np.uint8))
+    side = Image.fromarray((spine * (0.97 + 0.03 * rng.random((256, 64, 1)))).clip(0, 255).astype(np.uint8))
+    faces = {"front": front, "back": back, "left": side, "right": paper(False), "top": paper(True), "bottom": paper(True)}
+    gloss = {f: Image.new("L", (8, 8), 230 if f in ("front", "back", "left") else 40) for f in FACES}
+    return faces, gloss, (w, h, d)
 
 
 def from_bbdb(box):
@@ -159,27 +257,18 @@ def bleed(atlas, x, y, w, h):
     a[y + h:y + h + g, max(x - g, 0):x + w + g] = a[y + h - 1:y + h, max(x - g, 0):x + w + g]
 
 
-def main():
-    sources, sizes = {}, {}
-    for name, box in BOXES.items():
-        if "bbc" in box:
-            faces, gloss = from_bbc(box)
-            sources[name] = ({f: (faces[f], None) for f in FACES}, gloss)
-            sizes[name] = box["mm"]
-        else:
-            faces, sizes[name] = (from_bbdb if "bbdb" in box else from_museum)(box)
-            sources[name] = (faces, box["gloss"])
-    scale = 6.0
+def atlas(name, sources, sizes, out):
+    """Every thing's six faces in one picture, Textures/Fetched/NAME.png, and its gloss."""
+    scale = 8.0
     while layout(sizes, scale) is None:
         scale -= 0.05
     rects = layout(sizes, scale)
     colour = np.full((ATLAS, ATLAS, 3), 128, np.uint8)
     shine = np.zeros((ATLAS, ATLAS), np.uint8)
-    out = {}
-    for name, (faces, gloss) in sources.items():
-        out[name] = {"size": [v / 1000 for v in sizes[name]], "faces": {}}
+    for thing, (faces, gloss) in sources.items():
+        out[thing] = {"atlas": name, "size": [v / 1000 for v in sizes[thing]], "faces": {}}
         for face in FACES:
-            x, y, w, h = rects[name, face]
+            x, y, w, h = rects[thing, face]
             img, corners = faces[face]
             pic = img.resize((w, h), Image.LANCZOS) if corners is None else quad(img, corners, (w, h))
             colour[y:y + h, x:x + w] = np.asarray(pic)
@@ -188,14 +277,42 @@ def main():
             bleed(colour, x, y, w, h)
             bleed(shine, x, y, w, h)
             # (v up from the atlas's bottom, as atlas.json's; half a texel in from the edges)
-            out[name]["faces"][face] = [(x + 0.5) / ATLAS, 1 - (y + h - 0.5) / ATLAS, (x + w - 0.5) / ATLAS, 1 - (y + 0.5) / ATLAS]
-    Image.fromarray(colour).save(os.path.join(OUT, "GameBoxes.png"))
+            out[thing]["faces"][face] = [(x + 0.5) / ATLAS, 1 - (y + h - 0.5) / ATLAS, (x + w - 0.5) / ATLAS, 1 - (y + 0.5) / ATLAS]
+    os.makedirs(OUT, exist_ok=True)
+    Image.fromarray(colour).save(os.path.join(OUT, name + ".png"))
     # gloss: a laminated print where the map is white, a matt card where it is black
     smooth = 0.30 + 0.35 * (shine.astype(np.float32) / 255)
     packed = np.dstack([np.ones_like(smooth), 1 - smooth, np.ones_like(smooth)])   # occlusion, roughness, metal (as textures.save)
-    Image.fromarray((packed * 255 + 0.5).astype(np.uint8)).resize((ATLAS // 4, ATLAS // 4), Image.BILINEAR).save(os.path.join(OUT, "GameBoxes_p.png"))
+    Image.fromarray((packed * 255 + 0.5).astype(np.uint8)).resize((ATLAS // 4, ATLAS // 4), Image.BILINEAR).save(os.path.join(OUT, name + "_p.png"))
+    print("%s: %d things, %.2f pixels a millimetre" % (name, len(sources), scale))
+
+
+def fetch_box(name):
+    box = BOXES[name]
+    if "bbc" in box:
+        faces, gloss, mm = from_bbc(box)
+        return name, ({f: (faces[f], None) for f in FACES}, gloss), mm
+    faces, mm = (from_bbdb if "bbdb" in box else from_museum)(box)
+    return name, (faces, box["gloss"]), mm
+
+
+def fetch_magazine(ident):
+    faces, gloss, mm = from_archive(ident)
+    return ident.lower().replace("-", "_"), ({f: (faces[f], None) for f in FACES}, gloss), mm
+
+
+def main():
+    out = {}
+    for name in ("basis_transcoder.js", "basis_transcoder.wasm"):   # (once, before the threads: they share it)
+        get("https://unpkg.com/three@0.160.0/examples/jsm/libs/basis/" + name, "basis/" + name)
+    with concurrent.futures.ThreadPoolExecutor(6) as pool:   # (a few at a time: the sites are small)
+        boxes = list(pool.map(fetch_box, BOXES))
+        magazines = list(pool.map(fetch_magazine, MAGAZINES))
+    half = (len(boxes) + 1) // 2   # the boxes in two pictures: in one they were 1.3 pixels a millimetre
+    for name, things in (("GameBoxes", boxes[:half]), ("GameBoxes2", boxes[half:]), ("Magazines", magazines)):
+        atlas(name, {n: src for n, src, _ in things}, {n: mm for n, _, mm in things}, out)
     json.dump(out, open(os.path.join(HERE, "gameboxes.json"), "w"), indent=1)
-    print("game boxes: %.2f pixels a millimetre, %s" % (scale, ", ".join("%s %.0f x %.0f x %.0f mm" % ((n,) + tuple(s)) for n, s in sizes.items())))
+    print(", ".join("%s %.0f x %.0f x %.0f mm" % ((n,) + tuple(v * 1000 for v in t["size"])) for n, t in out.items()))
 
 
 if __name__ == "__main__":

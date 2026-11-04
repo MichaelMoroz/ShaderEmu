@@ -2141,7 +2141,7 @@ index 44e1c18..e1ad2c7 100644
      enum
      {
 diff --git a/tiberiandawn/conquer.cpp b/tiberiandawn/conquer.cpp
-index a8aebd8..f437c55 100644
+index a8aebd8..805a7b2 100644
 --- a/tiberiandawn/conquer.cpp
 +++ b/tiberiandawn/conquer.cpp
 @@ -98,6 +98,672 @@ extern void Send_Statistics_Packet(void);
@@ -2911,7 +2911,7 @@ index a8aebd8..f437c55 100644
          }
  
          Frame_Limiter(FL_NONE);
-@@ -1542,6 +2247,42 @@ static void Sync_Delay(void)
+@@ -1542,6 +2247,68 @@ static void Sync_Delay(void)
  extern void Check_For_Focus_Loss(void);
  void Reallocate_Big_Shape_Buffer(void);
  
@@ -2923,7 +2923,9 @@ index a8aebd8..f437c55 100644
 +*/
 +extern bool ShaderEmu_Pages(int w, int h);
 +extern "C" int host_relayout_wanted(int* width, int* height);
-+static void ShaderEmu_Relayout(int w, int h)
++extern "C" int host_relayout_now(int* width, int* height);
++extern "C" void host_first_size(int* width, int* height);
++static void ShaderEmu_Relayout(int w, int h, bool mission = true)
 +{
 +    int old_w = SeenBuff.Get_Width(), old_h = SeenBuff.Get_Height();
 +
@@ -2944,17 +2946,41 @@ index a8aebd8..f437c55 100644
 +    WindowList[0][WINDOWWIDTH] = SeenBuff.Get_Width();
 +    WindowList[0][WINDOWHEIGHT] = SeenBuff.Get_Height();
 +    Map.ShaderEmu_Layout();
-+    Map.Init_IO();
++    if (mission) {
++        Map.Init_IO();
++    }
 +    Map.Flag_To_Redraw(true);
 +    Show_Mouse();
 +    fprintf(stderr, "tdawn: the screen laid out at %dx%d (the view %dx%d)\n", w, h, WindowList[WINDOW_TACTICAL][WINDOWWIDTH],
 +            WindowList[WINDOW_TACTICAL][WINDOWHEIGHT]);
 +}
 +
++/*
++** ShaderEmu: a mission is laid out at the window's size from its first frame (the end of Start_Scenario), and what is drawn
++** at the first screen's size whatever the window (the main menu, the score, a movie: Select_Game, Do_Win, Do_Lose, Play_Movie)
++** goes back to that size first (docs/games/tdawn.md, "The window's size"). Neither does anything at the default size.
++*/
++void ShaderEmu_Mission_Size(void)
++{
++    int w, h;
++    if (host_relayout_now(&w, &h)) {
++        ShaderEmu_Relayout(w, h);
++    }
++}
++
++void ShaderEmu_First_Size(void)
++{
++    int w, h;
++    host_first_size(&w, &h);
++    if (SeenBuff.Get_Width() != w || SeenBuff.Get_Height() != h) {
++        ShaderEmu_Relayout(w, h, false);
++    }
++}
++
  bool Main_Loop()
  {
      KeyNumType input; // Player input.
-@@ -1549,6 +2290,13 @@ bool Main_Loop()
+@@ -1549,6 +2316,13 @@ bool Main_Loop()
      int y;
      int framedelay;
  
@@ -2968,7 +2994,7 @@ index a8aebd8..f437c55 100644
      //	InMainLoop = true;
  
      /*
-@@ -1611,20 +2359,47 @@ bool Main_Loop()
+@@ -1611,20 +2385,47 @@ bool Main_Loop()
      } else {
          FrameTimer.Set(Options.GameSpeed);
      }
@@ -3017,7 +3043,7 @@ index a8aebd8..f437c55 100644
              //			HidPage.Unlock();
          }
      }
-@@ -1650,7 +2425,17 @@ bool Main_Loop()
+@@ -1650,7 +2451,17 @@ bool Main_Loop()
      /*
      **	AI logic operations are performed here.
      */
@@ -3036,7 +3062,7 @@ index a8aebd8..f437c55 100644
  
      //	Heap_Dump_Check( "After Logic.AI" );
  
-@@ -1659,8 +2444,24 @@ bool Main_Loop()
+@@ -1659,8 +2470,24 @@ bool Main_Loop()
      **	a message has expired & been removed, and the entire map must be updated.
      */
      if (Messages.Manage()) {
@@ -3063,7 +3089,7 @@ index a8aebd8..f437c55 100644
      }
  
      //
-@@ -1710,6 +2511,9 @@ bool Main_Loop()
+@@ -1710,6 +2537,9 @@ bool Main_Loop()
          PlayerRestarts = false;
          Map.Help_Text(TXT_NONE);
          Set_Video_Cursor_Clip(false);
@@ -3073,7 +3099,7 @@ index a8aebd8..f437c55 100644
          Do_Win();
          Set_Video_Cursor_Clip(true);
      }
-@@ -1726,6 +2530,9 @@ bool Main_Loop()
+@@ -1726,6 +2556,9 @@ bool Main_Loop()
          PlayerRestarts = false;
          Map.Help_Text(TXT_NONE);
          Set_Video_Cursor_Clip(false);
@@ -3083,7 +3109,7 @@ index a8aebd8..f437c55 100644
          Do_Lose();
          Set_Video_Cursor_Clip(true);
      }
-@@ -1736,6 +2543,9 @@ bool Main_Loop()
+@@ -1736,6 +2569,9 @@ bool Main_Loop()
          PlayerRestarts = false;
          Map.Help_Text(TXT_NONE);
          Set_Video_Cursor_Clip(false);
@@ -3093,7 +3119,18 @@ index a8aebd8..f437c55 100644
          Do_Restart();
          Set_Video_Cursor_Clip(true);
      }
-@@ -2242,6 +3052,10 @@ void Play_Movie(char const* name, ThemeType theme, bool clrscrn)
+@@ -2148,6 +2984,10 @@ void Play_Movie(char const* name, ThemeType theme, bool clrscrn)
+     if (GameToPlay != GAME_NORMAL) {
+         return;
+     }
++#ifdef SHADEREMU
++    void ShaderEmu_First_Size(void);
++    ShaderEmu_First_Size();
++#endif
+ 
+     if (InterpolationTable)
+         memset(&InterpolationTable->PaletteInterpolationTable[0][0], 0, 65536);
+@@ -2242,6 +3082,10 @@ void Play_Movie(char const* name, ThemeType theme, bool clrscrn)
                  InMovie = true;
                  VQA_Play(vqa, VQAMODE_RUN);
                  VQA_Close(vqa);
@@ -3104,7 +3141,7 @@ index a8aebd8..f437c55 100644
                  // Resume_Audio_Thread();
                  InMovie = false;
                  Free_Interpolated_Palettes();
-@@ -2642,6 +3456,70 @@ void CC_Draw_Line(int x, int y, int x1, int y1, unsigned char color, int frame,
+@@ -2642,6 +3486,70 @@ void CC_Draw_Line(int x, int y, int x1, int y1, unsigned char color, int frame,
   *   02/21/1995 JLB : Created.                                                                 *
   *=============================================================================================*/
  //#pragma off(unreferenced)
@@ -3175,7 +3212,7 @@ index a8aebd8..f437c55 100644
  void CC_Draw_Shape(void const* shapefile,
                     int shapenum,
                     int x,
-@@ -2656,6 +3534,19 @@ void CC_Draw_Shape(void const* shapefile,
+@@ -2656,6 +3564,19 @@ void CC_Draw_Shape(void const* shapefile,
      char* shape_pointer;
      uintptr_t shape_size;
  
@@ -3195,7 +3232,7 @@ index a8aebd8..f437c55 100644
      if (shapefile && shapenum != -1) {
  
          /*
-@@ -3919,7 +4810,7 @@ void const* Hires_Retrieve(const char* name)
+@@ -3919,7 +4840,7 @@ void const* Hires_Retrieve(const char* name)
  {
      char filename[30];
  
@@ -3204,7 +3241,7 @@ index a8aebd8..f437c55 100644
          sprintf(filename, "H%s", name);
      } else {
          strcpy(filename, name);
-@@ -3928,7 +4819,7 @@ void const* Hires_Retrieve(const char* name)
+@@ -3928,7 +4849,7 @@ void const* Hires_Retrieve(const char* name)
  }
  int Get_Resolution_Factor(void)
  {
@@ -3213,7 +3250,7 @@ index a8aebd8..f437c55 100644
  }
  
  /**************************************************************************************************
-@@ -3976,6 +4867,21 @@ void Shake_The_Screen(int shakes, HousesType house)
+@@ -3976,6 +4897,21 @@ void Shake_The_Screen(int shakes, HousesType house)
      }
  #else
      shakes += shakes;
@@ -4552,7 +4589,7 @@ index 9b527ac..4f4b797 100644
  
          Set_Occupy_Bit(coord);
 diff --git a/tiberiandawn/init.cpp b/tiberiandawn/init.cpp
-index 8ae9955..993832a 100644
+index 8ae9955..b355e08 100644
 --- a/tiberiandawn/init.cpp
 +++ b/tiberiandawn/init.cpp
 @@ -42,6 +42,9 @@
@@ -4586,7 +4623,18 @@ index 8ae9955..993832a 100644
      /*
      **	Load multiplayer scenario descriptions
      */
-@@ -727,6 +735,9 @@ bool Select_Game(bool fade)
+@@ -700,6 +708,10 @@ extern int Com_Show_Fake_Scenario_Dialog(void);
+ 
+ bool Select_Game(bool fade)
+ {
++#ifdef SHADEREMU
++    void ShaderEmu_First_Size(void);
++    ShaderEmu_First_Size();
++#endif
+     enum
+     {
+         SEL_TIMEOUT = -1, // main menu timeout--go into attract mode
+@@ -727,6 +739,9 @@ bool Select_Game(bool fade)
          display = false;
          Show_Mouse();
      }
@@ -4596,7 +4644,7 @@ index 8ae9955..993832a 100644
  
      /*
      **	[Re]set any globals that need it, in preparation for a new scenario
-@@ -1016,6 +1027,13 @@ bool Select_Game(bool fade)
+@@ -1016,6 +1031,13 @@ bool Select_Game(bool fade)
  
                      Scen.Scenario = 1;
                      BuildLevel = 1;
@@ -4610,7 +4658,7 @@ index 8ae9955..993832a 100644
  
                      ScenPlayer = SCEN_PLAYER_GDI;
                      ScenDir = SCEN_DIR_EAST;
-@@ -1404,7 +1422,7 @@ bool Select_Game(bool fade)
+@@ -1404,7 +1426,7 @@ bool Select_Game(bool fade)
      **	properly set.
      */
      CCDebugString("C&C95 - Initialising message system.\n");
@@ -4619,7 +4667,7 @@ index 8ae9955..993832a 100644
      Messages.Init(Map.TacPixelX, Map.TacPixelY, 6, MAX_MESSAGE_LENGTH, 6 * factor + 1);
  
      /*
-@@ -2533,6 +2551,12 @@ void Init_Random(void)
+@@ -2533,6 +2555,12 @@ void Init_Random(void)
          /*
          ** Set the optional user-specified seed
          */
@@ -5587,10 +5635,21 @@ index 425890b..1e23f6b 100644
      }
  #endif
 diff --git a/tiberiandawn/scenario.cpp b/tiberiandawn/scenario.cpp
-index 47f8b42..e2548ba 100644
+index 47f8b42..2e1f2f3 100644
 --- a/tiberiandawn/scenario.cpp
 +++ b/tiberiandawn/scenario.cpp
-@@ -384,6 +384,7 @@ void Clear_Scenario(void)
+@@ -182,6 +182,10 @@ bool Start_Scenario(char* root, bool briefing)
+     /*
+     ** Set the options values, since the palette has been initialized by Read_Scenario
+     */
++#ifdef SHADEREMU
++    void ShaderEmu_Mission_Size(void);
++    ShaderEmu_Mission_Size(); // (docs/games/tdawn.md, "The window's size")
++#endif
+     CCDebugString("C&C95 - About to call Options.Set.\n");
+     Options.Set();
+     CCDebugString("C&C95 - About to return from Start_Scenario.\n");
+@@ -384,6 +388,7 @@ void Clear_Scenario(void)
      Base.Init();
  
      CurrentObject.Clear_All();
@@ -5598,10 +5657,14 @@ index 47f8b42..e2548ba 100644
  }
  
  /***********************************************************************************************
-@@ -403,6 +404,16 @@ void Clear_Scenario(void)
+@@ -403,6 +408,20 @@ void Clear_Scenario(void)
   *=============================================================================================*/
  void Do_Win(void)
  {
++#ifdef SHADEREMU
++    void ShaderEmu_First_Size(void);
++    ShaderEmu_First_Size();
++#endif
 +#ifdef SHADEREMU
 +    void ShaderEmu_Stage(const char* what);
 +    extern bool ShaderEmu_Auto_Press;
@@ -5615,7 +5678,7 @@ index 47f8b42..e2548ba 100644
      Map.Set_Default_Mouse(MOUSE_NORMAL);
      Hide_Mouse();
  
-@@ -435,6 +446,9 @@ void Do_Win(void)
+@@ -435,6 +454,9 @@ void Do_Win(void)
          Call_Back();
          Frame_Limiter();
      }
@@ -5625,6 +5688,17 @@ index 47f8b42..e2548ba 100644
  
      /*
      ** Stop here if this is a multiplayer game.
+@@ -623,6 +645,10 @@ void Do_Win(void)
+  *=============================================================================================*/
+ void Do_Lose(void)
+ {
++#ifdef SHADEREMU
++    void ShaderEmu_First_Size(void);
++    ShaderEmu_First_Size();
++#endif
+     Map.Set_Default_Mouse(MOUSE_NORMAL);
+     Hide_Mouse();
+ 
 diff --git a/tiberiandawn/scenarioini.cpp b/tiberiandawn/scenarioini.cpp
 index 8e906f4..338008f 100644
 --- a/tiberiandawn/scenarioini.cpp
@@ -5978,10 +6052,21 @@ index b38943f..4b3969b 100644
      int const h = 70 * factor;
      int const x = ((320 * factor) / 2) - w / 2;
 diff --git a/tiberiandawn/tab.cpp b/tiberiandawn/tab.cpp
-index d8d8a53..bf9f20a 100644
+index d8d8a53..3ed9251 100644
 --- a/tiberiandawn/tab.cpp
 +++ b/tiberiandawn/tab.cpp
-@@ -254,7 +254,7 @@ void TabClass::Set_Active(int select)
+@@ -127,7 +127,9 @@ void TabClass::Draw_It(bool complete)
+ 
+ void TabClass::Draw_Credits_Tab(void)
+ {
+-    unsigned x = Get_Resolution_Factor() ? 320 : 160;
++    // ShaderEmu: under the credits, which CreditClass::Graphic_Logic centres 120 (240) from the screen's right edge: the
++    // screen may be wider than 320 (640) (docs/games/tdawn.md, "The window's size")
++    unsigned x = SeenBuff.Get_Width() - (Get_Resolution_Factor() ? 320 : 160);
+     CC_Draw_Shape(TabShape, 0, x, 0, WINDOW_MAIN, SHAPE_NORMAL);
+ }
+ 
+@@ -254,7 +256,7 @@ void TabClass::Set_Active(int select)
  
  void TabClass::One_Time(void)
  {

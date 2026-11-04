@@ -45,6 +45,36 @@ static volatile int ui_reaped_status[32];
 static volatile unsigned ui_reaped_in;
 static unsigned ui_reaped_out;
 
+/* The next program ui_launch_started is told of is a game: its windows open maximised, unless the
+ * registry's wm.maximise_games is 0 (GR_WMC_MAXIMISE, wmclients.c). The Start menu's Games, a
+ * desktop shortcut with game=1. */
+static int ui_launch_maximise;
+
+/* The frame round a program's window (wmclients.c: 6 across, 29 down: a maximised window is 794 x 545 on the 800 x 600 desktop) and
+ * the bar under a maximised one (WM_BAR_HEIGHT). */
+#define UI_FRAME_W	6
+#define UI_FRAME_H	29
+#define UI_BAR_H	26
+
+/* Right before the vfork of a program ui_launch_maximise names: SE_MAXIMISED=WxH, the size of its
+ * window once maximised (the client area of a frame over the screen above the bar), so a game opens
+ * its window, and makes its picture, at that size from the first frame; the window manager's
+ * maximise then changes nothing. Any other program is started without it. */
+static void
+ui_launch_env(void)
+{
+	char value[24];
+	GR_SCREEN_INFO si;
+
+	if (!ui_launch_maximise || (reg_changed(), !reg_int("wm.maximise_games", 1))) {
+		unsetenv("SE_MAXIMISED");
+		return;
+	}
+	GrGetScreenInfo(&si);
+	snprintf(value, sizeof value, "%dx%d", si.cols - UI_FRAME_W, si.rows - UI_BAR_H - UI_FRAME_H);
+	setenv("SE_MAXIMISED", value, 1);
+}
+
 static void ui_launch_again(const char *name, const char *command);
 static void ui_launch_begin(const char *name, const struct ui_icon_ref *icon, GR_EVENT_MASK root_events);
 static void ui_launch_started(pid_t pid);
@@ -360,7 +390,8 @@ ui_launch_begin(const char *name, const struct ui_icon_ref *icon, GR_EVENT_MASK 
 	if (!ui_launch_gc) {
 		ui_launch_gc = GrNewGC();
 		GrSetGCUseBackground(ui_launch_gc, GR_FALSE);
-		GrSetGCFont(ui_launch_gc, GrCreateFontEx(GR_FONT_SYSTEM_VAR, 0, 0, NULL));
+		ui_look_read();
+		GrSetGCFont(ui_launch_gc, GrCreateFontEx(ui_smooth ? UI_LOOK_FONT : GR_FONT_SYSTEM_VAR, 0, 0, NULL));
 		ui_launch_busy = ui_launch_cursor();
 		GrGetScreenInfo(&si);
 	}
@@ -392,8 +423,19 @@ ui_launch_begin(const char *name, const struct ui_icon_ref *icon, GR_EVENT_MASK 
 static void
 ui_launch_started(pid_t pid)
 {
-	int error = pid > 0 ? ui_exec_errno : pid < 0 ? errno : 0, k;
+	int error = pid > 0 ? ui_exec_errno : pid < 0 ? errno : 0, k, maximise = ui_launch_maximise;
 
+	ui_launch_maximise = 0;
+	unsetenv("SE_MAXIMISED");
+	if (pid > 0 && !error && maximise && (reg_changed(), reg_int("wm.maximise_games", 1))) {
+		GR_WM_PROPERTIES word;
+
+		word.flags = GR_WM_FLAGS_COMMAND;
+		word.props = GR_WMC_MAXIMISE;
+		word.background = pid;
+		word.title = NULL;
+		GrSetWMProperties(GR_ROOT_WINDOW_ID, &word);
+	}
 	if (ui_launch_pid != -1)
 		return;
 	if (pid > 0 && !error) {
@@ -489,6 +531,7 @@ ui_launch_again(const char *name, const char *command)
 	ui_icon_of_command(command, &icon);
 	ui_launch_will_run(command);
 	ui_launch_begin(name, &icon, ui_launch_root_asked);
+	ui_launch_env();
 	if ((child = real_vfork()) == 0) {
 		signal(SIGCHLD, SIG_DFL);
 		execvp(words[0], words);

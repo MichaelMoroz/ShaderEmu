@@ -1399,7 +1399,7 @@ index abd632c..4f04acc 100644
  int  	GdOpenKeyboard(void);
  void 	GdCloseKeyboard(void);
 diff --git a/src/include/nano-X.h b/src/include/nano-X.h
-index 409290c..16a7c61 100644
+index 409290c..c6c746c 100644
 --- a/src/include/nano-X.h
 +++ b/src/include/nano-X.h
 @@ -161,6 +161,19 @@ typedef struct {
@@ -1449,7 +1449,7 @@ index 409290c..16a7c61 100644
  
  /* default decoration style*/
  #define GR_WM_PROPS_APPWINDOW	0x00000000L /* Leave appearance to WM*/
-@@ -214,6 +247,29 @@ typedef struct {
+@@ -214,6 +247,30 @@ typedef struct {
  #define GR_WM_FLAGS_BACKGROUND	0x0004	/* Background color*/
  #define GR_WM_FLAGS_BORDERSIZE	0x0008	/* Border size*/
  #define GR_WM_FLAGS_BORDERCOLOR	0x0010	/* Border color*/
@@ -1463,6 +1463,7 @@ index 409290c..16a7c61 100644
 +#define GR_WMC_ACTIVATE		6	/* to the front, its desktop shown, with the keyboard */
 +#define GR_WMC_STARTING		7	/* process N is starting (any window): the bar is told */
 +#define GR_WMC_BUTTONS		8	/* this window (and those in it) is told of GR_BUTTON_EXTRA's buttons (1), or not (0) */
++#define GR_WMC_MAXIMISE		9	/* process N and those it starts open their windows maximised (any window): a game the bar started */
 +/* what the window manager tells the bar: a key event of its hot key, with one of these for the
 + * key, subwid the frame, rootx and rooty what it says */
 +#define GR_WM_TELL(what)	(0xFE00 + (what))
@@ -1479,7 +1480,7 @@ index 409290c..16a7c61 100644
  
  /* NOTE: this struct must be hand-packed to a DWORD boundary for nxproto.h*/
  /**
-@@ -251,6 +307,8 @@ typedef struct {
+@@ -251,6 +308,8 @@ typedef struct {
    GR_CURSOR_ID cursor;		/**< cursor id*/
    int processid;		/**< process id of owner*/
    GR_LENGTH bufsize;		/**< mmaped buffer size if GR_WM_PROPS_BUFFER_MMAP*/
@@ -1489,7 +1490,7 @@ index 409290c..16a7c61 100644
  
  /**
 diff --git a/src/include/nanowm.h b/src/include/nanowm.h
-index 5f31f08..1a54457 100644
+index 5f31f08..107679a 100644
 --- a/src/include/nanowm.h
 +++ b/src/include/nanowm.h
 @@ -44,9 +44,9 @@
@@ -1555,7 +1556,7 @@ index 5f31f08..1a54457 100644
  /*
   * Used to record the offset position when performing a move.
   */
-@@ -139,6 +172,26 @@ void wm_client_window_destroy(win *window);
+@@ -139,6 +172,27 @@ void wm_client_window_destroy(win *window);
  void wm_client_window_remap(win *window);
  void wm_client_window_unmap(win *window);
  void wm_redraw_ncarea(win *window);
@@ -1570,6 +1571,7 @@ index 5f31f08..1a54457 100644
 +void wm_drag_pointer(int x, int y);
 +void wm_drag_gone(win *window);
 +void wm_place_save(win *window);
++void wm_maximise_add(int processid);	/* wmclients.c: GR_WMC_MAXIMISE */
 +win *wm_frame_of(GR_WINDOW_ID wid);
 +win *wm_first(void);
 +extern int wm_ontop_count;
@@ -2066,10 +2068,10 @@ index de5d02a..502f52b 100644
  		req->height = height;
  		req->width = width;
 diff --git a/src/nanox/nxpaintnc.c b/src/nanox/nxpaintnc.c
-index 9e40afe..8ddf562 100644
+index 9e40afe..3401c6d 100644
 --- a/src/nanox/nxpaintnc.c
 +++ b/src/nanox/nxpaintnc.c
-@@ -16,14 +16,136 @@
+@@ -16,14 +16,186 @@
  #endif
  #include "nano-X.h"
  #include "nanowm.h"
@@ -2088,7 +2090,47 @@ index 9e40afe..8ddf562 100644
 +extern unsigned nx_look(void) __attribute__((weak));
 +#define LOOK_OK(w)	(((w) >> 16) == 0x4c4b)
 +#define LOOK_SEVEN(w)	(LOOK_OK(w) && ((w) & 0xff) == 1)
-+#define LOOK_SMOOTH(w)	(LOOK_OK(w) && (((w) >> 8) & 0xff) == 1)
++#define LOOK_SMOOTH(w)	(!LOOK_OK(w) || (((w) >> 8) & 0xff) == 1)	/* (nobody has said: smooth) */
++/* The windows' colour Settings chose (linux/apps/ui_look.h, UI_TINT): 0x01RRGGBB, or 0 for the look's own. */
++extern unsigned nx_tint(void) __attribute__((weak));
++#define TINT_OK(t)	(((t) >> 24) == 1)
++
++/* The colour a share k/256 of the way from the tint (k 0) to white (k 256), or to black (k -256), rounded. */
++static GR_COLOR
++tint_mix256(unsigned tint, int k)
++{
++	int c[3] = { tint >> 16 & 255, tint >> 8 & 255, tint & 255 }, i;
++
++	for (i = 0; i < 3; i++)
++		c[i] = k >= 0 ? c[i] + ((255 - c[i]) * k + 128) / 256 : (c[i] * (256 + k) + 128) / 256;
++	return GR_RGB(c[0], c[1], c[2]);
++}
++
++/* The same in sixteenths. */
++static GR_COLOR
++tint_mix(unsigned tint, int k)
++{
++	return tint_mix256(tint, k * 16);
++}
++
++/* A caption in the tint, from one share (sixteenths) to another: across (classic), in bands of 4 pixels
++ * or more, at most a level of a channel apart, or down (Windows 7), a row each. (Bands of 1/16 showed
++ * as steps: 16 across a caption, 2 rows each down it.) */
++static void
++tint_caption(GR_DRAW_ID id, GR_GC_ID gc, int x, int y, int w, unsigned tint, int from, int to, int across)
++{
++	int bands = across ? (w / 4 < 16 ? 16 : w / 4 > 160 ? 160 : w / 4) : CYCAPTION, b, a, z;
++
++	for (b = 0; b < bands; b++) {
++		GrSetGCForeground(gc, tint_mix256(tint, from * 16 + (to - from) * 16 * b / (bands - 1)));
++		if (across) {
++			a = w * b / bands, z = w * (b + 1) / bands;
++			GrFillRect(id, gc, x + a, y, z - a, CYCAPTION);
++		} else
++			GrFillRect(id, gc, x, y + b, w, 1);
++	}
++}
++
 +/* the Windows 7 look's caption buttons, cells of 24 pixels (tools/make_icons.py) */
 +#define LOOK7_SHEET	"/usr/share/look7.ppm"
 +enum { LOOK7_MIN, LOOK7_MAX, LOOK7_RESTORE, LOOK7_CLOSE, LOOK7_OFF };
@@ -2147,26 +2189,36 @@ index 9e40afe..8ddf562 100644
 +paint_seven(GR_DRAW_ID id, GR_GC_ID gc, int w, int h, char *title, GR_BOOL active, GR_WM_PROPS props, unsigned look)
 +{
 +	int x = 0, y = 0, frame_w = w, off = active ? 0 : LOOK7_OFF, bx;
++	unsigned tint = nx_tint ? nx_tint() : 0;
++	/* the active frame's dark edge, light edge, middle and caption: the look's blue, or the tint's */
++	int tinted = active && TINT_OK(tint);
++	GR_COLOR dark = tinted ? tint_mix(tint, -6) : active ? GR_RGB(62, 86, 124) : GR_RGB(132, 146, 168);
++	GR_COLOR light = tinted ? tint_mix(tint, 13) : active ? GR_RGB(208, 224, 244) : GR_RGB(232, 237, 243);
++	GR_COLOR middle = tinted ? tint_mix(tint, 8) : active ? GR_RGB(150, 176, 210) : GR_RGB(200, 208, 220);
 +	GR_SCREEN_INFO si;
 +
 +	if (props & GR_WM_PROPS_APPFRAME) {
-+		GrSetGCForeground(gc, active ? GR_RGB(62, 86, 124) : GR_RGB(132, 146, 168));
++		GrSetGCForeground(gc, dark);
 +		GrRect(id, gc, 0, 0, w, h);
-+		GrSetGCForeground(gc, active ? GR_RGB(208, 224, 244) : GR_RGB(232, 237, 243));
++		GrSetGCForeground(gc, light);
 +		GrRect(id, gc, 1, 1, w - 2, h - 2);
-+		GrSetGCForeground(gc, active ? GR_RGB(150, 176, 210) : GR_RGB(200, 208, 220));
++		GrSetGCForeground(gc, middle);
 +		GrRect(id, gc, 2, 2, w - 4, h - 4);
 +		x = y = 3; w -= 6; h -= 6;
 +	} else if (props & GR_WM_PROPS_BORDER) {
-+		GrSetGCForeground(gc, active ? GR_RGB(62, 86, 124) : GR_RGB(132, 146, 168));
++		GrSetGCForeground(gc, dark);
 +		GrRect(id, gc, 0, 0, w, h);
 +		x = y = 1; w -= 2; h -= 2;
 +	}
 +	if (!(props & GR_WM_PROPS_CAPTION))
 +		return;
-+	GrSetGCForeground(gc, active ? GR_RGB(200, 218, 241) : GR_RGB(230, 235, 242));
-+	GrFillRect(id, gc, x, y, w, CYCAPTION);
-+	GrDrawImageFromFile(id, gc, x, y, w, CYCAPTION, active ? "/usr/share/caption7-on.ppm" : "/usr/share/caption7-off.ppm", 0);
++	if (tinted)
++		tint_caption(id, gc, x, y, w, tint, 13, 9, 0);
++	else {
++		GrSetGCForeground(gc, active ? GR_RGB(200, 218, 241) : GR_RGB(230, 235, 242));
++		GrFillRect(id, gc, x, y, w, CYCAPTION);
++		GrDrawImageFromFile(id, gc, x, y, w, CYCAPTION, active ? "/usr/share/caption7-on.ppm" : "/usr/share/caption7-off.ppm", 0);
++	}
 +	caption_icon(id, gc, x + 4, y + (CYCAPTION - 16) / 2);
 +	if (title) {
 +		GrSetGCForeground(gc, active ? GR_RGB(0, 0, 0) : GR_RGB(112, 122, 138));
@@ -2174,7 +2226,7 @@ index 9e40afe..8ddf562 100644
 +			w - 10 - (nx_caption_icon >= 0 ? 18 : 0) - ((props & GR_WM_PROPS_CLOSEBOX) ? 3 * CXCLOSEBOX + 10 : 0), title, look);
 +	}
 +	if (props & GR_WM_PROPS_APPFRAME) {
-+		GrSetGCForeground(gc, active ? GR_RGB(150, 176, 210) : GR_RGB(200, 208, 220));
++		GrSetGCForeground(gc, middle);
 +		GrLine(id, gc, x, y + CYCAPTION, x + w - 1, y + CYCAPTION);
 +	}
 +	if (!(props & GR_WM_PROPS_CLOSEBOX))
@@ -2206,18 +2258,24 @@ index 9e40afe..8ddf562 100644
  #if NUKLEARUI
  	static GR_FONT_ID fontid = 0;
  	if (!fontid)
-@@ -57,24 +179,33 @@ nxPaintNCArea(GR_DRAW_ID id, int w, int h, char *title, GR_BOOL active, GR_WM_PR
+@@ -57,24 +229,38 @@ nxPaintNCArea(GR_DRAW_ID id, int w, int h, char *title, GR_BOOL active, GR_WM_PR
  	if (!(props & GR_WM_PROPS_CAPTION))
  		goto out;
  
 -	/* fill caption*/
 -	GrSetGCForeground(gc, GrGetSysColor(active?
 -		GR_COLOR_ACTIVECAPTION: GR_COLOR_INACTIVECAPTION));
+-	GrFillRect(id, gc, x, y, w, CYCAPTION);
 +	/* fill caption: a colour, then a strip of colours stretched over it when the driver draws such */
-+	GrSetGCForeground(gc, active? GR_RGB(10, 36, 106): GR_RGB(128, 128, 128));
- 	GrFillRect(id, gc, x, y, w, CYCAPTION);
-+	GrDrawImageFromFile(id, gc, x, y, w, CYCAPTION,
-+		active? "/usr/share/caption-on.ppm": "/usr/share/caption-off.ppm", 0);
++	if (active && nx_tint && TINT_OK(nx_tint()))
++		/* the tint's own: from darker at the left to lighter, as the classic caption's blue */
++		tint_caption(id, gc, x, y, w, nx_tint(), -6, 4, 1);
++	else {
++		GrSetGCForeground(gc, active? GR_RGB(10, 36, 106): GR_RGB(128, 128, 128));
++		GrFillRect(id, gc, x, y, w, CYCAPTION);
++		GrDrawImageFromFile(id, gc, x, y, w, CYCAPTION,
++			active? "/usr/share/caption-on.ppm": "/usr/share/caption-off.ppm", 0);
++	}
 +
 +	/* the program's icon, a cell of the sheet of small ones, and the title after it */
 +	caption_icon(id, gc, x+3, y+(CYCAPTION-16)/2);
@@ -2246,7 +2304,7 @@ index 9e40afe..8ddf562 100644
  	y += CYCAPTION;
  
  	/* draw one line under caption*/
-@@ -111,6 +242,38 @@ nxPaintNCArea(GR_DRAW_ID id, int w, int h, char *title, GR_BOOL active, GR_WM_PR
+@@ -111,6 +297,38 @@ nxPaintNCArea(GR_DRAW_ID id, int w, int h, char *title, GR_BOOL active, GR_WM_PR
  		GrSetGCForeground(gc, GrGetSysColor(GR_COLOR_BTNTEXT));
  		GrLine(id, gc, r.x, r.y, r.x+r.width-1, r.y+r.height-1);
  		GrLine(id, gc, r.x, r.y+r.height-1, r.x+r.width-1, r.y);
@@ -4441,7 +4499,7 @@ index fae5bfa..cfe3a3f 100644
  
  /*
 diff --git a/src/nanox/wmaction.c b/src/nanox/wmaction.c
-index 27dcbe8..b39463c 100644
+index 27dcbe8..bacbf87 100644
 --- a/src/nanox/wmaction.c
 +++ b/src/nanox/wmaction.c
 @@ -4,6 +4,7 @@
@@ -4523,26 +4581,58 @@ index 27dcbe8..b39463c 100644
  	wm_redraw_ncarea(window);
  }
  
-@@ -138,6 +179,18 @@ void wm_container_buttondown(win *window, GR_EVENT_BUTTON *event)
+@@ -96,6 +137,19 @@ PtInRect(GR_RECT *prc, GR_SIZE x, GR_SIZE y)
+ 		y >= prc->y && y < (prc->y+prc->height));
+ }
+ 
++/* Whether x, y of a frame `info` is on the caption's box `box` (1 close, 2 maximise, 3 minimise). A box's
++ * picture is 18 pixels with 2 between, but a press need not be on it: the close box takes the frame's corner,
++ * each box the caption's whole height and the gap on its left. A beam in VR or a pad's pointer shakes, so a
++ * press's release counts `slack` pixels round its box. */
++static GR_BOOL
++wm_on_caption_box(GR_WINDOW_INFO *info, GR_COORD cxborder, GR_COORD cyborder, int box, int x, int y, int slack)
++{
++	int left = info->width - CXCLOSEBOX - cxborder - 2 - (box - 1) * (CXCLOSEBOX + 2) - 2;
++	int right = box == 1 ? info->width : left + CXCLOSEBOX + 2;
++
++	return x >= left - slack && x < right + slack && y >= -slack && y < cyborder + CYCAPTION + slack;
++}
++
+ void wm_container_buttondown(win *window, GR_EVENT_BUTTON *event)
+ {
+ 	struct pos_size *pos;
+@@ -126,18 +180,21 @@ void wm_container_buttondown(win *window, GR_EVENT_BUTTON *event)
+ 	if ((info.props & (GR_WM_PROPS_CAPTION|GR_WM_PROPS_CLOSEBOX)) ==
+ 	    (GR_WM_PROPS_CAPTION|GR_WM_PROPS_CLOSEBOX)) {
+ 
+-		/* Get close box rect*/
+-		r.x = info.width - CXCLOSEBOX - cxborder - 2;
+-		r.y = cyborder + 2;
+-		r.width = CXCLOSEBOX;
+-		r.height = CYCLOSEBOX;
+-
+-		/* Check mousedn in close box*/
+-		if (PtInRect(&r, event->x, event->y)) {
+-			/* close on button up*/
++		/* Check mousedn in close box (closed on button up)*/
++		if (wm_on_caption_box(&info, cxborder, cyborder, 1, event->x, event->y, 0)) {
  			window->close = GR_TRUE;
        		return;
  		}
 +		/* and in the maximise box to its left */
-+		r.x -= CXCLOSEBOX + 2;
-+		if (PtInRect(&r, event->x, event->y)) {
++		if (wm_on_caption_box(&info, cxborder, cyborder, 2, event->x, event->y, 0)) {
 +			window->maximize = GR_TRUE;
 +			return;
 +		}
 +		/* and in the minimise box left of that */
-+		r.x -= CXCLOSEBOX + 2;
-+		if (PtInRect(&r, event->x, event->y)) {
++		if (wm_on_caption_box(&info, cxborder, cyborder, 3, event->x, event->y, 0)) {
 +			window->minimize = GR_TRUE;
 +			return;
 +		}
  	}
  
  	/* 
-@@ -149,8 +202,8 @@ void wm_container_buttondown(win *window, GR_EVENT_BUTTON *event)
+@@ -149,8 +206,8 @@ void wm_container_buttondown(win *window, GR_EVENT_BUTTON *event)
  	 * the focus themself.
  	 * -- Amit Kulkarni
  	 */
@@ -4553,7 +4643,7 @@ index 27dcbe8..b39463c 100644
  
  	/* check for corner resize */
  	r.x = info.width - 5;
-@@ -158,7 +211,7 @@ void wm_container_buttondown(win *window, GR_EVENT_BUTTON *event)
+@@ -158,7 +215,7 @@ void wm_container_buttondown(win *window, GR_EVENT_BUTTON *event)
  	r.width = 5;
  	r.height = 5;
  
@@ -4562,7 +4652,7 @@ index 27dcbe8..b39463c 100644
  	   && !(info.props & GR_WM_PROPS_NORESIZE) && !(cinfo.props & GR_WM_PROPS_NORESIZE)) {
  #if !NO_CORNER_RESIZE
  	  struct pos_size * pos;
-@@ -215,6 +268,26 @@ void wm_container_buttondown(win *window, GR_EVENT_BUTTON *event)
+@@ -215,6 +272,26 @@ void wm_container_buttondown(win *window, GR_EVENT_BUTTON *event)
  	/* Check for mousedn in caption box*/
  	if (!PtInRect(&r, event->x, event->y))
  		return;
@@ -4589,7 +4679,7 @@ index 27dcbe8..b39463c 100644
  	
  	/*
  	 * Now we have a click on the caption. 
-@@ -231,6 +304,9 @@ void wm_container_buttondown(win *window, GR_EVENT_BUTTON *event)
+@@ -231,6 +308,9 @@ void wm_container_buttondown(win *window, GR_EVENT_BUTTON *event)
  	/* Don't allow window move if NOMOVE property set*/
  	if ((info.props & GR_WM_PROPS_NOMOVE) || (cinfo.props & GR_WM_PROPS_NOMOVE))
  		return;
@@ -4599,7 +4689,7 @@ index 27dcbe8..b39463c 100644
  
  	if(!window->data)
  		if(!(window->data = malloc(sizeof(struct pos_size))))
-@@ -252,9 +328,295 @@ void wm_container_buttondown(win *window, GR_EVENT_BUTTON *event)
+@@ -252,9 +332,298 @@ void wm_container_buttondown(win *window, GR_EVENT_BUTTON *event)
  	GrRect(GR_ROOT_WINDOW_ID, gc,info.x, info.y, info.width, info.height);
  	GrDestroyGC(gc);
  #endif	
@@ -4776,6 +4866,9 @@ index 27dcbe8..b39463c 100644
 +	case GR_WMC_BUTTONS:
 +		GsExtraButtons(wid, arg != 0);
 +		return;
++	case GR_WMC_MAXIMISE:
++		wm_maximise_add((int)arg);
++		return;
 +	}
 +	if (!window)
 +		return;
@@ -4895,7 +4988,24 @@ index 27dcbe8..b39463c 100644
  void wm_container_buttonup(win *window, GR_EVENT_BUTTON *event)
  {
  	GR_RECT		r;
-@@ -295,12 +657,30 @@ void wm_container_buttonup(win *window, GR_EVENT_BUTTON *event)
+@@ -279,14 +648,8 @@ void wm_container_buttonup(win *window, GR_EVENT_BUTTON *event)
+ 			cyborder = CYBORDER;
+ 		}
+ 
+-		/* Get close box rect*/
+-		r.x = info.width - CXCLOSEBOX - cxborder - 2;
+-		r.y = cyborder + 2;
+-		r.width = CXCLOSEBOX;
+-		r.height = CYCLOSEBOX;
+-
+-		/* Check mouseup in close box*/
+-		if (PtInRect(&r, event->x, event->y)) {
++		/* Check mouseup in close box, or near it*/
++		if (wm_on_caption_box(&info, cxborder, cyborder, 1, event->x, event->y, 8)) {
+ 			if(window->close == GR_TRUE) {
+ 				/*
+ 				 * This sends a CLOSE_REQ event to the window.
+@@ -295,12 +658,28 @@ void wm_container_buttonup(win *window, GR_EVENT_BUTTON *event)
  				 * atom, causing the window to close.
  				 */
  				GrCloseWindow(window->clientid);
@@ -4905,16 +5015,14 @@ index 27dcbe8..b39463c 100644
        		}
  		}
 +		/* the maximise box: fill the screen above the bar, or go back to where it was */
-+		r.x -= CXCLOSEBOX + 2;
-+		if (PtInRect(&r, event->x, event->y) && window->maximize) {
++		if (window->maximize && wm_on_caption_box(&info, cxborder, cyborder, 2, event->x, event->y, 8)) {
 +			window->maximize = GR_FALSE;
 +			wm_toggle_maximize(window);
 +			wm_place_save(window);
 +			return;
 +		}
 +		/* the minimise box: the window goes away until something maps it again (the bar's button) */
-+		r.x -= CXCLOSEBOX + 2;
-+		if (PtInRect(&r, event->x, event->y) && window->minimize) {
++		if (window->minimize && wm_on_caption_box(&info, cxborder, cyborder, 3, event->x, event->y, 8)) {
 +			window->minimize = GR_FALSE;
 +			GrUnmapWindow(window->wid);
 +			return;
@@ -4926,7 +5034,7 @@ index 27dcbe8..b39463c 100644
  
  	if(window->active) {
  #if OUTLINE_MOVE
-@@ -312,6 +692,38 @@ void wm_container_buttonup(win *window, GR_EVENT_BUTTON *event)
+@@ -312,6 +691,38 @@ void wm_container_buttonup(win *window, GR_EVENT_BUTTON *event)
  	  GrMoveWindow(window->wid, pos->xorig, pos->yorig);
  	  GrDestroyGC(gc);
  #endif
@@ -4965,7 +5073,7 @@ index 27dcbe8..b39463c 100644
  	  free(window->data);
  	  window->active = GR_FALSE;
  	  window->data = 0;
-@@ -330,8 +742,18 @@ void wm_container_buttonup(win *window, GR_EVENT_BUTTON *event)
+@@ -330,8 +741,18 @@ void wm_container_buttonup(win *window, GR_EVENT_BUTTON *event)
  
  	  w = info.width + (event->x - pos->xorig);
  	  h = info.height + (event->y - pos->yorig);
@@ -4984,7 +5092,7 @@ index 27dcbe8..b39463c 100644
  
  	  free(window->data);
  	  window->sizing = GR_FALSE;
-@@ -397,7 +819,13 @@ void wm_container_mousemoved(win *window, GR_EVENT_MOUSE *event)
+@@ -397,7 +818,13 @@ void wm_container_mousemoved(win *window, GR_EVENT_MOUSE *event)
  	
  	GrDestroyGC(gc);
  #else	
@@ -5000,10 +5108,10 @@ index 27dcbe8..b39463c 100644
  }
  
 diff --git a/src/nanox/wmclients.c b/src/nanox/wmclients.c
-index 9214904..ebfa27e 100644
+index 9214904..d530f3d 100644
 --- a/src/nanox/wmclients.c
 +++ b/src/nanox/wmclients.c
-@@ -9,6 +9,187 @@
+@@ -9,6 +9,257 @@
  #include "nano-X.h"
  #include "nxdraw.h"
  #include "nanowm.h"
@@ -5146,6 +5254,76 @@ index 9214904..ebfa27e 100644
 +	reg_set(key, value);
 +}
 +
++/* ---- the processes whose windows open maximised (GR_WMC_MAXIMISE: the bar names a game it
++ * started), and those they start: a starter script, an installer before the game. A process is
++ * forgotten when it has gone. A window that cannot resize is not maximised (wm_tile). */
++#define WM_MAXIMISE_KEPT 8
++static int maximise_pids[WM_MAXIMISE_KEPT], maximise_next;
++
++static int
++process_alive(int processid)
++{
++	char path[24];
++
++	sprintf(path, "/proc/%d", processid);
++	return access(path, F_OK) == 0;
++}
++
++/* The process that started this one, or 0. */
++static int
++process_parent(int processid)
++{
++	char path[32], text[160], *end;
++	int fd, n, parent = 0;
++
++	sprintf(path, "/proc/%d/stat", processid);
++	if ((fd = open(path, O_RDONLY)) < 0)
++		return 0;
++	n = read(fd, text, sizeof text - 1);
++	close(fd);
++	text[n > 0 ? n : 0] = 0;
++	/* "pid (name) state ppid": the name may hold spaces and brackets, so from its last ')' */
++	if ((end = strrchr(text, ')')) != NULL)
++		sscanf(end + 1, " %*c %d", &parent);
++	return parent;
++}
++
++void
++wm_maximise_add(int processid)
++{
++	int k;
++
++	if (processid <= 0)
++		return;
++	for (k = 0; k < WM_MAXIMISE_KEPT; k++)
++		if (maximise_pids[k] == processid)
++			return;
++	for (k = 0; k < WM_MAXIMISE_KEPT; k++)
++		if (!maximise_pids[k] || !process_alive(maximise_pids[k]))
++			break;
++	if (k == WM_MAXIMISE_KEPT)
++		k = maximise_next++ % WM_MAXIMISE_KEPT;
++	maximise_pids[k] = processid;
++}
++
++/* Whether a window of this process opens maximised: it or one of the processes that started it was named. */
++static int
++maximise_wanted(int processid)
++{
++	int depth, k, any = 0;
++
++	for (k = 0; k < WM_MAXIMISE_KEPT; k++)
++		if (maximise_pids[k] && !process_alive(maximise_pids[k]))
++			maximise_pids[k] = 0;
++		else
++			any |= maximise_pids[k];
++	for (depth = 0; any && processid > 1 && depth < 6; depth++, processid = process_parent(processid))
++		for (k = 0; k < WM_MAXIMISE_KEPT; k++)
++			if (maximise_pids[k] == processid)
++				return 1;
++	return 0;
++}
++
 +/* What the registry keeps for a window of `file` asked for this large, when no other window of
 + * that program is up: true, with where it goes (on the screen as it is now). */
 +static int
@@ -5191,7 +5369,7 @@ index 9214904..ebfa27e 100644
  
  /*
   * A new client window has been mapped, so we need to reparent and decorate it.
-@@ -22,10 +203,13 @@ int wm_new_client_window(GR_WINDOW_ID wid)
+@@ -22,10 +273,13 @@ int wm_new_client_window(GR_WINDOW_ID wid)
  	GR_COORD x, y, width, height, xoffset, yoffset;
  	GR_WM_PROPS style;
  	GR_WM_PROPERTIES props;
@@ -5205,7 +5383,7 @@ index 9214904..ebfa27e 100644
  
  	/* if not redecorating or not child of root window, return*/
  	if (winfo.parent != GR_ROOT_WINDOW_ID || (style & GR_WM_PROPS_NODECORATE))
-@@ -94,7 +278,7 @@ int wm_new_client_window(GR_WINDOW_ID wid)
+@@ -94,7 +348,7 @@ int wm_new_client_window(GR_WINDOW_ID wid)
  		}
  	}
  
@@ -5214,7 +5392,7 @@ index 9214904..ebfa27e 100644
  	x = MWABS(winfo.x - xoffset);
  	y = MWABS(winfo.y - yoffset);
  #else
-@@ -109,19 +293,61 @@ int wm_new_client_window(GR_WINDOW_ID wid)
+@@ -109,19 +363,61 @@ int wm_new_client_window(GR_WINDOW_ID wid)
  
  		/* We could proably use a more intelligent algorithm here */
  		GrGetScreenInfo(&si);
@@ -5281,7 +5459,7 @@ index 9214904..ebfa27e 100644
  	window.wid = pid;
  	window.pid = GR_ROOT_WINDOW_ID;
  	window.type = WINDOW_TYPE_CONTAINER;
-@@ -133,7 +359,7 @@ int wm_new_client_window(GR_WINDOW_ID wid)
+@@ -133,7 +429,7 @@ int wm_new_client_window(GR_WINDOW_ID wid)
  
  	/* don't erase background of container window*/
  	props.flags = GR_WM_FLAGS_PROPS;
@@ -5290,7 +5468,7 @@ index 9214904..ebfa27e 100644
  	GrSetWMProperties(pid, &props);
  
  	Dprintf("New client window %d container %d\n", wid, pid);
-@@ -157,11 +383,29 @@ int wm_new_client_window(GR_WINDOW_ID wid)
+@@ -157,11 +453,32 @@ int wm_new_client_window(GR_WINDOW_ID wid)
  
  	/* reparent client to container window (child is already mapped)*/
  	GrReparentWindow(wid, pid, xoffset, yoffset);
@@ -5313,6 +5491,9 @@ index 9214904..ebfa27e 100644
 +			made->fresh = 1;
 +			made->made_w = winfo.width;
 +			made->made_h = winfo.height;
++			/* a game the bar started opens maximised; where it was kept is where Put back goes */
++			if (kept_zone != WM_ZONE_MAX && !oversize && maximise_wanted(winfo.processid))
++				kept_zone = WM_ZONE_MAX;
 +			if (kept_zone)
 +				wm_tile(made, kept_zone);
 +		}
@@ -5320,7 +5501,7 @@ index 9214904..ebfa27e 100644
  
  #if 0000
  	/* add system utility button*/
-@@ -355,7 +599,8 @@ void wm_client_window_remap(win *window)
+@@ -355,7 +672,8 @@ void wm_client_window_remap(win *window)
  	Dprintf("client_window_remap %d (parent %d)\n", window->wid, window->pid);
  
  	GrGetWindowInfo(pwin->wid, &winfo);
@@ -5330,7 +5511,7 @@ index 9214904..ebfa27e 100644
  		GrMapWindow(pwin->wid);
  }
  
-@@ -440,6 +685,9 @@ void wm_client_window_destroy(win *window)
+@@ -440,6 +758,9 @@ void wm_client_window_destroy(win *window)
  		Dprintf("nanowm: Couldn't find parent of destroyed window %d\n", window->wid);
  		return;
  	}

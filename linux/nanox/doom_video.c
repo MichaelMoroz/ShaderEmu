@@ -112,6 +112,7 @@ begun(void)
  * with DOOM_HASH_TICS=N a sum of the game's state every N tics, to see a demo play the same.
  */
 static void seat_tic(void);
+static GLuint border_texture(void);
 static void view_poll(void);
 static void view_shares(void *unused, uint32_t from, uint32_t to);
 static void view_leave(void);
@@ -160,6 +161,72 @@ doom_window_scale(int asked, int given)
 }
 
 /*
+ * SE_MAXIMISED=WxH: the desktop starts the game maximised (linux/apps/ui_launch.h), and the window is
+ * made at that size from the start, so the window manager's maximise changes nothing and the first
+ * frame is laid out for it. Not with -1, -2 or -3, nor the port's own path.
+ */
+int
+doom_window_size(int *w, int *h, int given)
+{
+	const char *soft = getenv("DOOM_SOFTWARE"), *size = getenv("SE_MAXIMISED");
+	int width, height;
+
+	if (given || (soft && *soft == '1') || !size || sscanf(size, "%dx%d", &width, &height) != 2 || width < 64 || height < 40)
+		return 0;
+	*w = width;
+	*h = height;
+	return 1;
+}
+
+/*
+ * Any window's shape (docs/games/doom.md, "Any window"). Doom's 320 by 200 screen is drawn at the
+ * largest scale the window holds with square pixels (k, 16.16), across the middle; in a level it
+ * stands on the window's bottom, so the status bar is at the bottom whatever the shape. A view as wide
+ * as the screen reaches the window's sides, one from the screen's top its top, one to its bottom its
+ * bottom: more of the level is seen, never the same stretched. What is left is the game's border flat.
+ */
+int
+doom_screen_box(int width, int height, int level, int box[4])
+{
+	int kx = (width << 16) / SCREEN_W, ky = (height << 16) / SCREEN_H, k = kx < ky ? kx : ky;
+
+	if (k <= 0)
+		k = 1;
+	box[2] = (int)(((long long)SCREEN_W * k) >> 16);
+	box[3] = (int)(((long long)SCREEN_H * k) >> 16);
+	if (box[2] > width || kx <= ky)
+		box[2] = width;
+	if (box[3] > height || ky <= kx)
+		box[3] = height;
+	box[0] = (width - box[2]) / 2;
+	box[1] = level ? height - box[3] : (height - box[3]) / 2;
+	return k;
+}
+
+/* Where a view of Doom's (wx, wy, ww, wh on its screen) is in the window, top down; 1 if it reaches
+ * past the screen's box (a view as wide as the screen, or from its top or to its bottom). */
+int
+doom_view_box(int width, int height, int wx, int wy, int ww, int wh, int view[4], int *k)
+{
+	int box[4], x1, y1, out = 0;
+
+	*k = doom_screen_box(width, height, 1, box);
+	view[0] = box[0] + wx * box[2] / SCREEN_W;
+	view[1] = box[1] + wy * box[3] / SCREEN_H;
+	x1 = box[0] + (wx + ww) * box[2] / SCREEN_W;
+	y1 = box[1] + (wy + wh) * box[3] / SCREEN_H;
+	if (ww >= SCREEN_W && (box[0] > 0 || box[2] < width))
+		view[0] = 0, x1 = width, out = 1;
+	if (wy <= 0 && box[1] > 0)
+		view[1] = 0, out = 1;
+	if (wy + wh >= SCREEN_H && box[1] + box[3] < height)
+		y1 = height, out = 1;
+	view[2] = x1 - view[0];
+	view[3] = y1 - view[1];
+	return out;
+}
+
+/*
  * The port allocates the screen here. Doom takes pointers into it when it first sets up its
  * view, which is after this, so this is where the screen becomes the texture.
  */
@@ -183,6 +250,7 @@ I_InitGraphics(void)
 	glBindTexture(GL_TEXTURE_2D, screen_texture);
 	seglTexturePointer(screen, SCREEN_W, SCREEN_H, GL_COLOR_INDEX8_EXT);
 	gpu = 1;
+	border_texture();	/* (here: show_list may run on a worker, which must not load a lump) */
 	doom_gl = !(render && !strcmp(render, "soft"));
 	/* DOOM_VIEW=N: so many worker cores for the view's list (4); inline: none; told: none, and
 	 * the list made from what they would be told (docs/games/doom.md) */
@@ -663,16 +731,86 @@ melt_strips(void)
 	}
 }
 
-/* The screen as one rectangle over the whole window, after the view if there is one (`scene`). */
+/* The border's flat (as R_FillBackScreen has it), a texture of 64 by 64 palette indices; 0 if none. */
+void *W_CacheLumpNum(int lump, int tag);
+int W_CheckNumForName(char *name);
+
+static GLuint
+border_texture(void)
+{
+	static GLuint name;
+	static int tried;
+	unsigned char *picture;
+	int lump;
+
+	if (tried)
+		return name;
+	tried = 1;
+	lump = W_CheckNumForName("FLOOR7_2");
+	if (lump < 0)
+		lump = W_CheckNumForName("GRNROCK");
+	if (lump < 0 || !(picture = seglMemory(64 * 64)))
+		return 0;
+	memcpy(picture, W_CacheLumpNum(lump, 1 /* PU_STATIC */), 64 * 64);
+	glGenTextures(1, &name);
+	glBindTexture(GL_TEXTURE_2D, name);
+	seglTexturePointer(picture, 64, 64, GL_COLOR_INDEX8_EXT);
+	return name;
+}
+
+/* The border's flat over a rectangle of the window (top down), at the screen's scale k. */
+static void
+border(int width, int height, int x0, int y0, int x1, int y1, int k)
+{
+	GLfixed xyz[12], uv[8];
+	GLuint name;
+	int i;
+
+	if (x1 <= x0 || y1 <= y0 || !(name = border_texture()))
+		return;
+	for (i = 0; i < 4; i++) {
+		int x = i == 1 || i == 2 ? x1 : x0, y = i >= 2 ? y1 : y0;
+
+		xyz[i * 3] = (GLfixed)(((long long)x << 16) / width);
+		xyz[i * 3 + 1] = (GLfixed)(((long long)y << 16) / height);
+		xyz[i * 3 + 2] = 0;
+		/* a flat's 64 texels at the screen's scale */
+		uv[i * 2] = (GLfixed)(((long long)x << 26) / k);
+		uv[i * 2 + 1] = (GLfixed)(((long long)y << 26) / k);
+	}
+	seglQuad(xyz, uv, name, 255, 255, 0);
+}
+
+/* What of a rectangle is not under the view (v: x, y, w, h): up to four pieces of border. */
+static void
+border_around(int width, int height, int x0, int y0, int x1, int y1, const int *v, int k)
+{
+	int vx1 = v[0] + v[2], vy1 = v[1] + v[3];
+
+	if (x1 <= x0 || y1 <= y0)
+		return;
+	if (!v[2] || vx1 <= x0 || v[0] >= x1 || vy1 <= y0 || v[1] >= y1) {
+		border(width, height, x0, y0, x1, y1, k);
+		return;
+	}
+	border(width, height, x0, y0, x1, v[1], k);
+	border(width, height, x0, vy1, x1, y1, k);
+	border(width, height, x0, v[1] > y0 ? v[1] : y0, v[0], vy1 < y1 ? vy1 : y1, k);
+	border(width, height, vx1, v[1] > y0 ? v[1] : y0, x1, vy1 < y1 ? vy1 : y1, k);
+}
+
+/* The screen as one rectangle in its box of the window, after the view if there is one (`scene`),
+ * and the border's flat round the box where the view does not reach. */
 static void
 show_list(int scene)
 {
 	/* in units of the whole window: a matrix of 16.16 numbers cannot hold 2/320 exactly */
 	static const GLfixed corners[8] = {0, 0, ONE, 0, ONE, ONE, 0, ONE};
-	static const GLfixed flat[12] = {0, 0, 0, ONE, 0, 0, ONE, ONE, 0, 0, ONE, 0};
 	/* glOrthox(0, 1, 1, 0, -1, 1) column by column: working it out anew costs a frame 800 instructions */
 	static const GLfixed whole[16] = {2 * ONE, 0, 0, 0, 0, -2 * ONE, 0, 0, 0, 0, -ONE, 0, -ONE, ONE, 0, ONE};
-	int width, height;
+	extern int gamestate, viewwindowx, viewwindowy, scaledviewwidth, viewheight;
+	GLfixed flat[12];
+	int width, height, box[4], view[4] = {0, 0, 0, 0}, k, i;
 
 	seglSize(&width, &height);
 	if (!scene)
@@ -684,6 +822,20 @@ show_list(int scene)
 	glLoadIdentity();
 	glDisable(GL_DEPTH_TEST);
 	glColorKeySE(KEY);
+	k = doom_screen_box(width, height, gamestate == 0, box);
+	if (box[0] > 0 || box[1] > 0 || box[2] < width || box[3] < height) {
+		if (scene)
+			doom_view_box(width, height, viewwindowx, viewwindowy, scaledviewwidth, viewheight, view, &k);
+		border_around(width, height, 0, 0, width, box[1], view, k);
+		border_around(width, height, 0, box[1] + box[3], width, height, view, k);
+		border_around(width, height, 0, box[1], box[0], box[1] + box[3], view, k);
+		border_around(width, height, box[0] + box[2], box[1], width, box[1] + box[3], view, k);
+	}
+	for (i = 0; i < 4; i++) {
+		flat[i * 3] = (GLfixed)(((long long)(box[0] + (i == 1 || i == 2 ? box[2] : 0)) << 16) / width);
+		flat[i * 3 + 1] = (GLfixed)(((long long)(box[1] + (i >= 2 ? box[3] : 0)) << 16) / height);
+		flat[i * 3 + 2] = 0;
+	}
 	/* keyed over a view: it shows through where the screen holds the key */
 	seglQuad(flat, corners, screen_texture, 255, 255, scene);
 	if (melting == 1 || melting == 2)

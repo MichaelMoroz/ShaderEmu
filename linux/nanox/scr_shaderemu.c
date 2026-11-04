@@ -64,6 +64,7 @@
 #define WM_RUN		16		/* which start of the worker this is; 0: it parks */
 #define WM_HERE		20		/* the worker's: the start it runs from */
 #define WM_LOOK		24		/* the desktop's look, written by Settings (linux/apps/ui_look.h) */
+#define WM_TINT		25		/* the windows' colour, 0x01RRGGBB or 0, written by Settings (ui_look.h) */
 #define WM_PIXMAPS	28		/* pixmaps given the GPU's memory so far: a program sees whether its own was */
 #define WM_MAGIC	0x31514d57u
 #define KEYBOARD_OWNED	0x6b657973u
@@ -1189,6 +1190,13 @@ nx_look(void)
 	return gpu ? ((volatile uint32_t *)(gpu + WM_OFFSET))[WM_LOOK] : 0;
 }
 
+/* The windows' colour for the window manager (nxpaintnc.c): 0 for the look's own. */
+unsigned
+nx_tint(void)
+{
+	return gpu ? ((volatile uint32_t *)(gpu + WM_OFFSET))[WM_TINT] : 0;
+}
+
 /*
  * A file's own icon where it lies in the ROM, found without reading the file (a read is a page
  * copied, and a pass ended): the ROM's header at the file's number has its name and size.
@@ -1421,7 +1429,8 @@ static struct romfile {
 	const unsigned char *bytes;
 	uint32_t size, rom, atlas;	/* atlas: SEF_MSDF's, in the ROM, with its header in `sizes` */
 	struct sef_atlas sizes;
-} romfiles[64];
+} romfiles[128];	/* (kept for the session: 64 were fewer than the image's 79 fonts, and the browser's
+			 * faces and sizes filled them, after which every new font was the built-in one) */
 
 extern PMWFONT (*gd_createfont)(const char *name, MWCOORD height, MWCOORD width, int attr) __attribute__((weak));
 static MWFONTPROCS romfont_procs;
@@ -1490,9 +1499,9 @@ romfont_create(const char *name, MWCOORD height, MWCOORD width, int attr)
 
 	if (n < 5 || n >= sizeof romfiles[0].path || strcmp(name + n - 4, ".sef") != 0 || !accelerate)
 		return NULL;
-	for (file = romfiles; file < romfiles + 64 && file->bytes && strcmp(file->path, name) != 0; file++)
+	for (file = romfiles; file < romfiles + 128 && file->bytes && strcmp(file->path, name) != 0; file++)
 		;
-	if (file == romfiles + 64)
+	if (file == romfiles + 128)
 		return NULL;
 	if (!file->bytes) {
 		uint32_t rom;

@@ -157,6 +157,7 @@ static int		seated;
 static float		body, aimed, seat_fov_x = 90, seat_fov_y = 73.74f;
 static unsigned		mouse_count;
 static int		window_w, window_h;	/* its size now: the game's picture is config's, stretched to it */
+static unsigned		resized_at;		/* when the window last changed size: a second later the video restarts at it */
 
 /* A rectangle of the game's picture (y down) as the window's pixels. */
 static void picture_viewport (int x, int y, int w, int h)
@@ -227,6 +228,15 @@ void SE_Input (void)
 
 	if (!opened)
 		return;
+	/* a window resized a second ago and since left alone: the game's screen is made again at its size (vid_restart, as
+	   Jedi Outcast does), so the HUD and the view keep their shape; until then config's picture is stretched over it */
+	if (resized_at && (unsigned)Sys_Milliseconds () - resized_at > 1000) {
+		resized_at = 0;
+		if (window_w != config.vidWidth || window_h != config.vidHeight) {
+			printf ("quake3: the window is %dx%d, the video restarted\n", window_w, window_h);
+			Cbuf_ExecuteText (EXEC_APPEND, "vid_restart\n");
+		}
+	}
 	input = gpuControl (REG_INPUT);
 	host = seglHostState ();
 	/* a menu, the console, a level loading: a picture for a screen, not a world for a room */
@@ -278,6 +288,7 @@ void SE_Input (void)
 				seglSize (&window_w, &window_h);
 				if (window_w < 1 || window_h < 1)
 					window_w = config.vidWidth, window_h = config.vidHeight;
+				resized_at = (unsigned)Sys_Milliseconds () | 1;
 			}
 			origin_known = 0;
 			break;
@@ -431,7 +442,9 @@ static void window_open (void)
 	if (GrOpen () < 0)
 		ri.Error (ERR_FATAL, "no Nano-X server (start one: nano-X -p &)");
 	GrGetScreenInfo (&info);
-	if ((s = getenv ("QUAKE3_SIZE")) != NULL)
+	/* the desktop starts it maximised (SE_MAXIMISED, linux/apps/ui_launch.h): the window is made at that size and
+	   the game's screen with it (RE_BeginRegistration), so the maximise changes nothing; QUAKE3_SIZE says more */
+	if ((s = getenv ("QUAKE3_SIZE")) != NULL || (s = getenv ("SE_MAXIMISED")) != NULL)
 		sscanf (s, "%dx%d", &width, &height);
 	if (width > info.cols)
 		width = info.cols;

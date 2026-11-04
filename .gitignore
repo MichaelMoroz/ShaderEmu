@@ -12,3 +12,6 @@
 __pycache__/
 imgui.ini
 .vscode/settings.json
+
+# Pictures fetched when the world is made, which may not be passed on (world/gameboxes.py)
+/unity/ShaderEmu/Textures/Fetched/

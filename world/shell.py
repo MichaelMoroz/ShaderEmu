@@ -81,15 +81,16 @@ def corridor(b):
 
 
 def holodecks(b):
-    """The holodecks' corridor through the den's left wall, and its eight rooms of grid."""
+    """The holodecks' corridor through the den's left wall, plastered and carpeted as the corridor
+    by the lift, and its eight rooms of grid (holo_room)."""
     long, wide, high = annex.HC_LONG, annex.HC_WIDE, annex.HC_HIGH
     mid_x, mid_z = (annex.HC_X0 + annex.HC_X1) / 2, HOLO_Z
     b.obj("Holo corridor floor")
     with b.at((mid_x, 0, mid_z), (90, 0, 0)):
-        b.sheet((-long / 2, -wide / 2, long / 2, wide / 2), "SciCarpet", extent=long)
+        b.sheet((-long / 2, -wide / 2, long / 2, wide / 2), "Carpet", extent=long)
     b.obj("Holo corridor ceiling")
     with b.at((mid_x, high, mid_z), (-90, 0, 0)):
-        b.sheet((-long / 2, -wide / 2, long / 2, wide / 2), "SciTrim", extent=long)
+        b.sheet((-long / 2, -wide / 2, long / 2, wide / 2), "Ceiling", extent=long)
     b.obj("Holo corridor walls")
     row = high + GAP
     for side, (z, turn) in enumerate(((annex.HC_Z1, 0), (annex.HC_Z0, 180))):
@@ -99,34 +100,91 @@ def holodecks(b):
             x = x if turn == 0 else -x   # the south wall's own x runs against the world's
             doors.append((x - annex.ROOM_DOOR_WIDE / 2, -1, x + annex.ROOM_DOOR_WIDE / 2, annex.ROOM_DOOR_HIGH))
         with b.at((mid_x, 0, z), (0, turn, 0)):
-            b.sheet((-long / 2, 0, long / 2, high), "SciPanel", doors, light=(0, side * row), extent=long, uv_from=(0, high / 2))
+            b.sheet((-long / 2, 0, long / 2, high), "Wall", doors, light=(0, side * row), extent=long, uv_from=(0, high / 2))
     with b.at((annex.HC_X0, 0, mid_z), (0, -90, 0)):
-        b.sheet((-wide / 2, 0, wide / 2, high), "SciPanel", light=(0, 2 * row), extent=long, uv_from=(0, high / 2))
+        b.sheet((-wide / 2, 0, wide / 2, high), "Wall", light=(0, 2 * row), extent=long, uv_from=(0, high / 2))
     with b.at((annex.HC_X1, 0, mid_z), (0, 90, 0)):   # the den's wall from behind, with its doorway
-        b.sheet((-wide / 2, 0, wide / 2, high), "SciPanel", [(-HOLO_WIDE / 2, -1, HOLO_WIDE / 2, HOLO_HIGH)], light=(wide + GAP, 2 * row),
+        b.sheet((-wide / 2, 0, wide / 2, high), "Wall", [(-HOLO_WIDE / 2, -1, HOLO_WIDE / 2, HOLO_HIGH)], light=(wide + GAP, 2 * row),
                 extent=long, uv_from=(0, high / 2))
-
-    # a room: its four walls unrolled as one strip, so their corners are inside a chart; under
-    # the strip the floor and the ceiling
-    s, t = annex.ROOM, annex.ROOM_HIGH
-    extent = 4 * s
     for k in range(annex.ROOMS):
-        x, z, turn = annex.room_place(k)
-        b.obj("Holo room %d" % k)
-        with b.at((x, 0, z), (0, turn, 0)):   # the room's own frame: its door behind, the room towards +z
-            door = [(-annex.ROOM_DOOR_WIDE / 2, -1, annex.ROOM_DOOR_WIDE / 2, annex.ROOM_DOOR_HIGH)]
-            with b.at((0, 0, 0), (0, 180, 0)):
-                b.sheet((-s / 2, 0, s / 2, t), "HoloGrid", door, light=(0, 0), extent=extent)
-            with b.at((-s / 2, 0, s / 2), (0, -90, 0)):
-                b.sheet((-s / 2, 0, s / 2, t), "HoloGrid", light=(s, 0), extent=extent)
-            with b.at((0, 0, s), (0, 0, 0)):
-                b.sheet((-s / 2, 0, s / 2, t), "HoloGrid", light=(2 * s, 0), extent=extent)
-            with b.at((s / 2, 0, s / 2), (0, 90, 0)):
-                b.sheet((-s / 2, 0, s / 2, t), "HoloGrid", light=(3 * s, 0), extent=extent)
-            with b.at((0, 0, s / 2), (90, 0, 0)):
-                b.sheet((-s / 2, -s / 2, s / 2, s / 2), "HoloGrid", light=(0, t + GAP), extent=extent)
-            with b.at((0, t, s / 2), (-90, 0, 0)):
-                b.sheet((-s / 2, -s / 2, s / 2, s / 2), "HoloGrid", light=(s + GAP, t + GAP), extent=extent)
+        holo_room(b, k)
+
+
+def holo_room(b, k):
+    """Room k of grid as one mesh, welded: its four walls one strip round it (the doorway cut out
+    of the first), its floor and its ceiling, every face a whole panel of the grid (annex.GRID),
+    so that no cell is cut at a corner or by the doorway. In the lightmap the walls are one strip
+    unrolled from the door wall's corner at +x, so three of the four corners are inside a
+    chart; the floor and the ceiling are charts under it. The doorway's reveal is the corridor's
+    plaster, a mesh of its own beside them. The lines of the grid are annex.py's bars."""
+    s, t, g = annex.ROOM, annex.ROOM_HIGH, annex.GRID
+    n, m = round(s / g), round(t / g)                 # cells along a wall and up it
+    dw, dh = round(annex.ROOM_DOOR_WIDE / g), round(annex.ROOM_DOOR_HIGH / g)
+    d0 = (n - dw) // 2                                # the doorway's first cell along the door wall
+    x, z, turn = annex.room_place(k)
+    # the walls' strip, in the room's own frame: from the door wall's corner at +x round the room,
+    # each wall's start, its way along, and the way into the room
+    walls = [((s / 2, 0.0), (-1, 0), (0, 1)), ((-s / 2, 0.0), (0, 1), (1, 0)), ((-s / 2, s), (1, 0), (0, -1)), ((s / 2, s), (0, -1), (-1, 0))]
+    extent = 4 * s
+    vertices, faces, uvs, light, normals = [], [], [], [], []
+    index = {}
+
+    def vertex(p):
+        key = tuple(round(c, 5) for c in p)
+        if key not in index:
+            index[key] = len(vertices)
+            vertices.append(p)
+        return index[key]
+
+    def cell(corners, inward, u0v0, lighting):
+        faces.append(tuple(vertex(p) for p in corners))
+        uvs.append([(u0v0[0] + du, u0v0[1] + dv) for du, dv in ((0, 0), (1, 0), (1, 1), (0, 1))])
+        light.append([(lx / extent, ly / extent) for lx, ly in lighting])
+        normals.append(inward)
+    for w, ((sx, sz), (ax, az), (ix, iz)) in enumerate(walls):
+        for i in range(n):
+            for j in range(m):
+                if w == 0 and d0 <= i < d0 + dw and j < dh:
+                    continue   # the doorway
+                a, c = i * g, (i + 1) * g
+                corners = [(sx + ax * a, j * g, sz + az * a), (sx + ax * c, j * g, sz + az * c),
+                           (sx + ax * c, (j + 1) * g, sz + az * c), (sx + ax * a, (j + 1) * g, sz + az * a)]
+                along = w * s
+                cell(corners, (ix, 0, iz), (0, 0), [(along + a, j * g), (along + c, j * g), (along + c, (j + 1) * g), (along + a, (j + 1) * g)])
+    for y, up, at in ((0.0, 1, 0.0), (t, -1, s + GAP)):   # the floor, and the ceiling beside it, under the strip
+        for i in range(n):
+            for j in range(n):
+                x0, x1, z0, z1 = -s / 2 + i * g, -s / 2 + (i + 1) * g, j * g, (j + 1) * g
+                cell([(x0, y, z0), (x1, y, z0), (x1, y, z1), (x0, y, z1)], (0, up, 0), (0, 0),
+                     [(at + i * g, t + GAP + j * g), (at + (i + 1) * g, t + GAP + j * g), (at + (i + 1) * g, t + GAP + (j + 1) * g), (at + i * g, t + GAP + (j + 1) * g)])
+    b.obj("Holo room %d" % k)
+    with b.at((x, 0, z), (0, turn, 0)):   # the room's own frame: its door behind, the room towards +z
+        b.mesh(vertices, faces, uvs, "HoloPanel", normal=normals)
+        bm_uv2(b, faces, light, len(vertices))
+        # the doorway's reveal, through the wall to the corridor's face: jambs, head and threshold, in the plaster's own place of the layout
+        w, h, deep = annex.ROOM_DOOR_WIDE, annex.ROOM_DOOR_HIGH, WALL_THICK
+        at = 2 * (s + GAP)
+        pieces = [((-w / 2, h / 2, -deep / 2), (0, -90, 0), (deep, h), (at, t + GAP)),
+                  ((w / 2, h / 2, -deep / 2), (0, 90, 0), (deep, h), (at + deep + GAP, t + GAP)),
+                  ((0, h, -deep / 2), (-90, 0, 0), (w, deep), (at + 2 * (deep + GAP), t + GAP)),
+                  ((0, 0.0, -deep / 2), (90, 0, 0), (w, deep), (at + 2 * (deep + GAP), t + GAP + deep + GAP))]
+        for centre, rot, (pw, ph), spot in pieces:
+            with b.at(centre, rot):
+                b.sheet((-pw / 2, -ph / 2, pw / 2, ph / 2), "Wall", light=spot, extent=extent, uv_from=(0, -ph / 2))
+
+
+def bm_uv2(b, faces, light, count):
+    """The lightmap's places of the faces b.mesh just added to the current object (`count`
+    vertices, `faces` of them in order): a corner's place goes by its vertex, as _emit may have
+    turned a face over."""
+    bm = b.objects[b.current][0]
+    uv2 = bm.loops.layers.uv.get("UV2") or bm.loops.layers.uv.new("UV2")
+    bm.faces.ensure_lookup_table()
+    bm.verts.ensure_lookup_table()
+    first_face, first_vert = len(bm.faces) - len(faces), len(bm.verts) - count
+    for f, corners, places in zip(bm.faces[first_face:], faces, light):
+        for loop in f.loops:
+            loop[uv2].uv = places[corners.index(loop.vert.index - first_vert)]
 
 
 def build(b):

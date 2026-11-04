@@ -19,9 +19,12 @@ struct host_event {
 int host_open(int width, int height);
 /* The two 8-bit pages the GPU can show (0 and 1): the game draws straight into them. */
 unsigned char *host_page(int page);
-/* The window's size a second after it last changed, as the screen's size to lay the game out at: 1 when that is not the
- * screen's size now (docs/games/tdawn.md, "The window's size"). */
+/* The size the window wants the screen laid out at in a mission, a second after its size last changed: 1 when that is not
+ * the screen's size now (docs/games/tdawn.md, "The window's size"). host_relayout_now: the same without the wait, as a
+ * mission begins. host_first_size: the first screen's size, for the menus, the score and the movies. */
 int host_relayout_wanted(int *width, int *height);
+int host_relayout_now(int *width, int *height);
+void host_first_size(int *width, int *height);
 /* The pages at that size, cleared (host_page's pointers change): 0, or -1 with no GPU memory for them. */
 int host_relayout(int width, int height);
 /* 256 words of 0x00RRGGBB the screen and the cursor are looked up in. */

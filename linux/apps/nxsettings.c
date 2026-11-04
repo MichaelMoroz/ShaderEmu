@@ -1,9 +1,9 @@
 /*
  * nxsettings: the desktop's settings, a tab each. Desktop: what the desktop shows (a picture
- * of the image's, any picture file, or a colour). Look: windows classic or as Windows 7's, and
- * the text's font (ui_look.h). Screen: its size. Sound: how loud. Storage:
+ * of the image's, any picture file, or a colour). Look: windows classic or as Windows 7's, the
+ * text's font, the windows' colour (ui_look.h) and whether games open maximised. Screen: its size. Sound: how loud. Storage:
  * what the host keeps (docs/system/persist.md). System: what the machine is. Devices: each device and how it runs.
- * From a script: nxsettings apply | look seven|classic [smooth|classic] | size WxH | volume 0-100 |
+ * From a script: nxsettings apply | look seven|classic [smooth|classic] | color RRGGBB|default | size WxH | volume 0-100 |
  * choose [DIR] | system | devices.
  */
 #define _GNU_SOURCE
@@ -783,6 +783,50 @@ look_choose(int which)
 	set_look(which < 2 ? which == 0 : ui_seven, which < 2 ? which == 0 : which == 2);
 }
 
+/* The windows' colours: the look's own first, then tints dark enough for the classic caption's
+ * white text and light enough, mixed with white, for Windows 7's black (nx_tint in nxpaintnc.c). The Start
+ * orb is made in each of them (tools/make_icons.py's LOOK7_TINTS, nxbar.c's start_cell): a new one goes there too. */
+static const struct { const char *name, *value; } tints[] = {
+	{ "Default", "default" }, { "Blue", "2858a8" }, { "Teal", "1f8080" }, { "Green", "2e8040" }, { "Olive", "6c7820" },
+	{ "Orange", "c06010" }, { "Red", "b02828" }, { "Pink", "b03070" }, { "Purple", "6a3aa8" }, { "Graphite", "505860" },
+};
+#define TINTS (int)(sizeof tints / sizeof tints[0])
+#define TINT_Y (TOP + 148)
+#define TINT_X(i) ((i) == 0 ? 8 : 88 + ((i) - 1) * 28)
+#define TINT_W(i) ((i) == 0 ? 72 : 22)
+#define GAMES_Y (TOP + 184)
+#define GAMES_KEY "wm.maximise_games"	/* what the bar starts from Games opens maximised (nxbar.c) */
+
+/* The colour in use, by its place in tints (one not listed: -1). */
+static int
+tint_chosen(void)
+{
+	const char *now = reg_get(UI_TINT, "default");
+	int i;
+
+	for (i = 0; i < TINTS; i++)
+		if (!strcasecmp(now, tints[i].value))
+			return i;
+	return -1;
+}
+
+/* Sets the windows' colour, keeps it in the registry, and paints every frame again. */
+static void
+set_tint(const char *value)
+{
+	reg_set(UI_TINT, value);
+	ui_tint_set(ui_tint_parse(value));
+	if (window)
+		frames_again();
+}
+
+static void
+tint_choose(int which)
+{
+	if (which >= 0 && which < TINTS)
+		set_tint(tints[which].value);
+}
+
 static void
 draw(void)
 {
@@ -815,6 +859,30 @@ draw(void)
 		}
 		ui_text(window, 360, LOOK_Y(0) + 4, ui_seven ? "Pale glass frames, a dark bar." : "Grey frames, a blue caption.", -1, UI_SHADOW, 0);
 		ui_text(window, 360, LOOK_Y(2) + 4, ui_smooth ? "Selawik, smoothed." : "The window system's own.", -1, UI_SHADOW, 0);
+		ui_text(window, 8, TINT_Y - 20, "Window colour", -1, BLACK, 0);
+		{
+			int chosen = tint_chosen();
+
+			for (i = 0; i < TINTS; i++) {
+				if (i == 0)
+					ui_button(window, TINT_X(0), TINT_Y, TINT_W(0), 22, tints[0].name, chosen == 0);
+				else {
+					unsigned rgb = ui_tint_parse(tints[i].value);
+
+					ui_fill(window, TINT_X(i) + 2, TINT_Y + 2, 18, 18, MWRGB(rgb >> 16 & 255, rgb >> 8 & 255, rgb & 255));
+					ui_bevel(window, TINT_X(i), TINT_Y, 22, 22, 1);
+					GrSetGCForeground(ui_gc, chosen == i ? BLACK : UI_FACE);
+					GrRect(window, ui_gc, TINT_X(i) - 2, TINT_Y - 2, 26, 26);
+				}
+			}
+			if (focus == 5)
+				ui_focus(window, TINT_X(chosen < 0 ? 0 : chosen) + 4, TINT_Y + 4, TINT_W(chosen < 0 ? 0 : chosen) - 8, 22 - 8);
+			ui_text(window, 380, TINT_Y + 4, chosen > 0 ? tints[chosen].name : chosen == 0 ? "The look's own." : reg_get(UI_TINT, ""), -1, UI_SHADOW, 0);
+		}
+		ui_button(window, 8, GAMES_Y, 240, 22, reg_int(GAMES_KEY, 1) ? "Games open maximised: yes" : "Games open maximised: no",
+			reg_int(GAMES_KEY, 1));
+		if (focus == 6)
+			ui_focus(window, 8 + 4, GAMES_Y + 4, 240 - 8, 22 - 8);
 		ui_text(window, 8, HEIGHT - 44, "Frames, the bar and the desktop change at once; a program", -1, UI_SHADOW, 0);
 		ui_text(window, 8, HEIGHT - 26, "already open keeps its own look until it is opened again.", -1, UI_SHADOW, 0);
 		break;
@@ -941,7 +1009,7 @@ show_tab(int which)
 static int
 controls(void)
 {
-	return tab == TAB_SYSTEM || (tab == TAB_SOUND && have_sound <= 0) ? 1 : tab == TAB_STORAGE ? 4 : tab == TAB_LOOK ? 5 :
+	return tab == TAB_SYSTEM || (tab == TAB_SOUND && have_sound <= 0) ? 1 : tab == TAB_STORAGE ? 4 : tab == TAB_LOOK ? 7 :
 		tab == TAB_DEVICES ? 2 : 3;
 }
 
@@ -972,7 +1040,14 @@ key(const GR_EVENT *event)
 		draw();
 		break;
 	case TAB_LOOK:
-		if (ui_press_key(ch)) {
+		if (focus == 5 && (ch == MWKEY_LEFT || ch == MWKEY_RIGHT)) {
+			value = tint_chosen();
+			tint_choose(((value < 0 ? 0 : value) + (ch == MWKEY_LEFT ? TINTS - 1 : 1)) % TINTS);
+			draw();
+		} else if (focus == 6 && ui_press_key(ch)) {
+			reg_set(GAMES_KEY, reg_int(GAMES_KEY, 1) ? "0" : "1");
+			draw();
+		} else if (focus < 5 && ui_press_key(ch)) {
 			look_choose(focus - 1);
 			draw();
 		}
@@ -1042,6 +1117,17 @@ press(GR_EVENT *event)
 				look_choose(how);
 				draw();
 			}
+		for (how = 0; down && how < TINTS; how++)
+			if (ui_inside(x, y, TINT_X(how), TINT_Y, TINT_W(how), 22)) {
+				focus = 5;
+				tint_choose(how);
+				draw();
+			}
+		if (down && ui_inside(x, y, 8, GAMES_Y, 240, 22)) {
+			focus = 6;
+			reg_set(GAMES_KEY, reg_int(GAMES_KEY, 1) ? "0" : "1");
+			draw();
+		}
 		break;
 	case TAB_SCREEN:
 		if (ui_list_event(&screens, event)) {
@@ -1129,6 +1215,13 @@ main(int argc, char **argv)
 	ui_init();
 	if (argc == 1 && ui_single_instance())
 		return 0;
+	/* nxsettings color RRGGBB|default: the windows' colour, as the Look tab sets it */
+	if (argc > 2 && (!strcmp(argv[1], "color") || !strcmp(argv[1], "colour"))) {
+		set_tint(ui_tint_parse(argv[2]) ? argv[2] : "default");
+		frames_again();
+		GrClose();
+		return 0;
+	}
 	/* nxsettings look seven|classic [smooth|classic]: the look, as the Look tab sets it */
 	if (argc > 2 && !strcmp(argv[1], "look")) {
 		set_look(strcmp(argv[2], "classic") != 0, argc > 3 ? strcmp(argv[3], "classic") != 0 : ui_smooth);

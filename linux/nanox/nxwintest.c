@@ -10,6 +10,8 @@
  *	nxwintest linger [TITLE]	closes its window when asked and goes on running
  *	nxwintest crash [TITLE]		its window, then SIGSEGV 3 s later
  *	nxwintest slow SECONDS		no window for that long, then a plain one
+ *	nxwintest size W H		the front framed window put back and given a client area of W x H at
+ *					the screen's corner (a game's look at another size: tools/game_shots.py)
  */
 #include <signal.h>
 #include <stdio.h>
@@ -24,7 +26,13 @@ static GR_GC_ID gc;
 static GR_WINDOW_ID
 open_window(const char *title, int x)
 {
-	GR_WINDOW_ID w = GrNewWindowEx(GR_WM_PROPS_APPWINDOW, title, GR_ROOT_WINDOW_ID, x, 40, 240, 120, MWRGB(230, 236, 244));
+	const char *asked = getenv("SE_MAXIMISED");	/* (a game's starter asked it maximised: ui_launch.h) */
+	int w0 = 240, h0 = 120;
+	GR_WINDOW_ID w;
+
+	if (asked && sscanf(asked, "%dx%d", &w0, &h0) == 2)
+		printf("opened %dx%d\n", w0, h0), fflush(stdout);
+	w = GrNewWindowEx(GR_WM_PROPS_APPWINDOW, title, GR_ROOT_WINDOW_ID, x, 40, w0, h0, MWRGB(230, 236, 244));
 
 	GrSelectEvents(w, GR_EVENT_MASK_EXPOSURE | GR_EVENT_MASK_CLOSE_REQ | GR_EVENT_MASK_UPDATE);
 	GrMapWindow(w);
@@ -80,6 +88,41 @@ list(void)
 	return 0;
 }
 
+/* The front framed window not maximised and its client W x H, its frame at 0,0 (wmclients.c's wm_place). */
+static int
+size(int w, int h)
+{
+	GR_WINDOW_ID parent, *kids = NULL, *inner = NULL;
+	GR_COUNT n = 0, m = 0, i;
+	GR_WM_PROPERTIES word;
+	GR_WINDOW_INFO info, cinfo;
+
+	GrQueryTree(GR_ROOT_WINDOW_ID, &parent, &kids, &n);
+	for (i = 0; i < n; i++) {
+		GrGetWindowInfo(kids[i], &info);
+		if (!(info.props & GR_WM_PROPS_NODECORATE) && info.mapped)
+			break;
+	}
+	if (i == n || (GrQueryTree(kids[i], &parent, &inner, &m), !m))
+		return printf("size: no framed window\n"), 1;
+	word.flags = GR_WM_FLAGS_COMMAND;
+	word.props = GR_WMC_TILE;
+	word.background = 0;
+	word.title = NULL;
+	GrSetWMProperties(kids[i], &word);
+	GrGetWindowInfo(kids[i], &info);
+	GrGetWindowInfo(inner[0], &cinfo);
+	GrMoveWindow(kids[i], 0, 0);
+	GrResizeWindow(kids[i], w + info.width - cinfo.width, h + info.height - cinfo.height);
+	GrResizeWindow(inner[0], w, h);
+	GrFlush();
+	printf("sized %dx%d\n", w, h);
+	fflush(stdout);
+	free(inner);
+	free(kids);
+	return 0;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -96,6 +139,8 @@ main(int argc, char **argv)
 		return 1;
 	if (!strcmp(mode, "list"))
 		return list();
+	if (!strcmp(mode, "size") && argc > 3)
+		return size(atoi(argv[2]), atoi(argv[3]));
 	gc = GrNewGC();
 	GrSetGCUseBackground(gc, GR_FALSE);
 	one = open_window(title, 100);
@@ -119,8 +164,11 @@ main(int argc, char **argv)
 			raise(SIGSEGV);	/* (without an MMU a store to a low address need not fault) */
 		if (event.type == GR_EVENT_TYPE_EXPOSURE)
 			draw(event.exposure.wid, event.exposure.wid == one ? title : "second");
-		if (event.type == GR_EVENT_TYPE_UPDATE && event.update.utype == GR_UPDATE_SIZE && event.update.wid == one)
+		if (event.type == GR_EVENT_TYPE_UPDATE && event.update.utype == GR_UPDATE_SIZE && event.update.wid == one) {
+			printf("resized %dx%d\n", event.update.width, event.update.height);
+			fflush(stdout);
 			draw(one, title);
+		}
 		if (event.type != GR_EVENT_TYPE_CLOSE_REQ || !strcmp(mode, "ignore"))
 			continue;
 		GrDestroyWindow(event.general.wid);

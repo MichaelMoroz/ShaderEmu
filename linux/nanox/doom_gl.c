@@ -50,6 +50,7 @@ extern int skyflatnum;
 int doom_gl;				/* set by doom_video.c: the GPU draws the view */
 int doom_gl_scene;			/* a view was drawn for the frame being built */
 int doom_gl_kept = 1;			/* and it can be drawn again as it was (doom_gl_again) */
+int doom_view_box(int width, int height, int wx, int wy, int ww, int wh, int view[4], int *k);	/* doom_video.c */
 
 static int in_view;			/* inside our R_RenderPlayerView */
 static int keyed_first, keyed_last = -1;	/* the rows given the key again for this frame */
@@ -97,6 +98,10 @@ static struct {
 	fixed_t x, y, z, sin, cos;
 	angle_t angle;
 	int extralight, white, window_x, window_y, wide, high, frame;
+	/* where the view is in the window (top down), the screen's scale (16.16), whether the view
+	 * reaches past the screen's box (doom_view_box), its size in Doom's pixels (16.16) and how far
+	 * to the side it sees, in 16ths of how far ahead (16: a quarter turn wide) */
+	int vx, vy, vw, vh, k, out, wide16, high16, spread16;
 	int sector, light, unseen;		/* the viewer's sector, its light, and whether the weapon is a shadow */
 	const void *self;
 	struct { const state_t *state; fixed_t sx, sy; } weapon[NUMPSPRITES];
@@ -1901,8 +1906,9 @@ world_things_direct(struct share *me)
 		for (; m; m = m->snext) {
 			int dx = (m->x >> FRACBITS) - vx, dy = (m->y >> FRACBITS) - vy;
 			int ahead = dx * cs + dy * sn + margin, beside = dx * sn - dy * cs;
+			int side = told.spread16 > 16 ? ahead + (ahead >> 4) * (told.spread16 - 16) : ahead;	/* a wider view */
 
-			if (ahead >= 0 && beside <= ahead && -beside <= ahead && m != self) {
+			if (ahead >= 0 && beside <= side && -beside <= side && m != self) {
 				const struct thing thing = { m, m->x, m->y, m->z, m->angle, m->sprite | (unsigned)m->frame << 16, 0, 0, 0,
 							     (m->flags & MF_SHADOW) != 0 };
 
@@ -1936,8 +1942,9 @@ world_things(struct share *me)
 			const struct thing *thing = &me->things[i];
 			int dx = (thing->x >> FRACBITS) - vx, dy = (thing->y >> FRACBITS) - vy;
 			int ahead = dx * cs + dy * sn + margin, beside = dx * sn - dy * cs;
+			int side = told.spread16 > 16 ? ahead + (ahead >> 4) * (told.spread16 - 16) : ahead;	/* a wider view */
 
-			if (ahead < 0 || beside > ahead || -beside > ahead || thing->id == self)
+			if (ahead < 0 || beside > side || -beside > side || thing->id == self)
 				continue;
 			thing_kept(me, thing, level, level_grey, &eye);
 		}
@@ -2082,6 +2089,18 @@ view_take(void)
 	told.window_y = viewwindowy;
 	told.wide = scaledviewwidth;
 	told.high = viewheight;
+	{
+		int width, height, view[4];
+
+		seglSize(&width, &height);
+		told.out = doom_view_box(width, height, viewwindowx, viewwindowy, scaledviewwidth, viewheight, view, &told.k);
+		told.vx = view[0], told.vy = view[1], told.vw = view[2], told.vh = view[3];
+		told.wide16 = told.out ? (int)(((long long)told.vw << 32) / told.k) : told.wide << FRACBITS;
+		told.high16 = told.out ? (int)(((long long)told.vh << 32) / told.k) : told.high << FRACBITS;
+		told.spread16 = told.out ? (told.wide16 / told.wide + 4095) >> 12 : 16;
+		if (told.spread16 < 16)
+			told.spread16 = 16;
+	}
 	told.sector = sector - sectors;
 	told.light = sector->lightlevel;
 	told.unseen = player->powers[pw_invisibility] > 4 * 32 || player->powers[pw_invisibility] & 8;
@@ -2427,6 +2446,25 @@ R_Subsector(int number)
 /* The sky: one picture a quarter turn wide behind everything, sliding with the view angle. Not from a holodeck's seat:
  * there it is a flat draw, which the HUD layer put over the whole world (a picture of the layer, tools/hud_shot.py,
  * 4 November 2026); the room has the sky ceilings laid as a panorama and a sky of its own behind them. */
+/* A view past the screen's box (told.out): the sky at the view's left edge (u, a quarter turn a unit), at
+ * its top (v, the picture's 128 rows a unit) and the rows of it a window's pixel goes down (16.16). A
+ * quarter turn is 320 of Doom's pixels across; down, a view taller than 200 of them has the picture's
+ * 200 rows stretched over it rather than the picture again over its top. */
+static void
+sky_place(fixed_t *left, fixed_t *top, fixed_t *row)
+{
+	fixed_t across = (fixed_t)(((long long)told.vw << 32) / (320LL * told.k));
+
+	*left = (fixed_t)(((told.angle >> 22) << 8) & 0xffff) + across / 2;
+	if (told.high16 <= 200 * FRACUNIT) {
+		*top = (100 * FRACUNIT - told.high16 / 2) / 128;
+		*row = (fixed_t)((1LL << 32) / told.k);
+	} else {
+		*top = 0;
+		*row = (fixed_t)((200LL << FRACBITS) / told.vh);
+	}
+}
+
 static void
 sky(void)
 {
@@ -2437,18 +2475,25 @@ sky(void)
 		return;
 	name = sky_texture();
 	fixed_t u = (fixed_t)(((told.angle + ANG45) >> 22) << 8), v = ((100 - told.high / 2) << FRACBITS) / 128;
-	fixed_t far = -(FRACUNIT - 2);
+	fixed_t far = -(FRACUNIT - 2), across = FRACUNIT, down = (told.high << FRACBITS) / 128;
 	int k;
 
 	if (!name)
 		return;
 	u &= 0xffff;
+	if (told.out) {
+		fixed_t row;
+
+		sky_place(&u, &v, &row);
+		across = (fixed_t)(((long long)told.vw << 32) / (320LL * told.k));
+		down = (fixed_t)(((long long)told.vh * row) >> 7);
+	}
 	for (k = 0; k < 4; k++) {
 		quad_xyz[k * 3] = (k == 1 || k == 2) ? FRACUNIT : 0;
 		quad_xyz[k * 3 + 1] = k >= 2 ? FRACUNIT : 0;
 		quad_xyz[k * 3 + 2] = far;
-		quad_uv[k * 2] = (k == 1 || k == 2) ? u - FRACUNIT + 4 * FRACUNIT : u + 4 * FRACUNIT;
-		quad_uv[k * 2 + 1] = v + (k >= 2 ? (told.high << FRACBITS) / 128 : 0);
+		quad_uv[k * 2] = (k == 1 || k == 2) ? u - across + 4 * FRACUNIT : u + 4 * FRACUNIT;
+		quad_uv[k * 2 + 1] = v + (k >= 2 ? down : 0);
 	}
 	seglQuad(quad_xyz, quad_uv, name, 255, 255, 0);
 }
@@ -2504,11 +2549,21 @@ weapon(void)
 		y = (told.high << FRACBITS) / 2 + FixedMul(told.weapon[i].sy - spritetopoffset[lump] - 100 * FRACUNIT - FRACUNIT / 2, scale);
 		w = FixedMul(spritewidth[lump], scale);
 		h = FixedMul(sprite_height[lump] << FRACBITS, scale);
+		if (told.out) {
+			/* a view past the screen's box: the weapon as large, in the middle, on the view's bottom */
+			x += (told.wide16 - (told.wide << FRACBITS)) / 2;
+			y += told.high16 - (told.high << FRACBITS);
+		}
 		for (k = 0; k < 4; k++) {
 			int right = k == 1 || k == 2, low = k >= 2;
 
-			quad_xyz[k * 3] = (x + (right ? w : 0)) / told.wide;
-			quad_xyz[k * 3 + 1] = (y + (low ? h : 0)) / told.high;
+			if (told.out) {
+				quad_xyz[k * 3] = FixedDiv(x + (right ? w : 0), told.wide16);
+				quad_xyz[k * 3 + 1] = FixedDiv(y + (low ? h : 0), told.high16);
+			} else {
+				quad_xyz[k * 3] = (x + (right ? w : 0)) / told.wide;
+				quad_xyz[k * 3 + 1] = (y + (low ? h : 0)) / told.high;
+			}
 			quad_xyz[k * 3 + 2] = 0;
 			quad_uv[k * 2 + 1] = right != flip ? FRACUNIT : 0;	/* (v, u) */
 			quad_uv[k * 2] = low ? FRACUNIT : 0;
@@ -2593,11 +2648,21 @@ view_matrices(void)
 	static int wide = -1, high;
 	const fixed_t far = 8192 * FRACUNIT;
 
-	if (wide != told.wide || high != told.high) {
+	static int vw, vh;
+
+	if (wide != told.wide || high != told.high || vw != (told.out ? told.vw : 0) || vh != (told.out ? told.vh : 0)) {
 		wide = told.wide;
 		high = told.high;
+		vw = told.out ? told.vw : 0;
+		vh = told.out ? told.vh : 0;
 		to_clip[0] = FRACUNIT;
 		to_clip[5] = (told.wide << FRACBITS) / told.high;
+		if (told.out) {
+			/* past the screen's box: the same eye (160 of Doom's pixels from the screen,
+			 * a quarter turn across 320) sees more, a window's pixel the same angle */
+			to_clip[0] = (fixed_t)((320LL * told.k) / told.vw);
+			to_clip[5] = (fixed_t)((320LL * told.k) / told.vh);
+		}
 		to_clip[10] = -FixedDiv(far + NEAR, far - NEAR);
 		to_clip[14] = -FixedDiv(FixedMul(2 * NEAR, far >> 8), (far - NEAR) >> 8);
 		to_clip[11] = -FRACUNIT;
@@ -2714,9 +2779,9 @@ doom_view_draw(int share)
 		return;
 	}
 	seglSize(&width, &height);
-	/* the window may be any size: the view keeps its place on Doom's 320 by 200 screen */
-	glViewport(told.window_x * width / SCREENWIDTH, height - (told.window_y + told.high) * height / SCREENHEIGHT,
-		told.wide * width / SCREENWIDTH, told.high * height / SCREENHEIGHT);
+	/* the window may be any size: the view keeps its place on Doom's 320 by 200 screen, and one as
+	 * wide as it, from its top or to its bottom goes on to the window's edges (doom_view_box) */
+	glViewport(told.vx, height - (told.vy + told.vh), told.vw, told.vh);
 	glEnable(GL_TEXTURE_2D);
 	glEnable(GL_DEPTH_TEST);
 	glDisable(GL_BLEND);
@@ -2739,12 +2804,18 @@ doom_view_draw(int share)
 		seglKeptMatrices();
 		for (y = sector_group[numsectors]; y < sector_group[numsectors + 1]; y++) {
 			/* the sky's runs: its picture where sky() below would put it, by the pixel */
-			int vw = told.wide * width / SCREENWIDTH, vh = told.high * height / SCREENHEIGHT;
-			int vx = told.window_x * width / SCREENWIDTH, vy = told.window_y * height / SCREENHEIGHT;
+			int vw = told.vw, vh = told.vh, vx = told.vx, vy = told.vy;
 			fixed_t u = ((fixed_t)(((told.angle + ANG45) >> 22) << 8) & 0xffff) + 4 * FRACUNIT;
 			fixed_t v = ((100 - told.high / 2) << FRACBITS) / 128;
 
-			if (vw > 0 && vh > 0)
+			if (told.out && vw > 0 && vh > 0) {
+				fixed_t left, top, row;
+
+				sky_place(&left, &top, &row);
+				/* a quarter turn across 320 of Doom's pixels; rows as sky() has them */
+				seglKeptLaid(y, left + 4 * FRACUNIT + (fixed_t)(((long long)vx << 32) / (320LL * told.k)),
+					top - (fixed_t)(((long long)vy * row) >> 7), -(fixed_t)((1024LL << 32) / (320LL * told.k)), 8 * row);
+			} else if (vw > 0 && vh > 0)
 				seglKeptLaid(y, u + (vx << FRACBITS) / vw, v - ((vy * told.high) << 9) / vh, -(1024 << FRACBITS) / vw,
 					((8 * told.high) << FRACBITS) / vh);
 		}
@@ -2954,8 +3025,7 @@ doom_gl_again(void)
 	if (!world_on)
 		return;
 	seglSize(&width, &height);
-	glViewport(told.window_x * width / SCREENWIDTH, height - (told.window_y + told.high) * height / SCREENHEIGHT,
-		told.wide * width / SCREENWIDTH, told.high * height / SCREENHEIGHT);
+	glViewport(told.vx, height - (told.vy + told.vh), told.vw, told.vh);
 	glEnable(GL_TEXTURE_2D);
 	glEnable(GL_DEPTH_TEST);
 	glDisable(GL_BLEND);

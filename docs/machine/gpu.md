@@ -130,7 +130,22 @@ Flags added to the vertex mode:
 | `0x10000` moved | word 15 is the address of two texels, each a row of three numbers (floats or 16.16 as the draw's are): u' and v' are each a row's dot with (u, v, 1). A texture that slides, turns or grows costs the program those six numbers a draw, and its vertices stay as they are |
 | `0x20000` facing | with tagged: word 11 is the address of a table of the 256 ways a vertex can face, a texel each of three floats in the model's own space, and a vertex's tag is which. Word 13 is the address of three texels of floats: where the light comes from, its colour, and the colour of the light from everywhere. The vertex's colour is the last plus the second times how much it faces the first: a model is lit by those three texels and nothing is worked out for its vertices |
 
+| `0x40000` bones | floats, not compact: a skinned model's vertex made by the GPU from the model as it lies in memory ("A skinned model" below): word 1 the indices, 12 the vertices, 13 the bones, 14 the texture coordinates, 15 the light or 0 |
+
 A textured quad is then 16 words of vertices instead of 96.
+
+**A skinned model** (`0x40000`, 4 November 2026; Jedi Outcast's Ghoul2, `docs/games/jk2.md`, "Ghoul2 on the GPU"):
+drawn vertex k is the model's vertex whose index is word k of word 1's buffer (a word each, on 4 bytes: a model's
+triangles as its file has them). A vertex is 32 bytes on 4 (word 12): its normal and x, then y, z, a word of bone
+references (5 bits each from bit 0, the count less one in bits 30 and 31, each weight's top two bits in pairs from bit
+12) and a word of the weights' low bytes; a weight is tenths of 1,023 and the last one is 1 less the others. A bone is
+three texels (word 13), a row of four floats each, numbered by the vertex's references: the position is the weighted
+sum of the rows' products with (x, y, z, 1), the normal the first bone's rows' with the vertex's normal. Word 14 is two
+floats a vertex of texture coordinates (on 4 bytes). Word 15, when not 0, is three texels of light, each three floats
+of 0 to 255: from where the light comes in the model's space, its colour, and the colour from everywhere; the colour is
+then floor(min(the last + the second times max(normal . the first, 0), 255) x word 11's colour) / 255 and word 11's
+alpha, otherwise word 11 as it is. The draw's matrices are the modelview flag's; nothing of the model is copied a
+frame but its bones and light.
 
 **Fragment modes**
 

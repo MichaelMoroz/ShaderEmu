@@ -32,11 +32,13 @@ static struct __attribute__((aligned(16))) { void (*fn)(const void*); const void
 static struct __attribute__((aligned(16))) { volatile unsigned go, unused[3]; } job_go;  // this core's: the frame may begin
 static void gl_swap(void);
 static void memo_init(void);
+static void env_init(void);
 static int on_render(void) {
     char here;
     return (uint8_t*)&here >= render_stack && (uint8_t*)&here < render_stack + RENDER_STACK;
 }
 int jk2RenderWorkerHere(void) { return on_render(); }
+void jk2ServerServe(void);   // (the game's frame's worker: below)
 static uint32_t render_body(uint32_t given) {
     while (job_go.go != given) mc_end_pass();   // (until this core has given the frame's skins out: SE_SkinGive)
     job.fn(job.arg);
@@ -56,20 +58,23 @@ static void render_open(void) {
     mcw_touch_code(_start, (unsigned)(etext - _start));   // (a worker stops at a page of code no core has run)
     mcw_touch(render_stack, RENDER_STACK);
     mcw_touch(&job, sizeof job);
-    // (a worker on one of the first 16 cores, with the larger write cache: the drawing stores every vertex's words)
+    // (a worker on one of the first 16 cores, with the larger write cache: the drawing stores every vertex's words; the
+    // highest such, as mcw_try_call takes the lowest free one first: a job of the slots or the music's that took the
+    // drawing's or the mix's worker while it was free held its next frame back)
     rw0.worker = n;
-    for (int k = 1; k <= n; k++)
+    for (int k = n; k >= 1; k--)
         if (mcw_fast(k)) { rw0.worker = k; break; }
-    rw0.mode = 1;
+    rw0.mode = how && !strcmp(how, "menus") ? 2 : 1;
     printf("jk2: the drawing on worker %d (%s write cache), a frame behind\n", rw0.worker, mcw_fast(rw0.worker) ? "a large" : "a small");
 }
 // (in play only: a menu's few draws of many vertices are faster on this core, whose write cache is the larger)
 int SE_InPlay(void);
-int jk2RenderOn(void) { return on && rw0.mode == 1 && SE_InPlay(); }
+// (JK2_RENDER=menus: the menus' frames too)
+int jk2RenderOn(void) { return on && rw0.mode && (rw0.mode == 2 || SE_InPlay()); }
 // The frame out done and shown
 void jk2RenderSettle(void) {
     if (!rw0.out || on_render()) return;
-    while (!mcw_done(rw0.worker)) mcw_rest_for(&rw0.worker, 1), rw0.waits++;
+    while (!mcw_done(rw0.worker)) jk2ServerServe(), mcw_rest_for(&rw0.worker, 1), rw0.waits++;
     rw0.out = 0, rw0.settles++;
     if (job.swap) job.swap = 0, gl_swap();
 }
@@ -85,7 +90,7 @@ void jk2RenderGive(void (*fn)(const void*), const void* arg) {
 // docs/games/jk2.md, "The mix on a worker") ----
 #define MIX_STACK (128 * 1024)
 static uint8_t mix_stack[MIX_STACK] __attribute__((aligned(16)));
-static struct __attribute__((aligned(16))) { int worker, out, unused[2]; } mw0;   // this core's
+static struct __attribute__((aligned(16))) { int worker, out, waits, unused; } mw0;   // this core's
 static struct __attribute__((aligned(16))) { void (*fn)(void); int unused[3]; } mix_job;   // the worker's while out
 static uint32_t mix_body(uint32_t unused) {
     (void)unused;
@@ -97,11 +102,11 @@ static uint32_t mix_post(uint32_t a0, uint32_t a1) {
     return jk2_call_on_stack(mix_body, 0, mix_stack + MIX_STACK);
 }
 int jk2MixOn(void) {
-    if (!mw0.worker && rw0.mode == 1) {   // (a worker of the larger caches other than the drawing's)
+    if (!mw0.worker && rw0.mode) {   // (a worker of the larger caches other than the drawing's)
         const char* how = getenv("JK2_MIX");
         mw0.worker = -1;
         if (!(how && !strcmp(how, "core"))) {
-            for (int k = 1; k <= mcw_count(); k++)
+            for (int k = mcw_count(); k >= 1; k--)   // (the highest but the drawing's: render_open)
                 if (k != rw0.worker && mcw_fast(k)) { mw0.worker = k; break; }
             if (mw0.worker > 0) mcw_touch(mix_stack, MIX_STACK), mcw_touch(&mix_job, sizeof mix_job);
         }
@@ -110,14 +115,100 @@ int jk2MixOn(void) {
 }
 void jk2MixSettle(void) {
     if (!mw0.out) return;
-    while (!mcw_done(mw0.worker)) mcw_rest_for(&mw0.worker, 1);
+    while (!mcw_done(mw0.worker)) jk2ServerServe(), mcw_rest_for(&mw0.worker, 1), mw0.waits++;
     mw0.out = 0;
+}
+unsigned jk2MixWaits(void) {
+    unsigned w = mw0.waits;
+    mw0.waits = 0;
+    return w;
 }
 void jk2MixGive(void (*fn)(void)) {
     jk2MixSettle();
     mix_job.fn = fn;
     mcw_post(mw0.worker, mix_post, 0, 0);
     mw0.out = 1;
+}
+
+// ---- the game's next frame on a worker of its own beside the client's (JK2_SPLIT=worker: cl_main.cpp's CL_Frame,
+// docs/games/jk2.md, "The game's frame apart"). What only this core may do (allocations, the zone, cvars, commands,
+// files) the worker asks for and waits (jk2ServerOnCore0): this core makes it wherever it waits ----
+#define SERVER_STACK (512 * 1024)   // (se_slot.h's SE_SERVER_STACK: after the job slots' stacks, so SE_Core() knows it)
+extern uint8_t* const se_server_stack;
+#define server_stack se_server_stack
+static struct __attribute__((aligned(16))) { int worker, out, waits, asks; } sw0;   // this core's
+static struct __attribute__((aligned(16))) { void (*fn)(void*); void* arg; int unused[2]; } server_job;   // the worker's while out
+static struct __attribute__((aligned(16))) { volatile unsigned seq; uint32_t (*fn)(void*); void* args; unsigned unused; } sv_ask;   // the worker's
+static struct __attribute__((aligned(16))) { volatile unsigned seq; uint32_t result; unsigned unused[2]; } sv_answer;   // this core's
+int jk2ServerHere(void) {
+    char here;
+    return (uint32_t)((uint8_t*)&here - server_stack) < SERVER_STACK;
+}
+static uint32_t server_body(uint32_t unused) {
+    (void)unused;
+    server_job.fn(server_job.arg);
+    return 0;
+}
+static uint32_t server_post(uint32_t a0, uint32_t a1) {
+    (void)a0, (void)a1;
+    return jk2_call_on_stack(server_body, 0, server_stack + SERVER_STACK);
+}
+int jk2ServerOn(void) {
+    if (!sw0.worker && rw0.mode) {   // (a worker of the larger caches other than the drawing's and the mix's)
+        sw0.worker = -1;
+        jk2MixOn();
+        for (int k = mcw_count(); k >= 1; k--)
+            if (k != rw0.worker && k != mw0.worker && mcw_fast(k)) { sw0.worker = k; break; }
+        if (sw0.worker > 0) {
+            mcw_touch(server_stack, SERVER_STACK), mcw_touch(&server_job, sizeof server_job);
+            mcw_touch(&sv_ask, sizeof sv_ask);
+            printf("jk2: the game's frame on worker %d beside the client's\n", sw0.worker);
+        }
+    }
+    return on && sw0.worker > 0;
+}
+uint32_t jk2ServerOnCore0(uint32_t (*fn)(void*), void* args) {
+    if (!jk2ServerHere()) return fn(args);
+    sv_ask.fn = fn, sv_ask.args = args;
+    mc_publish();   // (the call before its number)
+    sv_ask.seq = sv_ask.seq + 1;
+    while (sv_answer.seq != sv_ask.seq) mc_end_pass();
+    return sv_answer.result;
+}
+// What the worker asks made now, if it asks (and its stop at a page or a system call served): wherever this core waits
+void jk2ServerServe(void) {
+    if (!sw0.out) return;
+    if (sv_ask.seq != sv_answer.seq) {
+        sv_answer.result = sv_ask.fn(sv_ask.args);
+        sv_answer.seq = sv_ask.seq;
+        sw0.asks++;
+    }
+    mcw_done(sw0.worker);
+}
+void jk2ServerSettle(void) {
+    if (!sw0.out) return;
+    while (!mcw_done(sw0.worker)) jk2ServerServe(), mcw_rest_for(&sw0.worker, 1), sw0.waits++;
+    sw0.out = 0;
+}
+void jk2ServerGive(void (*fn)(void*), void* arg) {
+    jk2ServerSettle();
+    static unsigned gives, deepest;   // (JK2_SERVER_DEPTH=1: how deep the frame's stack went, every 100 frames)
+    static int depth_on = -1;
+    if (depth_on < 0) depth_on = getenv("JK2_SERVER_DEPTH") != NULL;
+    if (depth_on && (++gives <= 10 || gives % 100 == 0)) {
+        const uint32_t* w = (const uint32_t*)server_stack;
+        unsigned k = 0;
+        while (k < SERVER_STACK / 4 && !w[k]) k++;
+        if (SERVER_STACK - k * 4 > deepest) deepest = SERVER_STACK - k * 4;
+        printf("jk2: the game's frame's stack %u bytes deep at most\n", deepest);
+    }
+    server_job.fn = fn, server_job.arg = arg;
+    mcw_post(sw0.worker, server_post, 0, 0);
+    sw0.out = 1;
+}
+void jk2ServerStats(unsigned* waits, unsigned* asks) {
+    *waits = sw0.waits, *asks = sw0.asks;
+    sw0.waits = sw0.asks = 0;
 }
 
 // The given frame may begin (posted first, so that no helper's job takes its worker)
@@ -168,6 +259,7 @@ int jk2glOpen(unsigned window) {
     on = 1;
     render_open();
     memo_init();
+    env_init();
     return 0;
 }
 static int depth_seen;   // a draw of this frame was depth-tested (fast_triangles: what is drawn before it is behind it)
@@ -177,6 +269,15 @@ static void gl_swap(void) {
     depth_seen = 0;
     if (gl_log_at < 0) gl_log_at = getenv("JK2_GL_LOG") ? atoi(getenv("JK2_GL_LOG")) : 0;
     gl_frames++;
+}
+// JK2_HOLD=F (sys_shaderemu.cpp, at the game's frame F): the frame given last drawn and shown, its list the last in RAM
+// and done, and the game held there, for a capture (rvc_cpu --until "jk2: holding" --save-ram, tools/gpu_reference.py)
+void jk2glHold(int frame) {
+    jk2RenderSettle();
+    if (on) seglSettle();
+    printf("jk2: holding at frame %d, swap %d\n", frame, gl_frames);
+    fflush(stdout);
+    for (;;) sleep(1);
 }
 void jk2glSwap(void) {
     if (!on || rw0.presenting) return;   // (a frame given to the worker: shown when it is done)
@@ -261,7 +362,14 @@ static int fast_ok(void) {
 // third of making it again, and none of its 69 KB stored. Draws of 600 indices and more, the last 8. JK2_GL=nomemo: not.
 #define MEMO_SLOTS 8
 #define MEMO_LEAST 600
-typedef struct { int count, n, far, frame; uint32_t keep, colour; unsigned used; gpu_state s; uint32_t *in, *idx; } memo_t;
+typedef struct { int count, n, far, frame; uint32_t keep, colour, ka, kb; unsigned used; gpu_state s; uint32_t *in, *idx; } memo_t;
+// The arrays' name, when rd-vanilla says what they hold (jk2glKey: tess filled with one static model's surface at a frame,
+// tr_surface.cpp's RB_SurfaceMesh): a kept draw made of the same is the same but for its coordinates and colours, which
+// are still compared (0: no name, everything compared)
+static uint32_t key_a, key_b;
+static uint32_t key_gen = 1;   // (raised when the models are made again: a surface's place may be another's then)
+void jk2glKey(const void* surface, int frame) { key_a = (uint32_t)(uintptr_t)surface, key_b = surface ? (uint32_t)frame ^ key_gen << 20 : 0; }
+void jk2glKeysForget(void) { key_gen++; }
 static memo_t memo[MEMO_SLOTS];
 static uint8_t* memo_gpu;
 static int memo_state = -1;   // -1 not yet asked, 0 off, 1 on
@@ -277,6 +385,14 @@ static memo_t* memo_find(const gpu_state* s, int count, int n, int far, uint32_t
         *shape = m;
         const uint32_t* in = m->in;
         int k = 0;
+        if (key_a && m->ka == key_a && m->kb == key_b) {   // (the same model's surface and frame: its positions and indices)
+            for (; k < n; k++, in += 6) {
+                const uint32_t* t = (const uint32_t*)(tc + (size_t)k * ts);
+                if (t[0] != in[3] || t[1] != in[4] || *(const uint32_t*)(col + (size_t)k * cs) != in[5]) break;
+            }
+            if (k == n) return m;
+            continue;
+        }
         for (; k < n; k++, in += 6) {
             const uint32_t* p = (const uint32_t*)(pos + (size_t)k * ps);
             const uint32_t* t = (const uint32_t*)(tc + (size_t)k * ts);
@@ -469,6 +585,7 @@ static int fast_triangles(int count, const uint32_t* idx) {
         }
         for (int i = 0; i < count; i++) kept->idx[i] = idx[i] - lo;
         kept->s = s0, kept->count = count, kept->n = n, kept->far = far, kept->keep = keep, kept->colour = s.colour;
+        kept->ka = key_a, kept->kb = key_b;
         kept->used = ++memo_clock, kept->frame = gl_frames;
         gpuDrawAt(&s, gpuAddress(to), count);
     } else if (!(to = gpuDrawRoom(&s, count, count))) {
@@ -482,6 +599,248 @@ static int fast_triangles(int count, const uint32_t* idx) {
     drawn_vertices += (uint32_t)count;
     return 1;
 }
+// The world's faces kept (docs/games/jk2.md, "The world's faces kept"; rd-vanilla's tr_surface.cpp): a face's words for
+// one kind of its coordinates, made once by jk2glKeptWords as fast_triangles makes a vertex's, and copied into the draw
+// of each stage that has them by jk2glKeptFaces, the stage's one colour the draw's. The coordinates are from 0 when
+// they lie in 0 to 63 (as fast_triangles has a clamped texture's: the light maps), else from the face's own floor, not
+// its draw's (in a texture that repeats, the same texels; 2 from jk2glKeptWords). 0 from jk2glKeptWords: coordinates
+// over 64 repeats, which a word does not hold; 0 from jk2glKeptFaces: a draw fast_triangles would make otherwise (a
+// clamped texture with words from a floor, an offset, no texture), which rd-vanilla then draws from tess.
+// JK2_GL=plain: none.
+int jk2glKeptOn(void) {
+    fast_ok();
+    return !fast_off;
+}
+int jk2glKeptWords(uint32_t* to, const float* points, int stride, int st, const int* idx, int count, int verts) {
+    float low_s = points[st], low_t = points[st + 1], high_s = low_s, high_t = low_t;
+    for (int k = 1; k < verts; k++) {
+        const float* t = points + (size_t)k * stride + st;
+        if (t[0] < low_s) low_s = t[0];
+        if (t[0] > high_s) high_s = t[0];
+        if (t[1] < low_t) low_t = t[1];
+        if (t[1] > high_t) high_t = t[1];
+    }
+    int floored = 2;   // (coordinates from 0, as fast_triangles makes a clamped texture's: either texture takes them)
+    if (low_s >= 0.0f && low_t >= 0.0f && high_s < 63.0f && high_t < 63.0f) {
+        floored = 1, low_s = low_t = 0.0f;
+    } else {
+        low_s = floor_of(low_s), low_t = floor_of(low_t);
+        if (!(high_s - low_s < 63.0f && high_t - low_t < 63.0f)) return 0;
+    }
+    for (int i = 0; i < count; i++, to += 4) {
+        const float* p = points + (size_t)idx[i] * stride;
+        to[0] = bits(p[0]), to[1] = bits(p[1]), to[2] = bits(p[2]);
+        to[3] = ((uint32_t)(int32_t)((p[st] - low_s) * 1024.0f) & 0xffff) | (uint32_t)(int32_t)((p[st + 1] - low_t) * 1024.0f) << 16;
+    }
+    return floored == 2 ? 2 : 1;
+}
+// Draws of words made elsewhere (the weather's particles, by its helper: rd-vanilla's tr_WorldEffects.cpp), as
+// fast_triangles makes a vertex of a draw of many colours: positions, coordinates from 0 in 12 bits each and a tag, the
+// tag a colour of the draw's table. `tables` holds each draw's 256 colours as the GL's RGBA bytes, made the GPU's words
+// here, with the state the GL has. 0: a 2D state, which those draws never have (the caller draws them otherwise).
+int jk2glTaggedDraws(const uint32_t* words, uint32_t* tables, const int* counts, int draws) {
+    if (!on) return 1;
+    fast_ok();
+    gpu_state s;
+    if (!draw_state(&s)) return 1;   // (its texture not in GPU memory: not drawn, as fast_triangles)
+    if (!fast_passes) {
+        float m[16];
+        seglGetMatrix(GL_PROJECTION, m);
+        if (m[10] == -2.0f && m[14] == -1.0f && m[11] == 0.0f && m[15] == 1.0f) return 0;
+        depth_seen = 1;
+    }
+    uint32_t keep = blending && blend_src == GL_ONE && blend_dst == GL_ONE ? 0x00ffffffu : 0xffffffffu;
+    s.vertex = GPU_TAGGED | GPU_TABLE;
+    for (int d = 0; d < draws; d++, tables += 256) {
+        const int tags = (counts[d] + 2) / 3 > 256 ? 256 : (counts[d] + 2) / 3;   // (at most a tag a triangle)
+        for (int k = 0; k < tags; k++) tables[k] = WORD_OF(tables[k]) & keep;
+        s.colour = gpuAddress(tables);
+        if (!gpuDrawAt(&s, gpuAddress(words), counts[d])) return 1;
+        drawn_vertices += (uint32_t)counts[d];
+        words += (size_t)counts[d] * 4;
+    }
+    return 1;
+}
+// (the GPU done with the list in flight: before memory it reads where it lies, the kept faces' words, is let go)
+void jk2glSettle(void) {
+    if (on) seglSettle();
+}
+// (floored: some face's words are from its floor, which a clamped texture does not take)
+int jk2glKeptFaces(uint32_t rgba, const uint32_t* const* words, const int* counts, int faces, int floored) {
+    if (!on) return 1;
+    gpu_state s;
+    if (!draw_state(&s)) return 1;   // (its texture not in GPU memory: not drawn, as fast_triangles)
+    if ((s.fragment & 0xff) == GPU_COLOUR || (floored && (s.fragment & GPU_CLAMPED)) || (offsetting && offset_pull != 0)) return 0;
+    depth_seen = 1;
+    uint32_t keep = blending && blend_src == GL_ONE && blend_dst == GL_ONE ? 0x00ffffffu : 0xffffffffu;
+    s.colour = replace ? 0x00ffffffu : WORD_OF(rgba) & keep;
+    // (drawn where the words lie, faces whose words follow each other in one draw: copied into the frame's list they
+    // filled its 512 KB of vertices, and what came after them, the HUD, found no room)
+    for (int f = 0; f < faces;) {
+        int count = counts[f], g = f + 1;
+        while (g < faces && words[g] == words[g - 1] + counts[g - 1] * 4 && count + counts[g] <= MAX_PRIMITIVE) count += counts[g++];
+        if (!gpuDrawAt(&s, gpuAddress(words[f]), count)) return 1;
+        drawn_vertices += (uint32_t)count;
+        f = g;
+    }
+    return 1;
+}
+// A Ghoul2 surface skinned by the GPU's vertex stage (gpu.h's VERTEX_BONES; docs/games/jk2.md, "Ghoul2 on the GPU"):
+// the model's own triangles, vertices and texture coordinates where they lie (memory of the program's, which the GPU
+// reads where it is: no MMU), its bone references' matrices and the entity's light copied into the frame's memory, the
+// state the GL has (texture, pass, blend) as fast_triangles takes it. `rgba` is the stage's colour (with a light, its
+// alpha alone), `light` twelve floats (from where and the red multiplier, its colour and the green one, the light from
+// everywhere and the blue one: gpu.h's three texels) or 0. 0: not drawn so, the caller skins it on this core.
+#define GPU_BONES 0x40000u
+int jk2glSkinned(const void* tris, int count, const void* verts, const void* coords, const float* bones, int nbones,
+                 const float* light, uint32_t rgba) {
+    if (!on || count < 3 || ((uintptr_t)verts & 3) || ((uintptr_t)coords & 3) || ((uintptr_t)tris & 3)) return 0;
+    SETTLE();
+    if (offsetting && offset_pull != 0) return 0;
+    fast_ok();   // (fast_passes asked)
+    gpu_state s;
+    if (!draw_state(&s)) return 1;   // (its texture not in GPU memory: not drawn, as fast_triangles)
+    if (!fast_passes) {   // (3D: what 2D comes after it goes on top)
+        float m[16];
+        seglGetMatrix(GL_PROJECTION, m);
+        if (m[10] == -2.0f && m[14] == -1.0f && m[11] == 0.0f && m[15] == 1.0f) return 0;
+        depth_seen = 1;
+    }
+    uint32_t keep = blending && blend_src == GL_ONE && blend_dst == GL_ONE ? 0x00ffffffu : 0xffffffffu;
+    uint32_t word = ((255u - (rgba >> 24)) << 24 | (rgba & 0xff) << 16 | (rgba & 0xff00) | (rgba >> 16 & 0xff)) & keep;
+    if (replace && (s.fragment & 0xff) != GPU_COLOUR) word = 0x00ffffffu, light = 0;
+    unsigned bytes = (unsigned)nbones * 48u + (light ? 48u : 0u);
+    float* room = gpuFrameMemory(bytes);
+    if (!room) return 1;
+    memcpy(room, bones, (size_t)nbones * 48);
+    uint32_t light_at = 0;
+    if (light) {
+        float* l = room + nbones * 12;
+        memcpy(l, light, 48);
+        light_at = gpuAddress(l);
+    }
+    s.vertex = GPU_BONES, s.colour = word;
+    s.more[0] = (uint32_t)(uintptr_t)verts, s.more[1] = gpuAddress(room), s.more[2] = (uint32_t)(uintptr_t)coords, s.more[3] = light_at;
+    uint32_t* c = gpuDrawAt(&s, (uint32_t)(uintptr_t)tris, count);
+    if (!c) return 1;
+    c[4] &= ~0x400u;   // (not compact: gpuDrawAt's draws are)
+    drawn_vertices += (uint32_t)count;
+    if (gl_log_at > 0 && gl_log_at == gl_frames)
+        printf("jk2gl: skinned %d indices, %d bones, texture %d, pass %u, colour %08x, lit %d\n", count, nbones,
+               texturing ? (int)bound : -1, s.fragment >> 16 & 15, word, light != 0);
+    return 1;
+}
+
+// ---- an environment-mapped stage on the GPU (gpu.h's VERTEX_ENV; docs/games/jk2.md, "The menu's logo") ----
+// rd-vanilla's tcGen environment makes every vertex's coordinates from the eye each frame: a turning model's shine was
+// made and copied again every frame (the menu's logo, 4,320 indices). Here the stage's positions and normals are kept
+// in GPU memory a drawn vertex each, with what they were made of, and a draw of the same state, indices, positions,
+// normals and colour is drawn from there with the eye's place, in the model's space, its only new words: the GPU
+// makes the coordinates as RB_CalcEnvironmentTexCoords does. 0: not drawn so (the caller makes them). JK2_ENV=cpu: never.
+#define ENV_SLOTS 4
+#define GPU_ENV 0x80000u
+typedef struct { int count, n, frame; uint32_t keep, colour, ka, kb; unsigned used; gpu_state s; uint32_t *in, *idx; uint8_t* gpu; } env_t;
+static env_t envs[ENV_SLOTS];
+static int env_state = -1;   // -1 not yet asked, 0 off, 1 on
+static unsigned env_clock;
+static void env_init(void) {
+    const char* g = getenv("JK2_ENV");
+    env_state = 0;
+    if (g && !strcmp(g, "cpu")) return;
+    uint8_t* gpu = hlglKeptMemory(ENV_SLOTS * MAX_PRIMITIVE * 32);
+    if (!gpu) return;
+    env_state = 1;
+    for (int e = 0; e < ENV_SLOTS && env_state; e++) {
+        envs[e].gpu = gpu + (size_t)e * MAX_PRIMITIVE * 32;
+        if (!(envs[e].in = malloc(MAX_PRIMITIVE * 7 * 4)) || !(envs[e].idx = malloc(MAX_PRIMITIVE * 4))) env_state = 0;
+        else mcw_touch(envs[e].in, MAX_PRIMITIVE * 7 * 4), mcw_touch(envs[e].idx, MAX_PRIMITIVE * 4);
+    }
+    mcw_touch(gpu, ENV_SLOTS * MAX_PRIMITIVE * 32);
+}
+#define ENV_WORD(c) ((255u - ((c) >> 24)) << 24 | ((c) & 0xff) << 16 | ((c) & 0xff00) | ((c) >> 16 & 0xff))
+int jk2glEnvElements(int count, const uint32_t* idx, const float* normal, const float* eye) {
+    if (!on || env_state <= 0 || count < 3 || count % 3 || count > MAX_PRIMITIVE - 1) return 0;
+    SETTLE();
+    if (!fast_ok()) return 0;
+    uint32_t lo = idx[0], hi = idx[0];
+    for (int i = 1; i < count; i++) {
+        uint32_t k = idx[i];
+        if (k < lo) lo = k;
+        if (k > hi) hi = k;
+    }
+    int n = (int)(hi - lo) + 1;
+    if (n > MAX_PRIMITIVE) return 0;
+    float m[16];
+    seglGetMatrix(GL_PROJECTION, m);
+    if (m[10] == -2.0f && m[14] == -1.0f && m[11] == 0.0f && m[15] == 1.0f) return 0;   // (2D: fast_triangles' way)
+    gpu_state s;
+    if (!draw_state(&s)) return 1;
+    if (!fast_passes) depth_seen = 1;
+    const uint8_t *pos = va_pos.p + (size_t)lo * va_pos.stride, *col = va_colour.p + (size_t)lo * va_colour.stride;
+    const float* nor = normal + (size_t)lo * 4;
+    int ps = va_pos.stride, cs = va_colour.stride;
+    uint32_t first = *(const uint32_t*)col;
+    for (int k = 1; k < n; k++)
+        if (*(const uint32_t*)(col + (size_t)k * cs) != first) return 0;   // (a colour a vertex: the CPU's way)
+    uint32_t keep = blending && blend_src == GL_ONE && blend_dst == GL_ONE ? 0x00ffffffu : 0xffffffffu;
+    uint32_t word = ENV_WORD(first) & keep;
+    if (replace && (s.fragment & 0xff) != GPU_COLOUR) word = 0x00ffffffu;
+    s.vertex = GPU_ENV, s.colour = word;
+    // a slot of the same state and shape whose positions, normals and indices are these
+    env_t* hit = 0;
+    for (int e = 0; e < ENV_SLOTS && !hit; e++) {
+        env_t* x = &envs[e];
+        if (!x->used || x->count != count || x->n != n || x->keep != keep || memcmp(&x->s, &s, sizeof s)) continue;
+        if (key_a && x->ka == key_a && x->kb == key_b) {   // (the same model's surface and frame: positions, normals, indices)
+            hit = x;
+            break;
+        }
+        const uint32_t* in = x->in;
+        int k = 0;
+        for (; k < n; k++, in += 6) {
+            const uint32_t* p = (const uint32_t*)(pos + (size_t)k * ps);
+            const uint32_t* q = (const uint32_t*)(nor + (size_t)k * 4);
+            if (p[0] != in[0] || p[1] != in[1] || p[2] != in[2] || q[0] != in[3] || q[1] != in[4] || q[2] != in[5]) break;
+        }
+        if (k < n) continue;
+        int i = 0;
+        for (; i < count && idx[i] - lo == x->idx[i]; i++) {
+        }
+        if (i == count) hit = x;
+    }
+    if (!hit) {   // (made again in the slot used longest ago)
+        hit = &envs[0];
+        for (int e = 1; e < ENV_SLOTS; e++)
+            if (envs[e].used < hit->used) hit = &envs[e];
+        if (hit->used && hit->frame >= gl_frames - 1) seglSettle();   // (the list being drawn may read it)
+        uint32_t* in = hit->in;
+        for (int k = 0; k < n; k++, in += 6) {
+            const uint32_t* p = (const uint32_t*)(pos + (size_t)k * ps);
+            const uint32_t* q = (const uint32_t*)(nor + (size_t)k * 4);
+            in[0] = p[0], in[1] = p[1], in[2] = p[2], in[3] = q[0], in[4] = q[1], in[5] = q[2];
+        }
+        uint32_t* to = (uint32_t*)hit->gpu;
+        uint32_t* normals = to + MAX_PRIMITIVE * 4;
+        for (int i = 0; i < count; i++, to += 4, normals += 4) {
+            uint32_t k = idx[i] - lo;
+            const uint32_t* v = hit->in + k * 6;
+            hit->idx[i] = k;
+            to[0] = v[0], to[1] = v[1], to[2] = v[2], to[3] = 0;
+            normals[0] = v[3], normals[1] = v[4], normals[2] = v[5], normals[3] = 0;
+        }
+        hit->s = s, hit->count = count, hit->n = n, hit->keep = keep, hit->ka = key_a, hit->kb = key_b;
+    }
+    hit->used = ++env_clock, hit->frame = gl_frames;
+    s.more[0] = gpuAddress(hit->gpu + MAX_PRIMITIVE * 16);
+    s.more[1] = bits(eye[0]), s.more[2] = bits(eye[1]), s.more[3] = bits(eye[2]);
+    gpuDrawAt(&s, gpuAddress(hit->gpu), count);
+    drawn_vertices += (uint32_t)count;
+    if (gl_log_at > 0 && gl_log_at == gl_frames) printf("jk2gl: environment %d indices %d vertices, texture %d, pass %u\n", count, n,
+                                                       texturing ? (int)bound : -1, s.fragment >> 16 & 15);
+    return 1;
+}
+#undef ENV_WORD
+
 #undef WORD_OF
 
 void jk2_glDrawElements(GLenum m, GLsizei count, GLenum type, const void* indices) {
@@ -573,8 +932,15 @@ void jk2_glTexSubImage2D(GLenum t, GLint l, GLint x, GLint y, GLsizei w, GLsizei
     ON_THEN(s_glTexSubImage2D(t, l, x, y, w, h, format, type, p));
 }
 void jk2_glTranslatef(GLfloat x, GLfloat y, GLfloat z) { ON_THEN(s_glTranslatef(x, y, z)); }
+void jk2_glScalef(GLfloat x, GLfloat y, GLfloat z) { ON_THEN(s_glScalef(x, y, z)); }
 void jk2_glVertex2f(GLfloat x, GLfloat y) { ON_THEN(s_glVertex2f(x, y)); }
 void jk2_glVertex3f(GLfloat x, GLfloat y, GLfloat z) { ON_THEN(s_glVertex3f(x, y, z)); }
 void jk2_glVertex3fv(const GLfloat* v) { ON_THEN(s_glVertex3fv(v)); }
 void jk2_glVertexPointer(GLint size, GLenum type, GLsizei stride, const void* p) { ON_THEN(s_glVertexPointer(size, type, stride, p)); }
 void jk2_glViewport(GLint x, GLint y, GLsizei w, GLsizei h) { ON_THEN(s_glViewport(x, y, w, h)); }
+
+// (the mix's worker runs on a stack of its own, where mcw_on_worker() is false: sys_shaderemu.cpp's SE_OnFirstCore asks)
+int jk2MixWorkerHere(void) {
+    char here;
+    return (uint8_t*)&here >= mix_stack && (uint8_t*)&here < mix_stack + MIX_STACK;
+}

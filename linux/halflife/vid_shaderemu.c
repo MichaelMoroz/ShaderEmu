@@ -13,6 +13,8 @@ game reads the host's words (docs/world/holodeck.md, "Played from the seat").
 #include "vid_common.h"
 #include "mod_local.h"
 #include "studio.h"
+#include <stdio.h>
+#include <stdlib.h>
 #include <nano-X.h>
 #include <GLES/segl.h>
 
@@ -58,6 +60,15 @@ void SE_Splash( void )
 	if( window || Sys_CheckParm( "-dedicated" ) || GrOpen() < 0 )
 		return;
 	GrGetScreenInfo( &info );
+	// the desktop starts it maximised (SE_MAXIMISED, linux/apps/ui_launch.h): the window, the splash and the video
+	// mode at that size from the start, so the window manager's maximise changes nothing
+	if( getenv( "SE_MAXIMISED" ))
+	{
+		int w, h;
+
+		if( sscanf( getenv( "SE_MAXIMISED" ), "%dx%d", &w, &h ) == 2 && w >= 320 && h >= 200 )
+			win_w = w, win_h = h;
+	}
 	if( Sys_GetParmFromCmdLine( "-width", size ))
 		win_w = Q_atoi( size );
 	if( Sys_GetParmFromCmdLine( "-height", size ))

@@ -34,6 +34,7 @@ public static partial class ShaderEmuBuilder
         public float[] panel;      // the keys' middle on the console's face
         public float[] stand;      // the console's foot: x, z
         public float[] lamps;      // the corridor's, along x
+        public float[] furniture;  // what stands in the corridor: x0, x1, z0, z1 and the height of each
     }
 
     static void Solid(Transform parent, string name, float x0, float x1, float y0, float y1, float z0, float z1)
@@ -869,6 +870,9 @@ public static partial class ShaderEmuBuilder
             (k % 2 == 0 ? north : south).AddRange(new[] { plan.rooms[k * 3] - doorWide / 2, plan.rooms[k * 3] + doorWide / 2 });
         WallX(solid, "Holo corridor wall", hx0, hx1, hz1, wall, tall, doorHigh, north);
         WallX(solid, "Holo corridor wall", hx0, hx1, hz0 - wall, wall, tall, doorHigh, south);
+        if (plan.furniture != null)
+            for (int i = 0; i + 4 < plan.furniture.Length; i += 5)
+                Solid(solid, "Holo corridor furniture", plan.furniture[i], plan.furniture[i + 1], 0, plan.furniture[i + 4], plan.furniture[i + 2], plan.furniture[i + 3]);
 
         // ---- a visitor steps out of the lift
         foreach (GameObject go in world.gameObject.scene.GetRootGameObjects())
@@ -1126,6 +1130,10 @@ public static partial class ShaderEmuBuilder
         machine.volumeMaskMaterial = maskMat;
         Apply(machine);
         HoloGuards(world);
+        // what later menus added, which a holodeck made again here must have too: without them
+        // Hide put nothing away (EmuHolodeck.Arrange found no plates, models or show buttons)
+        ConsoleSwitch();
+        AddHoloKeyboard();
     }
 
     static void LightVolumeIn(Transform world, string name, Vector3 centre, Vector3 size)

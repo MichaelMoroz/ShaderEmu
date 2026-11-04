@@ -6,8 +6,10 @@ Shader "ShaderEmu/City"
     {
         _MainTex ("Texture", 2D) = "black" {}
         _Haze ("Haze", Color) = (0.035, 0.032, 0.045, 1)
+        _HazeFlash ("Haze lit by lightning (at a flash of 1, ten times this)", Color) = (0.035, 0.032, 0.045, 1)
         _Dark ("Unlit surfaces", Float) = 0.6
         _Bright ("Lights (above 1 they bloom)", Float) = 5
+        _Night ("The night's own light: what is not a bright light, times this", Float) = 1
     }
     SubShader
     {
@@ -21,8 +23,8 @@ Shader "ShaderEmu/City"
             #include "UnityCG.cginc"
 
             sampler2D _MainTex;
-            float4 _Haze;
-            float _Dark, _Bright;
+            float4 _Haze, _HazeFlash;
+            float _Dark, _Bright, _Night;
             float _UdonWeatherFlash;   // lightning (EmuWeather)
 
             struct v2f {
@@ -43,8 +45,13 @@ Shader "ShaderEmu/City"
                 float3 c = tex2D(_MainTex, i.uv).rgb * i.colour.rgb;
                 // a lit window is a lamp: many times brighter than the wall round it
                 float3 lit = c * _UdonWeatherFlash * 2.5;
-                c = c * lerp(_Dark, _Bright, smoothstep(0.12, 0.7, max(c.r, max(c.g, c.b)))) + lit;
-                return float4(lerp(c, _Haze.rgb * (1.0 + 10.0 * _UdonWeatherFlash), i.colour.a), 1);
+                c = c * lerp(_Dark, _Bright, smoothstep(0.12, 0.7, max(c.r, max(c.g, c.b))));
+                // the night darker but not its lights: what blooms (1 and above) as it was, what is under a
+                // quarter of that times _Night, smoothly between (the texture's windows run from dim to
+                // bright, and its grey roofs were lit half as lamps: _Dark alone left them). Lightning after
+                c = c * lerp(_Night, 1.0, smoothstep(0.25, 1.0, max(c.r, max(c.g, c.b)))) + lit;
+                // (the haze lightning lights apart from its own: the night darker, the flash as bright)
+                return float4(lerp(c, _Haze.rgb + _HazeFlash.rgb * 10.0 * _UdonWeatherFlash, i.colour.a), 1);
             }
             ENDCG
         }

@@ -93,7 +93,8 @@ class Runner:
             e['RVC_RACES'] = races
         if env:
             e.update(env)
-        line = f"{before or a.before}nx; sleep 3; nxfuzz {flat(plan)}; echo LX-''DONE\\n"
+        # (Half-Life's licence as accepted before, kept in the registry: the plans play the game, not its licence window)
+        line = f"nxreg set halflife.eula 8676e153; {before or a.before}nx; sleep 3; nxfuzz {flat(plan)}; echo LX-''DONE\\n"
         if len(line) > 1000:   # (a longer line is cut by what types it, with no word: the plan's end is lost and the run looks clean)
             raise ValueError(f'a plan of {len(line)} characters: split it')
         cmd = [os.path.join(ROOT, 'bin', 'rvc_cpu.exe'), '--image', a.image, '--quiet', '--uart-log', log, '--expect', '/ # ', '--send', line,

@@ -31,7 +31,9 @@
 /* the look's colours: read once, at ui_init */
 #define UI_FACE (ui_seven ? MWRGB(240, 240, 240) : MWRGB(192, 192, 192))
 #define UI_SHADOW (ui_seven ? MWRGB(160, 160, 160) : MWRGB(128, 128, 128))
-#define UI_SELECTED (ui_seven ? MWRGB(51, 153, 255) : MWRGB(0, 0, 128))
+/* a selection's ground (white text on it), and the accent's edge (a focus): in the windows' colour when one is chosen */
+#define UI_SELECTED (ui_seven ? ui_accent(MWRGB(51, 153, 255), 0) : ui_accent(MWRGB(0, 0, 128), -64))
+#define UI_ACCENT (ui_seven ? ui_accent(MWRGB(51, 153, 255), 0) : ui_accent(BLACK, -96))
 #define UI_KEPT "/persistence/desktop"	/* the desktop's own files that the host keeps (docs/system/persist.md) */
 #define UI_WALLPAPER_CHOICE "desktop.wallpaper"	/* the registry's key for what the desktop shows: a picture's path, or #RRGGBB */
 #define UI_WALLPAPER_DEFAULT "/usr/share/wallpaper-fox.jpg"
@@ -39,22 +41,365 @@
 
 static GR_GC_ID ui_gc;
 static GR_FONT_ID ui_fixed, ui_var;
-static int ui_fw, ui_fh;	/* a character of the fixed font */
+static int ui_fw, ui_fh;	/* a character of the fixed font: the bitmap one's cell in either look */
+static int ui_fixed_dy;		/* rows the fixed font is drawn lower, for the bitmap font's baseline */
 static struct ui_widths ui_var_widths;	/* the other font's: ui_width(&ui_var_widths, ui_var, ...) */
+
+/* Buttons lit under the pointer (docs/system/nanox.md, "Buttons under the pointer"). Every button
+ * ui_button or ui_button_seven draws is kept here with its window; such a window is asked for the
+ * pointer's coming and going, and while the pointer is over it for its latest place (one event at
+ * most waits: GR_EVENT_MASK_MOUSE_POSITION, not every move). The button under the pointer gets an
+ * edge in the accent, drawn over its own, so what the program drew in it stays. The events the program
+ * did not ask for are taken here and never reach it (the wrappers below, by the Gr names: a program
+ * includes ui.h before its calls). A fill or a clear that covers a kept button forgets it. */
+#define UI_HOT_MAX 64
+static struct ui_hot { GR_WINDOW_ID w; short x, y, width, height; unsigned char pressed, seven; } ui_hots[UI_HOT_MAX];
+static int ui_hot_count;
+/* the button lit now (w 0: none); gone: a fill covered it, so its edge is not put back unless it is drawn again */
+static struct ui_hot ui_lit;
+static int ui_lit_gone;
+static struct ui_hot_mask { GR_WINDOW_ID w; GR_EVENT_MASK asked; unsigned char known, hot; } ui_hot_masks[16];
+static GR_WINDOW_ID ui_hot_in;	/* the window the pointer is over, whose places are asked for */
+static int ui_hot_off = -1;	/* UI_HOVER=0: no lit buttons, the program's events as it asked for them */
+
+static struct ui_hot_mask *
+ui_hot_mask_of(GR_WINDOW_ID w, int make)
+{
+	int i, free_at = -1;
+
+	for (i = 0; i < 16; i++) {
+		if (ui_hot_masks[i].w == w)
+			return &ui_hot_masks[i];
+		if (!ui_hot_masks[i].w && free_at < 0)
+			free_at = i;
+	}
+	if (!make || free_at < 0)
+		return NULL;
+	memset(&ui_hot_masks[free_at], 0, sizeof ui_hot_masks[0]);
+	ui_hot_masks[free_at].w = w;
+	return &ui_hot_masks[free_at];
+}
+
+/* What the window is asked for: the program's, and the pointer's coming, going and place for its buttons. */
+static void
+ui_hot_select(struct ui_hot_mask *m)
+{
+	GR_EVENT_MASK extra = m->hot ? GR_EVENT_MASK_MOUSE_ENTER | GR_EVENT_MASK_MOUSE_EXIT : 0;
+
+	if (m->hot && ui_hot_in == m->w)
+		extra |= GR_EVENT_MASK_MOUSE_POSITION;
+	(GrSelectEvents)(m->w, m->asked | extra);
+}
+
+static void
+ui_select_events(GR_WINDOW_ID w, GR_EVENT_MASK mask)
+{
+	struct ui_hot_mask *m = ui_hot_mask_of(w, 1);
+
+	if (!m) {
+		(GrSelectEvents)(w, mask);
+		return;
+	}
+	m->asked = mask, m->known = 1;
+	ui_hot_select(m);
+}
+
+/* A button's edge: lit (the accent's, under the pointer) or its own, pressed or not. Windows 7's: the dark
+ * line round it and the two rings inside; classic: the ring inside the bevel. */
+static void
+ui_hot_edge(const struct ui_hot *b, int lit)
+{
+	int x = b->x, y = b->y, width = b->width, height = b->height, half = height / 2;
+	GR_COLOR ring1, ring2top, ring2bottom, line;
+
+	if (width < 6 || height < 6)
+		return;
+	if (!b->seven) {
+		GrSetGCForeground(ui_gc, lit ? UI_ACCENT : (ui_seven ? MWRGB(240, 240, 240) : MWRGB(192, 192, 192)));
+		GrRect(b->w, ui_gc, x + 1, y + 1, width - 2, height - 2);
+		return;
+	}
+	if (lit) {
+		line = ui_accent(MWRGB(60, 127, 177), -48);
+		ring1 = ui_accent(MWRGB(160, 210, 240), 150);
+		ring2top = ring2bottom = ui_accent(MWRGB(214, 238, 252), 210);
+	} else {
+		line = b->pressed ? ui_accent(MWRGB(44, 98, 139), -64) : MWRGB(112, 112, 112);
+		ring1 = b->pressed ? ui_accent(MWRGB(240, 250, 255), 244) : WHITE;
+		ring2top = b->pressed ? ui_accent(MWRGB(229, 244, 252), 232) : MWRGB(242, 242, 242);
+		ring2bottom = b->pressed ? ui_accent(MWRGB(196, 229, 246), 184) : MWRGB(221, 221, 221);
+	}
+	GrSetGCForeground(ui_gc, line);
+	GrLine(b->w, ui_gc, x + 1, y, x + width - 2, y);
+	GrLine(b->w, ui_gc, x + 1, y + height - 1, x + width - 2, y + height - 1);
+	GrLine(b->w, ui_gc, x, y + 1, x, y + height - 2);
+	GrLine(b->w, ui_gc, x + width - 1, y + 1, x + width - 1, y + height - 2);
+	if (lit)
+		GrSetGCForeground(ui_gc, ring1), GrRect(b->w, ui_gc, x + 1, y + 1, width - 2, height - 2);
+	else {	/* (ui_button_seven's edges: lit top and left, shaded bottom and right) */
+		GrSetGCForeground(ui_gc, ring1);
+		GrLine(b->w, ui_gc, x + 1, y + 1, x + width - 2, y + 1);
+		GrLine(b->w, ui_gc, x + 1, y + 1, x + 1, y + height - 2);
+		GrSetGCForeground(ui_gc, b->pressed ? ui_accent(MWRGB(158, 202, 228), 140) : MWRGB(205, 205, 205));
+		GrLine(b->w, ui_gc, x + 1, y + height - 2, x + width - 2, y + height - 2);
+		GrLine(b->w, ui_gc, x + width - 2, y + 1, x + width - 2, y + height - 2);
+	}
+	/* the second ring is the button's ground: its two halves */
+	GrSetGCForeground(ui_gc, ring2top);
+	GrLine(b->w, ui_gc, x + 2, y + 2, x + width - 3, y + 2);
+	GrLine(b->w, ui_gc, x + 2, y + 2, x + 2, y + half - 1);
+	GrLine(b->w, ui_gc, x + width - 3, y + 2, x + width - 3, y + half - 1);
+	GrSetGCForeground(ui_gc, ring2bottom);
+	GrLine(b->w, ui_gc, x + 2, y + height - 3, x + width - 3, y + height - 3);
+	GrLine(b->w, ui_gc, x + 2, y + half, x + 2, y + height - 3);
+	GrLine(b->w, ui_gc, x + width - 3, y + half, x + width - 3, y + height - 3);
+}
+
+/* Two kept buttons in one place of one window */
+static int
+ui_hot_same(const struct ui_hot *a, const struct ui_hot *b)
+{
+	return a->w == b->w && a->x == b->x && a->y == b->y && a->width == b->width && a->height == b->height;
+}
+
+/* The kept buttons wholly inside a rectangle of a window (all of it: width 0) are gone. */
+static void
+ui_hot_forget(GR_WINDOW_ID w, int x, int y, int width, int height)
+{
+	int i, j;
+
+	for (i = j = 0; i < ui_hot_count; i++) {
+		struct ui_hot *b = &ui_hots[i];
+		int gone = b->w == w && (width <= 0 || (b->x >= x && b->y >= y && b->x + b->width <= x + width &&
+			b->y + b->height <= y + height));
+
+		if (gone && ui_lit.w && ui_hot_same(b, &ui_lit))
+			ui_lit_gone = 1;
+		if (!gone)
+			ui_hots[j++] = *b;
+	}
+	ui_hot_count = j;
+}
+
+/* A button drawn: kept, and lit again if the pointer is on it. */
+static void
+ui_hot_drawn(GR_WINDOW_ID w, int x, int y, int width, int height, int pressed, int seven)
+{
+	struct ui_hot_mask *m;
+	int i;
+
+	if (ui_hot_off < 0) {
+		const char *e = getenv("UI_HOVER");
+
+		ui_hot_off = e && e[0] == '0';	/* UI_HOVER=0 */
+	}
+	if (ui_hot_off)
+		return;
+	for (i = 0; i < ui_hot_count; i++)
+		if (ui_hots[i].w == w && ui_hots[i].x == x && ui_hots[i].y == y && ui_hots[i].width == width &&
+		    ui_hots[i].height == height)
+			break;
+	if (i == ui_hot_count) {
+		if (ui_hot_count == UI_HOT_MAX)
+			return;
+		ui_hot_count++;
+	}
+	ui_hots[i] = (struct ui_hot){ w, (short)x, (short)y, (short)width, (short)height, (unsigned char)(pressed != 0),
+		(unsigned char)seven };
+	if (ui_lit.w == w && ui_lit.x == x && ui_lit.y == y && ui_lit.width == width && ui_lit.height == height) {
+		ui_lit = ui_hots[i], ui_lit_gone = 0;
+		ui_hot_edge(&ui_lit, 1);
+	}
+	if ((m = ui_hot_mask_of(w, 1)) && !m->hot) {
+		if (!m->known) {	/* (a window selected before this program included ui.h, or a pixmap: 0) */
+			GR_WINDOW_INFO info;
+
+			GrGetWindowInfo(w, &info);
+			m->asked = info.wid == w ? info.eventmask : 0, m->known = 1;
+		}
+		m->hot = 1;
+		ui_hot_select(m);
+	}
+}
+
+/* An event seen before the program sees it; true when the program did not ask for it (it is dropped). */
+static int
+ui_hot_event(const GR_EVENT *ep)
+{
+	struct ui_hot_mask *m;
+	GR_WINDOW_ID w;
+	GR_EVENT_MASK bit;
+	int x, y, i, at = -1;
+
+	if (ep->type == GR_EVENT_TYPE_MOUSE_ENTER || ep->type == GR_EVENT_TYPE_MOUSE_EXIT)
+		w = ep->general.wid, bit = GR_EVENTMASK(ep->type);
+	else if (ep->type == GR_EVENT_TYPE_MOUSE_POSITION || ep->type == GR_EVENT_TYPE_MOUSE_MOTION)
+		w = ep->mouse.wid, bit = GR_EVENTMASK(ep->type);
+	else
+		return 0;
+	if (!(m = ui_hot_mask_of(w, 0)) || !m->hot)
+		return 0;
+	if (ep->type == GR_EVENT_TYPE_MOUSE_ENTER && ui_hot_in != w)
+		ui_hot_in = w, ui_hot_select(m);
+	else if (ep->type == GR_EVENT_TYPE_MOUSE_EXIT && ui_hot_in == w)
+		ui_hot_in = 0, ui_hot_select(m);
+	if (ep->type == GR_EVENT_TYPE_MOUSE_POSITION || ep->type == GR_EVENT_TYPE_MOUSE_MOTION) {
+		x = ep->mouse.x, y = ep->mouse.y;
+		for (i = ui_hot_count - 1; i >= 0; i--)	/* (the last drawn is on top) */
+			if (ui_hots[i].w == w && x >= ui_hots[i].x && y >= ui_hots[i].y && x < ui_hots[i].x + ui_hots[i].width &&
+			    y < ui_hots[i].y + ui_hots[i].height) {
+				at = i;
+				break;
+			}
+	}
+	if (at < 0 ? ui_lit.w != 0 : ui_lit.w == 0 || ui_lit_gone || !ui_hot_same(&ui_hots[at], &ui_lit)) {
+		if (ui_lit.w && !ui_lit_gone)
+			ui_hot_edge(&ui_lit, 0);
+		memset(&ui_lit, 0, sizeof ui_lit);
+		ui_lit_gone = 0;
+		if (at >= 0)
+			ui_lit = ui_hots[at], ui_hot_edge(&ui_lit, 1);
+		if (getenv("UI_HOVER_PRINT")) {	/* (for a test: tools/test_all.py's ui-hover) */
+			if (at >= 0)
+				printf("ui: lit %d,%d %dx%d\n", ui_lit.x, ui_lit.y, ui_lit.width, ui_lit.height);
+			else
+				printf("ui: unlit\n");
+			fflush(stdout);
+		}
+	}
+	return !(m->asked & bit);
+}
+
+static void
+ui_next_event(GR_EVENT *ep)
+{
+	do
+		(GrGetNextEvent)(ep);
+	while (ui_hot_event(ep));
+}
+
+static void
+ui_next_event_timeout(GR_EVENT *ep, GR_TIMEOUT timeout)
+{
+	do
+		(GrGetNextEventTimeout)(ep, timeout);
+	while (ui_hot_event(ep));
+}
+
+static void
+ui_check_next_event(GR_EVENT *ep)
+{
+	do
+		(GrCheckNextEvent)(ep);
+	while (ui_hot_event(ep));
+}
+
+static int
+ui_peek_event(GR_EVENT *ep)
+{
+	int got;
+
+	while ((got = (GrPeekEvent)(ep)) && ep->type != GR_EVENT_TYPE_NONE && ui_hot_event(ep))
+		(GrCheckNextEvent)(ep);	/* (taken from the queue: it was seen) */
+	return got;
+}
+
+static GR_FNCALLBACKEVENT ui_service_cb;
+
+static void
+ui_service_event(GR_EVENT *ep)
+{
+	if (!ui_hot_event(ep) && ui_service_cb)
+		ui_service_cb(ep);
+}
+
+static void
+ui_service_select(void *fds, GR_FNCALLBACKEVENT cb)
+{
+	ui_service_cb = cb;
+	(GrServiceSelect)(fds, cb ? ui_service_event : NULL);
+}
+
+static void
+ui_fill_rect(GR_DRAW_ID w, GR_GC_ID gc, GR_COORD x, GR_COORD y, GR_SIZE width, GR_SIZE height)
+{
+	if (ui_hot_count)
+		ui_hot_forget(w, x, y, width > 0 ? width : 1, height > 0 ? height : 1);
+	(GrFillRect)(w, gc, x, y, width, height);
+}
+
+static void
+ui_clear_area(GR_WINDOW_ID w, GR_COORD x, GR_COORD y, GR_SIZE width, GR_SIZE height, GR_BOOL expose)
+{
+	if (ui_hot_count)
+		ui_hot_forget(w, x, y, width && height ? width : 0, width && height ? height : 0);
+	(GrClearArea)(w, x, y, width, height, expose);
+}
+
+static void
+ui_destroy_window(GR_WINDOW_ID w)
+{
+	struct ui_hot_mask *m = ui_hot_mask_of(w, 0);
+
+	if (ui_hot_count)
+		ui_hot_forget(w, 0, 0, 0, 0);
+	if (ui_lit.w == w)
+		memset(&ui_lit, 0, sizeof ui_lit);
+	if (m)
+		m->w = 0;
+	if (ui_hot_in == w)
+		ui_hot_in = 0;
+	(GrDestroyWindow)(w);
+}
+
+#define GrSelectEvents(w, mask) ui_select_events(w, mask)
+#define GrGetNextEvent(ep) ui_next_event(ep)
+#define GrGetNextEventTimeout(ep, timeout) ui_next_event_timeout(ep, timeout)
+#define GrCheckNextEvent(ep) ui_check_next_event(ep)
+#define GrPeekEvent(ep) ui_peek_event(ep)
+#define GrServiceSelect(fds, cb) ui_service_select(fds, cb)
+#define GrFillRect(w, gc, x, y, width, height) ui_fill_rect(w, gc, x, y, width, height)
+#define GrClearArea(w, x, y, width, height, expose) ui_clear_area(w, x, y, width, height, expose)
+#define GrDestroyWindow(w) ui_destroy_window(w)
+
+/* The fixed font for the look: Liberation Mono's distance fields when smooth and its characters
+ * are the bitmap font's width (font-mono-10: 6 pixels), else X6x13. ui_fw and ui_fh stay X6x13's,
+ * so a layout is the same in both looks. */
+static GR_FONT_ID
+ui_fixed_font(void)
+{
+	static int base = -1;
+	GR_FONT_INFO info;
+	GR_FONT_ID bitmap = GrCreateFontEx(GR_FONT_SYSTEM_FIXED, 0, 0, NULL), smooth;
+
+	if (base < 0) {
+		GrGetFontInfo(bitmap, &info);
+		ui_fw = info.maxwidth, ui_fh = info.height, base = info.baseline;
+	}
+	ui_fixed_dy = 0;
+	if (!ui_smooth || (smooth = GrCreateFontEx(UI_LOOK_FIXED, 0, 0, NULL)) == 0)
+		return bitmap;
+	GrGetFontInfo(smooth, &info);
+	/* (a font the ROM does not have, or a server drawing in software, gives the built-in one) */
+	if (info.lastchar != 0xffff || info.maxwidth != ui_fw || info.height > ui_fh) {
+		GrDestroyFont(smooth);
+		return bitmap;
+	}
+	GrDestroyFont(bitmap);
+	ui_fixed_dy = base - info.baseline;
+	if (ui_fixed_dy < 0 || ui_fixed_dy > ui_fh - info.height)
+		ui_fixed_dy = ui_fh - info.height;
+	return smooth;
+}
 
 static void
 ui_init(void)
 {
-	GR_FONT_INFO info;
-
 	ui_look_read();
 	ui_gc = GrNewGC();
 	GrSetGCUseBackground(ui_gc, GR_FALSE);
 	ui_var = GrCreateFontEx(ui_smooth ? UI_LOOK_FONT : GR_FONT_SYSTEM_VAR, 0, 0, NULL);
-	ui_fixed = GrCreateFontEx(GR_FONT_SYSTEM_FIXED, 0, 0, NULL);
-	GrGetFontInfo(ui_fixed, &info);
-	ui_fw = info.maxwidth;
-	ui_fh = info.height;
+	ui_fixed = ui_fixed_font();
 }
 
 /* The look as Settings has it now; true when it changed, and the caller draws again. */
@@ -69,6 +414,8 @@ ui_restyle(void)
 		GrDestroyFont(ui_var);
 		ui_var = GrCreateFontEx(ui_smooth ? UI_LOOK_FONT : GR_FONT_SYSTEM_VAR, 0, 0, NULL);
 		ui_var_widths.known = 0;
+		GrDestroyFont(ui_fixed);	/* (a GC given ui_fixed by its caller is given it again) */
+		ui_fixed = ui_fixed_font();
 	}
 	return 1;
 }
@@ -95,13 +442,15 @@ ui_fill(GR_DRAW_ID w, int x, int y, int width, int height, GR_COLOR colour)
 }
 
 /* Text with its top left corner at x, y; `fixed` picks the font. (Selawik's ascent is a pixel
- * more than the bitmap font's: its text is a pixel higher, on the same baseline.) */
+ * more than the bitmap font's: its text is a pixel higher, on the same baseline; the fixed
+ * font's stand-in is lower by ui_fixed_dy.) */
 static void
 ui_text(GR_DRAW_ID w, int x, int y, const char *text, int count, GR_COLOR colour, int fixed)
 {
 	GrSetGCFont(ui_gc, fixed ? ui_fixed : ui_var);
 	GrSetGCForeground(ui_gc, colour);
-	GrText(w, ui_gc, x, y - (ui_smooth && !fixed), (void *)text, count < 0 ? (int)strlen(text) : count, GR_TFASCII | GR_TFTOP);
+	GrText(w, ui_gc, x, y + (fixed ? ui_fixed_dy : -(ui_smooth != 0)), (void *)text, count < 0 ? (int)strlen(text) : count,
+	       GR_TFASCII | GR_TFTOP);
 }
 
 /* The four sides of a rectangle, in two colours: top and left, bottom and right. */
@@ -134,15 +483,17 @@ ui_button_seven(GR_DRAW_ID w, int x, int y, int width, int height, int pressed)
 {
 	int half = height / 2;
 
-	ui_fill(w, x + 1, y + 1, width - 2, half - 1, pressed ? MWRGB(229, 244, 252) : MWRGB(242, 242, 242));
-	ui_fill(w, x + 1, y + half, width - 2, height - half - 1, pressed ? MWRGB(196, 229, 246) : MWRGB(221, 221, 221));
-	ui_edges(w, x + 1, y + 1, width - 2, height - 2, pressed ? MWRGB(240, 250, 255) : WHITE,
-		pressed ? MWRGB(158, 202, 228) : MWRGB(205, 205, 205));
-	GrSetGCForeground(ui_gc, pressed ? MWRGB(44, 98, 139) : MWRGB(112, 112, 112));
+	/* (pressed: the accent's pale halves and dark line, ui_hot_edge's colours too) */
+	ui_fill(w, x + 1, y + 1, width - 2, half - 1, pressed ? ui_accent(MWRGB(229, 244, 252), 232) : MWRGB(242, 242, 242));
+	ui_fill(w, x + 1, y + half, width - 2, height - half - 1, pressed ? ui_accent(MWRGB(196, 229, 246), 184) : MWRGB(221, 221, 221));
+	ui_edges(w, x + 1, y + 1, width - 2, height - 2, pressed ? ui_accent(MWRGB(240, 250, 255), 244) : WHITE,
+		pressed ? ui_accent(MWRGB(158, 202, 228), 140) : MWRGB(205, 205, 205));
+	GrSetGCForeground(ui_gc, pressed ? ui_accent(MWRGB(44, 98, 139), -64) : MWRGB(112, 112, 112));
 	GrLine(w, ui_gc, x + 1, y, x + width - 2, y);
 	GrLine(w, ui_gc, x + 1, y + height - 1, x + width - 2, y + height - 1);
 	GrLine(w, ui_gc, x, y + 1, x, y + height - 2);
 	GrLine(w, ui_gc, x + width - 1, y + 1, x + width - 1, y + height - 2);
+	ui_hot_drawn(w, x, y, width, height, pressed, 1);
 }
 
 static void
@@ -153,6 +504,7 @@ ui_button(GR_DRAW_ID w, int x, int y, int width, int height, const char *label, 
 	else {
 		ui_fill(w, x, y, width, height, UI_FACE);
 		ui_bevel(w, x, y, width, height, pressed);
+		ui_hot_drawn(w, x, y, width, height, pressed, 0);
 	}
 	ui_text(w, x + 6, y + (height - 12) / 2, label, -1, BLACK, 0);
 }
@@ -161,7 +513,7 @@ ui_button(GR_DRAW_ID w, int x, int y, int width, int height, const char *label, 
 static void
 ui_focus(GR_DRAW_ID w, int x, int y, int width, int height)
 {
-	GrSetGCForeground(ui_gc, ui_seven ? MWRGB(51, 153, 255) : BLACK);
+	GrSetGCForeground(ui_gc, UI_ACCENT);
 	GrRect(w, ui_gc, x - 2, y - 2, width + 4, height + 4);
 }
 
@@ -665,7 +1017,7 @@ ui_decoding_told(uint32_t done, uint32_t total)
 		 slash ? slash + 1 : ui_decoding.name);
 	ui_text_fit(ui_decoding.on, x + 12, y + 8, w - 24, text, MWRGB(240, 240, 240));
 	ui_fill(ui_decoding.on, x + 12, y + 28, bar, 10, MWRGB(20, 20, 24));
-	ui_fill(ui_decoding.on, x + 12, y + 28, bar * (int)ui_decoding.most / 100, 10, MWRGB(70, 140, 230));
+	ui_fill(ui_decoding.on, x + 12, y + 28, bar * (int)ui_decoding.most / 100, 10, ui_accent(MWRGB(70, 140, 230), 32));
 	if (ui_decoding.most)
 		snprintf(text, sizeof text, "%u%%   %ld.%ld s", ui_decoding.most, tenths / 10, tenths % 10);
 	else

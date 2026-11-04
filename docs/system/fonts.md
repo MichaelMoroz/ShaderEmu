@@ -74,6 +74,9 @@ fragment shader as textures and models are.
   driver): the passes are drawn one after another, and a fill queued after a line of text
   would otherwise come out under it. The list's first command, the surface's own picture,
   stays in the opaque pass.
+- The server keeps every font file it opened for the session, 128 of them (`romfiles`): it was
+  64, fewer than the image's 79, and once the browser's faces and sizes had filled it every
+  font asked for after was the built-in one.
 - A font not in the ROM (a file in memory), or a server that draws in software
   (`NANOX_SOFTWARE=1`), has none of this: the name is no font, and the program gets the
   built-in one. Text of these fonts is not clipped to a window's children: a program draws

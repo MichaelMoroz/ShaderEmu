@@ -220,6 +220,11 @@ EOF
 cat > "$OUT/usr/bin/halflife" <<'EOF'
 #!/bin/sh
 [ -f /usr/share/halflife/valve/pak0.PAK ] || { echo "halflife: Uplink's data is not in this image (linux/halflife/data.py)" >&2; exit 1; }
+# Sierra's licence, as the installer showed it, accepted before the game (cabinst; kept in the registry, halflife.eula)
+if [ -f /usr/share/halflife/licence/eula.txt ]; then
+    cabinst --title "Half-Life: Uplink" --licence eula.txt --key halflife.eula --installed /usr/share/halflife/licence - || exit $?
+fi
+[ "$1" = --licence ] && exit 0	# (only that: a test answers it first, then plays)
 mkdir -p /tmp/halflife/valve /persistence/halflife && cd /tmp/halflife || exit 1
 for f in /usr/share/halflife/valve/*; do ln -sf "$f" valve/; done
 exec halflife.bin "$@"

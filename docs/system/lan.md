@@ -246,7 +246,12 @@ hook polls from the timer.
   `[quake3]`: the host is `quake3 +map q3dm17` for four, said to be hosted a minute after it
   starts, with a client on the LAN kept to 3,000 bytes a second as any other
   (`sv_lanForceRate 0`, `sv_maxRate`), and the join asks for that rate, ten snapshots and
-  fifteen packets a second; not tried in the world, and not played. "Doom: network game"
+  fifteen packets a second; not tried in the world, and not played. "ClassiCube: host a game"
+  (`nxgame classicube host`) is `CLASSICUBE_LAN=host classicube`, the player's own world served by
+  the game (`docs/games/classicube.md`, "Played together"), said to be hosted thirty seconds after
+  it starts; "ClassiCube: join a game" runs the stock client against the first computer that says
+  `[classicube]` as `PlayerN` (N its number on the LAN, as the game's own "Join a LAN game" names
+  it). "Doom: network game"
   (`nxgame doom host`) is started on every computer that plays and Start pressed on each:
   the players are the computers that say `[doom]`, numbered in their addresses' order, and
   each runs `doom -net N` with the others' addresses. `nxgame doom now` asks nothing and

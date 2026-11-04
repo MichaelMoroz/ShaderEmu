@@ -447,7 +447,7 @@ ink(GR_COLOR colour)
 static void
 write_at(int x, int y, const char *text, int count)
 {
-	GrText(window, text_gc, x, y, (void *)text, count, GR_TFASCII | GR_TFTOP);
+	GrText(window, text_gc, x, y + ui_fixed_dy, (void *)text, count, GR_TFASCII | GR_TFTOP);
 }
 
 /* A line's number at the right of four places, or of as many as it has. */
@@ -1265,6 +1265,7 @@ draw_all(void)
 {
 	if (ui_restyle()) {	/* (Settings changed the look: a word of memory read) */
 		ui_menu_restyle();
+		(GrSetGCFont)(text_gc, ui_fixed);	/* (ui_restyle made it again) */
 		layout();
 	}
 	draw_menu_bar();

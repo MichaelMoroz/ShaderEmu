@@ -147,8 +147,10 @@ Shader "ShaderEmu/Machine"
             #define SOUND_MIXED _SoundMixed
             #define SOUND_RATE _SoundRate
             #define GPU_SOUND
-            // The GPU's camera draws all eight passes every frame.
-            #define _GpuPasses 0xffu
+            // The GPU's camera draws every pass every frame: 0-9, 12 and 13 (GpuDrawPass.cginc). At 0xff a list with a
+            // pass of the destination's alpha (8, 9, 12, 13: Jedi Outcast's menu) was never taken back, and the
+            // window system and every program waited on the GPU.
+            #define _GpuPasses 0x33ffu
             // the console's input (docs/machine/console.md): up to four characters, in two halves
             uniform uint _UartInLo, _UartInHi, _UdonUARTInTag;
             #define CON_IN_TAG _UdonUARTInTag

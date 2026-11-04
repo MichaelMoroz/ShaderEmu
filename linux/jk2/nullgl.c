@@ -24,7 +24,7 @@ NOTHING(glNewList) NOTHING(glOrtho) NOTHING(glPolygonMode) NOTHING(glPolygonOffs
 NOTHING(glPushMatrix) NOTHING(glScissor) NOTHING(glShadeModel) NOTHING(glStencilFunc) NOTHING(glStencilMask)
 NOTHING(glStencilOp) NOTHING(glTexCoord2f) NOTHING(glTexCoord2fv) NOTHING(glTexCoordPointer) NOTHING(glTexEnvf)
 NOTHING(glTexImage2D) NOTHING(glTexParameterf) NOTHING(glTexParameterfv) NOTHING(glTexParameteri)
-NOTHING(glTexSubImage2D) NOTHING(glTranslatef) NOTHING(glVertex2f) NOTHING(glVertex3f) NOTHING(glVertex3fv)
+NOTHING(glTexSubImage2D) NOTHING(glTranslatef) NOTHING(glScalef) NOTHING(glVertex2f) NOTHING(glVertex3f) NOTHING(glVertex3fv)
 NOTHING(glVertexPointer) NOTHING(glViewport)
 
 static GLuint lists = 1;
@@ -93,4 +93,39 @@ void jk2RenderGo(void) {}
 int jk2SkinPost(unsigned (*fn)(unsigned, unsigned), unsigned a0, unsigned a1) { (void)fn; (void)a0; (void)a1; return 0; }
 void jk2SkinJoin(void) {}
 void jk2Touch(void *memory, unsigned bytes) { (void)memory; (void)bytes; }
-void jk2WaitPass(void) {}
+void jk2WaitPass(void) {}/* Ghoul2 on the GPU (gl_jk2.c's): never on the build computer, which has no window */
+int jk2glOn(void) { return 0; }
+int jk2glSkinned(const void *tris, int count, const void *verts, const void *coords, const float *bones, int nbones,
+                 const float *light, unsigned rgba) {
+    (void)tris; (void)count; (void)verts; (void)coords; (void)bones; (void)nbones; (void)light; (void)rgba;
+    return 0;
+}
+int jk2glEnvElements(int count, const unsigned *idx, const float *normal, const float *eye) {
+    (void)count; (void)idx; (void)normal; (void)eye;
+    return 0;
+}
+void jk2glKey(const void *surface, int frame) { (void)surface; (void)frame; }
+void jk2glKeysForget(void) {}
+int jk2MixWorkerHere(void) { return 0; }
+
+/* the GL's kept and tagged words, the in-play test and the joins' counts (gl_jk2.c's, sys_shaderemu.cpp's under SE_WINDOW):
+   none on the build computer, so the renderer makes tess's words itself, which leaves the game as it is */
+int SE_InPlay(void) { return 1; }
+void hlglWordsInPlace(unsigned char *rgba, int n, int opaque, int *holes) { (void)rgba; (void)n; (void)opaque; (void)holes; }
+int jk2glKeptOn(void) { return 0; }
+int jk2glKeptWords(unsigned *to, const float *points, int stride, int st, const int *idx, int count, int verts) {
+    (void)to; (void)points; (void)stride; (void)st; (void)idx; (void)count; (void)verts;
+    return 0;
+}
+int jk2glTaggedDraws(const unsigned *words, unsigned *tables, const int *counts, int draws) {
+    (void)words; (void)tables; (void)counts; (void)draws;
+    return 0;
+}
+void jk2glSettle(void) {}
+int jk2glKeptFaces(unsigned rgba, const unsigned *const *words, const int *counts, int faces, int floored) {
+    (void)rgba; (void)words; (void)counts; (void)faces; (void)floored;
+    return 0;
+}
+unsigned se_join_waits, se_rs_waits;
+/* mcwx.h's loop over the workers: the whole range on this core */
+void mcw_for_opt(unsigned n, void (*fn)(void *ctx, unsigned from, unsigned to), void *ctx, const void *o) { (void)o; if (n) fn(ctx, 0, n); }
