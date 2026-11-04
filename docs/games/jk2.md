@@ -745,9 +745,8 @@ death and the autosave's load.
 - **The front end split** (`tr_main.cpp`, `R_SE_RenderViewSplit`, `RC_SE_VIEW`, `R_SE_FrontView`). Core 0 makes a
   view's Ghoul2 surfaces; the drawing's worker makes the rest of the view and draws it.
   - A view that may see the level's portal surface is made whole as before (`R_SE_PortalMaybeSeen`).
-  - **Off by default** (`JK2_FRONT=worker` turns it on). `JK2_FRONT=check` said 1,005 of 1,200 views' sorted lists were
-    not as the view made whole: a stale `tr.ori` and sums that went by order and address, fixed in the next section;
-    the check has not been run again since.
+  - `JK2_FRONT=check` said 1,005 of 1,200 views' sorted lists were not as the view made whole: a stale `tr.ori` and
+    sums that went by order and address, fixed in the next section, where it became the default.
 - **The server**:
   - `SV_AreaEntities_r` tests the bounds kept in `svEntity_t` at the link. `JK2_AREA_CHECK=1` printed no difference in
     one walk.
@@ -805,8 +804,10 @@ death and the autosave's load.
 - **The front end split, fixed**: the worker's view used a stale `tr.ori`, and dropped faces. The views' sums
   (`SE_ViewSumNote`, `SE_FrontSum`) are now order-free and name a world surface by its number, not its address. The
   front end's counters (`tr.pc`) are `se_pc`, in texels of their own, cleared by core 0 only when the front end is its
-  own: they shared texels with core 0's `RE_EndFrame` (`RVC_RACES_NEAR=4`). Still off by default: the walk was 320.7
-  passes a frame with it against 315.6 without.
+  own: they shared texels with core 0's `RE_EndFrame` (`RVC_RACES_NEAR=4`). `JK2_FRONT=check` then said 0 of 1,200
+  views of the walk not as made whole. Before the kept faces were drawn in place it bounded the drawing's worker (320.7
+  passes a frame against 315.6); since, it is **the default** (`JK2_FRONT=core` the way back): the walk with
+  `JK2_SOUND=mix`, core 0 3.60 to 3.30 million a frame, the drawing's worker 1.22 to 1.54, 540 to 506 passes.
 - **Instruments**: `JK2_PARTS=N` prints core 0's instructions a frame in the server's frame and the client's;
   `JK2_PLAYERS_LOG=N` says the longest player's job and all of them a frame; `JK2_HOLD=N` holds the game's frame N's picture (its list drawn and the last in RAM) for `rvc_cpu --save-ram` and
   `tools/gpu_reference.py`.
@@ -815,7 +816,9 @@ death and the autosave's load.
   the shapes and the HUD, not the world's colours). With all of `JK2_KEPT=0 JK2_WEATHER_DRAW=begin JK2_SKY_DRAW=begin
   JK2_WEATHER=drawing` the picture is the same as with `JK2_KEPT=0` alone (0 pixels differ). The defaults against them:
   0 pixels differ outside the HUD; inside it, the defaults draw the health and ammunition dials, the crosshair and the
-  datapad's messages, of which the old way drew only the dials' rims (its list was full).
+  datapad's messages, of which the old way drew only the dials' rims (its list was full). The front end on the worker
+  against `JK2_FRONT=core`: 0 pixels differ but in the two dials (about 1,400 each), which differ as much between two
+  captures of the same setting from two builds.
 - **Measured** (the walk, frames 1,500 to 1,700, calibrated, from a save; each row adds to the one above):
 
   | Change | Passes a frame | fps | The drawing's worker a frame |

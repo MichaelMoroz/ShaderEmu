@@ -5955,7 +5955,7 @@ index c9e745aa..9a5d832a 100644
  
  
 diff --git a/code/rd-vanilla/tr_main.cpp b/code/rd-vanilla/tr_main.cpp
-index da619736..1012222e 100644
+index da619736..1fc1620d 100644
 --- a/code/rd-vanilla/tr_main.cpp
 +++ b/code/rd-vanilla/tr_main.cpp
 @@ -205,7 +205,15 @@ void R_LocalPointToWorld (const vec3_t local, vec3_t world) {
@@ -6109,7 +6109,7 @@ index da619736..1012222e 100644
 +// world's and the polygons' are added in their order, so the sorted list is the one R_RenderView made. While the worker
 +// makes it this core runs the game's next frame, which changes nothing it reads (a new shader's place settles the
 +// drawing first, tr_shader.cpp); the next frame's RE_BeginFrame waits for it. A world with portals, or a scene with a
-+// portal or no world is made here as before. JK2_FRONT=worker turns it on (off by default, see SE_FrontOn).
++// portal or no world is made here as before. JK2_FRONT=core: every view made here, as before (SE_FrontOn).
 +typedef struct {
 +	int commandId, first, count, viewCount;
 +	unsigned seq, check, checkCount, unused;
@@ -6130,12 +6130,12 @@ index da619736..1012222e 100644
 +{
 +	return SE_FrontOn() == 1;
 +}
-+static int SE_FrontOn( void )	// 0 here (the default), 1 JK2_FRONT=worker, 2 JK2_FRONT=check
-+{	// (off by default: JK2_FRONT=check said most views' lists not as made whole on 4 November 2026, not yet explained)
++static int SE_FrontOn( void )	// 1 the worker's (the default), 0 JK2_FRONT=core, 2 JK2_FRONT=check
++{	// (JK2_FRONT=check: 0 of 1,200 views of the walk not as made whole, 4 November 2026, once tr.ori was set for the worker)
 +	static int on = -1;
 +	if ( on < 0 ) {
 +		const char *e = getenv( "JK2_FRONT" );
-+		on = e && !strcmp( e, "worker" ) ? 1 : e && !strcmp( e, "check" ) ? 2 : 0;
++		on = e && !strcmp( e, "core" ) ? 0 : e && !strcmp( e, "check" ) ? 2 : 1;
 +	}
 +	return on;
 +}
