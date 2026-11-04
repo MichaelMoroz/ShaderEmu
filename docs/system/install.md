@@ -10,6 +10,15 @@ session. `linux/aoe/data.py` and `linux/jk2/data.py` put the installer in; the g
 (`image.py`, since 4 November 2026; `AOE_IMAGE=0` and `JK2_IMAGE=0` make a private test image without them).
 
     cabinst [--title TEXT] [--licence NAME] [--key KEY] INSTALLER DEST WANTED...
+    cabinst [--title TEXT] [--licence NAME] [--key KEY] --installed DIR DEST
+
+**Decoded on the build computer (4 November 2026).** The developer chose to have both installers decoded into the image, so a
+game starts without minutes of unpacking: `data.py` decodes them (Age of Empires by 7-Zip into the cache's `decoded`, the
+files above and `eula.txt`; Jedi Outcast's pak and licence by its own reader, checked by their SHA-256) into
+`/usr/share/aoe/installed` and `/usr/share/jk2/installed`, and the installers are no longer in the image. The starters call
+`cabinst --installed DIR`: the licence is read from `DIR/NAME` and shown and asked exactly as before (Accept only at its
+end, the registry's key), and then every file of `DIR` is linked into `DEST`, nothing unpacked and no RAM taken for the
+files. The installer's way below is kept for an image made before.
 
 `WANTED` is `NAME[=PATH]` (a file of the cabinet, `/` or `\` between folders, any case), `*` or `*.ext`. The starters
 (`aoe`, `jk2`) call it first; `aoe --unpack` and `jk2 --unpack` do only that.

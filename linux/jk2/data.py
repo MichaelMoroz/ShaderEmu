@@ -245,17 +245,24 @@ def main():
     except Missing as e:
         print('jk2: %s. Nothing was put in.' % e, file=sys.stderr)
         return 3
-    # the installer as LucasArts made it, byte for byte (the licence allows copies only in their original form): the
-    # machine unpacks it after its licence is accepted there (cabinst, docs/system/install.md). The program and it together
-    os.makedirs(os.path.join(overlay, 'usr', 'share', 'jk2'), exist_ok=True)
+    # the installer decoded (4 November 2026: before, the installer itself, unpacked in the machine at every start): the
+    # pak and the licence, checked (demo), where the machine links them after the licence is accepted there (cabinst
+    # --installed, docs/system/install.md). The program and they together
+    pak, licence = demo(cache)
+    installed = os.path.join(overlay, 'usr', 'share', 'jk2', 'installed')
+    if os.path.isdir(installed):
+        shutil.rmtree(installed)
+    os.makedirs(os.path.join(installed, 'base'))
+    os.makedirs(os.path.join(installed, 'Disk1', 'Install'))
     os.makedirs(os.path.join(overlay, 'usr', 'bin'), exist_ok=True)
-    shutil.copyfile(exe, os.path.join(overlay, 'usr', 'share', 'jk2', EXE))
+    shutil.copyfile(pak, os.path.join(installed, 'base', 'assets0.pk3'))
+    shutil.copyfile(licence, os.path.join(installed, 'Disk1', 'Install', 'license.txt'))
     for name in ('jk2.bin', 'jk2'):
         shutil.copyfile(os.path.join(built, 'usr', 'bin', name), os.path.join(overlay, 'usr', 'bin', name))
     menu = os.path.join(built, 'usr', 'share', 'nxapps.77-jk2')
     if os.path.exists(menu):
         shutil.copyfile(menu, os.path.join(overlay, 'usr', 'share', 'nxapps.77-jk2'))
-    print('jk2: in the image: the installer, unpacked in the machine after its licence is accepted there')
+    print('jk2: in the image: the demo decoded, linked into place in the machine after its licence is accepted there')
     return 0
 
 

@@ -124,6 +124,8 @@ void Window_Free(void) { }
 
 static void DoCreateWindow(int width, int height) {
 	const char* s = getenv("CLASSICUBE_SIZE");
+	/* started as a game from the desktop: its maximised size from the first frame (SE_MAXIMISED, ui_launch.h) */
+	if (!s) s = getenv("SE_MAXIMISED");
 	if (s) { width = atoi(s); s = strchr(s, 'x'); if (s) height = atoi(s + 1); }
 	if (width  > DisplayInfo.Width)  width  = DisplayInfo.Width;
 	if (height > DisplayInfo.Height) height = DisplayInfo.Height;

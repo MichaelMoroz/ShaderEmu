@@ -92,13 +92,17 @@ cp "$OBJ/aoe.bin" "$OUT/usr/bin/aoe.bin"
 riscv32-linux-strip -o "$OUT/usr/bin/aoeprep" "$OBJ/aoeprep"
 cat > "$OUT/usr/bin/aoe" <<'EOF'
 #!/bin/sh
-# Age of Empires (docs/games/aoe.md): Microsoft's trial lies unchanged in the ROM. The files the game reads are unpacked into
-# memory at each start, after the licence read out of it is accepted (cabinst, docs/system/install.md), and its strings and
-# its faces' pixels and its menus' pictures at its window's size are made from them (aoeprep); they are deleted when the
-# game ends, as they are 34 MB of RAM
+# Age of Empires (docs/games/aoe.md): Microsoft's trial lies decoded in the ROM (linux/aoe/data.py). Its licence is shown
+# and accepted at each start (cabinst, docs/system/install.md), then the files are linked into /tmp/aoe, and its strings and
+# its faces' pixels and its menus' pictures at its window's size are made from them (aoeprep); the folder is deleted when
+# the game ends. An image with the installer itself (from before 4 November 2026) is unpacked as before
 D=/tmp/aoe
-cabinst --title "Age of Empires (trial)" --licence eula.txt --key aoe.eula /usr/share/aoe/MSAoE.exe $D '*.drs' '*.ai' '*.per' \
+if [ -d /usr/share/aoe/installed ]; then
+    cabinst --title "Age of Empires (trial)" --licence eula.txt --key aoe.eula --installed /usr/share/aoe/installed $D || exit $?
+else
+    cabinst --title "Age of Empires (trial)" --licence eula.txt --key aoe.eula /usr/share/aoe/MSAoE.exe $D '*.drs' '*.ai' '*.per' \
     '*.rps' '*.cty' '*.col' '*.scn' '*.cpn' '*.ply' '*.mid' '*.wav' '*.inf' Tileedge.dat Empires.dat language.dll '*.ttf' || exit $?
+fi
 [ -f $D/aoe-fonts.bin ] && [ -f $D/aoe-menus.bin ] || aoeprep $D || exit 2
 # (the music's instruments are not the trial's: DMXOPL's bank, in the ROM beside the installer)
 [ -e $D/genmidi.op2 ] || ln -s /usr/share/aoe/genmidi.op2 $D/genmidi.op2 2>/dev/null

@@ -1285,7 +1285,7 @@ index 95be4ac..0def2f7 100644
  	#undef  CC_BUILD_FILESYSTEM
  	#undef  CC_BUILD_COMPRESSION
 diff --git a/src/Entity.c b/src/Entity.c
-index 47bb81e..0197652 100644
+index 47bb81ebf..3e4600432 100644
 --- a/src/Entity.c
 +++ b/src/Entity.c
 @@ -496,11 +496,14 @@ void Entity_LerpAngles(struct Entity* e, float t) {
@@ -1349,6 +1349,21 @@ index 47bb81e..0197652 100644
  	hacks->PushbackPlacing = Options_GetBool(OPT_PUSHBACK_PLACING, false);
  	hacks->NoclipSlide     = Options_GetBool(OPT_NOCLIP_SLIDE,     false);
  	hacks->WOMStyleHacks   = Options_GetBool(OPT_WOM_STYLE_HACKS,  false);
+@@ -1182,8 +1195,14 @@ static void Entities_Init(void) {
+ 	int i;
+ 	Event_Register_(&GfxEvents.ContextLost, NULL, Entities_ContextLost);
+ 
++#ifdef CC_BUILD_SHADEREMU
++	/* every player's name over its head, through walls and at any distance (docs/games/classicube.md, "Played together") */
++	Entities.NamesMode = Options_GetEnum(OPT_NAMES_MODE, NAME_MODE_ALL_UNSCALED,
++		NameMode_Names, Array_Elems(NameMode_Names));
++#else
+ 	Entities.NamesMode = Options_GetEnum(OPT_NAMES_MODE, NAME_MODE_HOVERED,
+ 		NameMode_Names, Array_Elems(NameMode_Names));
++#endif
+ 	if (Game_ClassicMode) Entities.NamesMode = NAME_MODE_HOVERED;
+ 
+ 	Entities.ShadowsMode = Options_GetEnum(OPT_ENTITY_SHADOW, SHADOW_MODE_NONE,
 diff --git a/src/Entity.h b/src/Entity.h
 index 510f96b..7143730 100644
 --- a/src/Entity.h
@@ -1367,10 +1382,23 @@ index 510f96b..7143730 100644
  enum NameMode {
  	NAME_MODE_NONE, NAME_MODE_HOVERED, NAME_MODE_ALL, NAME_MODE_ALL_HOVERED, NAME_MODE_ALL_UNSCALED, NAME_MODE_COUNT
 diff --git a/src/EntityComponents.c b/src/EntityComponents.c
-index 52c8983..314d1b4 100644
+index 52c89830b..4ccbf699e 100644
 --- a/src/EntityComponents.c
 +++ b/src/EntityComponents.c
-@@ -1031,7 +1031,7 @@ void PhysicsComp_DoEntityPush(struct Entity* entity) {
+@@ -100,6 +100,12 @@ void AnimatedComp_GetCurrent(struct Entity* e, float t) {
+ 
+ 	anim->RightLegX = -anim->LeftLegX; anim->RightLegZ = -anim->LeftLegZ;
+ 	anim->RightArmX = -anim->LeftArmX; anim->RightArmZ = -anim->LeftArmZ;
++#ifdef CC_BUILD_SHADEREMU
++	{
++		extern float SE_ArmSwing(struct Entity* e);
++		anim->RightArmX += SE_ArmSwing(e);
++	}
++#endif
+ 
+ 	// See BobbingHor/BobbingVer in PerspectiveCamera_CalcViewBobbing
+ 	anim->BobbingModel = Math_AbsF(Math_CosF(anim->WalkTime)) * anim->Swing * (4.0f/16.0f);
+@@ -1031,7 +1037,7 @@ void PhysicsComp_DoEntityPush(struct Entity* entity) {
  	int id;
  	dir.y = 0.0f;
  
@@ -1380,10 +1408,22 @@ index 52c8983..314d1b4 100644
  		if (!other || other == entity) continue;
  		if (!other->Model->pushes)     continue;
 diff --git a/src/EntityRenderers.c b/src/EntityRenderers.c
-index b9ab2a3..ff0259c 100644
+index b9ab2a307..338f7e0cb 100644
 --- a/src/EntityRenderers.c
 +++ b/src/EntityRenderers.c
-@@ -403,7 +403,7 @@ void EntityNames_Render(void) {
+@@ -394,7 +394,11 @@ void EntityNames_Render(void) {
+ 	int i;
+ 
+ 	if (Entities.NamesMode == NAME_MODE_NONE) return;
++#ifndef CC_BUILD_SHADEREMU
+ 	if (Server.IsSinglePlayer && Game_NumStates == 1) return;
++#else
++	if (Entities_SE_First >= MAX_NET_PLAYERS) return;	/* (a LAN host is singleplayer and shows its joiners' names) */
++#endif
+ 
+ 	closestEntityId = Entities_GetClosest(&p->Base);
+ 	if (!p->Hacks.CanSeeAllNames || Entities.NamesMode != NAME_MODE_ALL) return;
+@@ -403,7 +407,7 @@ void EntityNames_Render(void) {
  	hadFog = Gfx_GetFog();
  	if (hadFog) Gfx_SetFog(false);
  
@@ -1392,7 +1432,16 @@ index b9ab2a3..ff0259c 100644
  	{
  		if (!Entities.List[i]) continue;
  		if (i != closestEntityId) DrawName(Entities.List[i]);
-@@ -426,7 +426,7 @@ void EntityNames_RenderHovered(void) {
+@@ -421,12 +425,16 @@ void EntityNames_RenderHovered(void) {
+ 	int i;
+ 
+ 	if (Entities.NamesMode == NAME_MODE_NONE) return;
++#ifndef CC_BUILD_SHADEREMU
+ 	if (Server.IsSinglePlayer && Game_NumStates == 1) return;
++#else
++	if (Entities_SE_First >= MAX_NET_PLAYERS) return;	/* (a LAN host is singleplayer and shows its joiners' names) */
++#endif
+ 
  	allNames = !(Entities.NamesMode == NAME_MODE_HOVERED || Entities.NamesMode == NAME_MODE_ALL) 
  		&& p->Hacks.CanSeeAllNames;
  
@@ -3550,7 +3599,7 @@ index 614de99..33b4523 100644
  	struct timespec t;
  	#if defined CC_BUILD_IRIX || defined CC_BUILD_HPUX
 diff --git a/src/Protocol.c b/src/Protocol.c
-index 7657a5d..88f0642 100644
+index 7657a5ddd..0816e76cf 100644
 --- a/src/Protocol.c
 +++ b/src/Protocol.c
 @@ -216,6 +216,9 @@ static void AddEntity(cc_uint8* data, EntityID id, const cc_string* name, const
@@ -3584,11 +3633,15 @@ index 7657a5d..88f0642 100644
  void Classic_SendSetBlock(int x, int y, int z, cc_bool place, BlockID block) {
  	cc_uint8 tmp[32];
  	cc_uint8* data = tmp;
-@@ -500,9 +517,15 @@ void Classic_SendSetBlock(int x, int y, int z, cc_bool place, BlockID block) {
+@@ -500,9 +517,19 @@ void Classic_SendSetBlock(int x, int y, int z, cc_bool place, BlockID block) {
  		WriteBlock(data, block);
  	}
  	Server.SendData(tmp, (cc_uint32)(data - tmp));
 +#ifdef CC_BUILD_SHADEREMU
++	{
++		extern void SE_BlockSent(int x, int y, int z);	/* its echo swings no other player's arm */
++		SE_BlockSent(x, y, z);
++	}
 +	if (SE_LanLog()) { printf("lan: block %d sent at %d,%d,%d, %u ms\n", place ? block : 0, x, y, z, SE_Milliseconds()); fflush(stdout); }
 +#endif
  }
@@ -3600,7 +3653,7 @@ index 7657a5d..88f0642 100644
  	struct HacksComp* hacks;
  
  	Server.Name.length = 0;
-@@ -595,6 +618,9 @@ static void Classic_LevelDataChunk(cc_uint8* data) {
+@@ -595,6 +622,9 @@ static void Classic_LevelDataChunk(cc_uint8* data) {
  }
  
  static void Classic_LevelFinalise(cc_uint8* data) {
@@ -3610,17 +3663,21 @@ index 7657a5d..88f0642 100644
  	int width, height, length, volume;
  	cc_uint64 end;
  	int delta;
-@@ -657,6 +683,9 @@ static void Classic_SetBlock(cc_uint8* data) {
+@@ -657,6 +687,13 @@ static void Classic_SetBlock(cc_uint8* data) {
  	if (World_Contains(x, y, z)) {
  		Game_UpdateBlock(x, y, z, block);
  	}
 +#ifdef CC_BUILD_SHADEREMU
++	{
++		extern void SE_BlockArrived(int x, int y, int z);	/* the arm of whoever placed it swings (Lan_ShaderEmu.c) */
++		SE_BlockArrived(x, y, z);
++	}
 +	if (!Server.IsSinglePlayer && SE_LanLog()) { printf("lan: block %d arrived at %d,%d,%d, %u ms\n", block, x, y, z, SE_Milliseconds()); fflush(stdout); }
 +#endif
  }
  
  static void Classic_AddEntity(cc_uint8* data) {
-@@ -1959,6 +1988,11 @@ static void Protocol_Reset(void) {
+@@ -1959,6 +1996,11 @@ static void Protocol_Reset(void) {
  	WoM_Reset();
  }
  
@@ -3753,11 +3810,11 @@ index 761927b..ac21a48 100644
  static void SPConnection_SendData(const cc_uint8* data, cc_uint32 len) { }
 @@ -205,6 +228,9 @@ static cc_bool SPConnection_Tick(struct ScheduledTask2* task) {
  	/* 60 -> 20 ticks a second */
++#ifdef CC_BUILD_SHADEREMU
++	SE_LanTick();	/* (60 a second: what joiners send is read and answered at once, Lan_ShaderEmu.c) */
++#endif
  	if ((ticks++ % 3) != 0)  return true;
  	
-+#ifdef CC_BUILD_SHADEREMU
-+	SE_LanTick();
-+#endif
  	Physics_Tick();
  	TexturePack_CheckPending();
  	return true;

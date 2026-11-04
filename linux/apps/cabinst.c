@@ -5,12 +5,16 @@
  * are unpacked on the worker cores straight into memory (tmpfs files mapped in place), with a bar of how far.
  *
  *	cabinst [--title TEXT] [--licence NAME] [--key KEY] INSTALLER DEST WANTED...
+ *	cabinst [--title TEXT] [--licence NAME] [--key KEY] --installed DIR DEST
  *
  *	WANTED	NAME[=PATH]: a file of the cabinet ('/' or '\' between folders, any case), put at DEST/PATH (by
  *		default its own name); '*' is every file
  *	--licence NAME	the licence's file in the cabinet, shown first
  *	--key KEY	the registry's key that keeps the acceptance (the licence's CRC-32): not asked again while
  *			/persistence is kept. The files are unpacked every session all the same
+ *	--installed DIR	the installer decoded already, in the ROM (the image's data.py, 4 November 2026): the licence is
+ *			read from DIR/NAME and asked as from the installer, and then every file of DIR is linked into DEST
+ *			(folders made), with nothing unpacked
  *
  * Exit 0: the files are there (or were this session: DEST/.unpacked); 1: the licence was declined; 2: failed,
  * and a line says why. Without a window system the licence is printed and asked on the terminal.
@@ -25,6 +29,7 @@
 #include <stdio.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <dirent.h>
 #include <time.h>
 #include "ui.h"
 #include "ui_ask.h"
@@ -425,19 +430,63 @@ file_ready(struct cab_file *e, char *path, int *mapped)
 	return 0;
 }
 
+/* ---------------------------------------------------------------- an installer decoded already */
+
+/* Every file under FROM linked at the same place under TO, folders made: the count, or -1 (errno says why). */
+static int
+link_tree(const char *from, const char *to)
+{
+	DIR *d = opendir(from);
+	struct dirent *e;
+	int n = 0;
+
+	if (!d)
+		return -1;
+	mkdir(to, 0755);
+	while ((e = readdir(d))) {
+		char a[1024], b[1024];
+		struct stat st;
+		int k;
+
+		if (e->d_name[0] == '.' && (!e->d_name[1] || (e->d_name[1] == '.' && !e->d_name[2])))
+			continue;
+		snprintf(a, sizeof a, "%s/%s", from, e->d_name);
+		snprintf(b, sizeof b, "%s/%s", to, e->d_name);
+		if (stat(a, &st))
+			continue;
+		if (S_ISDIR(st.st_mode)) {
+			if ((k = link_tree(a, b)) < 0) {
+				closedir(d);
+				return -1;
+			}
+			n += k;
+		} else {
+			unlink(b);
+			if (symlink(a, b)) {
+				closedir(d);
+				return -1;
+			}
+			n++;
+		}
+	}
+	closedir(d);
+	return n;
+}
+
 /* ---------------------------------------------------------------- the program */
 
 static void
 usage(void)
 {
-	fprintf(stderr, "usage: cabinst [--title TEXT] [--licence NAME] [--key KEY] INSTALLER DEST WANTED...\n");
+	fprintf(stderr, "usage: cabinst [--title TEXT] [--licence NAME] [--key KEY] INSTALLER DEST WANTED...\n"
+		"       cabinst [--title TEXT] [--licence NAME] [--key KEY] --installed DIR DEST\n");
 	exit(2);
 }
 
 int
 main(int argc, char **argv)
 {
-	const char *licence = NULL, *key = NULL, *installer, *dest, *why, *e;
+	const char *licence = NULL, *key = NULL, *installed = NULL, *installer, *dest, *why, *e;
 	struct cab c;
 	struct stat st;
 	char path[1024], mark[1024];
@@ -457,49 +506,77 @@ main(int argc, char **argv)
 			licence = argv[a + 1];
 		else if (!strcmp(argv[a], "--key"))
 			key = argv[a + 1];
+		else if (!strcmp(argv[a], "--installed"))
+			installed = argv[a + 1];
 		else
 			usage();
 	}
-	if (argc - a < 3)
+	if (installed ? argc - a < 1 : argc - a < 3)
 		usage();
-	installer = argv[a], dest = argv[a + 1];
+	installer = installed ? installed : argv[a], dest = argv[installed ? a : a + 1];
+	if (installed)
+		a--;	/* (no WANTED: argv[a + 2] is past the end) */
 	snprintf(mark, sizeof mark, "%s/.unpacked", dest);
 	if (stat(mark, &st) == 0) {
 		say("unpacked already this session");
 		return 0;
 	}
-	if ((fd = open(installer, O_RDONLY)) < 0 || fstat(fd, &st) ||
+	if (installed)
+		memset(&c, 0, sizeof c), st.st_size = 0;
+	else if ((fd = open(installer, O_RDONLY)) < 0 || fstat(fd, &st) ||
 	    (f = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0)) == MAP_FAILED) {
 		fprintf(stderr, "cabinst: %s: %s\n", installer, strerror(errno));
 		return 2;
 	}
-	close(fd);
-	if ((why = cab_open(&c, f, (uint32_t)st.st_size))) {
+	if (installed)
+		;
+	else if (close(fd), (why = cab_open(&c, f, (uint32_t)st.st_size))) {
 		fprintf(stderr, "cabinst: %s: %s\n", installer, why);
 		return 2;
 	}
 	if ((e = getenv("CABINST_BATCH")))
 		c.batch = (uint32_t)atoi(e);
 	c.workers = workers;
-	if (workers > 0) {
+	if (workers > 0 && !installed) {
 		/* a worker stops at every page of code no core has run: the text read here once (from _start's page) */
 		const char *text = (const char *)((uintptr_t)_start & ~(uintptr_t)4095);
 
 		mcw_touch_code(text, (unsigned)(etext - text));
 		c.workers = mcw_open(workers);
 	}
-	say("%s: a cabinet of %u files in %u folder%s, at %u; %d workers", installer, c.nfiles, c.nfolders, c.nfolders == 1 ? "" : "s",
+	if (!installed)
+		say("%s: a cabinet of %u files in %u folder%s, at %u; %d workers", installer, c.nfiles, c.nfolders, c.nfolders == 1 ? "" : "s",
 	    c.at, c.workers);
 	windowed = GrOpen() >= 0;
 	if (windowed)
 		ui_init();
 
 	/* the licence, read out of the installer and accepted before anything is unpacked */
+	if (licence && installed) {	/* the licence the installer holds, decoded with it */
+		FILE *l;
+		long size;
+
+		snprintf(path, sizeof path, "%s/%s", installed, licence);
+		for (char *q = path; *q; q++)
+			if (*q == '\\')
+				*q = '/';
+		if (!(l = fopen(path, "rb")) || fseek(l, 0, SEEK_END) || (size = ftell(l)) < 0 || fseek(l, 0, SEEK_SET) ||
+		    !(lic.text = malloc(size + 1)) || fread(lic.text, 1, size, l) != (size_t)size) {
+			fprintf(stderr, "cabinst: %s: %s\n", path, strerror(errno));
+			return 2;
+		}
+		fclose(l);
+		lic.text[size] = 0;
+	}
 	if (licence) {
-		int k = cab_find(&c, licence);
-		uint32_t crc;
+		int k = installed ? 0 : cab_find(&c, licence);
+		uint32_t crc, size = installed ? (uint32_t)strlen(lic.text) : 0;
 		char value[16];
 
+		if (installed) {
+			crc = media_crc32(0, lic.text, size);
+			say("licence %s: %u bytes, CRC-32 %08x, decoded already", licence, size, crc);
+		} else {
 		if (k < 0) {
 			fprintf(stderr, "cabinst: %s has no %s\n", installer, licence);
 			return 2;
@@ -517,6 +594,7 @@ main(int argc, char **argv)
 		lic.text[c.files[k].size] = 0;
 		crc = media_crc32(0, lic.text, c.files[k].size);
 		say("licence %s: %u bytes, CRC-32 %08x, read out in %.2f s", c.files[k].name, c.files[k].size, crc, now() - t0);
+		}
 		/* (the text as lines: CR LF and CR to LF, a tab a space, a NUL the end) */
 		{
 			char *s, *o;
@@ -545,6 +623,23 @@ main(int argc, char **argv)
 		}
 		c.made = 0, c.rounds = 0, c.sums_seen = 0;
 		memset(cab_times, 0, sizeof cab_times);
+	}
+
+	if (installed) {	/* nothing to unpack: the decoded files linked into place */
+		int n = link_tree(installed, dest);
+		FILE *m;
+
+		if (windowed)
+			GrClose();
+		if (n < 0) {
+			fprintf(stderr, "cabinst: %s into %s: %s\n", installed, dest, strerror(errno));
+			return 2;
+		}
+		if ((m = fopen(mark, "w")))
+			fprintf(m, "%s\n", installed), fclose(m);
+		printf("cabinst: %s: %d files linked from %s\n", title, n, installed);
+		fflush(stdout);
+		return 0;
 	}
 
 	/* the files wanted, each mapped where it will be */

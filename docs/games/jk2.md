@@ -348,10 +348,14 @@ buffer on core 0 whatever the GL under it.
   demo binds Ctrl to use, which E is as well).
 - **The window's size**: a second after the window's size last changed, the renderer is restarted at that size
   (`r_mode -1`, `r_customwidth` and `r_customheight`, `vid_restart`; 320 x 240 to 1,024 x 768 in whole 8s), so a larger window
-  is drawn at its own pixels, not 640 x 480 stretched; the menus stay the game's 640 x 480, stretched, and the pointer is mapped
-  through it. `JK2_RESIZE=stretch` is the way before. `test_all.py jk2-resize` (an image with the demo) maximises the window at
-  the main menu: "the window is 794x545: the renderer restarted at 792x544", then New and a click where the stretched menu has
-  Begin Game (the display's 623,542 to the menu's 499,454) loads the level. A restart reloads what the renderer holds: tens of
+  is drawn at its own pixels, not 640 x 480 stretched. The menus and the HUD stay the game's 640 x 480, at one scale for both
+  axes in the middle of the window (`SE_Screen2D` in `tr_backend.cpp`, jk2.patch; 4 November 2026: stretched before), a picture of
+  that whole screen (a level's picture while it loads, a cinematic) widened to the window (`SE_Full2D`), and the pointer is mapped
+  through the same rectangle; the view's field of view is a 4:3 screen's, wider in a wider window (OpenJK's `cg_fovAspectAdjust`,
+  set at the window's start). Started from the desktop as a game the window and the renderer open at the maximised size
+  (`SE_MAXIMISED`, `linux/apps/ui_launch.h`), so there is no restart a second after the start. `JK2_RESIZE=stretch` is the way before. `test_all.py jk2-resize` (an image with the demo) maximises the window at
+  the main menu: "the window is 794x545: the renderer restarted at 792x544", then New and a click where the menu has
+  Begin Game (the menu's 499,454) loads the level. A restart reloads what the renderer holds: tens of
   seconds of the guest's at this machine's speed. Until 3 November 2026 the restart kept 640 x 480 ("MODE: -1, 640 x 480"), drawn in
   the window's corner with old pixels round it: rd-vanilla calls `WIN_Init` only while `glConfig.vidWidth` is 0 and its shutdown
   leaves it, so `WIN_Shutdown` now clears it ("MODE: -1, 792 x 544"). The log lines alone had passed; a capture showed it

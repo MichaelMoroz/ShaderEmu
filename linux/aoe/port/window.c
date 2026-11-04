@@ -27,16 +27,17 @@ uint8_t *aoe_win_open(int w, int h, const char *title)
     if (window) {
         /* the game's layout changed (aoe_win_layout): the window keeps its size and the picture is stretched over it; a page of
          * each size is kept, so switching back and forth takes no more GPU memory (docs/games/aoe.md, "Two layouts") */
-        static uint8_t *kept[2];
-        static int kept_w[2], kept_h[2];
+        /* (four: 640 and 800 wide, each at 4:3 for the menus and at the window's shape for the game screen) */
+        static uint8_t *kept[4];
+        static int kept_w[4], kept_h[4];
         int i;
         aoe_win_settle();
-        for (i = 0; i < 2 && kept[i] && (kept_w[i] != page_w || kept_h[i] != page_h); i++)
+        for (i = 0; i < 4 && kept[i] && (kept_w[i] != page_w || kept_h[i] != page_h); i++)
             ;
-        if (i < 2 && !kept[i]) kept[i] = page, kept_w[i] = page_w, kept_h[i] = page_h;
-        for (i = 0; i < 2 && kept[i] && (kept_w[i] != w || kept_h[i] != h); i++)
+        if (i < 4 && !kept[i]) kept[i] = page, kept_w[i] = page_w, kept_h[i] = page_h;
+        for (i = 0; i < 4 && kept[i] && (kept_w[i] != w || kept_h[i] != h); i++)
             ;
-        page = i < 2 && kept[i] ? kept[i] : seglMemory(w * h);
+        page = i < 4 && kept[i] ? kept[i] : seglMemory(w * h);
         page_w = w; page_h = h;
         memset(page, 0, w * h);
         glBindTexture(GL_TEXTURE_2D, texture);
@@ -50,7 +51,12 @@ uint8_t *aoe_win_open(int w, int h, const char *title)
      * screen has room for"), and the game's picture stays whole, above the bar. */
     GR_SCREEN_INFO screen;
     GrGetScreenInfo(&screen);
-    window = GrNewWindowEx(GR_WM_PROPS_APPWINDOW | (screen.rows < h + 58 ? GR_WM_PROPS_ONTOP : 0), (char *) title, GR_ROOT_WINDOW_ID, -1, -1, w, h, 0);
+    /* Started from the desktop as a game, it opens at the maximised size it is given (SE_MAXIMISED, ui_launch.h): the window
+     * manager then maximises it with no resize, and the picture is stretched over it as over any resized window. */
+    int ww = w, wh = h;
+    if (getenv("SE_MAXIMISED") && sscanf(getenv("SE_MAXIMISED"), "%dx%d", &ww, &wh) != 2) ww = w, wh = h;
+    if (ww < 320 || wh < 200) ww = w, wh = h;
+    window = GrNewWindowEx(GR_WM_PROPS_APPWINDOW | (screen.rows < wh + (wh != h ? 55 : 58) ? GR_WM_PROPS_ONTOP : 0), (char *) title, GR_ROOT_WINDOW_ID, -1, -1, ww, wh, 0);
     GrSelectEvents(window, GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_KEY_UP | GR_EVENT_MASK_BUTTON_DOWN |
         GR_EVENT_MASK_BUTTON_UP | GR_EVENT_MASK_MOUSE_POSITION | GR_EVENT_MASK_CLOSE_REQ | GR_EVENT_MASK_UPDATE | GR_EVENT_MASK_EXPOSURE);
     {
@@ -181,6 +187,7 @@ static long long pad_ms(void)
 
 /* The layout for the window's size (docs/games/aoe.md, "Two layouts"): 800 x 600 once the window has room for most of it, else 640 x
  * 480. A size is taken a second after the last change (a drag gives many). The width wanted when it should change, else 0. */
+int aoe_win_game_height(int width);
 static int sized_w, sized_h;
 static long long sized_at;
 int aoe_win_layout(void)
@@ -191,7 +198,24 @@ int aoe_win_layout(void)
     if (fixed || !sized_at || pad_ms() - sized_at < 1000) return 0;
     sized_at = 0;
     want = sized_w >= 760 && sized_h >= 540 ? 800 : 640;
-    return want != page_w ? want : 0;
+    /* (the same width with another shape: the game screen's height follows the window too) */
+    return want != page_w || (page_h != want * 3 / 4 && page_h != aoe_win_game_height(want)) ? want : 0;
+}
+
+/* The game screen's height for a layout WIDTH wide in the window as it is now: the window's shape, so the picture is
+ * scaled by one factor (docs/games/aoe.md, "The game screen in the window's shape"); its top band and bottom panel are
+ * placed from the screen's height, the view is what lies between (scr_game.cpp's dy, aoe.patch). In whole 2s, from 9:16
+ * of the width to the width. The
+ * menus stay 4:3 (their pictures are 800 x 600). AOE_LAYOUT=fixed or 43: 4:3 always, the way before. */
+int aoe_win_game_height(int width)
+{
+    static int four_three = -1;
+    int ww = 0, wh = 0, h;
+    if (four_three < 0) { const char *e = getenv("AOE_LAYOUT"); four_three = e && (!strcmp(e, "fixed") || !strcmp(e, "43")); }
+    if (window) seglSize(&ww, &wh);
+    if (four_three || width < 800 || ww <= 0 || wh <= 0) return width * 3 / 4;   /* (640's layout is 4:3: only 800's places follow the height) */
+    h = (int) ((long long) width * wh / ww) & ~1;
+    return h < width * 9 / 16 ? (width * 9 / 16) & ~1 : h > width ? width : h;
 }
 
 /* One event, or 0. */

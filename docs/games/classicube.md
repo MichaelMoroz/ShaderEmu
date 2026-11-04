@@ -338,8 +338,25 @@ a game" (`nxgame classicube host|join`, `docs/system/lan.md`), and their shortcu
 - **Blocks** are deltas: a block a joiner places or takes away is applied by the host and sent to everybody as one SetBlock
   of 8 bytes; one the host changes likewise. (The singleplayer physics' own changes are not sent: the tests turn it off.)
 - **Players**: the host shows joiners through its protocol's own handlers (`Protocol_SE_Install`: models, names, smoothed
-  moves), as a client would; every player's place goes to the others when it moved, at most ten times a second, 10 bytes.
+  moves), as a client would; every player's place goes to the others when it moved, 20 times a second, 10 bytes (4 November
+  2026: at ten a second a client's interpolation, which takes one place a tick of 20, moved a player one tick and stood it the
+  next). The host's loop runs at the singleplayer server's 60 calls a second: what a joiner sends is read, applied and echoed
+  in the call it comes, places told every third call.
+- **Names** are over every player's head through walls and at any distance, on the host's screen too (`NAME_MODE_ALL_UNSCALED`
+  by default; the option still wins).
+- **Arms**: a player who places or takes away a block swings its right arm on the others' screens (`SE_ArmSwing`, 300 ms). The
+  protocol has no word for it: the host knows who sent each block; a joiner swings the other player nearest the block within 7
+  blocks of its eye, but not for the echo of its own block.
+- **Sends at once**: the stock client's connection has `TCP_NODELAY` (`build.sh` links with `--wrap=connect`, `__wrap_connect` in
+  `Lan_ShaderEmu.c`). Without it the place it sends 20 times a second always had a packet unacknowledged, and every block waited
+  for that ACK (Nagle), a round trip of the world's LAN.
 - **Chat** goes to everybody with whose it is.
+
+What a round trip costs in the world (4 November 2026, from the code: `EmuMachine.cs`, `EmuShareHub.cs`, `EmuNet.cs`): one way is
+the guest's packet read back from the GPU (1 to 3 Unity frames), the batch handed to VRChat (up to 10.5 ms), VRChat's relay (70 to
+100 ms, nothing of ours), the receiving machine's ring (a frame) and the guest's poll (up to 10 ms): 110 to 130 ms, so a ping is
+about 230 ms and cannot be under 100 over VRChat's events. The display stream is already cut to a sixth while LAN packets flow
+(`netFlowAt`, a second after the last); stopping it whole would save about 10 ms on average.
 
 Measured on three `rvc_cpu` machines (`python tools/classicube_lan.py --joiners 2`: `--net-rate 4000 --net-delay 115`,
 the world's link; 3 November 2026):

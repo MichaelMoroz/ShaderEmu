@@ -108,6 +108,13 @@ std::optional<std::string_view> VideoDriver_ShaderEmu::Start(const StringList &)
 	_cur_resolution.width = Clamp<uint>(_cur_resolution.width, 640, _screen_cols);
 	/* (all of it above the bar under a caption, 26 and 29; at 640 x 480 the frame's sides go off the screen) */
 	_cur_resolution.height = Clamp<uint>(_cur_resolution.height, std::min(480, _screen_rows - 55), _screen_rows - 55);
+	/* the desktop starts it maximised (linux/apps/ui_launch.h): the window, and the game's screen, at that size from the start */
+	if (const char *size = getenv("SE_MAXIMISED"); size != nullptr) {
+		int w = 0, h = 0;
+		while (*size >= '0' && *size <= '9') w = w * 10 + (*size++ - '0');
+		if (*size++ == 'x') while (*size >= '0' && *size <= '9') h = h * 10 + (*size++ - '0');
+		if (w >= 64 && h >= 64 && w <= 4096 && h <= 4096) _cur_resolution = { static_cast<uint>(w), static_cast<uint>(h) };
+	}
 
 	_window = GrNewWindowEx(GR_WM_PROPS_APPWINDOW, "OpenTTD", GR_ROOT_WINDOW_ID, -1, -1, _cur_resolution.width,
 			_cur_resolution.height, 0);

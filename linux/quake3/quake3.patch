@@ -1030,7 +1030,7 @@ index 816e0b10..3998886f 100644
  typedef struct script_s
  {
 diff --git a/code/cgame/cg_draw.c b/code/cgame/cg_draw.c
-index afe09412..98f72ea7 100644
+index afe09412..3b52a1ee 100644
 --- a/code/cgame/cg_draw.c
 +++ b/code/cgame/cg_draw.c
 @@ -203,6 +203,42 @@ Draws large numbers for status bar and powerups
@@ -1142,7 +1142,15 @@ index afe09412..98f72ea7 100644
  			w = CG_DrawStrlen( s ) * BIGCHAR_WIDTH + 8;
  			x -= w;
  			CG_DrawBigString( x + 4, y, s, 1.0F);
-@@ -2052,7 +2092,19 @@ static void CG_DrawCrosshairNames( void ) {
+@@ -1904,6 +1944,7 @@ static void CG_DrawCrosshair(void)
+ 	x = cg_crosshairX.integer;
+ 	y = cg_crosshairY.integer;
+ 	CG_AdjustFrom640( &x, &y, &w, &h );
++	x -= cgs.screenXBias, y -= cgs.screenYBias;	// ShaderEmu: an offset from the view's middle
+ 
+ 	ca = cg_drawCrosshair.integer;
+ 	if (ca < 0) {
+@@ -2052,7 +2093,19 @@ static void CG_DrawCrosshairNames( void ) {
  	}
  
  	// scan the known entities to see if the crosshair is sighted on one
@@ -1162,7 +1170,7 @@ index afe09412..98f72ea7 100644
  
  	// draw the name of the player being looked at
  	color = CG_FadeColor( cg.crosshairClientTime, 1000 );
-@@ -2648,10 +2700,13 @@ void CG_DrawActive( stereoFrame_t stereoView ) {
+@@ -2648,10 +2701,13 @@ void CG_DrawActive( stereoFrame_t stereoView ) {
  		CG_DrawCrosshair3D();
  
  	// draw 3D view
@@ -1176,6 +1184,45 @@ index afe09412..98f72ea7 100644
  }
  
  
+diff --git a/code/cgame/cg_drawtools.c b/code/cgame/cg_drawtools.c
+index fb9e29a4..e4ff90cd 100644
+--- a/code/cgame/cg_drawtools.c
++++ b/code/cgame/cg_drawtools.c
+@@ -37,9 +37,14 @@ void CG_AdjustFrom640( float *x, float *y, float *w, float *h ) {
+ 		*x += 0.5 * ( cgs.glconfig.vidWidth - ( cgs.glconfig.vidHeight * 640 / 480 ) );
+ 	}
+ #endif
++	// ShaderEmu: a picture of the whole screen fills the window (a level's picture while it loads, a fade)
++	if ( *x <= 0 && *y <= 0 && *x + *w >= 640 && *y + *h >= 480 ) {
++		*x = 0, *y = 0, *w = cgs.glconfig.vidWidth, *h = cgs.glconfig.vidHeight;
++		return;
++	}
+ 	// scale for screen sizes
+-	*x *= cgs.screenXScale;
+-	*y *= cgs.screenYScale;
++	*x = *x * cgs.screenXScale + cgs.screenXBias;
++	*y = *y * cgs.screenYScale + cgs.screenYBias;
+ 	*w *= cgs.screenXScale;
+ 	*h *= cgs.screenYScale;
+ }
+@@ -604,7 +609,7 @@ static void UI_DrawBannerString2( int x, int y, const char* str, vec4_t color )
+ 	trap_R_SetColor( color );
+ 	
+ 	ax = x * cgs.screenXScale + cgs.screenXBias;
+-	ay = y * cgs.screenYScale;
++	ay = y * cgs.screenYScale + cgs.screenYBias;
+ 
+ 	s = str;
+ 	while ( *s )
+@@ -714,7 +719,7 @@ static void UI_DrawProportionalString2( int x, int y, const char* str, vec4_t co
+ 	trap_R_SetColor( color );
+ 	
+ 	ax = x * cgs.screenXScale + cgs.screenXBias;
+-	ay = y * cgs.screenYScale;
++	ay = y * cgs.screenYScale + cgs.screenYBias;
+ 
+ 	s = str;
+ 	while ( *s )
 diff --git a/code/cgame/cg_ents.c b/code/cgame/cg_ents.c
 index ec8b02ff..6f2efc0d 100644
 --- a/code/cgame/cg_ents.c
@@ -1346,7 +1393,7 @@ index ec8b02ff..6f2efc0d 100644
  	}
  }
 diff --git a/code/cgame/cg_local.h b/code/cgame/cg_local.h
-index 6546d4d5..2fa2834b 100644
+index 6546d4d5..bc19b38a 100644
 --- a/code/cgame/cg_local.h
 +++ b/code/cgame/cg_local.h
 @@ -192,6 +192,9 @@ typedef struct centity_s {
@@ -1359,7 +1406,15 @@ index 6546d4d5..2fa2834b 100644
  } centity_t;
  
  
-@@ -1370,6 +1373,11 @@ void CG_RailTrail( clientInfo_t *ci, vec3_t start, vec3_t end );
+@@ -996,6 +999,7 @@ typedef struct {
+ 	float			screenXScale;		// derived from glconfig
+ 	float			screenYScale;
+ 	float			screenXBias;
++	float			screenYBias;		// ShaderEmu: the 640 x 480 screen in the middle of a window of another shape
+ 
+ 	int				serverCommandSequence;	// reliable command stream counter
+ 	int				processedSnapshotNum;// the number of snapshots cgame has requested
+@@ -1370,6 +1374,11 @@ void CG_RailTrail( clientInfo_t *ci, vec3_t start, vec3_t end );
  void CG_GrappleTrail( centity_t *ent, const weaponInfo_t *wi );
  void CG_AddViewWeapon (playerState_t *ps);
  void CG_AddPlayerWeapon( refEntity_t *parent, playerState_t *ps, centity_t *cent, int team );
@@ -1372,7 +1427,7 @@ index 6546d4d5..2fa2834b 100644
  
  void CG_OutOfAmmoChange( void );	// should this be in pmove?
 diff --git a/code/cgame/cg_main.c b/code/cgame/cg_main.c
-index 1269e1b6..d85a8233 100644
+index 1269e1b6..36728c57 100644
 --- a/code/cgame/cg_main.c
 +++ b/code/cgame/cg_main.c
 @@ -74,6 +74,11 @@ Q_EXPORT intptr_t vmMain( int command, int arg0, int arg1, int arg2, int arg3, i
@@ -1430,6 +1485,23 @@ index 1269e1b6..d85a8233 100644
  	for ( i = 0, cv = cvarTable ; i < cvarTableSize ; i++, cv++ ) {
  		trap_Cvar_Update( cv->vmCvar );
  	}
+@@ -1879,6 +1905,16 @@ void CG_Init( int serverMessageNum, int serverCommandSequence, int clientNum ) {
+ 	trap_GetGlconfig( &cgs.glconfig );
+ 	cgs.screenXScale = cgs.glconfig.vidWidth / 640.0;
+ 	cgs.screenYScale = cgs.glconfig.vidHeight / 480.0;
++	// ShaderEmu: one scale for both axes, the 640 x 480 screen in the middle of a window of any shape (the window is
++	// the desktop's, any size: a stretched HUD was wider than it is tall); a picture of the whole screen still fills it
++	// (CG_AdjustFrom640)
++	if ( cgs.screenXScale > cgs.screenYScale ) {
++		cgs.screenXBias = 0.5 * ( cgs.glconfig.vidWidth - 640 * cgs.screenYScale );
++		cgs.screenXScale = cgs.screenYScale;
++	} else {
++		cgs.screenYBias = 0.5 * ( cgs.glconfig.vidHeight - 480 * cgs.screenXScale );
++		cgs.screenYScale = cgs.screenXScale;
++	}
+ 
+ 	// get the gamestate from the client system
+ 	trap_GetGameState( &cgs.gameState );
 diff --git a/code/cgame/cg_players.c b/code/cgame/cg_players.c
 index 4a4abaad..295e6c27 100644
 --- a/code/cgame/cg_players.c
@@ -2104,10 +2176,21 @@ index 010be948..e65b3f55 100644
  
  void		trap_SetUserCmdValue( int stateValue, float sensitivityScale ) {
 diff --git a/code/cgame/cg_view.c b/code/cgame/cg_view.c
-index 3dba5eba..207cd792 100644
+index 3dba5eba..9ce66cc4 100644
 --- a/code/cgame/cg_view.c
 +++ b/code/cgame/cg_view.c
-@@ -682,6 +682,14 @@ static int CG_CalcViewValues( void ) {
+@@ -517,6 +517,10 @@ static int CG_CalcFov( void ) {
+ 		}
+ 	}
+ 
++	// ShaderEmu: the field of view is a 4:3 screen's, wider in a wider window (the desktop's window may be any shape)
++	if ( cg.refdef.width * 3 > cg.refdef.height * 4 ) {
++		fov_x = atan2( tan( fov_x / 360 * M_PI ) * cg.refdef.width * 3, cg.refdef.height * 4 ) * 360 / M_PI;
++	}
+ 	x = cg.refdef.width / tan( fov_x / 360 * M_PI );
+ 	fov_y = atan2( cg.refdef.height, x );
+ 	fov_y = fov_y * 360 / M_PI;
+@@ -682,6 +686,14 @@ static int CG_CalcViewValues( void ) {
  		CG_OffsetFirstPersonView();
  	}
  
@@ -2122,7 +2205,7 @@ index 3dba5eba..207cd792 100644
  	// position eye relative to origin
  	AnglesToAxis( cg.refdefViewAngles, cg.refdef.viewaxis );
  
-@@ -782,7 +790,9 @@ void CG_DrawActiveFrame( int serverTime, stereoFrame_t stereoView, qboolean demo
+@@ -782,7 +794,9 @@ void CG_DrawActiveFrame( int serverTime, stereoFrame_t stereoView, qboolean demo
  	trap_R_ClearScene();
  
  	// set up cg.snap and possibly cg.nextSnap
@@ -2132,7 +2215,7 @@ index 3dba5eba..207cd792 100644
  
  	// if we haven't received any snapshots yet, all
  	// we can draw is the information screen
-@@ -798,7 +808,9 @@ void CG_DrawActiveFrame( int serverTime, stereoFrame_t stereoView, qboolean demo
+@@ -798,7 +812,9 @@ void CG_DrawActiveFrame( int serverTime, stereoFrame_t stereoView, qboolean demo
  	cg.clientFrame++;
  
  	// update cg.predictedPlayerState
@@ -2142,7 +2225,7 @@ index 3dba5eba..207cd792 100644
  
  	// decide on third person view
  	cg.renderingThirdPerson = cg.snap->ps.persistant[PERS_TEAM] != TEAM_SPECTATOR
-@@ -814,12 +826,16 @@ void CG_DrawActiveFrame( int serverTime, stereoFrame_t stereoView, qboolean demo
+@@ -814,12 +830,16 @@ void CG_DrawActiveFrame( int serverTime, stereoFrame_t stereoView, qboolean demo
  
  	// build the render lists
  	if ( !cg.hyperspace ) {
@@ -4146,7 +4229,7 @@ index ed94517f..65b4f696 100644
  			}
  			return;
 diff --git a/code/qcommon/common.c b/code/qcommon/common.c
-index d97312c4..fc93bebd 100644
+index d97312c4..9867da59 100644
 --- a/code/qcommon/common.c
 +++ b/code/qcommon/common.c
 @@ -37,12 +37,30 @@ int demo_protocols[] =
