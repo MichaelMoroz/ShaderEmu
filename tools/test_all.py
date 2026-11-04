@@ -178,7 +178,7 @@ CASES = [
         # the inventory on the sheet: the grip opens it, then the right hand's beam moves onto row 6 and its trigger picks a block
         ('vr-pick', '90000133,0,0,c0000000,04bea3da,0,04bea026,2400fc72',
          ['--host-from', '20', '90000133,0,0,c0000000,84bea3da,0,04bea026,2400fc72',
-          '--host-from', '24', '90000133,0,0,c0000000,84bea3da,0,44bea026,2600f8e4'], 'holds 58', r'seat: 1 .* holds 58 raw 1 menu 0'))],
+          '--host-from', '24', '90000133,0,0,c0000000,84bea3da,0,44bea026,2600f8e4'], 'holds 58 raw 1 menu 0', r'seat: 1 .* holds 58 raw 1 menu 0'))],
     # docs/games/classicube.md, "Sound": a dig sound on the card, and the tune decoded on workers into its stream
     case('classicube-sound', 'games classicube sound', CC + 'CLASSICUBE_SOUND_LOG=1 CLASSICUBE_SEAT=1 CLASSICUBE_SEED=7 classicube', True,
          until='ccmusic: 16 of', more=['--host', '00000112,e0000000,0,0,0,0,0,0', '--host-from', '20', '00000112,e0000000,0,0,0,0,40000000,0'],
