@@ -9205,10 +9205,10 @@ index 221cf26d..f87c9246 100644
  void WriteInUseBits(void);
  void ReadInUseBits(void);
 diff --git a/codeJK2/game/g_main.cpp b/codeJK2/game/g_main.cpp
-index 671b309a..db987fcf 100644
+index 671b309a..88a61add 100644
 --- a/codeJK2/game/g_main.cpp
 +++ b/codeJK2/game/g_main.cpp
-@@ -28,6 +28,159 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
+@@ -28,6 +28,210 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
  #include "Q3_Interface.h"
  #include "g_nav.h"
  #include "g_roff.h"
@@ -9246,12 +9246,52 @@ index 671b309a..db987fcf 100644
 +		*f = se_to_copy( *f );
 +	}
 +}
++// What the client's frame may write, given back field by field where it changed (JK2_SPLIT=copy): the words the check
++// found written over the sums' frames and the walk, and every field the client's game's sources assign; =check gives
++// back every word that changed and counts those outside these lists ("not listed")
++struct seRange_t { unsigned short at, bytes; };
++#define SE_F( T, f ) { (unsigned short)offsetof( T, f ), (unsigned short)sizeof( ( (T *)0 )->f ) }
++static const seRange_t se_ent_back[] = { SE_F( gentity_t, disconnectDebounceTime ), SE_F( gentity_t, setTime ),
++	SE_F( gentity_t, lightLevel ), SE_F( gentity_t, e_clThinkFunc ), SE_F( gentity_t, pushDebounceTime ),
++	SE_F( gentity_t, painDebounceTime ), SE_F( gentity_t, count ), SE_F( gentity_t, fx_time ), SE_F( gentity_t, delay ),
++	SE_F( gentity_t, aimDebounceTime ), SE_F( gentity_t, misc_dlight_active ), SE_F( gentity_t, contents ),
++	SE_F( gentity_t, svFlags ), SE_F( gentity_t, s.loopSound ), SE_F( gentity_t, s.eType ), SE_F( gentity_t, s.eFlags ),
++	SE_F( gentity_t, s.apos.trBase ), SE_F( gentity_t, s.powerups ) };
++static const seRange_t se_cl_back[] = { SE_F( gclient_t, ps ), SE_F( gclient_t, facial_blink ), SE_F( gclient_t, facial_frown ),
++	SE_F( gclient_t, facial_aux ), SE_F( gclient_t, renderInfo ), SE_F( gclient_t, pers.cmd_angles ) };
++static unsigned se_not_listed;
++static int se_listed( const seRange_t *r, int n, size_t at )
++{
++	for ( int k = 0 ; k < n ; k++ )
++		if ( at >= r[k].at && at < (size_t)r[k].at + r[k].bytes )
++			return 1;
++	return 0;
++}
++// (the listed fields: a word that changed, back to the game's; a pointer field moved back)
++static void se_give_listed( const void *now, const void *given, void *to, const seRange_t *r, int n, const unsigned short *offs, int np )
++{
++	for ( int k = 0 ; k < n ; k++ ) {
++		const uint32_t *a = (const uint32_t *)( (const char *)now + r[k].at ), *b = (const uint32_t *)( (const char *)given + r[k].at );
++		uint32_t *t = (uint32_t *)( (char *)to + r[k].at );
++		const int words = ( r[k].bytes + 3 ) / 4;
++		for ( int w = 0 ; w < words ; w++ ) {
++			if ( a[w] == b[w] )
++				continue;
++			uint32_t v = a[w];
++			for ( int p = 0 ; p < np ; p++ )
++				if ( offs[p] == r[k].at + w * 4 )
++					v = (uint32_t)(uintptr_t)se_to_game( (gentity_t *)(uintptr_t)v );
++			t[w] = v;
++		}
++	}
++}
 +// the counts of JK2_SPLIT=check: of each struct, a word's place written by the client's frame
 +static unsigned se_ent_at[sizeof( gentity_t ) / 4 + 1], se_cl_at[sizeof( gclient_t ) / 4 + 1], se_npc_at[sizeof( gNPC_t ) / 4 + 1];
 +static unsigned se_leaked, se_frames;
 +// what the client's frame changed of one struct (now, against given), into the game's (to): a pointer field back to the
 +// game's entities; any other word that points into the copy is a field the lists miss (counted)
-+static void se_give_back( const void *now, const void *given, void *to, size_t bytes, const unsigned short *offs, int n, unsigned *at )
++static void se_give_back( const void *now, const void *given, void *to, size_t bytes, const unsigned short *offs, int n, unsigned *at,
++	const seRange_t *listed, int nlisted )
 +{
 +	const uint32_t *a = (const uint32_t *)now, *b = (const uint32_t *)given;
 +	uint32_t *t = (uint32_t *)to;
@@ -9269,8 +9309,11 @@ index 671b309a..db987fcf 100644
 +			v = (uint32_t)(uintptr_t)se_to_game( (gentity_t *)(uintptr_t)v );
 +		}
 +		t[w] = v;
-+		if ( at )
++		if ( at ) {
 +			at[w]++;
++			if ( !listed || !se_listed( listed, nlisted, w * 4 ) )
++				se_not_listed++;
++		}
 +	}
 +	const size_t tail = bytes & 3;
 +	if ( tail && memcmp( (const char *)now + bytes - tail, (const char *)given + bytes - tail, tail ) )
@@ -9335,15 +9378,23 @@ index 671b309a..db987fcf 100644
 +	const int check = se_split == 2;
 +	for ( int i = 0 ; i < MAX_GENTITIES ; i++ ) {
 +		gentity_t *s = &se_sh[i], *v = &se_gv[i], *g = &g_entities[i];
++		if ( !check ) {
++			if ( se_live_cl[i] )
++				se_give_listed( se_sh_cl[i], se_gv_cl[i], se_live_cl[i], se_cl_back, SE_COUNT( se_cl_back ), se_cl_ptrs, SE_COUNT( se_cl_ptrs ) );
++			se_give_listed( s, v, g, se_ent_back, SE_COUNT( se_ent_back ), se_ent_ptrs, SE_COUNT( se_ent_ptrs ) );
++			continue;
++		}
 +		if ( se_live_cl[i] ) {
-+			se_give_back( se_sh_cl[i], se_gv_cl[i], se_live_cl[i], sizeof( gclient_t ), se_cl_ptrs, SE_COUNT( se_cl_ptrs ), check ? se_cl_at : NULL );
++			se_give_back( se_sh_cl[i], se_gv_cl[i], se_live_cl[i], sizeof( gclient_t ), se_cl_ptrs, SE_COUNT( se_cl_ptrs ), se_cl_at,
++				se_cl_back, SE_COUNT( se_cl_back ) );
 +			s->client = v->client = se_live_cl[i];	// (as the game's: the word is the same both ways)
 +		}
 +		if ( se_live_npc[i] ) {
-+			se_give_back( se_sh_npc[i], se_gv_npc[i], se_live_npc[i], sizeof( gNPC_t ), se_npc_ptrs, SE_COUNT( se_npc_ptrs ), check ? se_npc_at : NULL );
++			se_give_back( se_sh_npc[i], se_gv_npc[i], se_live_npc[i], sizeof( gNPC_t ), se_npc_ptrs, SE_COUNT( se_npc_ptrs ), se_npc_at,
++				NULL, 0 );
 +			s->NPC = v->NPC = se_live_npc[i];
 +		}
-+		se_give_back( s, v, g, sizeof( gentity_t ), se_ent_ptrs, SE_COUNT( se_ent_ptrs ), check ? se_ent_at : NULL );
++		se_give_back( s, v, g, sizeof( gentity_t ), se_ent_ptrs, SE_COUNT( se_ent_ptrs ), se_ent_at, se_ent_back, SE_COUNT( se_ent_back ) );
 +	}
 +	if ( check && ++se_frames % 100 == 0 ) {
 +		char line[1024];
@@ -9361,14 +9412,14 @@ index 671b309a..db987fcf 100644
 +			gi.Printf( "jk2split: %s words written%s\n", kinds[k].name, line );
 +			memset( kinds[k].at, 0, ( kinds[k].words + 1 ) * sizeof( unsigned ) );
 +		}
-+		gi.Printf( "jk2split: %u frames, %u words pointing into the copy not in the lists\n", se_frames, se_leaked );
++		gi.Printf( "jk2split: %u frames, %u words pointing into the copy not in the lists, %u words written not listed\n", se_frames, se_leaked, se_not_listed );
 +	}
 +}
 +#endif
  #include "g_navigator.h"
  #include "b_local.h"
  #include "anims.h"
-@@ -74,12 +227,14 @@ void ClearInUse(gentity_t *ent)
+@@ -74,12 +278,14 @@ void ClearInUse(gentity_t *ent)
  	g_entityInUseBits[entNum/32]&=~(((unsigned int)1)<<(entNum&0x1f));
  }
  
@@ -9383,7 +9434,7 @@ index 671b309a..db987fcf 100644
  
  qboolean PInUse2(gentity_t *ent)
  {
-@@ -736,6 +891,10 @@ ShutdownGame
+@@ -736,6 +942,10 @@ ShutdownGame
  =================
  */
  void ShutdownGame( void ) {
@@ -9394,7 +9445,7 @@ index 671b309a..db987fcf 100644
  	gi.Printf ("==== ShutdownGame ====\n");
  
  	gi.Printf ("... ICARUS_Shutdown\n");
-@@ -1256,6 +1415,9 @@ void G_RunFrame( int levelTime ) {
+@@ -1256,6 +1466,9 @@ void G_RunFrame( int levelTime ) {
  	int			i;
  	gentity_t	*ent;
  	int			ents_inuse=0; // someone's gonna be pissed I put this here...
@@ -9404,7 +9455,7 @@ index 671b309a..db987fcf 100644
  #if	AI_TIMERS
  	AITime = 0;
  	navTime = 0;
-@@ -1482,8 +1644,84 @@ void G_RunFrame( int levelTime ) {
+@@ -1482,8 +1695,84 @@ void G_RunFrame( int levelTime ) {
  		ValidateInUseBits();
  	}
  #endif
@@ -9423,13 +9474,13 @@ index 671b309a..db987fcf 100644
 +{
 +	h ^= (unsigned)v;
 +	return h * 16777619u;
-+}
-+
+ }
+ 
 +static int se_eighth( float f )
 +{
 +	return (int)( f * 8.0f + ( f < 0 ? -0.5f : 0.5f ) );
- }
- 
++}
++
 +extern "C" unsigned se_rand_state;    // (linux/jk2/se_rand.c)
 +extern "C" uint32_t SE_Holdrand( void );    // (q_math.c)
 +

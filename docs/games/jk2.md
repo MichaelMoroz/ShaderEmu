@@ -893,16 +893,19 @@ The first stage, on one core (`JK2_SPLIT=copy`, `=check`; unset is as before):
   while the client's frame is out and the game's own otherwise; `cg_entities[i].gent` is moved with it
   (`SE_CGEntitiesAt`). The game hands the engine its two functions at its first frame (`SE_GameHooks` in `cl_main.cpp`):
   its module keeps its names.
-- **What the client's frame wrote** goes back to the game's entities when it ends (`SE_GameTake`): by difference with
-  the copy as given, a pointer into the copy made the game's again. `JK2_SPLIT=check` counts each word's place
-  (`jk2split:` lines). Over the sums' 4,000 frames that is: of an entity, `disconnectDebounceTime`, `setTime` and
-  `lightLevel`; of its client, one word of the player's state, the three facial timers and `renderInfo` from its 188th
-  byte to its end (the eye, head and feet the drawing found); of an NPC, nothing; and no word pointing into the copy
-  outside the lists.
-- **Checked**: `test_all.py jk2-split` (the sums with `JK2_SPLIT=check`) gives `jk2-sums`'s sums at frames 3200 and 3600.
+- **What the client's frame wrote** goes back to the game's entities when it ends (`SE_GameTake`), a pointer into the
+  copy made the game's again. `JK2_SPLIT=copy` gives back the words of a list of fields that changed against the copy
+  as given (`se_ent_back`, `se_cl_back`): what the check found and every field the client's game's sources assign.
+  `JK2_SPLIT=check` gives back every word that changed, by difference (about a million instructions a frame, the walk
+  at 0.58 frames a second), counts each one's place (`jk2split:` lines) and the words outside the list. Over the sums'
+  4,000 frames that is: of an entity, `disconnectDebounceTime`, `setTime` and `lightLevel`; of its client, one word of the
+  player's state, the three facial timers and `renderInfo` from its 188th byte to its end (the eye, head and feet the
+  drawing found); of an NPC, nothing. Over the walk with `JK2_SPLIT=check`: 0 words written outside the list and 0
+  words pointing into the copy outside the pointer fields.
+- **Checked**: `test_all.py jk2-split` (the sums with `JK2_SPLIT=copy`) gives `jk2-sums`'s sums at frames 3200 and 3600,
+  and so did `JK2_SPLIT=check`.
 
-Still to come, in order: the give-back as that list of fields, not a difference (the difference is about a million
-instructions a frame); the Ghoul2 instances the client's game poses, which the game traces against and animates; the
+Still to come, in order: the Ghoul2 instances the client's game poses, which the game traces against and animates; the
 engine's zone, console and snapshot ring used by both; then the game's next frame on a worker beside the client's,
 what the client wrote given back a frame later on both computers. Even so core 0 stays at about the game's frame, 1.0
 million a frame (about 4.5 frames a second at most), and the drawing's worker, 1.3 to 1.5 million, is then the bound.
