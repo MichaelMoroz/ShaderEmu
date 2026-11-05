@@ -3,8 +3,9 @@ Shader "ShaderEmu/GpuDrawBlit"
     // GpuDraw.shader as blits, with no camera (docs/machine/gpu.md, "Blits in place of cameras"; src/amp.cginc): the
     // same 12 passes, each a blit into the GPU's target and its depth buffer. A blit's two triangles are two patches
     // tessellated at factor 8, and a geometry shader of 32 instances gives 5,184 calls, 13 of the device's triangles
-    // each in the mesh's order (gpu_amp_geom in src/gpu.cginc). Pass 8 clears the depth to far, as the camera's
-    // clear did; EmuMachine blits it first.
+    // each in the mesh's order (gpu_amp_geom in src/gpu.cginc). Pass 15 puts the whole target's depth at the near plane
+    // and pass 8 the picture's at far, as the camera's clear did, so nothing depth-tested is drawn past the picture;
+    // EmuMachine blits them first.
     Properties
     {
         _State ("Machine state texture", 2D) = "black" {}
@@ -286,6 +287,21 @@ Shader "ShaderEmu/GpuDrawBlit"
             #pragma fragment frag
             #define GPU_DRAW_IDS_PASS
             #define _GpuPass 0
+            #include "GpuDrawPass.cginc"
+            ENDCG
+        }
+        Pass   // 15: the whole target's depth at the near plane, before pass 8 (GPU_CLEAR_NEAR in GpuDrawPass.cginc)
+        {
+            Name "CLEARNEAR"
+            ColorMask 0
+            ZTest Always
+            ZWrite On
+            CGPROGRAM
+            #pragma target 5.0
+            #pragma vertex vert
+            #pragma fragment frag
+            #define _GpuPass 0
+            #define GPU_CLEAR_NEAR
             #include "GpuDrawPass.cginc"
             ENDCG
         }

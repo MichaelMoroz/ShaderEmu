@@ -339,5 +339,36 @@ Shader "ShaderEmu/gpu"
             }
             ENDCG
         }
+
+        Pass
+        {
+            // The picture's depth at far (the harness clears the whole target's to the near plane first): past the picture a
+            // depth-tested pass's fragment fails the depth test before it is shaded, as 3D triangles past a program's view
+            // were drawn and shaded over the rest of the 2048 square target (docs/machine/gpu.md, "The picture's rectangle").
+            // No clip: a pixel inside is drawn as before. Two triangles of the picture's rectangle, depth only.
+            Name "GPUClear"
+            ZTest Always
+            ZWrite On
+
+            CGPROGRAM
+            #pragma target 5.0
+            #pragma vertex vert
+            #pragma fragment frag
+
+            Texture2D<uint4> _State;
+            #define GPU_STATE _State
+            #include "src/gpu.h"
+
+            float4 vert(uint id : SV_VertexID) : SV_Position {
+                uint k = id % 6;
+                bool right = k == 1 || k == 2 || k == 4, low = k == 2 || k == 4 || k == 5;
+                float2 size = gpu_picture_size();
+                return place_pixels(float2(right ? size.x : 0.0, low ? size.y : 0.0), 1.0);
+            }
+            float4 frag() : SV_Target {
+                return 0;
+            }
+            ENDCG
+        }
     }
 }

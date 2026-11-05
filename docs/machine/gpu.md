@@ -495,9 +495,12 @@ atlas's, in GPU memory, and its corridor's textures are near).
 A texture from the VRAM costs what a colour does; what is left, 0.055 ms, is the vertex shader's: every pass runs all
 196,608 vertices, each finding its command by a binary search (until the draw IDs, next).
 
-In the world the memory screen's VRAM button shows it (`EmuScope.ShowVram`, `Scope.shader`'s mode 4; 5 November 2026):
-the whole 4096 x 4096 square, row 0 at the top as `VRAM_X` and `VRAM_Y` address it, level 0 only, a texel's alpha over
-a checker of 64 texels and a grid of 512.
+In the world the memory screen's VRAM button shows the GPU's memory (`EmuScope.ShowVram`, `Scope.shader`'s mode 4,
+`gpu_memory`; 5 November 2026): at the left the VRAM, the whole 4096 x 4096 square (the slots and the rows `gles.c` streams
+into), row 0 at the top as `VRAM_X` and `VRAM_Y` address it, level 0 only, a texel's alpha over a checker of 64 texels and a
+grid of 512; at the top right the frame buffer (`GpuTarget`, 1280 x 720, as the display reads it); under it the draw IDs (a
+texel a vertex, a colour of its command's texel, dim where no pass draws it; written every frame, zeros where no list is
+drawn, so it shows only while one is: Quake's, a frame in a few dozen).
 
 ## Draw IDs
 
@@ -631,13 +634,22 @@ read its rectangle. So:
   distances (`GPU_EDGE`; `--define GPU_NO_EDGE` in the harness leaves it whole). Its colour and depth are the same
   at every corner, so no pixel inside changes. 3D triangles past a program's view are not cut: a cut triangle's
   new corners move the interpolation inside it.
-- The world's depth clear (GpuDrawBlit's pass 8, a draw) covers the list's
-  picture, not the whole target: depth past it is tested only by pixels past it.
+- The world's depth clear (GpuDrawBlit's pass 8, a draw) covers the list's picture, after pass 15 has put the whole
+  target's depth at the near plane (5 November 2026): past the picture a depth-tested pass's fragment (passes 0 to 3, 8
+  and 9: the 3D) fails the card's depth test before it is shaded. Before, 3D triangles past a program's view were drawn
+  and shaded over the rest of the 1280 x 720 target (Quake's 640 x 480 is a third of it). It is no clip, so no pixel
+  inside changes, and the depth is the vertices', not `SV_Depth`, which would turn the card's coarse depth culling off for
+  the passes after it. The passes that test no depth (4 to 7, 12 and 13: 2D, blends) still draw what they are given past
+  the picture (Quake's flash of a key, a rectangle over all of it). The harness does the same (below).
 - The world's display blit draws the mode's rectangle of its 2048 x 1024 texture (Display.shader's `_Rect`; 800
   x 600 is a quarter), and a whole one when the mode shrinks, after power off and for another's display: outside
   the rectangle the texture keeps the `_Off` a whole blit wrote, so the mipmaps are made over the whole texture.
-- The harness clears the depth with `ClearDepthStencilView`, a clear of the whole surface, which a card makes
-  without drawing; the readback and the sound never read the target. The targets' memory stays: 7.4 MB in the
+- The harness clears the depth with `ClearDepthStencilView`, a clear of the whole surface which a card makes without
+  drawing, to the near plane, then draws the picture's rectangle at far (gpu.shader's `GPUClear`, depth only;
+  5 November 2026), so that its 2048 square target is bounded as the world's is; a `gpu.shader` without the pass, or
+  `RVC_GPU_WHOLE_DEPTH=1`, clears all of it to far as before, and `RVC_GPU_READS=1` says which. glxgears and mctest on the
+  desktop, 120 frames on WARP from one snapshot under `--fixed-dt 0.02`: the whole target the same pixels both ways. The
+  readback and the sound never read the target. The targets' memory stays: 7.4 MB in the
   world (colour and depth), 32 MB in the harness; a target of another size moves every vertex's place (`part` in
   `gpu_vertex_sized`) and so the pictures.
 

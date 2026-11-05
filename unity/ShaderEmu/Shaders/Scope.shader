@@ -1,16 +1,18 @@
 Shader "ShaderEmu/Scope"
 {
     // The memory screen's other pictures (EmuScope.cs picks one): the CPU's state texels, the
-    // ROM, the sound card's ring of samples as two traces, and the GPU's VRAM (docs/machine/gpu.md,
-    // "VRAM": the textures the guest uploaded).
+    // ROM, the sound card's ring of samples as two traces, and the GPU's memory (docs/machine/gpu.md):
+    // the VRAM (its slots and the rows gles.c streams into), the frame buffer and the vertices' draw IDs.
     Properties
     {
-        _Mode ("1: CPU state, 2: ROM, 3: sound, 4: VRAM", Int) = 1
+        _Mode ("1: CPU state, 2: ROM, 3: sound, 4: the GPU's memory", Int) = 1
         _State ("Machine state texture", 2D) = "black" {}
         _Data_ROM ("ROM, a 16-byte texel a pixel (RGBAFloat, read by its bits)", 2D) = "black" {}
         _Mix ("Sound card's mix", 2D) = "black" {}
         _GpuVram ("The GPU's VRAM (4096 x 4096 RGBA8)", 2D) = "black" {}
-        _Aspect ("The screen's width over its height (the VRAM is drawn square in its middle)", Float) = 1
+        _GpuTarget ("The GPU's colour target, its frame buffer (1280 x 720)", 2D) = "black" {}
+        _GpuDrawIds ("The draw IDs: a texel a mesh vertex, its command's texel and its passes (512 x 384 RGInt)", 2D) = "black" {}
+        _Aspect ("The screen's width over its height (the VRAM is drawn square at its left)", Float) = 2
     }
     SubShader
     {
@@ -29,6 +31,8 @@ Shader "ShaderEmu/Scope"
             Texture2D<float4> _Mix;
             Texture2D<float4> _GpuVram;
             SamplerState sampler_GpuVram_linear_clamp;
+            Texture2D<float4> _GpuTarget;
+            Texture2D<int2> _GpuDrawIds;
             float _Aspect;
             uint _Mode;
 
@@ -120,13 +124,10 @@ Shader "ShaderEmu/Scope"
                 return c;
             }
 
-            // The VRAM square in the screen's middle, its row 0 at the top as the GPU addresses it (gpu.h's
+            // The VRAM square at the screen's left, its row 0 at the top as the GPU addresses it (gpu.h's
             // VRAM_X and VRAM_Y). Level 0 in four bilinear taps a pixel: the levels are made only when a list
             // asks for them. A texel's alpha is shown over a dim checker of 64 texels, a 512-texel grid over all.
-            float3 vram(float2 p) {
-                float2 t = float2((p.x - 0.5) * _Aspect + 0.5, p.y);
-                float2 d = float2(ddx(t.x), ddy(t.y)) * 0.25;   // (before the branch: no derivatives inside one)
-                if (t.x < 0 || t.x > 1) return float3(0.02, 0.025, 0.04);
+            float3 vram(float2 t, float2 d) {
                 float4 c = 0;
                 c += _GpuVram.SampleLevel(sampler_GpuVram_linear_clamp, t + float2(-d.x, -d.y), 0);
                 c += _GpuVram.SampleLevel(sampler_GpuVram_linear_clamp, t + float2( d.x, -d.y), 0);
@@ -140,9 +141,46 @@ Shader "ShaderEmu/Scope"
                 return min(grid.x, grid.y) < abs(d.x) * 4096 * 2 ? lerp(rgb, float3(0.25, 0.35, 0.5), 0.6) : rgb;
             }
 
+            // The frame buffer as the display reads it (Display.shader's mode 3: its pixel (0, 0) at the top left),
+            // four pixels averaged.
+            float3 frame_buffer(float2 t, float2 d) {
+                float2 size = float2(1280, 720), at = t * size, e = max(d * size, 0.5);
+                float3 c = _GpuTarget.Load(int3(clamp(at + float2(-e.x, -e.y), 0, size - 1), 0)).rgb
+                         + _GpuTarget.Load(int3(clamp(at + float2( e.x, -e.y), 0, size - 1), 0)).rgb
+                         + _GpuTarget.Load(int3(clamp(at + float2(-e.x,  e.y), 0, size - 1), 0)).rgb
+                         + _GpuTarget.Load(int3(clamp(at + float2( e.x,  e.y), 0, size - 1), 0)).rgb;
+                return c * 0.25;
+            }
+
+            // A vertex's draw ID: a colour of its command's texel, bright where it is drawn in a pass, dim where in none.
+            float3 draw_ids(float2 t) {
+                int2 v = _GpuDrawIds.Load(int3(clamp(int2(t * float2(512, 384)), int2(0, 0), int2(511, 383)), 0));
+                if (v.x == 0 && v.y == 0) return float3(0.02, 0.025, 0.04);
+                uint h = (uint)v.x * 2654435761u;
+                float3 c = float3((h >> 8) & 255, (h >> 16) & 255, h >> 24) / 255.0 * 0.7 + 0.3;
+                return v.y != 0 ? c : c * 0.3;
+            }
+
+            // The GPU's memory: the VRAM a square at the left, the frame buffer at the top of what is left, the draw IDs
+            // under it, each at its own aspect, apart by a dark gap.
+            float3 gpu_memory(float2 p) {
+                const float3 back = float3(0.02, 0.025, 0.04);
+                float2 q = float2(p.x * _Aspect, p.y);   // in the screen's heights
+                float2 d = float2(ddx(q.x), ddy(q.y)) * 0.25;   // (before any branch: no derivatives inside one)
+                if (q.x < 1.0) return vram(q, d);
+                float left = 1.0 + 0.02, wide = _Aspect - left;
+                float2 u = float2(q.x - left, q.y);
+                if (u.x < 0) return back;
+                float fbHigh = wide * 720.0 / 1280.0;
+                if (u.y < fbHigh) return frame_buffer(float2(u.x / wide, u.y / fbHigh), d / float2(wide, fbHigh));
+                float top = fbHigh + 0.02, idHigh = 1.0 - top, idWide = idHigh * 512.0 / 384.0;
+                if (u.y < top || u.x > idWide) return back;
+                return draw_ids(float2(u.x / idWide, (u.y - top) / idHigh));
+            }
+
             float4 frag(v2f i) : SV_Target {
                 float2 p = float2(i.uv.x, 1.0 - i.uv.y);
-                float3 c = _Mode == 1 ? cpu_state(p) : _Mode == 2 ? rom(p) : _Mode == 4 ? vram(p) : sound(p);
+                float3 c = _Mode == 1 ? cpu_state(p) : _Mode == 2 ? rom(p) : _Mode == 4 ? gpu_memory(p) : sound(p);
 #ifndef UNITY_COLORSPACE_GAMMA
                 c = GammaToLinearSpace(c);
 #endif
