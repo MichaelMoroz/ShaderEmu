@@ -42,7 +42,10 @@ Nano-X's build.
 
 Not checked: programs that use `double` heavily, `long double`, and anything the branch's own
 test suite skips. `python tools/test_all.py cc-bytes` compiles the four examples with `cc`, `cc -g`
-and `tcc -c` and compares the outputs' md5 sums.
+and `tcc -c` and compares the outputs' md5 sums. They must not go by the build home: the drivers map it to `/nm`
+(`-ffile-prefix-map` in `linux/nommu/setup.sh`), and TinyCC's own runtime, which its cross compiler builds without that,
+has its objects' FILE symbols renamed to `/nm/work/...` (`linux/tcc/build.sh`; every linked program keeps them, and the
+value moved with the home until 5 November 2026). Two homes made by `setup.sh` from one tree give the same bytes.
 
 ## What a compile costs
 
