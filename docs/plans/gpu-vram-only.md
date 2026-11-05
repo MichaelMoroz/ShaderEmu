@@ -81,3 +81,9 @@ the VRAM (two loads, no RAM). `SPRITE_WORDS` (the last picture) is the picture's
   and the draw IDs wrote all 196,608 texels every frame, now into eight targets of 16 bytes, for lists of 50 vertices.
   Both now draw the rows the list's vertices take alone (`gpu_rows_vertex`, from the last command's end), and the frame row
   says how many (texel 4 this frame's, 0 with no list; texel 5 the last list's, the holodeck's).
+  After that, the VRAM alone against the RAM path, the mean of two 8 s runs: colour 0.175 against 0.181 ms, words nearest
+  0.174 against 0.182, words smooth 0.172 against 0.308, indexed nearest 0.173 against 0.175, indexed smooth 0.172 against
+  0.320, three bytes smooth 0.173 against 0.445, compact with a light map 0.176 against 0.532, 3,600 rectangles 0.118
+  against 0.155: faster in every mode (indexed nearest level).
+- Not done: a snapshot this harness makes under `--cpu` loads to a black picture (the guest idle), with the harness of before
+  the rows change too; a cold boot draws (Doom's E1M1, 2,987 colours). Not looked into yet.
