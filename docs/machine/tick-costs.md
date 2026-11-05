@@ -722,3 +722,74 @@ are in bold.
   Each such kind is a small share of a load, so the whole runs say less than the frozen pass.
 - The shell loop's time left is in the fetch of short loops and in the stack's loads and stores; every form tried for
   those moved the driver's mode or the read ahead.
+
+## Sixth round (5 November 2026): fusions, deferred writes, inline floats, and the pass's length
+
+The same RTX 3090, D3D11, fxc2 67; the tree of `62c2cd86`, a stamped copy of it the base (`EXP_BASE`), and a second copy
+beside the variants in every run (`same2`): ms of a frame's tick against that copy, from one snapshot each (Quake walking
+e1m1 with `QUAKE_TRACK=5`, Tiberian Dawn's scenario 3 at frame 2,113, the shell loop), 40 to 70 s, up to ten ticks in one run
+(`RVC_TICK_ALT`). Copies of the tree differed by 0.2 to 0.9% from each other (Tiberian Dawn up to 1.7% once), so a variant is
+believed only where it holds in two runs or more. Another session's Unity editor on the card made some runs worthless
+(a base twice its usual time): those were dropped and run again. The numbers are means over the runs (in brackets).
+
+| What | Quake | Tiberian Dawn | Shell | Verdict |
+|---|---|---|---|---|
+| **f2**: arithmetic's next word of the texel, when it is arithmetic or a branch, in the same turn (its registers forwarded from the first) | +0.2% (4) | -1.1% (4) | +0.1% (4) | Tiberian Dawn only |
+| f1 (the next arithmetic word only, read after the write); f1b (forwarded); f5 (a branch only) | +0.2%; -; +0.2% | -1.3%; -0.5%; -0.2% | +0.9%; 0.0%; -0.2% | level |
+| f4: the next word fused after any kind, at the turn's end | +14.8% | +7.2% | +13.4% | lost: one level more on every instruction |
+| la1 (arithmetic after a load); ld2 (a lw of the same texel after a load, from the texel taken); st2 (a sw into the texel remembered last after a sw); br5 (arithmetic after a branch not taken) | -0.2%; +2.8%; +2.4%; +1.8% | +0.5%; +3.7%; +2.0%; +2.1% | +0.4%; +2.9%; +1.4%; +2.3% | lost |
+| **fp1**: fdiv inline with the sum, difference and product, as the card's `a / b` (FAST's division, out of FAST) | -0.2% (3) | -0.9% (3) | -0.4% (3) | a little |
+| **f2 + fp1** | -1.2% (3) | -1.0% (3) | -0.2% (3) | about -1% |
+| **f2 + fp1 + ffma** (fmadd, fmsub, fnmsub, fnmadd in the fast loop, one `mad`, the loop's last test) | -0.7% (2) | -1.0% (2) | -0.7% (2) | about -1%; ffma costs nothing measurable |
+| fp3 (the conversions before the light floats); pfp (no `precise` on the sum, difference and product); fcmpn (no NaN test in comparisons: the card's compare is false on a NaN too) | -0.5%; -0.7%; +0.8% | -0.3%; -0.5%; +0.1% | -0.6%; 0.0%; -0.4% | level |
+| m1: mul among arithmetic's selects (as round two found) | +0.5% (2) | -1.4% (2) | +1.8% (2) | lost but on Tiberian Dawn |
+| br1 (branches before stores and floats); br2, br3 (branches in the first group, after loads; after arithmetic) | +0.9%; +0.5%; -0.9% | -1.7%; -0.5%; -0.4% | -0.6%; +0.6%; 0.0% | br1 Tiberian Dawn only, as before |
+| jl1: jal with the branches | +0.9% | +3.2% | +2.4% | lost |
+| fb1: a branch fused after a float comparison | -1.5% (2) | +1.2% (2) | +1.1% (2) | Quake only |
+| wb1: the result written a turn late, after the next turn's register reads, which take it by selects | +0.5% | +1.5% | +2.4% | lost |
+| wb2: wb1, and an instruction that may not ends the loop by the budget (no break); wb3: and the budget's test under the fetch's | +2.4%; +6.0% | +3.0%; +8.3% | +3.9%; +7.8% | lost |
+| prew2: `pre_w` written only on the way out (`if (!ok) { pre_w = w; break; }`) | +4.5% | +1.7% | +6.0% | lost: one `mov` moved |
+| fxc2's switches, each in a folder of its own so the cache does not give it the tree's blob: `VKD3D_HLSL_VALUE_NUMBERING=0`, `VKD3D_HLSL_FLATTEN=30`, `VKD3D_HLSL_SPLIT_STRUCTS=0` | -0.6%, +0.3%, +1.1% | +0.3%, -0.1%, -0.2% | 0.0%, -0.4%, +0.1% | level, as round one found |
+| Probe: the core a uniform (`select_core(_Init)`), to see whether the driver's branches cost less when it can tell a warp's lanes agree | | | | not run: every pixel then makes core 0's pass, the workers stop, and WARP's check fails, so no stamp |
+
+The cache key of `build/shadercache` is the preprocessed text without the folder, so a copy of the tree compiled under an fxc2
+switch gets the tree's blob: give it a token of its own (`static const uint tag = 0;`) and compile it in a run that has the
+switch in its environment (the trees already cached keep their compile).
+
+**The pass's length.** Not the tick's code but its budget (`--ticks`, `_Ticks`): one run a length from the same snapshots,
+alternating twice. Tiberian Dawn's instructions a second, the shell loop's, Quake's frames in 30 s (`QUAKE_TRACK`):
+
+| Instructions a pass | Shell | Tiberian Dawn | Quake |
+|---|---|---|---|
+| 8,192 | 4.62 M/s | 5.12 M/s | 2,217 frames |
+| 10,240 | +1.7% | +2.3% | -2.9% |
+| 12,288 | +3.7% | +3.6% | +4.7% |
+| 14,336 | +4.6% | +4.4% | +2.5% |
+| 16,384 | +5.5% | +5.3% | +2.9% |
+| 20,480 | +5.8% | +6.4% | +0.5% |
+
+Where core 0's passes end with a budget of 32,768 (`--frame-log`, `python tools/pass_ends.py`):
+
+| Load | Ended before 8k | before 12k | before 16k | before 24k | write cache full | waiting | ran to the budget |
+|---|---|---|---|---|---|---|---|
+| Quake, e1m1 | 52.4% | 62.4% | 78.5% | 96.0% | 0.8% | 98.3% | 0.9% |
+| Tiberian Dawn | 2.2% | 10.2% | 24.7% | 32.7% | 29.8% | 1.2% | 67.0% |
+| Shell loop | 0 | 0 | 0 | 0 | 0 | 0 | 100% |
+
+- Tiberian Dawn's passes that the write cache ends begin at about 9k instructions, are most at 12k to 13k and reach 18k: the
+  cache's 336 texels are a pass of about 12k of its code. At 8,192 none ends there; at 12,288 4.5% of passes do (0.4% of the
+  instructions), at 16,384 13.3% (2.7%).
+- Quake's core 0 waits for its clock, not for a worker: `main` (`sys_shaderemu.c`) pauses until `Sys_Milliseconds()` moves,
+  and `Host_FilterTime` runs a frame every 10 ms of the guest's (`host.c`); the server's frame and part of the drawing are
+  the workers'. Its pauses come in clusters (0-1k, 4-5k, 11-13k, 16-18k instructions into a pass), and its frames a
+  second are how those line up with the clock, so they say little of the length's worth. A program whose cores wait for
+  each other every frame (nxphys, Doom's view, Jedi Outcast's drawing worker) pays every wait longer with a longer pass,
+  as stores reach RAM only at the commit; none was measured here.
+- 12,288 is where the gain of fewer rounds' fixed costs (about 6% of a round at 8,192) meets the write cache and the waits:
+  +3.7 to +4.7% on all three. Not taken: it is the machine's setting for every program and every world, measured on two.
+
+**What was learnt.** Nothing of the fast loop's shape gave more than 1% on every load: f2 + fp1 (+ ffma) about 1%, at the
+noise's edge. fp1 changes what fdiv makes (the card's quotient, which `rvc_cpu` does not make: a model of the card's
+division is owed first), and ffma's `mad` is fused where the general step rounds twice: neither is in the tree. The ways
+to more are outside the loop's text: the pass's length (with the write cache, which caps it at about 12k of Tiberian Dawn's
+code), a larger write cache, and fewer instructions (Zba and fmadd in the programs: `docs/plans/riscv-isa.md`).
