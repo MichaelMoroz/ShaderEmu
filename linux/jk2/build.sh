@@ -272,7 +272,7 @@ if [ "${JK2_HOST:-}" != 1 ]; then
         BEGIN { while ((getline l < f) > 0) { split(l, w, " "); have[w[1]] = 1 } }
         $2 ~ /^gl[A-Z]/ && (("jk2_" $2) in have) {print "--redefine-sym " $2 "=jk2_" $2}') \
         --redefine-sym glState=se_glState_b "$BUILD/drawb_r.all.o" "$BUILD/drawb_r.1.o"
-    OWN="tess backEnd rb_surfaceTable se_kf_n se_kf_ok se_kf_indices se_mesh_frame se_mesh_ni se_mesh_nv se_mesh_surface lightOrigin
+    OWN="tess backEnd rb_surfaceTable se_kept_stats se_kf_n se_kf_ok se_kf_indices se_mesh_frame se_mesh_ni se_mesh_nv se_mesh_surface lightOrigin
         tr_stencilled g_bRenderGlowingObjects g_uiCurrentPixelShaderType SQuickSprite se_glState_b se_half_b SSAdditiveTransparency
         SSUsingFog SSVertAlpha SSVertWindDir SSVertWindForce curWeatherAmount curWindBlowVect curWindGrassDir curWindGust
         curWindPoint curWindPointActive curWindPointForce curWindSpeed gustLeft lastSSUpdateTime nextGustTime randomindex

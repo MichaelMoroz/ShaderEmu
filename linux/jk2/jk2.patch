@@ -340,7 +340,7 @@ index 94051760..57e8ac87 100644
  	if ( cl.viewangles[PITCH] - oldAngles[PITCH] > 90 ) {
  		cl.viewangles[PITCH] = oldAngles[PITCH] + 90;
 diff --git a/code/client/cl_main.cpp b/code/client/cl_main.cpp
-index 1a5c2446..490d5a5e 100644
+index 1a5c2446..abfe7897 100644
 --- a/code/client/cl_main.cpp
 +++ b/code/client/cl_main.cpp
 @@ -145,6 +145,7 @@ void CL_FlushMemory( void ) {
@@ -359,7 +359,7 @@ index 1a5c2446..490d5a5e 100644
  		// clear nextmap so the cinematic shutdown doesn't execute it
  		Cvar_Set( "nextmap", "" );
  		CL_Disconnect();
-@@ -761,8 +763,133 @@ CL_Frame
+@@ -761,8 +763,152 @@ CL_Frame
  extern cvar_t	*cl_newClock;
  static unsigned int frameCount;
  float avgFrametime=0.0;
@@ -404,10 +404,14 @@ index 1a5c2446..490d5a5e 100644
 +static char se_sv_error[1024];
 +static char se_sv_kept[16384];
 +static int se_sv_kept_used, se_sv_kept_lost;
++static uint32_t se_mix_gen;	// the mix the game's frame waits for (gl_jk2.c's jk2MixGiven; CL_Frame)
++extern "C" { uint32_t jk2MixGiven( void ); void jk2MixWaitHere( uint32_t gen ); }
 +static void SE_ServerJob( void * )
 +{
 +	if ( setjmp( se_sv_abort ) )
 +		return;
++	if ( se_mix_gen )
++		jk2MixWaitHere( se_mix_gen );	// (the voices' levels the game reads made: CL_Frame)
 +	SV_Frame( se_sv_msec, se_sv_frac );
 +}
 +// (Com_Error on the worker: the frame ends and the error is raised by this core at the settle)
@@ -446,9 +450,22 @@ index 1a5c2446..490d5a5e 100644
 +extern unsigned long long SE_Instructions( void );
 +unsigned long long se_split_ins[4];	// (JK2_PARTS: give, game's frame here, take, frames)
 +int SE_MixEarly( void );
++static int se_mix_lazy = -1;	// JK2_MIX_LAZY=0: settled at the frame's start, as before
++static int se_mix_lazy_frame;	// this frame's mix waited for by the game's worker and this core's first sound call
 +void CL_Frame( int msec, float fractionMsec ) {
-+	if ( SE_MixEarly() )
++	// (docs/games/jk2.md, "The mix waited for by the game's frame": the mix of the frame before, out on its worker, is waited
++	// for by the game's frame on its own worker before it reads the voices' levels, and by this core at its first call into
++	// the sound system (snd_dma.cpp), not at the frame's start: about 37 passes a frame of the walk this core waited)
++	if ( se_mix_lazy < 0 ) {
++		const char *e = getenv( "JK2_MIX_LAZY" );
++		se_mix_lazy = e && !strcmp( e, "1" );	// (the game's voices' levels a frame later: not the default)
++	}
++	se_mix_lazy_frame = se_mix_lazy && SE_MixEarly() && SE_SplitAhead() == 2 && se_game_give && cls.state == CA_ACTIVE &&
++		com_sv_running && com_sv_running->integer && jk2ServerOn();
++	if ( SE_MixEarly() && !se_mix_lazy_frame )
 +		SE_MixSettle();	// (but with JK2_MIX_LATE=1, where the mix runs on into the frame: snd_dma.cpp, se_snd_defer)
++	se_mix_gen = 0;	// (the game's frame reads the levels a frame behind: it waits for no mix)
++	{ void SE_LipGive( int lagged ); SE_LipGive( se_mix_lazy_frame ); }
 +	unsigned long long se_i0 = SE_Instructions();
 +	if ( se_game_give )
 +		se_game_give();
@@ -464,6 +481,8 @@ index 1a5c2446..490d5a5e 100644
 +			jk2ServerGive( SE_ServerJob, NULL );
 +			se_out = 1;
 +		} else {
++			if ( se_mix_lazy_frame )
++				SE_MixSettle(), se_mix_lazy_frame = 0, se_mix_gen = 0;
 +			se_sv_side = 1;
 +			SV_Frame( msec, fractionMsec );
 +			se_sv_side = 0;
@@ -487,13 +506,13 @@ index 1a5c2446..490d5a5e 100644
 +#endif
  
 +#ifdef SHADEREMU
-+	if ( SE_MixEarly() )
++	if ( SE_MixEarly() && !se_mix_lazy_frame )
 +		SE_MixSettle();	// (the mix painted on a worker during the game's frame done before the client's sounds; not with JK2_MIX_LATE=1)
 +#endif
  	if ( !com_cl_running->integer ) {
  		return;
  	}
-@@ -1127,6 +1254,9 @@ void CL_InitRef( void ) {
+@@ -1127,6 +1273,9 @@ void CL_InitRef( void ) {
  	RIT(CM_DeleteCachedMap);
  	RIT(CM_DrawDebugSurface);
  	RIT(CM_PointContents);
@@ -743,7 +762,7 @@ index ccdab28d..c2ee9ab7 100644
  qboolean	MP3Stream_SeekTo		( channel_t *ch, float fTimeToSeekTo );
  qboolean	MP3Stream_Rewind		( channel_t *ch );
 diff --git a/code/client/snd_dma.cpp b/code/client/snd_dma.cpp
-index bb539e4c..9002833c 100644
+index bb539e4c..57945b9a 100644
 --- a/code/client/snd_dma.cpp
 +++ b/code/client/snd_dma.cpp
 @@ -51,9 +51,111 @@ void S_StopAllSounds(void);
@@ -890,27 +909,53 @@ index bb539e4c..9002833c 100644
  		chMP3_Bgrnd.iMP3SlidingDecodeWindowPos = 0;
  		chMP3_Bgrnd.iMP3SlidingDecodeWritePos = 0;
  		MP3Stream_SeekTo( &chMP3_Bgrnd, fTime );
-@@ -668,6 +786,9 @@ void S_ReloadAllUsedSounds(void)
+@@ -647,6 +765,9 @@ void S_Init( void ) {
+ //
+ void S_ReloadAllUsedSounds(void)
+ {
++#ifdef SHADEREMU
++	SE_MixSettle();	// (the mix out on its worker done first: cl_main.cpp's CL_Frame, "lazily")
++#endif
+ 	if (s_soundStarted && !s_soundMuted )
+ 	{
+ 		// new bit, reload all soundsthat are used on the current level...
+@@ -668,6 +789,12 @@ void S_ReloadAllUsedSounds(void)
  
  void S_Shutdown( void )
  {
++#ifdef SHADEREMU
++	SE_MixSettle();	// (the mix out on its worker done first: cl_main.cpp's CL_Frame, "lazily")
++#endif
 +#ifdef SHADEREMU
 +	se_snd_settle();
 +#endif
  	if ( !s_soundStarted ) {
  		return;
  	}
-@@ -917,6 +1038,9 @@ S_BeginRegistration
+@@ -905,6 +1032,9 @@ are no longer valid.
+ ===================
+ */
+ void S_DisableSounds( void ) {
++#ifdef SHADEREMU
++	SE_MixSettle();	// (the mix out on its worker done first: cl_main.cpp's CL_Frame, "lazily")
++#endif
+ 	S_StopAllSounds();
+ 	s_soundMuted = qtrue;
+ }
+@@ -917,6 +1047,12 @@ S_BeginRegistration
  */
  void S_BeginRegistration( void )
  {
++#ifdef SHADEREMU
++	SE_MixSettle();	// (the mix out on its worker done first: cl_main.cpp's CL_Frame, "lazily")
++#endif
 +#ifdef SHADEREMU
 +	se_snd_settle();
 +#endif
  	s_soundMuted = qfalse;		// we can play again
  
  #ifdef USE_OPENAL
-@@ -1003,6 +1127,30 @@ S_RegisterSound
+@@ -1003,9 +1139,36 @@ S_RegisterSound
  Creates a default buzz sound if the file can't be loaded
  ==================
  */
@@ -941,10 +986,19 @@ index bb539e4c..9002833c 100644
  sfxHandle_t	S_RegisterSound( const char *name)
  {
  	sfx_t	*sfx;
-@@ -1441,6 +1589,11 @@ Starts an ambient, 'one-shot" sound.
++#ifdef SHADEREMU
++	SE_MixSettle();	// (a sound registered, maybe loaded, beside the mix: done first)
++#endif
+ 
+ 	if (!s_soundStarted) {
+ 		return 0;
+@@ -1441,6 +1604,14 @@ Starts an ambient, 'one-shot" sound.
  
  void S_StartAmbientSound( const vec3_t origin, int entityNum, unsigned char volume, sfxHandle_t sfxHandle )
  {
++#ifdef SHADEREMU
++	SE_MixSettle();	// (the mix out on its worker done first: cl_main.cpp's CL_Frame, "lazily")
++#endif
 +#ifdef SHADEREMU
 +	if ( se_snd_defer( 1, origin, entityNum, CHAN_AMBIENT, sfxHandle, volume ) )
 +		return;	// (the mix is out: made at its settle)
@@ -953,7 +1007,7 @@ index bb539e4c..9002833c 100644
  	channel_t	*ch;
  	/*const*/ sfx_t *sfx;
  
-@@ -1498,7 +1651,11 @@ void S_StartAmbientSound( const vec3_t origin, int entityNum, unsigned char volu
+@@ -1498,7 +1669,11 @@ void S_StartAmbientSound( const vec3_t origin, int entityNum, unsigned char volu
  
  	if (sfx->pMP3StreamHeader)
  	{
@@ -965,10 +1019,13 @@ index bb539e4c..9002833c 100644
  		//ch->iMP3SlidingDecodeWritePos = 0; // These will be zero from the memset in S_PickChannel(), but keep them here for reference...
  		//ch->iMP3SlidingDecodeWindowPos= 0; //
  	}
-@@ -1519,6 +1676,11 @@ Entchannel 0 will never override a playing sound
+@@ -1519,6 +1694,14 @@ Entchannel 0 will never override a playing sound
  */
  void S_StartSound(const vec3_t origin, int entityNum, soundChannel_t entchannel, sfxHandle_t sfxHandle )
  {
++#ifdef SHADEREMU
++	SE_MixSettle();	// (the mix out on its worker done first: cl_main.cpp's CL_Frame, "lazily")
++#endif
 +#ifdef SHADEREMU
 +	if ( se_snd_defer( 0, origin, entityNum, entchannel, sfxHandle, 0 ) )
 +		return;	// (the mix is out: made at its settle)
@@ -977,7 +1034,7 @@ index bb539e4c..9002833c 100644
  	channel_t	*ch;
  	/*const*/ sfx_t *sfx;
  
-@@ -1625,7 +1787,11 @@ void S_StartSound(const vec3_t origin, int entityNum, soundChannel_t entchannel,
+@@ -1625,7 +1808,11 @@ void S_StartSound(const vec3_t origin, int entityNum, soundChannel_t entchannel,
  
  	if (sfx->pMP3StreamHeader)
  	{
@@ -989,60 +1046,195 @@ index bb539e4c..9002833c 100644
  		//ch->iMP3SlidingDecodeWritePos = 0; // These will be zero from the memset in S_PickChannel(), but keep them here for reference...
  		//ch->iMP3SlidingDecodeWindowPos= 0; //
  	}
-@@ -1641,6 +1807,9 @@ S_StartLocalSound
+@@ -1641,6 +1828,12 @@ S_StartLocalSound
  ==================
  */
  void S_StartLocalSound( sfxHandle_t sfxHandle, int channelNum ) {
++#ifdef SHADEREMU
++	SE_MixSettle();	// (the mix out on its worker done first: cl_main.cpp's CL_Frame, "lazily")
++#endif
 +#ifdef SHADEREMU
 +	S_SE_SoundsFinish();	// (the sounds made on the workers in first: snd_mem.cpp)
 +#endif
  	if ( !s_soundStarted || s_soundMuted ) {
  		return;
  	}
-@@ -1658,6 +1827,9 @@ S_StartLocalLoopingSound
+@@ -1658,6 +1851,12 @@ S_StartLocalLoopingSound
  ==================
  */
  void S_StartLocalLoopingSound( sfxHandle_t sfxHandle) {
++#ifdef SHADEREMU
++	SE_MixSettle();	// (the mix out on its worker done first: cl_main.cpp's CL_Frame, "lazily")
++#endif
 +#ifdef SHADEREMU
 +	S_SE_SoundsFinish();	// (the sounds made on the workers in first: snd_mem.cpp)
 +#endif
  	vec3_t nullVec = {0,0,0};
  
  	if ( !s_soundStarted || s_soundMuted ) {
-@@ -1702,6 +1874,9 @@ so sound doesn't stutter.
+@@ -1702,6 +1901,12 @@ so sound doesn't stutter.
  ==================
  */
  void S_ClearSoundBuffer( void ) {
++#ifdef SHADEREMU
++	SE_MixSettle();	// (the mix out on its worker done first: cl_main.cpp's CL_Frame, "lazily")
++#endif
 +#ifdef SHADEREMU
 +	se_snd_settle();
 +#endif
  	int		clear;
  
  	if ( !s_soundStarted || s_soundMuted ) {
-@@ -1829,6 +2004,9 @@ S_StopAllSounds
+@@ -1783,6 +1988,9 @@ S_StopAllSounds
+ */
+ void S_StopSounds(void)
+ {
++#ifdef SHADEREMU
++	SE_MixSettle();	// (the mix out on its worker done first: cl_main.cpp's CL_Frame, "lazily")
++#endif
+ 	if ( !s_soundStarted ) {
+ 		return;
+ 	}
+@@ -1829,6 +2037,12 @@ S_StopAllSounds
  ==================
  */
  void S_StopAllSounds(void) {
++#ifdef SHADEREMU
++	SE_MixSettle();	// (the mix out on its worker done first: cl_main.cpp's CL_Frame, "lazily")
++#endif
 +#ifdef SHADEREMU
 +	se_snd_settle();
 +#endif
  	if ( !s_soundStarted ) {
  		return;
  	}
-@@ -1873,6 +2051,9 @@ Include velocity in case I get around to doing doppler...
+@@ -1854,6 +2068,9 @@ S_ClearLoopingSounds
+ */
+ void S_ClearLoopingSounds( void )
+ {
++#ifdef SHADEREMU
++	SE_MixSettle();	// (the mix out on its worker done first: cl_main.cpp's CL_Frame, "lazily")
++#endif
+ #ifdef USE_OPENAL
+ 	if (s_UseOpenAL)
+ 	{
+@@ -1873,6 +2090,12 @@ Include velocity in case I get around to doing doppler...
  ==================
  */
  void S_AddLoopingSound( int entityNum, const vec3_t origin, const vec3_t velocity, sfxHandle_t sfxHandle, soundChannel_t chan ) {
++#ifdef SHADEREMU
++	SE_MixSettle();	// (the mix out on its worker done first: cl_main.cpp's CL_Frame, "lazily")
++#endif
 +#ifdef SHADEREMU
 +	S_SE_SoundsFinish();	// (the sounds made on the workers in first: snd_mem.cpp)
 +#endif
  	/*const*/ sfx_t *sfx;
  
    	if ( !s_soundStarted || s_soundMuted ) {
-@@ -2693,9 +2874,16 @@ Called once each time through the main loop
+@@ -1916,6 +2139,9 @@ S_AddAmbientLoopingSound
+ */
+ void S_AddAmbientLoopingSound( const vec3_t origin, unsigned char volume, sfxHandle_t sfxHandle )
+ {
++#ifdef SHADEREMU
++	SE_MixSettle();	// (the mix out on its worker done first: cl_main.cpp's CL_Frame, "lazily")
++#endif
+ 	/*const*/ sfx_t *sfx;
+ 
+ 	if ( !s_soundStarted || s_soundMuted ) {
+@@ -2066,6 +2292,9 @@ Music streaming
+ */
+ void S_RawSamples( int samples, int rate, int width, int channels, const byte *data, float volume, qboolean bFirstOrOnlyUpdateThisFrame )
+ {
++#ifdef SHADEREMU
++	SE_MixSettle();	// (the mix out on its worker done first: cl_main.cpp's CL_Frame, "lazily")
++#endif
+ 	int		i;
+ 	int		src, dst;
+ 	float	scale;
+@@ -2275,6 +2504,9 @@ let the sound system know where an entity currently is
+ */
+ void S_UpdateEntityPosition( int entityNum, const vec3_t origin )
+ {
++#ifdef SHADEREMU
++	SE_MixSettle();	// (the mix out on its worker done first: cl_main.cpp's CL_Frame, "lazily")
++#endif
+ 	if ( entityNum < 0 || entityNum >= MAX_GENTITIES ) {
+ 		Com_Error( ERR_DROP, "S_UpdateEntityPosition: bad entitynum %i", entityNum );
+ 	}
+@@ -2456,6 +2688,9 @@ Change the volumes of all the playing sounds for changes in their positions
+ */
+ void S_Respatialize( int entityNum, const vec3_t head, vec3_t axis[3], qboolean inwater )
+ {
++#ifdef SHADEREMU
++	SE_MixSettle();	// (the mix out on its worker done first: cl_main.cpp's CL_Frame, "lazily")
++#endif
+ #ifdef USE_OPENAL
+ 	EAXOCCLUSIONPROPERTIES eaxOCProp;
+ 	EAXACTIVEFXSLOTS eaxActiveSlots;
+@@ -2651,10 +2886,44 @@ qboolean S_ScanChannelStarts( void ) {
+ // this is now called AFTER the DMA painting, since it's only the painter calls that cause the MP3s to be unpacked,
+ //	and therefore to have data readable by the lip-sync volume calc code.
+ //
++#ifdef SHADEREMU
++// ---- the voices' levels the game reads (gi.VoiceVolume; docs/games/jk2.md, "The mix a frame behind") ----
++// The game reads them from an array of its own, written by the first core at a frame's start (SE_LipGive) from the
++// levels a mix made, as a list (S_DoLipSynchs): the mix just settled, as before; or with JK2_MIX_LAZY=1 the mix before
++// it, so that neither the game's frame nor this core waits for the mix at a frame's start (it settles at this core's
++// first call into the sound system): the levels a frame later, always the same frame later.
++int se_voice_vol[MAX_GENTITIES];
++struct seLip_t { short ent, vol; };
++static seLip_t se_lip_made[MAX_CHANNELS + 1];	// the mix's
++static int se_lip_made_n;
++static seLip_t se_lip_ready[MAX_CHANNELS + 1];	// the first core's: the last settled mix's
++static int se_lip_ready_n;
++static seLip_t se_lip_given[MAX_CHANNELS + 1];	// what se_voice_vol holds
++static int se_lip_given_n;
++void SE_LipReady( void )
++{
++	memcpy( se_lip_ready, se_lip_made, se_lip_made_n * sizeof( seLip_t ) );
++	se_lip_ready_n = se_lip_made_n;
++}
++void SE_LipGive( int lagged )
++{
++	const seLip_t *from = lagged ? se_lip_ready : se_lip_made;
++	const int n = lagged ? se_lip_ready_n : se_lip_made_n;
++	for ( int i = 0 ; i < se_lip_given_n ; i++ )
++		se_voice_vol[se_lip_given[i].ent] = 0;
++	for ( int i = 0 ; i < n ; i++ )
++		se_voice_vol[from[i].ent] = from[i].vol;
++	memcpy( se_lip_given, from, n * sizeof( seLip_t ) );
++	se_lip_given_n = n;
++}
++#endif
+ void S_DoLipSynchs( const int s_oldpaintedtime )
+ {
+ 	channel_t		*ch;
+ 	int				i;
++#ifdef SHADEREMU
++	se_lip_made_n = 0;
++#endif
+ 
+ 	// clear out the lip synching override array for this frame
+ 	memset(s_entityWavVol, 0,(MAX_GENTITIES * 4));
+@@ -2674,6 +2943,10 @@ void S_DoLipSynchs( const int s_oldpaintedtime )
+ 		{
+ 			// go away and work out amplitude for this sound we are playing right now.
+ 			s_entityWavVol[ ch->entnum ] = S_CheckAmplitude( ch, s_oldpaintedtime );
++#ifdef SHADEREMU
++			if ( se_lip_made_n < MAX_CHANNELS )
++				se_lip_made[se_lip_made_n].ent = (short)ch->entnum, se_lip_made[se_lip_made_n++].vol = (short)s_entityWavVol[ ch->entnum ];
++#endif
+ 			if ( s_show->integer == 3 ) {
+ 				Com_Printf( "(%i)%i %s vol = %i\n", ch->entnum, i, ch->thesfx->sSoundName, s_entityWavVol[ ch->entnum ] );
+ 			}
+@@ -2693,9 +2966,20 @@ Called once each time through the main loop
  ============
  */
  void S_Update( void ) {
++#ifdef SHADEREMU
++	SE_MixSettle();	// (the mix out on its worker done first: cl_main.cpp's CL_Frame, "lazily")
++	SE_LipReady();	// (the mix before done: its levels the next frame's with JK2_MIX_LAZY=1)
++#endif
 +#ifdef SHADEREMU
 +	S_SE_SoundsFinish();	// (the sounds made on the workers in first: snd_mem.cpp)
 +#endif
@@ -1056,7 +1248,7 @@ index bb539e4c..9002833c 100644
  	if ( !s_soundStarted || s_soundMuted ) {
  		return;
  	}
-@@ -2900,7 +3088,11 @@ void S_Update_(void) {
+@@ -2900,7 +3184,11 @@ void S_Update_(void) {
  
  			if (ch->thesfx->pMP3StreamHeader)
  			{
@@ -1068,7 +1260,7 @@ index bb539e4c..9002833c 100644
  				ch->iMP3SlidingDecodeWritePos = 0;
  				ch->iMP3SlidingDecodeWindowPos= 0;
  
-@@ -3063,6 +3255,15 @@ void S_Update_(void) {
+@@ -3063,6 +3351,15 @@ void S_Update_(void) {
  			endtime = s_soundtime + samps;
  
  
@@ -1084,7 +1276,7 @@ index bb539e4c..9002833c 100644
  		SNDDMA_BeginPainting ();
  
  		S_PaintChannels (endtime);
-@@ -4062,6 +4263,9 @@ static void FreeMusic( MusicInfo_t *pMusicInfo )
+@@ -4062,6 +4359,9 @@ static void FreeMusic( MusicInfo_t *pMusicInfo )
  {
  	if (pMusicInfo->pLoadedData)
  	{
@@ -1094,7 +1286,17 @@ index bb539e4c..9002833c 100644
  		Z_Free(pMusicInfo->pLoadedData);
  		pMusicInfo->pLoadedData		= NULL;		// these two MUST be kept as valid/invalid together
  		pMusicInfo->sLoadedDataName[0]= '\0';	//
-@@ -4134,7 +4338,13 @@ static qboolean S_StartBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolean
+@@ -4073,6 +4373,9 @@ static void FreeMusic( MusicInfo_t *pMusicInfo )
+ //
+ void S_UnCacheDynamicMusic( void )
+ {
++#ifdef SHADEREMU
++	SE_MixSettle();	// (the mix out on its worker done first: cl_main.cpp's CL_Frame, "lazily")
++#endif
+ 	for (int i = eBGRNDTRACK_DATABEGIN; i != eBGRNDTRACK_DATAEND; i++)
+ 	{
+ 		FreeMusic( &tMusic_Info[i]);
+@@ -4134,7 +4437,13 @@ static qboolean S_StartBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolean
  											// scan up to halfway of it to find floating headers, so don't make it
  											// too small. 8k works fine.
  		qboolean bMusicSucceeded = qfalse;
@@ -1109,7 +1311,7 @@ index bb539e4c..9002833c 100644
  		{
  			if (!pMusicInfo->pLoadedData)
  			{
-@@ -4177,7 +4387,7 @@ static qboolean S_StartBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolean
+@@ -4177,7 +4486,7 @@ static qboolean S_StartBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolean
  							pMusicInfo->sfxMP3_Bgrnd.pMP3StreamHeader		= &pMusicInfo->streamMP3_Bgrnd;
  				Q_strncpyz( pMusicInfo->sfxMP3_Bgrnd.sSoundName, name, sizeof(pMusicInfo->sfxMP3_Bgrnd.sSoundName) );
  
@@ -1118,7 +1320,7 @@ index bb539e4c..9002833c 100644
  				{
  					MP3Stream_InitPlayingTimeFields ( &pMusicInfo->streamMP3_Bgrnd, name, pbMP3DataSegment, pMusicInfo->iLoadedDataLen, qtrue);
  				}
-@@ -4193,7 +4403,7 @@ static qboolean S_StartBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolean
+@@ -4193,7 +4502,7 @@ static qboolean S_StartBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolean
  						pMusicInfo->chMP3_Bgrnd.thesfx = &pMusicInfo->sfxMP3_Bgrnd;
  				memcpy(&pMusicInfo->chMP3_Bgrnd.MP3StreamHeader, pMusicInfo->sfxMP3_Bgrnd.pMP3StreamHeader, sizeof(*pMusicInfo->sfxMP3_Bgrnd.pMP3StreamHeader));
  
@@ -1127,7 +1329,37 @@ index bb539e4c..9002833c 100644
  				{
  					if (pMusicInfo->s_backgroundFile != -1)
  					{
-@@ -4711,6 +4921,54 @@ static qboolean S_UpdateBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolea
+@@ -4498,6 +4807,9 @@ static char gsLoopMusic [MAX_QPATH]={0};
+ 
+ void S_RestartMusic( void )
+ {
++#ifdef SHADEREMU
++	SE_MixSettle();	// (the mix out on its worker done first: cl_main.cpp's CL_Frame, "lazily")
++#endif
+ 	if (s_soundStarted && !s_soundMuted )
+ 	{
+ 		//if (gsIntroMusic[0] || gsLoopMusic[0])	// dont test this anymore (but still *use* them), they're blank for JK2 dynamic-music levels anyway
+@@ -4518,6 +4830,9 @@ void S_RestartMusic( void )
+ //
+ void S_StartBackgroundTrack( const char *intro, const char *loop, qboolean bCalledByCGameStart )
+ {
++#ifdef SHADEREMU
++	SE_MixSettle();	// (the mix out on its worker done first: cl_main.cpp's CL_Frame, "lazily")
++#endif
+ 	bMusic_IsDynamic = qfalse;
+ 
+ 	if (!s_soundStarted)
+@@ -4647,6 +4962,9 @@ void S_StartBackgroundTrack( const char *intro, const char *loop, qboolean bCall
+ 
+ void S_StopBackgroundTrack( void )
+ {
++#ifdef SHADEREMU
++	SE_MixSettle();	// (the mix out on its worker done first: cl_main.cpp's CL_Frame, "lazily")
++#endif
+ 	for (int i=0; i<eBGRNDTRACK_NUMBEROF; i++)
+ 	{
+ 		S_StopBackgroundTrack_Actual( &tMusic_Info[i] );
+@@ -4711,6 +5029,54 @@ static qboolean S_UpdateBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolea
  		return qfalse;
  	}
  
@@ -1182,7 +1414,7 @@ index bb539e4c..9002833c 100644
  	// see how many samples should be copied into the raw buffer
  	if ( s_rawend < s_soundtime ) {
  		s_rawend = s_soundtime;
-@@ -4935,6 +5193,9 @@ static void S_UpdateBackgroundTrack( void )
+@@ -4935,6 +5301,9 @@ static void S_UpdateBackgroundTrack( void )
  			if ( pMusicInfoCurrent->s_backgroundFile == -1)
  			{
  				int iRawEnd = s_rawend;
@@ -1192,7 +1424,7 @@ index bb539e4c..9002833c 100644
  				S_UpdateBackgroundTrack_Actual( pMusicInfoCurrent, qtrue, s_musicVolume->value );
  
  	/*			static int iPrevFrontVol = 0;
-@@ -4947,6 +5208,9 @@ static void S_UpdateBackgroundTrack( void )
+@@ -4947,6 +5316,9 @@ static void S_UpdateBackgroundTrack( void )
  				if (pMusicInfoFadeOut->bActive)
  				{
  					s_rawend = iRawEnd;
@@ -1202,7 +1434,7 @@ index bb539e4c..9002833c 100644
  					S_UpdateBackgroundTrack_Actual( pMusicInfoFadeOut, qfalse, s_musicVolume->value );	// inactive-checked internally
  	/*
  					static int iPrevFadeVol = 0;
-@@ -5096,6 +5360,9 @@ static int SND_MemUsed(sfx_t *sfx)
+@@ -5096,6 +5468,9 @@ static int SND_MemUsed(sfx_t *sfx)
  //
  static int SND_FreeSFXMem(sfx_t *sfx)
  {
@@ -1212,7 +1444,17 @@ index bb539e4c..9002833c 100644
  	int iBytesFreed = 0;
  
  #ifdef USE_OPENAL
-@@ -5255,6 +5522,23 @@ int SND_FreeOldestSound(void)
+@@ -5181,6 +5556,9 @@ void SND_TouchSFX(sfx_t *sfx)
+ //
+ void S_FreeAllSFXMem(void)
+ {
++#ifdef SHADEREMU
++	SE_MixSettle();	// (the mix out on its worker done first: cl_main.cpp's CL_Frame, "lazily")
++#endif
+ 	for (int i=1 ; i < s_numSfx ; i++)	// start @ 1 to skip freeing default sound
+ 	{
+ 		SND_FreeSFXMem(&s_knownSfx[i]);
+@@ -5255,6 +5633,23 @@ int SND_FreeOldestSound(void)
  extern qboolean gbInsideLoadSound;
  qboolean SND_RegisterAudio_LevelLoadEnd(qboolean bDeleteEverythingNotUsedThisLevel /* 99% qfalse */)
  {
@@ -1781,8 +2023,24 @@ index d245590d..08623df2 100644
 +	se_mix_parts.helpers = 0;	// (given again for the next mix, or none)
 +#endif
  }
+diff --git a/code/client/vmachine.cpp b/code/client/vmachine.cpp
+index 0ee14644..1b73660d 100644
+--- a/code/client/vmachine.cpp
++++ b/code/client/vmachine.cpp
+@@ -68,7 +68,11 @@ extern intptr_t CL_CgameSystemCalls( intptr_t *args );
+ intptr_t VM_DllSyscall( intptr_t arg, ... ) {
+ #if !id386 || defined __clang__ || defined MACOS_X
+ 	// rcg010206 - see commentary above
++#ifdef SHADEREMU
++	intptr_t args[13];	// (the client game's calls have 9 arguments at most: fewer taken from the list, each call)
++#else
+ 	intptr_t args[16];
++#endif
+ 	va_list ap;
+ 
+ 	args[0] = arg;
 diff --git a/code/game/ghoul2_shared.h b/code/game/ghoul2_shared.h
-index 3427e786..bcd07f54 100644
+index 3427e786..8b9b0049 100644
 --- a/code/game/ghoul2_shared.h
 +++ b/code/game/ghoul2_shared.h
 @@ -403,6 +403,33 @@ struct boltInfo_t{
@@ -1819,6 +2077,28 @@ index 3427e786..bcd07f54 100644
  typedef std::vector <boltInfo_t> boltInfo_v;
  typedef std::vector <mdxaBone_t> mdxaBone_v;
  
+@@ -596,6 +623,21 @@ class CGhoul2Info_v
+ 
+ 	IGhoul2InfoArray &InfoArray() const
+ 	{
++#ifdef SHADEREMU
++		// (the array is made once and never freed, G2_API.cpp: kept, not asked for at every use; some 35 thousand
++		// instructions a frame of the walk on the first core went to the asking)
++		static IGhoul2InfoArray *se_array;
++		if ( se_array )
++			return *se_array;
++#ifdef RENDERER
++		se_array = &TheGhoul2InfoArray();
++#elif _JK2EXE
++		se_array = &_TheGhoul2InfoArray();
++#else
++		se_array = &TheGameGhoul2InfoArray();
++#endif
++		return *se_array;
++#endif
+ #ifdef RENDERER
+ 		return TheGhoul2InfoArray();
+ #elif _JK2EXE
 diff --git a/code/mp3code/towave.c b/code/mp3code/towave.c
 index ff83a002..335fcfe9 100644
 --- a/code/mp3code/towave.c
@@ -5694,7 +5974,7 @@ index 5464b70b..a1f3c8cd 100644
  	{
  		return;
 diff --git a/code/rd-vanilla/tr_backend.cpp b/code/rd-vanilla/tr_backend.cpp
-index 741bb95b..30aaf881 100644
+index 741bb95b..537bcecb 100644
 --- a/code/rd-vanilla/tr_backend.cpp
 +++ b/code/rd-vanilla/tr_backend.cpp
 @@ -27,6 +27,10 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
@@ -5726,7 +6006,18 @@ index 741bb95b..30aaf881 100644
  
  	if ( !image ) {
  		ri.Printf( PRINT_WARNING, "GL_Bind: NULL image\n" );
-@@ -508,6 +521,22 @@ static void RB_BeginDrawingView (void) {
+@@ -71,6 +84,10 @@ void GL_Bind( image_t *image ) {
+ 	}
+ 
+ 	if ( glState.currenttextures[glState.currenttmu] != texnum ) {
++#ifdef SHADEREMU
++		extern int se_half_b;
++		if ( !se_half_b )	// (the images are the first copy's: the drawing's second part marks none)
++#endif
+ 		image->frameUsed = tr.frameCount;
+ 		glState.currenttextures[glState.currenttmu] = texnum;
+ 		qglBindTexture (GL_TEXTURE_2D, texnum);
+@@ -508,6 +525,22 @@ static void RB_BeginDrawingView (void) {
  		}
  	}
  
@@ -5749,7 +6040,7 @@ index 741bb95b..30aaf881 100644
  	if ( !( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) && ( r_DynamicGlow->integer && !g_bRenderGlowingObjects ) )
  	{
  		if (tr.world && tr.world->globalFog != -1)
-@@ -583,11 +612,11 @@ static inline bool R_WorldCoordToScreenCoordFloat(vec3_t worldCoord, float *x, f
+@@ -583,11 +616,11 @@ static inline bool R_WorldCoordToScreenCoordFloat(vec3_t worldCoord, float *x, f
  	ycenter = glConfig.vidHeight / 2;
  
  	//AngleVectors (tr.refdef.viewangles, vfwd, vright, vup);
@@ -5765,7 +6056,7 @@ index 741bb95b..30aaf881 100644
  
  	transformed[0] = DotProduct(local,vright);
  	transformed[1] = DotProduct(local,vup);
-@@ -599,8 +628,8 @@ static inline bool R_WorldCoordToScreenCoordFloat(vec3_t worldCoord, float *x, f
+@@ -599,8 +632,8 @@ static inline bool R_WorldCoordToScreenCoordFloat(vec3_t worldCoord, float *x, f
  		return false;
  	}
  
@@ -5776,7 +6067,7 @@ index 741bb95b..30aaf881 100644
  
  	*x = xcenter + xzi * transformed[0];
  	*y = ycenter - yzi * transformed[1];
-@@ -641,6 +670,295 @@ typedef struct
+@@ -641,6 +674,302 @@ typedef struct
  static postRender_t g_postRenders[MAX_POST_RENDERS];
  static int g_numPostRenders = 0;
  
@@ -5787,7 +6078,7 @@ index 741bb95b..30aaf881 100644
 +// state, everything loaded the first's) draws the second on a worker of its own beside it into its own part of the
 +// frame's list (gpu_shaderemu.c's halves), which the drawing then moves after its own. The part is cut where a sort
 +// begins, as near the middle as that falls. Not the glow's pass, a portal's view nor stencil shadows. What the second
-+// part leaves to draw last (a distortion) comes back to be drawn after the first's. JK2_HALF=1: two parts (not yet the default).
++// part leaves to draw last (a distortion) comes back to be drawn after the first's. JK2_HALF=0: one part.
 +glstate_t se_glState_b;		// (the second copy's glState: build.sh points its glState here)
 +int se_half_b;			// 1 in the second copy while it draws its part (it makes no kept words then: tr_surface.cpp)
 +struct seHalf_t {
@@ -5802,7 +6093,7 @@ index 741bb95b..30aaf881 100644
 +static seHalf_t se_half;
 +extern "C" {
 +int jk2DrawHalfGive( void *half, void *gl );
-+void jk2DrawHalfJoin( void *gl );
++int jk2DrawHalfJoin( void *gl );
 +void jk2glHalfInit( const void *gl );
 +void jk2glHalfEnd( void *gl );
 +}
@@ -5996,12 +6287,17 @@ index 741bb95b..30aaf881 100644
 +	static int on = -1;
 +	if ( on < 0 ) {
 +		const char *e = getenv( "JK2_HALF" );
-+		on = e && !strcmp( e, "1" );	// (JK2_HALF=1: the second part still drawn wrong, docs/games/jk2.md)
++		on = !( e && !strcmp( e, "0" ) );
 +	}
++	// (where the list is cut, as a share of it: the second part is mostly entities and what is drawn over, dearer a surface
++	// than the world's; moved each frame by how long the drawing waited for the second part, in 1/256ths)
++	static int share = 160;
 +	int k = numDrawSurfs;
 +	if ( on && !se_half_b && !g_bRenderGlowingObjects && r_shadows->integer != 2 && !backEnd.viewParms.isPortal &&
 +		 !( backEnd.refdef.rdflags & RDF_HYPERSPACE ) && numDrawSurfs >= 64 ) {
-+		k = numDrawSurfs / 2;
++		k = numDrawSurfs * share >> 8;
++		if ( k < 1 )
++			k = 1;
 +		while ( k < numDrawSurfs && drawSurfs[k].sort == drawSurfs[k - 1].sort )
 +			k++;
 +		if ( k < numDrawSurfs ) {
@@ -6015,7 +6311,9 @@ index 741bb95b..30aaf881 100644
 +	}
 +	SE_DrawSurfRange( drawSurfs, k, originalTime, depthRange, didShadowPass );
 +	if ( k < numDrawSurfs ) {
-+		jk2DrawHalfJoin( se_half.gl );
++		const int waited = jk2DrawHalfJoin( se_half.gl );
++		share += waited > 2 ? 4 : waited == 0 ? -2 : 0;
++		share = share < 32 ? 32 : share > 240 ? 240 : share;
 +		for ( int p = 0; p < se_half.numPost && g_numPostRenders < MAX_POST_RENDERS; p++ )
 +			g_postRenders[g_numPostRenders++] = se_half.post[p];
 +		if ( se_half.stencilled )
@@ -6072,7 +6370,7 @@ index 741bb95b..30aaf881 100644
  void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
  	shader_t		*shader, *oldShader;
  	int				fogNum, oldFogNum;
-@@ -667,6 +985,11 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
+@@ -667,6 +996,11 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
  	RB_BeginDrawingView ();
  
  	// draw everything
@@ -6084,7 +6382,7 @@ index 741bb95b..30aaf881 100644
  	oldEntityNum = -1;
  	backEnd.currentEntity = &tr.worldEntity;
  	oldShader = NULL;
-@@ -837,6 +1160,7 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
+@@ -837,6 +1171,7 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
  	if (oldShader != NULL) {
  		RB_EndSurface();
  	}
@@ -6092,7 +6390,7 @@ index 741bb95b..30aaf881 100644
  
  	if (tr_stencilled && tr_distortionPrePost)
  	{ //ok, cap it now
-@@ -966,6 +1290,28 @@ RENDER BACK END FUNCTIONS
+@@ -966,6 +1301,28 @@ RENDER BACK END FUNCTIONS
  ============================================================================
  */
  
@@ -6121,7 +6419,7 @@ index 741bb95b..30aaf881 100644
  /*
  ================
  RB_SetGL2D
-@@ -980,7 +1326,12 @@ void	RB_SetGL2D (void) {
+@@ -980,7 +1337,12 @@ void	RB_SetGL2D (void) {
  	qglScissor( 0, 0, glConfig.vidWidth, glConfig.vidHeight );
  	qglMatrixMode(GL_PROJECTION);
      qglLoadIdentity ();
@@ -6135,7 +6433,7 @@ index 741bb95b..30aaf881 100644
  	qglMatrixMode(GL_MODELVIEW);
      qglLoadIdentity ();
  
-@@ -1027,6 +1378,8 @@ const void *RB_StretchPic ( const void *data ) {
+@@ -1027,6 +1389,8 @@ const void *RB_StretchPic ( const void *data ) {
  	int		numVerts, numIndexes;
  
  	cmd = (const stretchPicCommand_t *)data;
@@ -6144,7 +6442,7 @@ index 741bb95b..30aaf881 100644
  
  	if ( !backEnd.projection2D ) {
  		RB_SetGL2D();
-@@ -1034,7 +1387,7 @@ const void *RB_StretchPic ( const void *data ) {
+@@ -1034,7 +1398,7 @@ const void *RB_StretchPic ( const void *data ) {
  
  	shader = cmd->shader;
  	if ( shader != tess.shader ) {
@@ -6153,7 +6451,7 @@ index 741bb95b..30aaf881 100644
  			RB_EndSurface();
  		}
  		backEnd.currentEntity = &backEnd.entity2D;
-@@ -1061,29 +1414,29 @@ const void *RB_StretchPic ( const void *data ) {
+@@ -1061,29 +1425,29 @@ const void *RB_StretchPic ( const void *data ) {
  	baDest = (byteAlias_t *)&tess.vertexColors[numVerts + 2]; baDest->ui = baSource->ui;
  	baDest = (byteAlias_t *)&tess.vertexColors[numVerts + 3]; baDest->ui = baSource->ui;
  
@@ -6191,7 +6489,7 @@ index 741bb95b..30aaf881 100644
  	tess.xyz[ numVerts + 3 ][2] = 0;
  
  	tess.texCoords[ numVerts + 3 ][0][0] = cmd->s1;
-@@ -1113,7 +1466,7 @@ const void *RB_RotatePic ( const void *data )
+@@ -1113,7 +1477,7 @@ const void *RB_RotatePic ( const void *data )
  
  	shader = cmd->shader;
  	if ( shader != tess.shader ) {
@@ -6200,7 +6498,7 @@ index 741bb95b..30aaf881 100644
  			RB_EndSurface();
  		}
  		backEnd.currentEntity = &backEnd.entity2D;
-@@ -1204,7 +1557,7 @@ const void *RB_RotatePic2 ( const void *data )
+@@ -1204,7 +1568,7 @@ const void *RB_RotatePic2 ( const void *data )
  
  		shader = cmd->shader;
  		if ( shader != tess.shader ) {
@@ -6209,7 +6507,7 @@ index 741bb95b..30aaf881 100644
  				RB_EndSurface();
  			}
  			backEnd.currentEntity = &backEnd.entity2D;
-@@ -1311,7 +1664,7 @@ const void	*RB_DrawSurfs( const void *data ) {
+@@ -1311,7 +1675,7 @@ const void	*RB_DrawSurfs( const void *data ) {
  	const drawSurfsCommand_t	*cmd;
  
  	// finish any 2D drawing if needed
@@ -6218,7 +6516,7 @@ index 741bb95b..30aaf881 100644
  		RB_EndSurface();
  	}
  
-@@ -1406,7 +1759,7 @@ const void	*RB_DrawBuffer( const void *data ) {
+@@ -1406,7 +1770,7 @@ const void	*RB_DrawBuffer( const void *data ) {
  	qglDrawBuffer( cmd->buffer );
  
  		// clear screen for debugging
@@ -6227,7 +6525,7 @@ index 741bb95b..30aaf881 100644
  	{
  		const fog_t		*fog = &tr.world->fogs[tr.world->numfogs];
  
-@@ -1530,10 +1883,13 @@ RB_SwapBuffers
+@@ -1530,10 +1894,13 @@ RB_SwapBuffers
  */
  extern void RB_RenderWorldEffects( void );
  const void	*RB_SwapBuffers( const void *data ) {
@@ -6242,7 +6540,7 @@ index 741bb95b..30aaf881 100644
  		RB_EndSurface();
  	}
  
-@@ -1568,6 +1924,9 @@ const void	*RB_SwapBuffers( const void *data ) {
+@@ -1568,6 +1935,9 @@ const void	*RB_SwapBuffers( const void *data ) {
  
      GLimp_LogComment( "***************** RB_SwapBuffers *****************\n\n\n" );
  
@@ -6252,7 +6550,7 @@ index 741bb95b..30aaf881 100644
  	ri.WIN_Present(&window);
  
  	backEnd.projection2D = qfalse;
-@@ -1582,7 +1941,7 @@ const void	*RB_WorldEffects( const void *data )
+@@ -1582,7 +1952,7 @@ const void	*RB_WorldEffects( const void *data )
  	cmd = (const setModeCommand_t *)data;
  
  	// Always flush the tess buffer
@@ -6261,7 +6559,7 @@ index 741bb95b..30aaf881 100644
  	{
  		RB_EndSurface();
  	}
-@@ -1604,7 +1963,16 @@ RB_ExecuteRenderCommands
+@@ -1604,7 +1974,16 @@ RB_ExecuteRenderCommands
  void RB_ExecuteRenderCommands( const void *data ) {
  	int		t1, t2;
  
@@ -6278,7 +6576,7 @@ index 741bb95b..30aaf881 100644
  
  	while ( 1 ) {
  		data = PADP(data, sizeof(void *));
-@@ -1628,6 +1996,13 @@ void RB_ExecuteRenderCommands( const void *data ) {
+@@ -1628,6 +2007,13 @@ void RB_ExecuteRenderCommands( const void *data ) {
  		case RC_DRAW_SURFS:
  			data = RB_DrawSurfs( data );
  			break;
@@ -6292,7 +6590,7 @@ index 741bb95b..30aaf881 100644
  		case RC_DRAW_BUFFER:
  			data = RB_DrawBuffer( data );
  			break;
-@@ -1640,7 +2015,11 @@ void RB_ExecuteRenderCommands( const void *data ) {
+@@ -1640,7 +2026,11 @@ void RB_ExecuteRenderCommands( const void *data ) {
  		case RC_END_OF_LIST:
  		default:
  			// stop rendering
@@ -10186,10 +10484,23 @@ index 71b7ed2a..3e701db8 100644
  
  typedef enum {
 diff --git a/code/server/sv_game.cpp b/code/server/sv_game.cpp
-index 8cd596fb..b8e4be48 100644
+index 8cd596fb..8b9aa2f7 100644
 --- a/code/server/sv_game.cpp
 +++ b/code/server/sv_game.cpp
-@@ -1084,7 +1084,21 @@ void SV_InitGameProgs (void) {
+@@ -949,7 +949,12 @@ void SV_InitGameProgs (void) {
+ 	import.AdjustAreaPortalState = SV_AdjustAreaPortalState;
+ 	import.AreasConnected = CM_AreasConnected;
+ 
++#ifdef SHADEREMU
++	extern int se_voice_vol[MAX_GENTITIES];
++	import.VoiceVolume = se_voice_vol;	// (written at a frame's start: snd_dma.cpp's SE_LipGive)
++#else
+ 	import.VoiceVolume = s_entityWavVol;
++#endif
+ 
+ 	import.Malloc = G_ZMalloc_Helper;
+ 	import.Free = Z_Free;
+@@ -1084,7 +1089,21 @@ void SV_InitGameProgs (void) {
  
  	// use the current msec count for a random seed
  	Z_TagFree(TAG_G_ALLOC);
@@ -10541,7 +10852,7 @@ index 4a20f0ee..27bb06df 100644
  =================
  UI_KeyEvent
 diff --git a/code/ui/ui_shared.cpp b/code/ui/ui_shared.cpp
-index 2f5cbdf8..70978752 100644
+index 2f5cbdf8..3ad64b58 100644
 --- a/code/ui/ui_shared.cpp
 +++ b/code/ui/ui_shared.cpp
 @@ -285,11 +285,27 @@ qboolean PC_ParseRect(rectDef_t *r)
@@ -10600,6 +10911,16 @@ index 2f5cbdf8..70978752 100644
  	}
  }
  
+@@ -7067,6 +7097,9 @@ void UI_TalkingHead(itemDef_t *item)
+ 	}
+ */
+ 
++#ifdef SHADEREMU
++	{ void SE_MixSettle( void ); SE_MixSettle(); }	// (the levels the mix makes: its frame's done)
++#endif
+ 	if (s_entityWavVol[0] > 0)	// if we aren't talking, then it will be 0, -1 for talking but paused
+ 	{
+ 		anim = FACE_TALK1 + s_entityWavVol[0]-1;
 diff --git a/codeJK2/cgame/FxPrimitives.cpp b/codeJK2/cgame/FxPrimitives.cpp
 index 0b83bc19..1fa66703 100644
 --- a/codeJK2/cgame/FxPrimitives.cpp

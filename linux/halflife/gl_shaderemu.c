@@ -589,7 +589,9 @@ static int draw_state(gpu_state* s) {
     s->fragment = GPU_COLOUR | GPU_PASS(pass);
     if (texturing && bound && textures[bound].spilled) unspill(bound);
     if (texturing && bound && textures[bound].at != NOWHERE) {
+#ifndef SE_DRAW_B   /* (the textures are the first copy's: Jedi Outcast's second part marks none) */
         textures[bound].drawn = swaps;
+#endif
         texture_state(s, &textures[bound], pass, alpha_test);
     } else if (texturing && bound) {
         return 0;   // (no pixels yet, or no room in GPU memory)

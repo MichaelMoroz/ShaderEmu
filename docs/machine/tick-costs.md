@@ -741,6 +741,10 @@ believed only where it holds in two runs or more. Another session's Unity editor
 | **fp1**: fdiv inline with the sum, difference and product, as the card's `a / b` (FAST's division, out of FAST) | -0.2% (3) | -0.9% (3) | -0.4% (3) | a little |
 | **f2 + fp1** | -1.2% (3) | -1.0% (3) | -0.2% (3) | about -1% |
 | **f2 + fp1 + ffma** (fmadd, fmsub, fnmsub, fnmadd in the fast loop, one `mad`, the loop's last test) | -0.7% (2) | -1.0% (2) | -0.7% (2) | about -1%; ffma costs nothing measurable |
+| On f2 + fp1 + ffma (k2): la1; a load fused after arithmetic (k2al); a loop over the texel's run of arithmetic (k2t); no `n + 1 < budget` (k2nb); br3; br1 | +1.2%; +1.8%; +0.2%; +0.3%; +0.2%; +1.6% | -0.5%; +2.5%; 0.0%; -0.8%; -1.0%; -2.8% | -0.4%; +1.9%; +0.8%; -0.4%; -0.1%; +0.2% | level or lost; br1 Tiberian Dawn only again |
+| k2 again, in two more runs | +0.2%, -0.5% | -0.9%, -0.8% | -0.6%, -0.3% | about -0.5%: the noise's edge |
+| k2 with fdiv inline as `fp_all` makes it (exponents to the middle) and ffma rounded twice as the general step (k3: the results unchanged) | +1.7% | +0.5% | +0.8% | lost: the division's work is done for every sum, product and difference |
+| The same with the division under a branch of its own in the inline block (k3b); f2 + ffma rounded twice, fdiv where it was (k3c) | +0.7%; -0.25% | +0.1%; -0.1% | +0.4%; +0.4% | level: what k2 had over them was the card's quotient and the fused `mad`, or layout |
 | fp3 (the conversions before the light floats); pfp (no `precise` on the sum, difference and product); fcmpn (no NaN test in comparisons: the card's compare is false on a NaN too) | -0.5%; -0.7%; +0.8% | -0.3%; -0.5%; +0.1% | -0.6%; 0.0%; -0.4% | level |
 | m1: mul among arithmetic's selects (as round two found) | +0.5% (2) | -1.4% (2) | +1.8% (2) | lost but on Tiberian Dawn |
 | br1 (branches before stores and floats); br2, br3 (branches in the first group, after loads; after arithmetic) | +0.9%; +0.5%; -0.9% | -1.7%; -0.5%; -0.4% | -0.6%; +0.6%; 0.0% | br1 Tiberian Dawn only, as before |
@@ -788,8 +792,42 @@ Where core 0's passes end with a budget of 32,768 (`--frame-log`, `python tools/
 - 12,288 is where the gain of fewer rounds' fixed costs (about 6% of a round at 8,192) meets the write cache and the waits:
   +3.7 to +4.7% on all three. Not taken: it is the machine's setting for every program and every world, measured on two.
 
+**What a round is made of on this card** (`RVC_PASS_PROF=1`, 600 frames from each snapshot, ms a round):
+
+| Load | tick | unpack | gather | commit rows | commit points | devices | devices with `RVC_LIST_LAZY=1` |
+|---|---|---|---|---|---|---|---|
+| Shell loop | 1.55 | 0.03 | 0.006 | 0.005 | 0.015 | 0.110 | 0.008 |
+| Tiberian Dawn | 1.39 | 0.03 | 0.006 | 0.005 | 0.015 | 0.111 | 0.009 |
+
+The devices' 0.11 ms is the GPU device's list pass, drawn every round whether a list is due or not: 6.6 to 7.4% of a
+round in the harness, which draws the devices every round. The world draws them once a Unity frame (about 8 rounds), so
+there they are under 1% of a frame. `RVC_LIST_LAZY` (opt-in, `a4ff4d46`) still has the bug `riscv-backport-plan.md` names:
+a list submitted in a frame where none was drawn is never drawn; its fix is gpu_vm's, under `GVM_RAM` in `src/gpu.h`. It
+also means the pass's length is worth less in the world than in the harness: of a round's fixed 0.17 ms here only about
+0.056 (unpack, gather, the commit's rows and points) is a round's in the world, so 12,288 there would gain a third of 3.5%
+and the tick's own fixed part, not the harness's 4 to 6%.
+
+| Variant (changes no result) | Quake | Tiberian Dawn | Shell | |
+|---|---|---|---|---|
+| k3c (f2 + fmadd rounded twice) with `LOAD_UP` by selects (lu1) and no budget test on the fused word (nb): k4 | +0.1% | -1.25% | -0.45% | one run: to be run again |
+| lu1 alone (on k3c); mh1 (mulh by `mulhi`); id1 (a texel's word by masks) | -0.8%, -0.05%; -0.1%; +0.2% | -0.5%, -0.4%; +0.3%; +0.6% | -0.2%, -0.1%; +0.4%; +0.8% | level |
+| aui1: an addi of lui's or auipc's register fused into the jumps' block | +1.2% | +0.3% | +1.2% | lost |
+
+**Kept** (`shader_vm/tick.hlsl` and Unity's copy, stamp `0a78efe277ddf37f`; `test_card.py mctest-3 fptest lanetest` pass on
+the card): k4lb, no result changed. The texel's next word in the same turn when it is arithmetic or a branch after
+arithmetic, or a branch after a load (its registers taken from the first word's result where it names it), with no test of
+the budget (a pass may run one instruction past it: `pre_valid` reads false, the outer loop ends, a lane's `lane_left`
+floors at 0); fmadd, fmsub, fnmsub and fnmadd in the fast loop as the general step makes them (a product and a sum, each
+rounded: `rvc_cpu`'s `fmaf` rounds once, as before); `LOAD_UP` by selects. Against a copy of the tree in each of three runs:
+
+| | Quake | Tiberian Dawn | Shell |
+|---|---|---|---|
+| k4lb | -0.5%, +0.6%, -0.2% | -2.2%, -2.2%, -1.9% | -0.3%, -0.25%, -0.35% |
+| k6 (the same with `n + 1 < budget` on every fused word) | +0.9% | -0.7% | +0.8% |
+| k5la, k5fb, k5x (k4lb and arithmetic after a load; a branch after a float comparison; both) | +1.9%, +0.3%, +1.5% | -1.9%, -2.2%, -2.2% | -0.3%, -0.25%, -0.25% |
+
 **What was learnt.** Nothing of the fast loop's shape gave more than 1% on every load: f2 + fp1 (+ ffma) about 1%, at the
-noise's edge. fp1 changes what fdiv makes (the card's quotient, which `rvc_cpu` does not make: a model of the card's
+noise's edge; the kept fusion 2% of Tiberian Dawn, a little of the shell, level on Quake. fp1 changes what fdiv makes (the card's quotient, which `rvc_cpu` does not make: a model of the card's
 division is owed first), and ffma's `mad` is fused where the general step rounds twice: neither is in the tree. The ways
 to more are outside the loop's text: the pass's length (with the write cache, which caps it at about 12k of Tiberian Dawn's
 code), a larger write cache, and fewer instructions (Zba and fmadd in the programs: `docs/plans/riscv-isa.md`).
