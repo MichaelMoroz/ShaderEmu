@@ -1322,12 +1322,16 @@ passes a frame between two builds (core 0 812 against 757 thousand instructions 
 walk alone says little. `JK2_SOUND=mix` makes the state the same, but core 0 then decodes the music (346 passes a frame
 for every build): no use for this.
 
-**The front end's missing surfaces** (open, found 5 November 2026 from a picture in the world): with the front end on its
-worker the picture misses far buildings and the mirror floor's reflection, and blinks: `JK2_FRONT=check` (each view made
-whole on core 0 too, the counts now printed where a frame of the worker's views passes) says 1,005 of 1,200 views of the walk
-not as made whole, the worker's with 20 to 85 surfaces fewer (688 against 773). `JK2_FRONT=core` draws them. Images of the
-day: the 04:11 build right, the floor's reflection gone by 10:58 (the front end moved to its worker at 08:46). Every view
-to the worker (`JK2_FRONT_VIEWS=all`) left it so: not the default.
+**The front end's missing surfaces** (found 5 November 2026 from a picture in the world, fixed the same day): with the
+front end on its worker the picture missed far buildings and the mirror floor, blinking. `JK2_FRONT=check` (each view made
+whole on core 0 too; its counts are now printed where a frame of the worker's views passes, with the world's surfaces and
+the polygons apart) said 1,005 of 1,200 views of the walk not as made whole, the worker's with 20 to 85 world surfaces fewer
+(605 against 662). Since the Ghoul2 entities' surfaces were made by the front end's worker first (`se_front_make`), the world
+was walked after them with `tr.ori` the last entity's (`R_RotateForEntity` leaves it so), and `R_CullSurface` culls a
+world face by `tr.ori`'s eye: faces facing the camera were culled as facing away. The world's `tr.ori` is put back after
+them: 0 of 1,201 views wrong, and the frame-600 capture has the buildings and the floor as `JK2_FRONT=core` draws them.
+A blinking picture is found by such counts over many views, not by one held frame; the capture only confirms it.
+Every view to the worker (`JK2_FRONT_VIEWS=all`, tried on the way) is not the default.
 
 ### What bounds it
 

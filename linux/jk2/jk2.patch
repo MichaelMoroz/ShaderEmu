@@ -8953,7 +8953,7 @@ index c9e745aa..d9f6bac9 100644
  
  
 diff --git a/code/rd-vanilla/tr_main.cpp b/code/rd-vanilla/tr_main.cpp
-index da619736..6d9a8a99 100644
+index da619736..b57714b4 100644
 --- a/code/rd-vanilla/tr_main.cpp
 +++ b/code/rd-vanilla/tr_main.cpp
 @@ -205,7 +205,15 @@ void R_LocalPointToWorld (const vec3_t local, vec3_t world) {
@@ -9129,7 +9129,7 @@ index da619736..6d9a8a99 100644
  
  		ent->needDlights = qfalse;
  
-@@ -1550,4 +1680,335 @@ void R_RenderView (viewParms_t *parms) {
+@@ -1550,4 +1680,339 @@ void R_RenderView (viewParms_t *parms) {
  
  	// draw main system development information (surface outlines, etc)
  	R_DebugGraphics();
@@ -9365,6 +9365,10 @@ index da619736..6d9a8a99 100644
 +		se_skin_front = 0;
 +		se_entity_filter = 0;
 +		se_g2_made.made = cmd->seq;
++		// (the world's eye again: an entity left tr.ori its own (R_RotateForEntity), and the world's faces are culled by tr.ori's
++		// eye (R_CullSurface): the world walked after the Ghoul2 entities missed some of its faces, 20 to 85 a view of the walk,
++		// far buildings blinking out, JK2_FRONT=check's views not as made whole)
++		tr.ori = tr.viewParms.world;
 +	}
 +	const int se_w0 = tr.refdef.numDrawSurfs;
 +	R_AddWorldSurfaces();
