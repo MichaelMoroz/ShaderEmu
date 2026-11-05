@@ -911,13 +911,51 @@ float4 gpu_upload_fragment(gpu_varyings i) {
         y = (uint)(at.y + 64 * (int)height) % height;
     }
     uint n = y * row + x, texel;
+    // (every kind a fragment reads from RAM becomes colours here, but a sprite record's: docs/machine/gpu.md, "VRAM")
     [branch]
-    if (mode == FRAGMENT_INDEXED) {
+    if (mode == FRAGMENT_MASK) {
+        // a bit a pixel, rows of whole bytes: white, its alpha the bit (a draw of the slot in FRAGMENT_MASK tests it)
+        n = y * ((width + 7) >> 3) + (x >> 3);
+        texel = (texture_word(i.texture_info.g + (n & ~3u)) >> (8 * (n & 3))) & 0xff;
+        return ((texel << (x & 7)) & 0x80) ? 1.0 : float4(1, 1, 1, 0);
+    } else if (mode == FRAGMENT_COVER) {
+        // four bits of coverage a pixel, the left in the high half: white, its alpha the coverage
+        n = y * ((width + 1) >> 1) + (x >> 1);
+        texel = (texture_word(i.texture_info.g + (n & ~3u)) >> (8 * (n & 3))) & 0xff;
+        return float4(1, 1, 1, (float)((x & 1) ? texel & 15 : texel >> 4) / 15.0);
+    } else if (mode == FRAGMENT_TILES) {
+        // a layer of tiles (as gpu_fragment reads one): the pixel's cell, its tile's byte, the bank's colour; the key 0
+        uint4 layer = ram(texel_of(i.texture_info.g));
+        uint tile_w = max(layer.a & 0xff, 1), tile_h = max((layer.a >> 8) & 0xff, 1);
+        uint cell_at = layer.r + 2 * ((y / tile_h) * ((layer.a >> 16) & 0xfff) + x / tile_w);
+        uint cell = (ram_word(cell_at & ~3u) >> (8 * (cell_at & 3))) & 0xffff;
+        uint px = x % tile_w, py = y % tile_h;
+        if (cell & 0x400) px = tile_w - 1 - px;
+        if (cell & 0x800) py = tile_h - 1 - py;
+        uint tile = cell & 0x3ff, piece = layer.a >> 28, tiles = layer.g;
+        if (piece != 0) {
+            tiles = ram_word(layer.g + 4 * (tile >> piece));
+            tile &= (1u << piece) - 1;
+        }
+        uint tat = tiles + (tile * tile_h + py) * tile_w + px;
+        texel = (ram_word(tat & ~3u) >> (8 * (tat & 3))) & 0xff;
+        if ((i.texture_info.r & FRAGMENT_KEYED) && texel == i.key) return 0.0;
+        texel = ram_word(layer.b + 4 * (texel + 16 * (cell >> 12)));
+    } else if (mode == FRAGMENT_YUV) {
+        // a film's frame: luma, and the chroma of its 2 x 2 (BT.601, 16 to 235)
+        uint half_w = width >> 1, luma_at = i.texture_info.g + y * width + x;
+        uint blue_at = i.texture_info.g + width * height + (y >> 1) * half_w + (x >> 1), red_at = blue_at + half_w * (height >> 1);
+        float luma = 1.164 * ((float)((texture_word(luma_at & ~3u) >> (8 * (luma_at & 3))) & 0xff) - 16.0);
+        float blue = (float)((texture_word(blue_at & ~3u) >> (8 * (blue_at & 3))) & 0xff) - 128.0;
+        float red = (float)((texture_word(red_at & ~3u) >> (8 * (red_at & 3))) & 0xff) - 128.0;
+        return saturate(float4((luma + 1.596 * red) / 255.0, (luma - 0.392 * blue - 0.813 * red) / 255.0, (luma + 2.017 * blue) / 255.0, 1.0));
+    } else if (mode == FRAGMENT_INDEXED) {
         texel = (texture_word(i.texture_info.g + (n & ~3u)) >> (8 * (n & 3))) & 0xff;
         if ((i.texture_info.r & FRAGMENT_KEYED) && texel == i.key) return 0.0;
         texel = ram_word((i.light_info.b != 0 ? i.light_info.b : DEV_AT + 0x1000400u) + 4 * texel);
     } else {
-        texel = mode == FRAGMENT_RGB24 ? gpu_rgb24(i.texture_info.g, n) : texture_word(i.texture_info.g + 4 * n);
+        // (a glyph's three distance fields are three bytes a pixel as RGB24's: the median does not mind their order)
+        texel = mode == FRAGMENT_RGB24 || mode == FRAGMENT_MSDF ? gpu_rgb24(i.texture_info.g, n) : texture_word(i.texture_info.g + 4 * n);
         if ((i.texture_info.r & FRAGMENT_KEYED) && texel == i.key) return 0.0;
     }
     float4 c = colour_of(texel);
@@ -1055,6 +1093,29 @@ float4 gpu_fragment(gpu_varyings i) {
         uint slot = i.texture_info.g;
         bool clamped = (i.texture_info.r & FRAGMENT_CLAMPED) != 0, keyed = (slot & VRAM_PREMULTIPLIED) != 0;
         float4 t;
+        // (a mask's and a coverage's alpha is the upload's: the bit, the coverage; their colour the draw's)
+        [branch]
+        if (mode == FRAGMENT_MASK || mode == FRAGMENT_COVER) {
+            t = vram_texel(slot, uint2(width, height), uv, 0, clamped);
+            if (t.a <= (mode == FRAGMENT_MASK ? 0.5 : 0.0)) discard;
+            if (mode == FRAGMENT_COVER) c.a *= t.a;
+            return saturate(c);
+        }
+        [branch]
+        if (mode == FRAGMENT_MSDF) {
+            // as below from RAM: four quarters' coverage, each the median of the three fields the sampler weighs at level 0
+            if (width < 2 || height < 2) discard;
+            float range = 2.0 * asfloat(i.key), cover = 0.0;
+            [loop]
+            for (uint n = 0; n < 4; n++) {
+                float2 at = saturate(uv + float2((n & 1) ? 0.25 : -0.25, (n & 2) ? 0.25 : -0.25) * i.light_uv) * float2(width - 1, height - 1);
+                float3 s = _GpuVram.SampleLevel(sampler_linear_clamp, (float2(VRAM_X(slot), VRAM_Y(slot)) + at + 0.5) / VRAM_SIDE, 0).rgb;
+                cover += saturate(range * (max(min(s.r, s.g), min(max(s.r, s.g), s.b)) - 0.5) + 0.5);
+            }
+            if (cover <= 0.0) discard;
+            c.a *= 0.25 * cover;
+            return saturate(c);
+        }
         [branch]
         if (i.texture_info.r & FRAGMENT_SMOOTH) {
             t = vram_sample(slot, uint2(width, height), uv, lod, clamped);

@@ -7,6 +7,8 @@
 //   9 the vertices' cost: 3,600 rectangles of 16 x 16 tiling the picture, a command each, in passes 0, 1 and 2 by turns
 //   10 a copy (gpu_copy): 64 rectangles of 32 x 32 in the top left 256 x 256, moving a pixel a frame, copied into a slot at
 //      the list's end and drawn from there over the rest of the picture, four times as large (the frame before's copy)
+//   11 the kinds an upload converts: a mask, coverage, a layer of tiles (keyed), a film's frame and a glyph's distance fields,
+//      each 64 x 64 drawn twice as large from RAM on the left and from its slot on the right: the halves must match
 
 #include "../common/gpu.h"
 
@@ -71,6 +73,49 @@ int main(void) {
             gpu_copy(0, 0, 256, 256, slot, 0, 0, 0);
             gpu_submit();
         }
+    }
+#endif
+#if MODE == 11
+    {
+        // (the kinds' numbers in the device: docs/machine/gpu.md)
+        enum { MASK = 3, TILES = 5, YUV = 6, COVER = 7, MSDF = 8 };
+        static uint8_t mask[8 * 64] GPU_ALIGNED, cover[32 * 64] GPU_ALIGNED, film[64 * 64 + 2 * 32 * 32] GPU_ALIGNED;
+        static uint8_t fields[3 * 64 * 64] GPU_ALIGNED, tiles[4 * 8 * 8] GPU_ALIGNED;
+        static uint16_t cells[8 * 8] GPU_ALIGNED;
+        static uint32_t palette[32] GPU_ALIGNED, layer[4] GPU_ALIGNED;
+        for (int i = 0; i < 8 * 64; i++) mask[i] = (uint8_t)(i * 37 ^ (i >> 3) * 11);
+        for (int i = 0; i < 32 * 64; i++) cover[i] = (uint8_t)(i * 29 + (i >> 5) * 7);
+        for (int i = 0; i < 64 * 64; i++) film[i] = (uint8_t)(16 + ((i % 64) * 3 + (i / 64) * 2) % 220);
+        for (int i = 0; i < 32 * 32; i++) film[64 * 64 + i] = (uint8_t)(64 + (i % 32) * 4), film[64 * 64 + 1024 + i] = (uint8_t)(200 - (i / 32) * 4);
+        for (int i = 0; i < 64 * 64; i++) {
+            int x = i % 64, y = i / 64, d = 128 + (24 - (x - 32 < 0 ? 32 - x : x - 32) - (y - 32 < 0 ? 32 - y : y - 32)) * 6;
+            uint8_t v = (uint8_t)(d < 0 ? 0 : d > 255 ? 255 : d);
+            fields[3 * i] = v, fields[3 * i + 1] = (uint8_t)(v + (x & 7)), fields[3 * i + 2] = (uint8_t)(v - (y & 7));
+        }
+        for (int i = 0; i < 4 * 64; i++) tiles[i] = (uint8_t)((i * 5 + (i >> 6)) % 16);
+        for (int i = 0; i < 64; i++) cells[i] = (uint16_t)((i % 4) | (i & 4 ? 0x400 : 0) | (i & 8 ? 0x800 : 0) | (i % 2) << 12);
+        for (int i = 0; i < 32; i++) palette[i] = (uint32_t)(i * 0x00070b0d) & 0x00ffffff;
+        layer[0] = (uint32_t)cells, layer[1] = (uint32_t)tiles, layer[2] = (uint32_t)palette, layer[3] = 8 | 8 << 8 | 8 << 16;
+        static const uint32_t kinds[5] = {MASK, COVER, TILES | GPU_FRAGMENT_KEYED, YUV, MSDF};
+        const void* sources[5] = {mask, cover, layer, film, fields};
+        gpu_begin();
+        for (int k = 0; k < 5; k++)
+            gpu_upload(sources[k], kinds[k], 64, 64, GPU_VRAM_SLOT(16 + 96 * k, 16, 0), 0, 0, 0);
+        gpu_submit();
+        gpu_begin();
+        gpu_clear(0x00203040);
+        for (int k = 0; k < 5; k++)
+            for (int side = 0; side < 2; side++) {
+                volatile uint32_t* c = gpu_command(GPU_RECT, 6);
+                c[1] = kinds[k] == MASK || kinds[k] == COVER || kinds[k] == MSDF ? 0x00f0c040 : 0x00ffffff;
+                c[2] = kinds[k] == MSDF ? 0x3f000000 : 0;   // the key (MSDF: its range, 0.5 a screen pixel)
+                c[4] = 64 + 512 * side, c[5] = 8 + 140 * k, c[6] = c[4] + 128, c[7] = c[5] + 128;
+                c[8] = kinds[k] | (kinds[k] == COVER || kinds[k] == MSDF ? GPU_PASS(GPU_PASS_BLEND) : 0);
+                c[9] = side ? GPU_VRAM_SLOT(16 + 96 * k, 16, 0) : (uint32_t)sources[k];
+                c[10] = 64, c[11] = 64;
+                c[12] = 0, c[13] = 0, c[14] = ONE, c[15] = ONE;
+            }
+        for (;;) gpu_submit();
     }
 #endif
 #if MODE == 9
