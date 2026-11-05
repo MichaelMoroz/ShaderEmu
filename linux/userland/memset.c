@@ -1,12 +1,15 @@
 /*
  * memset for the image's C library, in place of musl's (toolchain.sh puts it into libc.a): musl's own,
- * with fills from 2 KB up made by the commit (uop.h; docs/machine/gpu.md, "A program's copy"): the
+ * with fills from 8 KB up made by the commit (uop.h; docs/machine/gpu.md, "A program's copy"): the
  * texels between the ends never enter the core's write cache. Asking ends the pass.
  */
 #include <string.h>
 #include <stdint.h>
 
-#define UOP_MIN 2048   /* (uop.h) */
+/* From 8 KB: a smaller fill by stores fits the core's write cache (about 6 KB of texels a pass, AGENTS.md) in a few hundred
+   instructions, where asking ends the pass (OpenTTD's scroll on the card, 5 November 2026: a 2 KB threshold ended 869 more passes
+   early, the tick's fill 72.9% to 68.7%) */
+#define UOP_MIN 8192
 
 /* [a, a + n) in the GPU's memory, 0x80000000 to its end at 0x81e00000, or in RAM, 0x82000000 to 0x92000000 (not the
    device words between, which the commit's fill leaves as they are): uop.h's UOP_IN_RAM */
