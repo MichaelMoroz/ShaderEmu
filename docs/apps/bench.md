@@ -237,9 +237,9 @@ as before. `NXPERF_CLOCK=guest` takes the guest's clock anyway. The card's name 
 Each result is divided by the reference machine's (larger is better; a time an operation, `ns/load`, the
 other way), a part's score is 1,000 times the geometric mean of its results' ratios, and the whole is the
 geometric mean of the parts there are (`linux/bench/perf_score.c`). A test that failed its check or was not
-run counts in none. The reference is the machine as the card model has it: the values of "Results" run 1
-above, so there every part and the whole are 1,000 (a run of the same binary under the model, 3 November
-2026: 1,007, its parts 989 to 1,063). The parts:
+run counts in none. The reference is the machine as the card model has it (`tools/card_model.json`, fitted
+again on the RTX 3090 on 5 November 2026 with the program's copy: "The card" below): a run of nxperf under that
+model, so there every part and the whole are 1,000. The parts:
 
 | Part | Tests |
 |---|---|
@@ -286,13 +286,15 @@ the same arithmetic, 3 and 4 November 2026.
 | Machine | Score | single core | FPU | memory | multicore | lanes | numerical | media | GPU |
 |---|---|---|---|---|---|---|---|---|---|
 | the card model (reference) | 1,000 | 1,000 | 1,000 | 1,000 | 1,000 | 1,000 | 1,000 | 1,000 | 1,000 |
-| 486DX-33 (1990, estimated) | 761 | 1,571 | 327 | 1,585 | 517 | - | 780 | 588 | - |
-| RTX 3090, harness (the card, 255 workers) | 1,175 | 1,064 | 762 | 649 | 1,324 | 8,904 | 858 | 990 | 691 |
-| rvc_cpu, 5900X, 1 thread (the host's clock) | 23,109 | 55,021 | 28,896 | 42,979 | 19,093 | 3,928 | 28,315 | 8,501 | 65,921 |
-| rvc_cpu, 5900X, 24 threads (the same) | 33,244 | 55,959 | 29,833 | 45,328 | 36,687 | 12,913 | 33,478 | 18,837 | 65,992 |
-| rvc_cpu, 9950X3D, 1 thread (this PC, the host's clock) | 36,346 | 85,304 | 42,024 | 72,473 | 28,934 | 5,993 | 42,705 | 12,887 | 122,845 |
-| rvc_cpu, 9950X3D, 16 threads (the same) | 52,678 | 85,529 | 42,248 | 76,256 | 59,346 | 19,293 | 51,151 | 29,911 | 122,838 |
-| 9950X3D, native (this PC, no workers, lanes or GPU) | 2,155,644 | 1,717,048 | 1,240,884 | 2,782,002 | 1,828,829 | - | 4,409,307 | 2,099,189 | - |
+| 486DX-33 (1990, estimated) | 772 | 1,623 | 335 | 1,428 | 544 | - | 814 | 616 | - |
+| RTX 3090, harness (the card, 255 workers) | 1,474 | 1,110 | 802 | 1,044 | 1,318 | 13,016 | 889 | 1,046 | 1,500 |
+| rvc_cpu, 5900X, 1 thread (the host's clock) | 23,424 | 56,847 | 29,577 | 38,716 | 18,464 | 4,861 | 29,538 | 8,898 | 59,013 |
+| rvc_cpu, 5900X, 24 threads (the same) | 33,698 | 57,817 | 30,536 | 40,832 | 35,480 | 15,979 | 34,925 | 19,719 | 59,077 |
+| rvc_cpu, 9950X3D, 1 thread (this PC, the host's clock) | 36,835 | 88,134 | 43,017 | 65,285 | 27,980 | 7,407 | 44,549 | 13,496 | 109,898 |
+| rvc_cpu, 9950X3D, 16 threads (the same) | 53,404 | 88,366 | 43,247 | 68,688 | 57,394 | 23,883 | 53,355 | 31,316 | 110,041 |
+| 9950X3D, native (this PC, no workers, lanes or GPU) | 2,150,328 | 1,774,053 | 1,270,120 | 2,455,206 | 1,875,289 | - | 4,502,726 | 2,116,348 | - |
+
+(Scores against the reference of 5 November 2026; the machines' own values as they were measured.)
 
 - **rvc_cpu, 9950X3D**: this PC, an AMD Ryzen 9 9950X3D, `RVC_THREADS=1` and `=16` (half its 32 threads),
   `tools/test_all.py nxperf`, 4 November 2026, with the repeats ("A test run until it is timed"): 1.57 times
@@ -306,11 +308,15 @@ the same arithmetic, 3 and 4 November 2026.
   integer tests.
 
 - **The card**: `rvc_harness --d3d11` through `tools\gpu_queue.ps1` on the RTX 3090, `nano-X -p & sleep 2;
-  nxperf --cli`, 255 workers, the field 3,968 lanes, every check held. Against the model: the first core 1 to
-  25% faster in its own tests, the lanes real (`field` 1.80 M/s against the model's plain calls, 90 times;
-  `shade` 16.4 Mpx/s, 5 times), and the machine's copy and fill far slower: `memcpy` 5.82 MB/s, `memset` 7.41
-  and `gpu-copy` 5.76 against the model's 187, 749 and 187, about the speed of a loop of words. The model
-  times a copy as a pass's work; the harness's copies are not that fast: not looked into here.
+  nxperf --cli`, 255 workers, the field 3,968 lanes, every check held, 5 November 2026. Until 4 November the tick
+  read the program's copy CSR (0x8b0) as 0, so libc's `memcpy` and `memset` were loops of words on the card
+  (5.82 and 7.41 MB/s); with it `memcpy` 597 MB/s, `memset` 780, `gpu-copy` 286 (a run of the memory group alone
+  gave 912, 723 and 403). The model was fitted again on that tick (`tools/calibrate.py`): ms a pass = 1.1969 +
+  0.0407 a thousand of core 0's instructions + 0.00168 of the workers' + 1.6593 a GPU list, and 0.27 in place of
+  the first for a pass that makes a copy's chunk (rvc_cpu's `--pass-model`'s fifth value; from nxperf's `memcpy`).
+  Under it `memcpy` is 962 MB/s and `gpu-copy` 836: the GPU copy is still over the card's by 2 to 3 times. Its
+  games are worse fitted than the RTX 5090's model was (doom +20.8% left out, classicube -12.5%, quake -8.2%):
+  the card runs shared the computer with another session's rvc_cpu runs.
 - **rvc_cpu**: plain `rvc_cpu` (no pass model) on an AMD Ryzen 9 5900X, `RVC_THREADS=1` and `=24`, timed by the
   host's clock ("The host's clock"). One thread: the first core 262 Mop/s in `int-alu` at 1.10 i/op, 288 million
   instructions a second, 52 times the model's; 24 threads: the same first core, the workers' `mc-255` 625 Mop/s

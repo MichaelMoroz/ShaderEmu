@@ -5,9 +5,11 @@ description: Measure how fast a game or program would run on the graphics card w
 
 # Calibrated measurements
 
-`rvc_cpu --pass-model A,B,C,D` makes each pass take as long as a card's would:
+`rvc_cpu --pass-model A,B,C,D[,E]` makes each pass take as long as a card's would:
 
     ms a pass = A + B a thousand of core 0's instructions + C a thousand of the workers' + D a GPU list
+
+and a pass that makes a chunk (256 KB) of a program's copy from RAM has E in place of A (E is A when not given).
 
 The model goes into the run, not over its counts, because programs read the clock: frame pacing,
 tick pacing and how much work a frame does all change with it. So instruction counts under the model
@@ -66,7 +68,25 @@ the model replaces that clock. The game's own lines then give the rates (`Select
 
 ## How far to trust it
 
-Fitted in October 2026 to an RTX 5090 with the new fxc2:
+Fitted again on 5 November 2026 to the RTX 3090, on the tick that has the program's copy (0x8b0), with E from nxperf's
+`memcpy` (`calibrate.py fit --copy-ms 0.27`):
+
+    ms a pass = 1.1969 + 0.0407 core 0 + 0.00168 workers + 1.6593 a GPU list; 0.27 for a copy's pass
+
+| Game | Card ms a pass | Fitted | Left out | Error |
+| --- | --- | --- | --- | --- |
+| doom | 1.745 | 1.854 | 2.109 | +20.8% |
+| nes | 1.669 | 1.762 | 1.791 | +7.3% |
+| tdawn | 1.715 | 1.704 | 1.692 | -1.4% |
+| classicube | 1.992 | 1.815 | 1.743 | -12.5% |
+| quake-timedemo | 1.886 | 1.762 | 1.732 | -8.2% |
+| ralert | 1.621 | 1.724 | 1.780 | +9.8% |
+
+Worse than the 5090's below: the card runs shared the computer with another session's runs; fit again on a quiet
+computer before trusting a calibrated number to better than about 20%. nxperf under it: `memcpy` 962 MB/s (the card
+597 to 912), `gpu-copy` 836 (the card 286 to 403).
+
+The fit before, in October 2026 to an RTX 5090 with the new fxc2:
 
     ms a pass = 1.4005 + 0.0111 core 0 + 0.00079 workers + 0.5705 a GPU list
 
