@@ -181,8 +181,9 @@ Shader "ShaderEmu/gpu"
 
         Pass
         {
-            // The streams' sums (docs/machine/gpu.md, "Streams"), drawn four times after the draw IDs, _GpuStreamStep 0 to 3:
-            // each triangle's stream's size, each row's sum, where each row starts, each triangle's first texel in the band.
+            // The streams' sums (docs/machine/gpu.md, "Streams"), drawn six times after the draw IDs, _GpuStreamStep 0 to 5:
+            // each triangle's stream's size, sixteen of a row's summed, each row's sum, sixteen rows' summed, where each row
+            // starts, each triangle's first texel in the band.
             Name "GPUStreamSums"
             ZTest Off
             ZWrite Off

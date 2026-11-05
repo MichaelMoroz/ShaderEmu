@@ -156,7 +156,7 @@ SamplerState sampler_linear_clamp;    // (its name is the sampler's kind, in Uni
 #ifndef GPU_STREAM_WORD
 #define GPU_STREAM_WORD uint
 #endif
-Texture2D<GPU_STREAM_WORD> _GpuStreamOffsets, _GpuStreamRows, _GpuStreamStarts;
+Texture2D<GPU_STREAM_WORD> _GpuStreamOffsets, _GpuStreamRows, _GpuStreamStarts, _GpuStreamParts, _GpuStreamGroups;
 // (the sizes' texel: the size, and the triangle + 1 whose stream a texture the same as an earlier command's takes, 0 none)
 #ifndef GPU_STREAM_PAIR
 #define GPU_STREAM_PAIR uint2
@@ -167,6 +167,11 @@ Texture2D<GPU_STREAM_PAIR> _GpuStreamSizes;
 #define STREAM_OFFSET(t) asuint(_GpuStreamOffsets.Load(int3((t) % GPU_STREAM_SIDE, (t) / GPU_STREAM_SIDE, 0)))
 #define STREAM_ROW(r) asuint(_GpuStreamRows.Load(int3((r), 0, 0)))
 #define STREAM_START(r) asuint(_GpuStreamStarts.Load(int3((r), 0, 0)))
+// (sixteen triangles' sizes of a row summed, GPU_STREAM_PARTS x GPU_STREAM_SIDE; sixteen rows' sums, GPU_STREAM_PARTS x 1)
+#define GPU_STREAM_PART 16
+#define GPU_STREAM_PARTS (GPU_STREAM_SIDE / GPU_STREAM_PART)
+#define STREAM_PART(r, g) asuint(_GpuStreamParts.Load(int3((g), (r), 0)))
+#define STREAM_GROUP(g) asuint(_GpuStreamGroups.Load(int3((g), 0, 0)))
 #ifdef GPU_VRAM
 Texture2D<float4> _GpuStreams;   // the streams, one after another in rows of GPU_STREAM_SIDE_TEXELS
 // Texel (x, y) of a stream of rows of `width`.
@@ -1314,11 +1319,13 @@ float4 gpu_sprite_fragment(gpu_varyings i) {
 }
 
 #ifdef GPU_STREAM_SUMS_PASS
-// The streams' sums (docs/machine/gpu.md, "Streams"), a texel each, in four steps after the draw IDs: 0 a triangle's stream's
-// size (GPU_STREAM_SIDE square), 1 a row's sizes summed (GPU_STREAM_SIDE x 1), 2 where a row's streams start (the rows before
-// summed), 3 a triangle's stream's first texel in the band (GPU_STREAM_SIDE square). A row with nothing streamed sums nothing.
+// The streams' sums (docs/machine/gpu.md, "Streams"), a texel each, in six steps after the draw IDs: 0 a triangle's stream's
+// size (GPU_STREAM_SIDE square), 1 sixteen of a row's sizes summed (GPU_STREAM_PARTS x GPU_STREAM_SIDE), 2 a row's sizes
+// summed (GPU_STREAM_SIDE x 1), 3 sixteen rows' sums summed (GPU_STREAM_PARTS x 1), 4 where a row's streams start (the rows
+// before summed), 5 a triangle's stream's first texel in the band (GPU_STREAM_SIDE square). No texel reads more than 31 others:
+// a loop of 256 reads one after another, in every round with or without a list, was 0.024 ms of each.
 uint2 gpu_stream_sums_fragment(uint2 at, uint step) {
-    uint sum = 0;
+    uint sum = 0, k;
     [branch]
     if (step == 0) {
         uint t = at.y * GPU_STREAM_SIDE + at.x;
@@ -1326,17 +1333,28 @@ uint2 gpu_stream_sums_fragment(uint2 at, uint step) {
         uint same = it.size != 0 ? gpu_stream_shared(it.base, it) : 0;
         return uint2(same != 0 ? 0 : it.size, same);
     } else if (step == 1) {
-        [loop]
-        for (uint c = 0; c < GPU_STREAM_SIDE; c++) sum += STREAM_SIZE(at.x * GPU_STREAM_SIDE + c);
+        [unroll]
+        for (k = 0; k < GPU_STREAM_PART; k++) sum += STREAM_SIZE(at.y * GPU_STREAM_SIDE + at.x * GPU_STREAM_PART + k);
     } else if (step == 2) {
-        [loop]
-        for (uint r = 0; r < at.x; r++) sum += STREAM_ROW(r);
+        [unroll]
+        for (k = 0; k < GPU_STREAM_PARTS; k++) sum += STREAM_PART(at.x, k);
+    } else if (step == 3) {
+        [unroll]
+        for (k = 0; k < GPU_STREAM_PART; k++) sum += STREAM_ROW(at.x * GPU_STREAM_PART + k);
+    } else if (step == 4) {
+        // (unrolled and masked: sixteen reads at once, not one after another)
+        uint g = at.x / GPU_STREAM_PART, r = at.x % GPU_STREAM_PART;
+        [unroll]
+        for (k = 0; k < GPU_STREAM_PART; k++)
+            sum += (k < g ? STREAM_GROUP(k) : 0) + (k < r ? STREAM_ROW(g * GPU_STREAM_PART + k) : 0);
     } else {
         sum = STREAM_START(at.y);
         [branch]
         if (STREAM_ROW(at.y) != 0) {
-            [loop]
-            for (uint c = 0; c < at.x; c++) sum += STREAM_SIZE(at.y * GPU_STREAM_SIDE + c);
+            uint g = at.x / GPU_STREAM_PART, r = at.x % GPU_STREAM_PART;
+            [unroll]
+            for (k = 0; k < GPU_STREAM_PART; k++)
+                sum += (k < g ? STREAM_PART(at.y, k) : 0) + (k < r ? STREAM_SIZE(at.y * GPU_STREAM_SIDE + g * GPU_STREAM_PART + k) : 0);
         }
     }
     return uint2(sum, 0);

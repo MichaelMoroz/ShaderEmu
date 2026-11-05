@@ -38,3 +38,5 @@ c32e1d6315d87334  c7f9b2b860a9b3961  2026-11-05  WARP ran 1 snapshot of `nano-X 
 01ba3b01accac27d  2026-11-05  WARP passed 1 cases: mctest-3
 909697d6a3f83e39  2026-11-05  WARP ran 3 snapshots of `nano-X -p & sleep 1; glxgears & mctest 3` 6 s each (tools/warp_stamp.py)
 566f7907f902f6ee  c2d107d3a6e19dd8e  2026-11-05  WARP ran 1 snapshot of `nano-X -p & sleep 1; glxgears & mctest 3` 3 s (tools/warp_stamp.py)
+a39bfc82957d02bc  c326e792829da63a8  2026-11-05  WARP ran 1 snapshot of `nano-X -p & sleep 1; glxgears & mctest 3` 3 s (tools/warp_stamp.py)
+feb0c2579426ee4f  ca889d260d10b8ece  2026-11-05  WARP ran 1 snapshot of `nano-X -p & sleep 1; glxgears & mctest 3` 3 s (tools/warp_stamp.py)

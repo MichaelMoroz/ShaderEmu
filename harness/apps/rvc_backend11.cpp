@@ -824,8 +824,8 @@ private:
         for (int k = 0; k < kStreamSums && SUCCEEDED(hr); k++) {
             D3D11_TEXTURE2D_DESC sd = cd;
             sd.Format = k == 0 ? DXGI_FORMAT_R32G32_UINT : DXGI_FORMAT_R32_UINT;   // (the sizes: and what an earlier draw streams of the same)
-            sd.Width = kStreamSide;
-            sd.Height = k == 1 || k == 2 ? 1 : kStreamSide;
+            sd.Width = kStreamSumW[k];
+            sd.Height = kStreamSumH[k];
             hr = gpu_.device->CreateTexture2D(&sd, nullptr, &streamSums_[k]);
             if (SUCCEEDED(hr)) hr = gpu_.device->CreateRenderTargetView(streamSums_[k].Get(), nullptr, &streamSumsRtv_[k]);
             if (SUCCEEDED(hr)) hr = gpu_.device->CreateShaderResourceView(streamSums_[k].Get(), nullptr, &streamSumsSrv_[k]);
@@ -932,12 +932,13 @@ private:
     // The streams' sums (GPUStreamSums, four steps) after the draw IDs: what each triangle begins that a draw would read
     // from RAM, how large, and where in the VRAM's band; the front end and the stream pass read them.
     void gpuStreamSums(Material& mat) {
-        static const char* names[kStreamSums] = {"_GpuStreamSizes", "_GpuStreamRows", "_GpuStreamStarts", "_GpuStreamOffsets"};
-        for (int step = 0; step < kStreamSums; step++) {
+        static const char* names[kStreamSums] = {"_GpuStreamSizes", "_GpuStreamParts", "_GpuStreamRows", "_GpuStreamGroups",
+                                                 "_GpuStreamStarts", "_GpuStreamOffsets"};
+        static const int steps = getenv("RVC_STREAM_STEPS") ? atoi(getenv("RVC_STREAM_STEPS")) : kStreamSums;   // (timing only)
+        for (int step = 0; step < steps; step++) {
             mat.setInt("_GpuStreamStep", step);
-            UINT h = step == 1 || step == 2 ? 1 : kStreamSide;
-            gpuInto(mat, gpuPasses_[6], streamSumsRtv_[step].Get(), kStreamSide, h, 3);
-            mat.setTexture(names[step], streamSumsSrv_[step].Get(), kStreamSide, h);
+            gpuInto(mat, gpuPasses_[6], streamSumsRtv_[step].Get(), kStreamSumW[step], kStreamSumH[step], 3);
+            mat.setTexture(names[step], streamSumsSrv_[step].Get(), kStreamSumW[step], kStreamSumH[step]);
         }
     }
     // The streams' texels into the band (GPUStream): a quad over its rows in use.
@@ -1084,9 +1085,10 @@ private:
             gpuDrawIds(mat);
             mat.setTexture("_GpuDrawIds", drawIdsSrv_.Get(), kDrawIdsW, kDrawIdsH);
             bool streams = gpuPasses_.size() > 7 && !noStreams_;   // (--define GPU_NO_STREAMS: the draws read RAM, no stream is made)
-            if (streams) gpuStreamSums(mat);
+            static const int parts = getenv("RVC_STREAM_PARTS") ? atoi(getenv("RVC_STREAM_PARTS")) : 3;   // (timing only: 1 the sums, 2 the stream pass)
+            if (streams && (parts & 1)) gpuStreamSums(mat);
             if (gpuPasses_.size() > 5) gpuVertices(mat);
-            if (streams) gpuStream(mat);
+            if (streams && (parts & 2)) gpuStream(mat);
         }
         if (gpuPasses_.size() > 2 && !comparing_) gpuUpload(mat, (gpuPasses & 0x10000u) != 0);   // (the levels made on GPU_UPLOADED)
         mat.setTexture("_GpuVram", vramSrv_.Get(), kVramSide, kVramSide);
@@ -1733,7 +1735,9 @@ private:
     ComPtr<ID3D11RenderTargetView> madeRtv_[kMade];
     ComPtr<ID3D11ShaderResourceView> madeSrv_[kMade];
     static const UINT kStreamSide = 256;   // GPU_STREAM_SIDE
-    static const int kStreamSums = 4;      // sizes, rows, starts, offsets
+    static const int kStreamSums = 6;      // sizes, parts of rows, rows, groups of rows, starts, offsets (GPU_STREAM_PART 16)
+    static constexpr UINT kStreamSumW[kStreamSums] = {kStreamSide, kStreamSide / 16, kStreamSide, kStreamSide / 16, kStreamSide, kStreamSide};
+    static constexpr UINT kStreamSumH[kStreamSums] = {kStreamSide, kStreamSide, 1, 1, 1, kStreamSide};
     ComPtr<ID3D11Texture2D> streamSums_[kStreamSums];
     ComPtr<ID3D11RenderTargetView> streamSumsRtv_[kStreamSums];
     ComPtr<ID3D11ShaderResourceView> streamSumsSrv_[kStreamSums];

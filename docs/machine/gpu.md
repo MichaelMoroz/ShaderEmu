@@ -569,10 +569,13 @@ bitmap or a sprite's pixels, the device copies before the list's passes into a t
 VRAM's kind, the streams' (`_GpuStreams`, 4096 x 4096 colours: a picture as large as the screen, as Doom's view at 2048 x
 1600, did not fit in a band of the VRAM).
 
-- **The sums** (GPUStreamSums, four draws of one pass after the draw IDs, `_GpuStreamStep` 0 to 3, `gpu_stream_sums_fragment`):
+- **The sums** (GPUStreamSums, six draws of one pass after the draw IDs, `_GpuStreamStep` 0 to 5, `gpu_stream_sums_fragment`):
   a texel a triangle of the mesh, 256 x 256, of what that triangle begins (`gpu_stream_item`: a rectangle's or a draw's texture
   and a compact draw's light map at its command's first triangle, a glyph at its character's, a sprite record's pixels at its
-  record's) and its size in texels; each row's sum; where each row starts; and each triangle's first texel in the band.
+  record's) and its size in texels; sixteen of a row's summed; each row's sum; sixteen rows' summed; where each row starts;
+  and each triangle's first texel in the band. No texel reads more than 31 others: with four steps a row's sum and its start
+  were loops of 256 reads one after another, 0.024 ms of every round, list or none (Doom 1,534 thousand instructions a second
+  against 1,622 without the streams).
 - **The front end** gives a vertex its stream's place, `VRAM_STREAM` (bit 29) and the texel's number, in place of the address.
 - **Sharing**: a rectangle's or a draw's texture the same as one of the 256 commands before it (`GPU_STREAM_LOOK`: mode,
   address, size, the key if keyed; no light map) takes the earliest one's stream (the second word of the sizes), and the front
@@ -583,8 +586,8 @@ VRAM's kind, the streams' (`_GpuStreams`, 4096 x 4096 colours: a picture as larg
   remaps and the palette applied, a hole of no alpha).
 - **The fragment** reads a stream's texel by its number (`stream_texel`), nearest, four weighed, the distance fields' four
   samples or the light map's four, as it read RAM; under `GPU_VRAM_ONLY` (the default in GPUDraw with the front end) its RAM
-  paths are not compiled at all, and what a stream did not bring, only what the band (3,145,728 texels) had no room for, is
-  magenta: only what 16,777,216 texels had no room for.
+  paths are not compiled at all, and what a stream did not bring, only what the 16,777,216 texels had no room for, is
+  magenta.
 
 A glyph's and a sprite record's streams are their own. `gles.c` streams its own first, into the VRAM's rows 3072 to 3328 at the
 list's end (`stream_put`), once however many draws name a texture and drawn by the sampler; `SEGL_STREAM=0` leaves them to the
@@ -596,7 +599,11 @@ such pair to `RVC_GPU_COMPARE_SAVE=PREFIX`, and what the sums held). One run, on
 are not the same machine. Under `--cpu`, 5 November 2026: `gpubench` 11 and 12 (every texture kind and every sprite kind, with
 and without a palette, a 640 x 400 words record) the same bytes as from RAM; Quake's frame 200 of the timedemo with its
 textures and light maps in RAM (`QUAKE_VRAM=0 QUAKE_VRAM_LIGHT=0`), drawn from one snapshot both ways, 0 pixels; Doom's E1M1,
-479 frames both ways, 0 frames with a pixel that differs.
+479 frames both ways, 0 frames with a pixel that differs. Every graphics program of the image, 32 of them (glxgears, Doom, Quake,
+ClassiCube, the NES, both Command & Conquers, Quake III, Half-Life, Jedi Outcast, OpenTTD, Age of Empires, Micropolis, the desktop
+and its programs, the ray and path tracers, nxphys, the examples, the HLSL viewer, the demos), run under `--cpu` with
+`RVC_GPU_COMPARE=7` until they draw: 0 frames with a pixel that differs, no magenta of the streams' (nxpaint's and demo-blit's
+are their own: the RAM's draw has them too), and GPUDraw reading RAM in neither stage.
 
 ## Cost
 
