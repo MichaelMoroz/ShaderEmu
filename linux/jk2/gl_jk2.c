@@ -204,7 +204,9 @@ static uint32_t half_job(uint32_t gen, uint32_t a1);
 static struct __attribute__((aligned(16))) { int worker, out, tried, unused; } hw0;   // this core's (the drawing on two workers: below)
 #endif
 void jk2RenderGive(void (*fn)(const void*), const void* arg) {
-    jk2RenderSettle();
+    // (the frame before done; not this frame's front end, which the drawing waits for itself and this core where it next
+    // writes tr's view: jk2RenderSettle here held this core about 17 passes a frame of the walk)
+    jk2RenderSettleBack();
     job.fn = fn, job.arg = arg, job.swap = 0;
     mcw_post(rw0.worker, render_job, rw0.gives + 1, 0);
 #ifndef SE_DRAW_B
