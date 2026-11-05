@@ -465,14 +465,14 @@ uint fast(uint room) {
                 // it is arithmetic or a branch, its registers taken from this result where it names this one's. No test of
                 // the budget: a pass may run one instruction past it, which ends it all the same (2% of Tiberian Dawn's tick)
                 uint w2 = cur.y;
-                [branch] if ((w2 & 0x5f) == 0x13 && (w2 & 0xfe00007f) != 0x02000033 && (pc & 12) != 12) {
+                [branch] if ((w2 & 0x5f) == 0x13 && ((w2 & 0xfe00007f) != 0x02000033 || (w2 & 0x7000) == 0) && (pc & 12) != 12) {   // (mul too: a product here costs a lone arithmetic word nothing)
                     uint g3 = (w2 >> 12) & 7, d2 = (w2 >> 7) & 31, s1 = (w2 >> 15) & 31, s2 = (w2 >> 20) & 31;
                     uint a2 = xr[s1], b2 = xr[s2];
                     a2 = s1 == dst ? v : a2; b2 = s2 == dst ? v : b2;
                     xr[dst] = v;
                     bool reg2 = (w2 & 0x20) != 0, alt2 = (w2 & 0x40000000) != 0;
                     uint y2 = reg2 ? b2 : imm_i(w2), turn2 = (g3 & 1) ? 0 : 0x80000000;
-                    uint q01 = (g3 & 1) ? a2 << y2 : ((reg2 && alt2) ? a2 - y2 : a2 + y2), q23 = (a2 ^ turn2) < (y2 ^ turn2) ? 1 : 0;
+                    uint q01 = (g3 & 1) ? a2 << y2 : (reg2 && (w2 & 0x02000000) != 0) ? a2 * y2 : ((reg2 && alt2) ? a2 - y2 : a2 + y2), q23 = (a2 ^ turn2) < (y2 ^ turn2) ? 1 : 0;
                     uint q45 = (g3 & 1) ? (alt2 ? asuint(asint(a2) >> y2) : a2 >> y2) : a2 ^ y2, q67 = (g3 & 1) ? a2 & y2 : a2 | y2;
                     v = (g3 & 4) ? ((g3 & 2) ? q67 : q45) : ((g3 & 2) ? q23 : q01);
                     dst = d2 == 0 ? 64 : d2;

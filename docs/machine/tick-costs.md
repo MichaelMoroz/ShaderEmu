@@ -826,6 +826,16 @@ rounded: `rvc_cpu`'s `fmaf` rounds once, as before); `LOAD_UP` by selects. Again
 | k6 (the same with `n + 1 < budget` on every fused word) | +0.9% | -0.7% | +0.8% |
 | k5la, k5fb, k5x (k4lb and arithmetic after a load; a branch after a float comparison; both) | +1.9%, +0.3%, +1.5% | -1.9%, -2.2%, -2.2% | -0.3%, -0.25%, -0.25% |
 
+On the kept tree (a copy of it in each run):
+
+| What | Quake | Tiberian Dawn | Shell | Verdict |
+|---|---|---|---|---|
+| **mul as the fused second word** (its product only in the fused copy: a lone arithmetic word pays nothing) | -0.4%, -0.7% | -2.5%, -1.7% | +0.15%, +0.15% | **kept** (stamp `e0da98763fad1fdc`; `test_card.py mctest-3 fptest lanetest tdawn-300` pass on the card) |
+| Arithmetic fused after a lone mul (t2mm, on the above) | -0.8% | -1.6% | +0.3% | level against it |
+| A branch as the third word after a fused pair (t2t3) | -0.1% | +1.2% | +0.3% | lost |
+| The fused branch tested before the fused arithmetic (t2ord) | +1.4% | +1.5% | +0.3% | lost |
+| The fused word reading its registers after the write (t2nf); `LOAD_UP` as before (t2lu0); no fast fmadd (t2ffma0); fb1 on the kept tree | +0.4%; -0.3%; +0.5%; +0.2% | 0.0%; -0.1%; -0.2%; +0.4% | -0.5%; -0.45%; -0.35%; +0.15% | level: the kept parts are worth what the whole is, not each alone |
+
 **What was learnt.** Nothing of the fast loop's shape gave more than 1% on every load: f2 + fp1 (+ ffma) about 1%, at the
 noise's edge; the kept fusion 2% of Tiberian Dawn, a little of the shell, level on Quake. fp1 changes what fdiv makes (the card's quotient, which `rvc_cpu` does not make: a model of the card's
 division is owed first), and ffma's `mad` is fused where the general step rounds twice: neither is in the tree. The ways
