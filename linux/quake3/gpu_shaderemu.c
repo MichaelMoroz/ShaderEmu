@@ -359,11 +359,14 @@ void gpuHalfMerge(const void* hp) {
     uint32_t* list = (uint32_t*)(gpu + set_at);
     const uint32_t n = h->cmd_to - h->cmd_from;
     if (n) memmove(list + 16 * commands, list + 16 * h->cmd_from, (size_t)n * 64);
+    // (the mesh's vertices follow the first part's without a gap: the GPU finds a vertex's command by a binary search of
+    // word 3 and draws every mesh vertex, and one in a gap was drawn as the command before's, past its own: streaks)
+    for (uint32_t i = 0; i < n; i++) list[16 * (commands + i) + 3] = list[16 * (commands + i) + 3] - h->mesh_from + mesh_vertices;
     commands += n;
     passes_used |= h->passes;
     if (h->blocks_to > blocks) blocks = h->blocks_to;
     if (h->vertex_to > vertex_top) vertex_top = h->vertex_to;
-    if (h->mesh_to > mesh_vertices) mesh_vertices = h->mesh_to;
+    mesh_vertices += h->mesh_to - h->mesh_from;
     half_commands_end = MAX_COMMANDS, half_blocks_end = MAX_BLOCKS, half_vertex_end = 0, half_mesh_end = MAX_MESH;
     last_draw = 0, joined_command = 0, matrices_dirty = 1, frame_last = 0xffffffffu;
     used_last[1] = blocks, used_last[2] = (vertex_top - set_at - VERTICES_IN) >> 10, used_last[3] = commands;

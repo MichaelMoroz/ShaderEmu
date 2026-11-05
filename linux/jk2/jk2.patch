@@ -5694,7 +5694,7 @@ index 5464b70b..a1f3c8cd 100644
  	{
  		return;
 diff --git a/code/rd-vanilla/tr_backend.cpp b/code/rd-vanilla/tr_backend.cpp
-index 741bb95b..b6b8d61e 100644
+index 741bb95b..537bcecb 100644
 --- a/code/rd-vanilla/tr_backend.cpp
 +++ b/code/rd-vanilla/tr_backend.cpp
 @@ -27,6 +27,10 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
@@ -5798,7 +5798,7 @@ index 741bb95b..b6b8d61e 100644
 +// state, everything loaded the first's) draws the second on a worker of its own beside it into its own part of the
 +// frame's list (gpu_shaderemu.c's halves), which the drawing then moves after its own. The part is cut where a sort
 +// begins, as near the middle as that falls. Not the glow's pass, a portal's view nor stencil shadows. What the second
-+// part leaves to draw last (a distortion) comes back to be drawn after the first's. JK2_HALF=1: two parts (not yet the default).
++// part leaves to draw last (a distortion) comes back to be drawn after the first's. JK2_HALF=0: one part.
 +glstate_t se_glState_b;		// (the second copy's glState: build.sh points its glState here)
 +int se_half_b;			// 1 in the second copy while it draws its part (it makes no kept words then: tr_surface.cpp)
 +struct seHalf_t {
@@ -6007,7 +6007,7 @@ index 741bb95b..b6b8d61e 100644
 +	static int on = -1;
 +	if ( on < 0 ) {
 +		const char *e = getenv( "JK2_HALF" );
-+		on = e && !strcmp( e, "1" );	// (JK2_HALF=1: the second part still drawn wrong, docs/games/jk2.md)
++		on = !( e && !strcmp( e, "0" ) );
 +	}
 +	// (where the list is cut, as a share of it: the second part is mostly entities and what is drawn over, dearer a surface
 +	// than the world's; moved each frame by how long the drawing waited for the second part, in 1/256ths)

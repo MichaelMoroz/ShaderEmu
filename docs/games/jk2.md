@@ -1064,7 +1064,11 @@ copies' stores to shared marks (a texture's last frame, an image's `frameUsed`, 
 now: `RVC_RACES` 0 undone but libmedia's inflate. With 1 MB sets the walk is 218.0 passes a frame (3.5 a second)
 against 227.0 one part; the drawing's two parts 751 and 527 thousand instructions a frame, and core 0 is the chain now
 (about 117 passes of its own, then the mix's settle 37, the players' joins 33, the front end 17). 16 job slots instead
-of 8 changed nothing (218.2). The picture of two parts is still to be captured.
+of 8 changed nothing (218.2). The picture's streaks were the mesh: the GPU finds a vertex's command by a binary search
+of its word 3 and draws every vertex of the mesh, so the gap between the first part's mesh and the second's (which began
+at the upper half) was drawn as the first part's last command, past its own vertices; the merge now renumbers the moved
+commands to follow the first part's. Captured (`rvc_harness --cpu --warp`, `JK2_HOLD=1450`): the world, the sky, the
+HUD and the hands as with one part. The default since: `JK2_HALF=0` is one part. The walk 217.87 passes a frame.
 
 **The frame's list sets 1 MB** (`gpu_shaderemu.c` under `SE_HALVES`, Jedi Outcast's build only): a frame's vertices
 nearly filled the 288 KB a 512 KB set has (`JK2_ROOMS_LOG`'s "least left": 0 to 13 KB, up to 1,496 rooms refused in 100

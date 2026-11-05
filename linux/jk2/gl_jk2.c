@@ -1363,7 +1363,7 @@ static struct __attribute__((aligned(16))) { volatile uint32_t gen, unused[3]; }
 static int half_on(void) {
     if (!hw0.tried) {
         const char* e = getenv("JK2_HALF");
-        hw0.tried = 1, hw0.unused = rw0.mode && e && !strcmp(e, "1");   // (JK2_HALF=1: not yet drawn right, docs/games/jk2.md)
+        hw0.tried = 1, hw0.unused = rw0.mode && !(e && !strcmp(e, "0"));   // (JK2_HALF=0: one part, as before)
         if (hw0.unused) {
             mcw_touch(b_jk2glHalfStack(), RENDER_STACK);
             mcw_touch(&half_go, sizeof half_go), mcw_touch((void*)&half_done, sizeof half_done), mcw_touch(&half_d, sizeof half_d);
