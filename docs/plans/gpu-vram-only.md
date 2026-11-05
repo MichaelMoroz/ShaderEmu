@@ -87,4 +87,5 @@ the VRAM (two loads, no RAM). `SPRITE_WORDS` (the last picture) is the picture's
   against 0.155: faster in every mode (indexed nearest level). (The RAM path's harness ran 8,192 instructions a pass,
   this one's default is 12,288: with `--ticks 8192` the VRAM side is the same within 0.003 ms, 0.172 to 0.178, 0.120.)
 - Not done: a snapshot this harness makes under `--cpu` loads to a black picture (the guest idle), with the harness of before
-  the rows change too; a cold boot draws (Doom's E1M1, 2,987 colours). Not looked into yet.
+  the rows change too; a cold boot draws (Doom's E1M1, 2,987 colours). Main's harness (c6e3eb98) does the same with its own
+  snapshot of the same moment: an older bug, not this branch's (the loaded machine's 255 workers say never started).
