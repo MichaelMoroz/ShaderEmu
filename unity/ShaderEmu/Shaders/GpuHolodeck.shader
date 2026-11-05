@@ -9,6 +9,7 @@ Shader "ShaderEmu/GpuHolodeck"
     {
         _State ("Machine state texture", 2D) = "black" {}
         _Data_ROM ("ROM, a 16-byte texel a pixel (RGBAFloat, read by its bits)", 2D) = "black" {}
+        _GpuVram ("The GPU's VRAM: textures the guest uploaded, with mip levels", 2D) = "black" {}
         _ScreenSize ("The near plane's picture at the largest scale, in metres", Vector) = (1.28, 0.8, 0, 0)
         _Plane ("Scale: that plane from the near plane (0) to the far plane (1)", Range(0, 1)) = 0
         _RoomMin ("The room's low corner, in the world", Vector) = (-12.7, 0, -0.1, 0)

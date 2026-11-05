@@ -124,10 +124,34 @@ public:
             if (d.first == "RAM_BUFFER") csBuffer_ = true;
         if (getenv("RVC11_COMPUTE") && !buildComputeTick(shader, bo, err)) return false;
         std::string gpuErr;
-        if (opt.gpuShader && (!buildPasses(gpu_, *opt.gpuShader, {"GPUDraw", "GPUControl"}, bo, gpuPasses_, gpuErr) ||
+        if (opt.gpuShader && (!buildPasses(gpu_, *opt.gpuShader, {"GPUDraw", "GPUControl", "GPUUpload", "GPUDrawIds", "GPUCopy", "GPUVertices", "GPUStreamSums", "GPUStream"}, bo, gpuPasses_, gpuErr) ||
                               !createGpuTarget(gpuErr))) {
             fprintf(stderr, "[harness] GPU device disabled: %s\n", gpuErr.c_str());
             gpuPasses_.clear();
+        }
+        if (!gpuPasses_.empty() && getenv("RVC_GPU_READS")) {
+            // (docs/machine/gpu.md, "Streams") whether the draw pass's compiled stages bind the state texture, RAM, at all:
+            // the compiler keeps a texture only where something reads it
+            const GpuPass& d = gpuPasses_[0];
+            auto reads = [](const auto& layout) {
+                for (auto& t : layout.textures)
+                    if (t.name == "_State") return true;
+                return false;
+            };
+            fprintf(stderr, "[harness] GPUDraw reads RAM: vertex %s, fragment %s\n", reads(d.vsLayout) ? "yes" : "no", reads(d.psLayout) ? "yes" : "no");
+        }
+        for (auto& d : opt.compile.defines)
+            if (d.first == "GPU_NO_STREAMS") noStreams_ = true;
+        if (opt.gpuShader && !gpuPasses_.empty() && getenv("RVC_GPU_COMPARE")) {
+            // RVC_GPU_COMPARE=N (docs/machine/gpu.md, "Streams"): every N-th frame the list drawn again the way before
+            // (GPU_NO_STREAMS: the fragment reading RAM) into a second target from the same picture, and the two counted
+            ShaderBuildOptions a = bo;
+            a.settings.defines.push_back({"GPU_NO_STREAMS", "1"});
+            if (!buildPasses(gpu_, *opt.gpuShader, {"GPUDraw", "GPUControl", "GPUUpload", "GPUDrawIds", "GPUCopy", "GPUVertices"}, a, gpuAlt_, gpuErr)) {
+                fprintf(stderr, "[harness] RVC_GPU_COMPARE: %s\n", gpuErr.c_str());
+                gpuAlt_.clear();
+            }
+            compareEvery_ = std::max(1, atoi(getenv("RVC_GPU_COMPARE")));
         }
         if (opt.gpuShader && opt.ampShader && !gpuPasses_.empty()) {
             // --blits: the lists drawn by a blit's calls, 13 of the mesh's triangles each (src/gpu.h, GPU_AMP)
@@ -351,7 +375,7 @@ public:
             if (workers) zones.push_back(UpdateZone{64 + band / 2, kHeight - bandRows / 2, band, bandRows, 0});
             // TICK_MRT: the tick draws a pixel for every eight texels, into eight targets of its
             // own, and the pass that follows puts them where the state has them
-            static const char* const kPassLabels[] = {"tick", "unpack", "commit bands", "commit points", "commit copy", "devices", "", "", "", "", "", ""};
+            static const char* const kPassLabels[] = {"tick", "unpack", "commit bands", "commit points", "commit copy", "gpu draw", "control+sound", "", "", "", "", ""};
             if (rounds == 1 && getenv("RVC_PASS_PROF")) { prof_.labels = kPassLabels; profBegin(tag); }
             if (mrt_) tickDraw(mat, zones[0]);
             prof_.mark(gpu_.ctx.Get());
@@ -390,12 +414,13 @@ public:
         }
         if (rounds > 1) mat.setInt("_ZapKind", (int)zapKind);
         if (timeIt) gpu_.ctx->End(tsQuery_[2].Get());
-        if (gpuPasses_.size() == 2 && !freeze) {
+        if (gpuPasses_.size() >= 2 && !freeze) {
             bool listDrawn = !listLazy() || listDue > 0;   // (RVC_LIST_LAZY: only while a list is due)
             if (listDrawn) {
                 gpuDraw(mat);
                 if (listDue > 0) listDue--;
             }
+            prof_.mark(gpu_.ctx.Get());   // (RVC_PASS_PROF: the GPU's lists apart from the control words and the sound)
             mat.setInt("_GpuListSkipped", listDrawn ? 0 : 1);   // (the control zone takes the submit word back only when drawn)
             bool mixed = soundMix && !soundPasses_.empty();
             if (mixed) soundDraw(mat, tag);   // before the control zone moves the voices on
@@ -504,6 +529,36 @@ public:
         return rb.pop(gpu_.ctx.Get(), out, tag);
     }
 
+    bool readVram(std::vector<uint8_t>& out) override {
+        if (!vramUsed_ || !vram_) return false;
+        D3D11_TEXTURE2D_DESC td{};
+        td.Width = td.Height = kVramSide;
+        td.MipLevels = td.ArraySize = 1;
+        td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        td.SampleDesc.Count = 1;
+        td.Usage = D3D11_USAGE_STAGING;
+        td.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        ComPtr<ID3D11Texture2D> staging;
+        if (FAILED(gpu_.device->CreateTexture2D(&td, nullptr, &staging))) return false;
+        gpu_.ctx->CopySubresourceRegion(staging.Get(), 0, 0, 0, 0, vram_.Get(), 0, nullptr);
+        D3D11_MAPPED_SUBRESOURCE m{};
+        if (FAILED(gpu_.ctx->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &m))) return false;
+        out.resize((size_t)kVramSide * kVramSide * 4);
+        for (UINT y = 0; y < kVramSide; y++) memcpy(&out[(size_t)y * kVramSide * 4], (const uint8_t*)m.pData + (size_t)y * m.RowPitch, kVramSide * 4);
+        gpu_.ctx->Unmap(staging.Get(), 0);
+        for (size_t i = 0; i < out.size(); i += 4096)   // (all zeros: nothing was ever uploaded)
+            for (size_t k = i; k < i + 4096; k++)
+                if (out[k]) return true;
+        return false;
+    }
+    bool writeVram(const uint8_t* texels, size_t bytes) override {
+        if (!vram_ || bytes != (size_t)kVramSide * kVramSide * 4) return false;
+        gpu_.ctx->UpdateSubresource(vram_.Get(), 0, nullptr, texels, kVramSide * 4, 0);
+        gpu_.ctx->GenerateMips(vramSrv_.Get());
+        vramUsed_ = true;
+        return true;
+    }
+
     bool gpuTimes(double& tickMs, double& commitMs, double& deviceMs) override {
         if (tsPending_) {
             D3D11_QUERY_DATA_TIMESTAMP_DISJOINT dj{};
@@ -548,6 +603,9 @@ public:
     void viewRender(bool present) override { view_.render(gpu_.ctx.Get(), stateSrv(), present, gpuSrv_.Get()); }
     bool gpuCapture(const std::string& path) override {
         if (!gpuColor_) return false;
+        if (!gpuAlt_.empty())
+            fprintf(stderr, "[gpu compare] %llu frames drawn both ways, %llu with pixels that differ\n", (unsigned long long)compareLists_,
+                    (unsigned long long)compareBad_);
         D3D11_TEXTURE2D_DESC td{};
         gpuColor_->GetDesc(&td);
         td.Usage = D3D11_USAGE_STAGING;
@@ -716,17 +774,324 @@ private:
             err = "GPU target: " + hrToString(hr);
             return false;
         }
-        const float black[4] = {0, 0, 0, 1};
+        // the VRAM (shader_vm/src/gpu.h, "VRAM"): uploads draw its level 0, GenerateMips the rest
+        D3D11_TEXTURE2D_DESC vd{};
+        vd.Width = vd.Height = kVramSide;
+        vd.MipLevels = 0;
+        vd.ArraySize = 1;
+        vd.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        vd.SampleDesc.Count = 1;
+        vd.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+        vd.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
+        if (SUCCEEDED(hr)) hr = gpu_.device->CreateTexture2D(&vd, nullptr, &vram_);
+        D3D11_RENDER_TARGET_VIEW_DESC rv{};
+        rv.Format = vd.Format;
+        rv.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+        if (SUCCEEDED(hr)) hr = gpu_.device->CreateRenderTargetView(vram_.Get(), &rv, &vramRtv_);
+        if (SUCCEEDED(hr)) hr = gpu_.device->CreateShaderResourceView(vram_.Get(), nullptr, &vramSrv_);
+        if (FAILED(hr)) {
+            err = "VRAM: " + hrToString(hr);
+            return false;
+        }
+        // the draw IDs (shader_vm/src/gpu.h, "draw IDs"): a mesh vertex's command and passes, a texel each
+        D3D11_TEXTURE2D_DESC cd{};
+        cd.Width = kDrawIdsW;
+        cd.Height = kDrawIdsH;
+        cd.MipLevels = cd.ArraySize = 1;
+        cd.Format = DXGI_FORMAT_R32G32_UINT;
+        cd.SampleDesc.Count = 1;
+        cd.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+        hr = gpu_.device->CreateTexture2D(&cd, nullptr, &drawIds_);
+        if (SUCCEEDED(hr)) hr = gpu_.device->CreateRenderTargetView(drawIds_.Get(), nullptr, &drawIdsRtv_);
+        if (SUCCEEDED(hr)) hr = gpu_.device->CreateShaderResourceView(drawIds_.Get(), nullptr, &drawIdsSrv_);
+        if (FAILED(hr)) {
+            err = "draw IDs: " + hrToString(hr);
+            return false;
+        }
+        // the vertex front end's six (shader_vm/src/gpu.h, "the vertex front end"): four of floats, two of words
+        for (int k = 0; k < kMade && SUCCEEDED(hr); k++) {
+            D3D11_TEXTURE2D_DESC md = cd;
+            md.Format = k < 4 ? DXGI_FORMAT_R32G32B32A32_FLOAT : DXGI_FORMAT_R32G32B32A32_UINT;
+            hr = gpu_.device->CreateTexture2D(&md, nullptr, &made_[k]);
+            if (SUCCEEDED(hr)) hr = gpu_.device->CreateRenderTargetView(made_[k].Get(), nullptr, &madeRtv_[k]);
+            if (SUCCEEDED(hr)) hr = gpu_.device->CreateShaderResourceView(made_[k].Get(), nullptr, &madeSrv_[k]);
+        }
+        if (FAILED(hr)) {
+            err = "the vertex front end's targets: " + hrToString(hr);
+            return false;
+        }
+        // the streams' sums (shader_vm/src/gpu.h, "streams"): a word a triangle twice, a word a row twice
+        for (int k = 0; k < kStreamSums && SUCCEEDED(hr); k++) {
+            D3D11_TEXTURE2D_DESC sd = cd;
+            sd.Format = k == 0 ? DXGI_FORMAT_R32G32_UINT : DXGI_FORMAT_R32_UINT;   // (the sizes: and what an earlier draw streams of the same)
+            sd.Width = kStreamSumW[k];
+            sd.Height = kStreamSumH[k];
+            hr = gpu_.device->CreateTexture2D(&sd, nullptr, &streamSums_[k]);
+            if (SUCCEEDED(hr)) hr = gpu_.device->CreateRenderTargetView(streamSums_[k].Get(), nullptr, &streamSumsRtv_[k]);
+            if (SUCCEEDED(hr)) hr = gpu_.device->CreateShaderResourceView(streamSums_[k].Get(), nullptr, &streamSumsSrv_[k]);
+        }
+        if (FAILED(hr)) {
+            err = "the streams' sums: " + hrToString(hr);
+            return false;
+        }
+        // and the streams' own texture (_GpuStreams), as large as the VRAM, RGBA8, of no levels
+        {
+            D3D11_TEXTURE2D_DESC sd = cd;
+            sd.Width = sd.Height = kVramSide;
+            sd.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+            hr = gpu_.device->CreateTexture2D(&sd, nullptr, &streams_);
+            if (SUCCEEDED(hr)) hr = gpu_.device->CreateRenderTargetView(streams_.Get(), nullptr, &streamsRtv_);
+            if (SUCCEEDED(hr)) hr = gpu_.device->CreateShaderResourceView(streams_.Get(), nullptr, &streamsSrv_);
+            if (FAILED(hr)) {
+                err = "the streams' texture: " + hrToString(hr);
+                return false;
+            }
+        }
+        const float black[4] = {0, 0, 0, 1}, none[4] = {0, 0, 0, 0};
         gpu_.ctx->ClearRenderTargetView(gpuRtv_.Get(), black);
+        gpu_.ctx->ClearRenderTargetView(vramRtv_.Get(), none);
         return true;
+    }
+
+    // The list's uploads into the VRAM's level 0 (GPUUpload), every frame a list is drawn; its mip levels made anew with
+    // `mips`, on a frame whose passes word has GPU_UPLOADED, which a list with SUBMIT_UPLOADS waits for.
+    // Each mesh vertex's command and passes (GPUDrawIds), from the state the passes after it draw from.
+    void gpuDrawIds(Material& mat) {
+        ID3D11DeviceContext* ctx = gpu_.ctx.Get();
+        GpuPass& pass = gpuPasses_[3];
+        ctx->OMSetRenderTargets(1, drawIdsRtv_.GetAddressOf(), nullptr);
+        D3D11_VIEWPORT vp{0, 0, (float)kDrawIdsW, (float)kDrawIdsH, 0, 1};
+        ctx->RSSetViewports(1, &vp);
+        ctx->RSSetState(gpu_.rasterNoCull.Get());
+        ctx->IASetInputLayout(nullptr);
+        ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        ID3D11ShaderResourceView* state = stateSrv();
+        mat.bind(ctx, pass, gpu_);
+        for (auto& t : pass.psLayout.textures)
+            if (t.name == "_State") ctx->PSSetShaderResources(t.slot, 1, &state);
+        ctx->OMSetBlendState(gpuBlend_[0].Get(), nullptr, 0xffffffff);
+        ctx->OMSetDepthStencilState(gpuDepthState_[2].Get(), 0);
+        ctx->Draw(3, 0);
+        ID3D11ShaderResourceView* none = nullptr;
+        for (auto& t : pass.psLayout.textures) ctx->PSSetShaderResources(t.slot, 1, &none);
+        ctx->OMSetRenderTargets(0, nullptr, nullptr);
+    }
+
+    // The list's copies of rectangles of its picture into the VRAM (GPUCopy, CMD_COPY), after all its passes: the target
+    // read, the VRAM's level 0 written (no levels made: a copied slot has none).
+    void gpuCopy(Material& mat) {
+        ID3D11DeviceContext* ctx = gpu_.ctx.Get();
+        GpuPass& pass = gpuPasses_[4];
+        ctx->OMSetRenderTargets(1, vramRtv_.GetAddressOf(), nullptr);
+        D3D11_VIEWPORT vp{0, 0, (float)kVramSide, (float)kVramSide, 0, 1};
+        ctx->RSSetViewports(1, &vp);
+        ctx->RSSetState(gpu_.rasterNoCull.Get());
+        ctx->IASetInputLayout(nullptr);
+        ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        mat.setTexture("_GpuTarget", gpuSrv_.Get(), kGpuTarget, kGpuTarget);
+        ID3D11ShaderResourceView* state = stateSrv();
+        mat.bind(ctx, pass, gpu_);
+        for (auto& t : pass.vsLayout.textures)
+            if (t.name == "_State") ctx->VSSetShaderResources(t.slot, 1, &state);
+        for (auto& t : pass.psLayout.textures)
+            if (t.name == "_State") ctx->PSSetShaderResources(t.slot, 1, &state);
+        ctx->OMSetBlendState(gpuBlend_[0].Get(), nullptr, 0xffffffff);
+        ctx->OMSetDepthStencilState(gpuDepthState_[2].Get(), 0);
+        ctx->Draw(kGpuTriangles * 3, 0);
+        ID3D11ShaderResourceView* none = nullptr;
+        for (auto& t : pass.vsLayout.textures) ctx->VSSetShaderResources(t.slot, 1, &none);
+        for (auto& t : pass.psLayout.textures) ctx->PSSetShaderResources(t.slot, 1, &none);
+        ctx->OMSetRenderTargets(0, nullptr, nullptr);
+        vramUsed_ = true;
+    }
+
+    // A pass of the GPU's into one target of w x h, `vertices` drawn, the state bound to its vertex and fragment stages.
+    void gpuInto(Material& mat, GpuPass& pass, ID3D11RenderTargetView* rtv, UINT w, UINT h, UINT vertices) {
+        ID3D11DeviceContext* ctx = gpu_.ctx.Get();
+        ctx->OMSetRenderTargets(1, &rtv, nullptr);
+        D3D11_VIEWPORT vp{0, 0, (float)w, (float)h, 0, 1};
+        ctx->RSSetViewports(1, &vp);
+        ctx->RSSetState(gpu_.rasterNoCull.Get());
+        ctx->IASetInputLayout(nullptr);
+        ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        ID3D11ShaderResourceView* state = stateSrv();
+        mat.bind(ctx, pass, gpu_);
+        for (auto& t : pass.vsLayout.textures)
+            if (t.name == "_State") ctx->VSSetShaderResources(t.slot, 1, &state);
+        for (auto& t : pass.psLayout.textures)
+            if (t.name == "_State") ctx->PSSetShaderResources(t.slot, 1, &state);
+        ctx->OMSetBlendState(gpuBlend_[0].Get(), nullptr, 0xffffffff);
+        ctx->OMSetDepthStencilState(gpuDepthState_[2].Get(), 0);
+        ctx->Draw(vertices, 0);
+        ID3D11ShaderResourceView* none = nullptr;
+        for (auto& t : pass.vsLayout.textures) ctx->VSSetShaderResources(t.slot, 1, &none);
+        for (auto& t : pass.psLayout.textures) ctx->PSSetShaderResources(t.slot, 1, &none);
+        ctx->OMSetRenderTargets(0, nullptr, nullptr);
+    }
+
+    // The streams' sums (GPUStreamSums, four steps) after the draw IDs: what each triangle begins that a draw would read
+    // from RAM, how large, and where in the VRAM's band; the front end and the stream pass read them.
+    void gpuStreamSums(Material& mat) {
+        static const char* names[kStreamSums] = {"_GpuStreamSizes", "_GpuStreamParts", "_GpuStreamRows", "_GpuStreamGroups",
+                                                 "_GpuStreamStarts", "_GpuStreamOffsets"};
+        static const int steps = getenv("RVC_STREAM_STEPS") ? atoi(getenv("RVC_STREAM_STEPS")) : kStreamSums;   // (timing only)
+        for (int step = 0; step < steps; step++) {
+            mat.setInt("_GpuStreamStep", step);
+            gpuInto(mat, gpuPasses_[6], streamSumsRtv_[step].Get(), kStreamSumW[step], kStreamSumH[step], 3);
+            mat.setTexture(names[step], streamSumsSrv_[step].Get(), kStreamSumW[step], kStreamSumH[step]);
+        }
+    }
+    // The streams' texels into the band (GPUStream): a quad over its rows in use.
+    void gpuStream(Material& mat) {
+        gpuInto(mat, gpuPasses_[7], streamsRtv_.Get(), kVramSide, kVramSide, 6);
+        mat.setTexture("_GpuStreams", streamsSrv_.Get(), kVramSide, kVramSide);
+    }
+
+    // Every vertex a command claims, made once from the list (GPUVertices): the passes after it read them by their draw IDs.
+    void gpuVertices(Material& mat) {
+        ID3D11DeviceContext* ctx = gpu_.ctx.Get();
+        GpuPass& pass = gpuPasses_[5];
+        ID3D11RenderTargetView* rtvs[kMade];
+        for (int k = 0; k < kMade; k++) rtvs[k] = madeRtv_[k].Get();
+        ctx->OMSetRenderTargets(kMade, rtvs, nullptr);
+        D3D11_VIEWPORT vp{0, 0, (float)kDrawIdsW, (float)kDrawIdsH, 0, 1};
+        ctx->RSSetViewports(1, &vp);
+        ctx->RSSetState(gpu_.rasterNoCull.Get());
+        ctx->IASetInputLayout(nullptr);
+        ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        ID3D11ShaderResourceView* state = stateSrv();
+        mat.bind(ctx, pass, gpu_);
+        for (auto& t : pass.psLayout.textures)
+            if (t.name == "_State") ctx->PSSetShaderResources(t.slot, 1, &state);
+        ctx->OMSetBlendState(gpuBlend_[0].Get(), nullptr, 0xffffffff);
+        ctx->OMSetDepthStencilState(gpuDepthState_[2].Get(), 0);
+        ctx->Draw(3, 0);
+        ID3D11ShaderResourceView* none = nullptr;
+        for (auto& t : pass.psLayout.textures) ctx->PSSetShaderResources(t.slot, 1, &none);
+        ctx->OMSetRenderTargets(0, nullptr, nullptr);
+        static const char* names[kMade] = {"_GpuMadePos", "_GpuMadeColour", "_GpuMadeUv", "_GpuMadeEdge", "_GpuMadeTex", "_GpuMadeMore"};
+        for (int k = 0; k < kMade; k++) mat.setTexture(names[k], madeSrv_[k].Get(), kDrawIdsW, kDrawIdsH);
+    }
+
+    void gpuUpload(Material& mat, bool mips) {
+        ID3D11DeviceContext* ctx = gpu_.ctx.Get();
+        GpuPass& pass = gpuPasses_[2];
+        ctx->OMSetRenderTargets(1, vramRtv_.GetAddressOf(), nullptr);
+        D3D11_VIEWPORT vp{0, 0, (float)kVramSide, (float)kVramSide, 0, 1};
+        ctx->RSSetViewports(1, &vp);
+        ctx->RSSetState(gpu_.rasterNoCull.Get());
+        ctx->IASetInputLayout(nullptr);
+        ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        ID3D11ShaderResourceView* state = stateSrv();
+        mat.bind(ctx, pass, gpu_);
+        for (auto& t : pass.vsLayout.textures)
+            if (t.name == "_State") ctx->VSSetShaderResources(t.slot, 1, &state);
+        for (auto& t : pass.psLayout.textures)
+            if (t.name == "_State") ctx->PSSetShaderResources(t.slot, 1, &state);
+        ctx->OMSetBlendState(gpuBlend_[0].Get(), nullptr, 0xffffffff);
+        ctx->OMSetDepthStencilState(gpuDepthState_[2].Get(), 0);
+        ctx->Draw(kGpuTriangles * 3, 0);
+        ID3D11ShaderResourceView* none = nullptr;
+        for (auto& t : pass.vsLayout.textures) ctx->VSSetShaderResources(t.slot, 1, &none);
+        for (auto& t : pass.psLayout.textures) ctx->PSSetShaderResources(t.slot, 1, &none);
+        ctx->OMSetRenderTargets(0, nullptr, nullptr);
+        if (mips) ctx->GenerateMips(vramSrv_.Get());
+        vramUsed_ = true;   // (a snapshot keeps the VRAM unless it is all zeros)
     }
 
     // Draws the GPU device's mesh. Depth starts fresh every frame; colour is kept, so the
     // picture stays until the guest submits another list.
     void gpuDraw(Material& mat) {
+        bool compare = !gpuAlt_.empty() && !comparing_ && ++compareFrame_ % compareEvery_ == 0;
+        if (compare) {
+            if (!gpuAltColor_) {
+                D3D11_TEXTURE2D_DESC td{};
+                gpuColor_->GetDesc(&td);
+                gpu_.device->CreateTexture2D(&td, nullptr, &gpuAltColor_);
+                gpu_.device->CreateRenderTargetView(gpuAltColor_.Get(), nullptr, &gpuAltRtv_);
+            }
+            gpu_.ctx->CopyResource(gpuAltColor_.Get(), gpuColor_.Get());   // (the picture the list starts from, both ways)
+        }
+        gpuDrawOnce(mat);
+        if (compare) gpuCompare(mat);
+    }
+    // The list drawn the way before into the second target, the two read back and their pixels compared.
+    void gpuCompare(Material& mat) {
+        std::swap(gpuPasses_, gpuAlt_);
+        std::swap(gpuRtv_, gpuAltRtv_);
+        comparing_ = true;
+        gpuDrawOnce(mat);
+        comparing_ = false;
+        std::swap(gpuRtv_, gpuAltRtv_);
+        std::swap(gpuPasses_, gpuAlt_);
+        std::vector<uint8_t> a, b;
+        UINT w = 0, h = 0;
+        if (!readTarget(gpuColor_.Get(), a, w, h) || !readTarget(gpuAltColor_.Get(), b, w, h)) return;
+        uint64_t differ = 0;
+        int most = 0;
+        for (size_t i = 0; i < a.size(); i += 4) {
+            int d = 0;
+            for (int c = 0; c < 3; c++) d = std::max(d, std::abs((int)a[i + c] - (int)b[i + c]));
+            if (d) differ++, most = std::max(most, d);
+        }
+        compareLists_++;
+        if (differ) compareBad_++;
+        if (differ && compareBad_ <= 3 && streams_) {
+            // (what the sums held: the streams, their texels, and the draws that took another's)
+            std::vector<uint8_t> sizes;
+            UINT sw = 0, sh = 0;
+            if (readTarget(streamSums_[0].Get(), sizes, sw, sh, 8)) {
+                uint64_t items = 0, texels = 0, sharing = 0;
+                for (size_t i = 0; i + 8 <= sizes.size(); i += 8) {
+                    uint32_t size, same;
+                    memcpy(&size, &sizes[i], 4), memcpy(&same, &sizes[i + 4], 4);
+                    if (size) items++, texels += size;
+                    if (same) sharing++;
+                }
+                fprintf(stderr, "[gpu compare] streams: %llu of %llu texels, %llu draws sharing one\n", (unsigned long long)items,
+                        (unsigned long long)texels, (unsigned long long)sharing);
+            }
+        }
+        if (differ || getenv("RVC_GPU_COMPARE_ALL"))
+            fprintf(stderr, "[gpu compare] frame %llu: %llu pixels differ, most %d\n", (unsigned long long)compareFrame_, (unsigned long long)differ, most);
+        if (differ && compareBad_ == 1 && getenv("RVC_GPU_COMPARE_SAVE")) {
+            std::string base = getenv("RVC_GPU_COMPARE_SAVE");
+            memoryViewWriteBmp(base + ".streams.bmp", w, h, a.data(), w * 4);
+            memoryViewWriteBmp(base + ".ram.bmp", w, h, b.data(), w * 4);
+        }
+    }
+    bool readTarget(ID3D11Texture2D* t, std::vector<uint8_t>& out, UINT& w, UINT& h, UINT bytes = 4) {
+        D3D11_TEXTURE2D_DESC td{};
+        t->GetDesc(&td);
+        td.Usage = D3D11_USAGE_STAGING;
+        td.BindFlags = 0;
+        td.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        ComPtr<ID3D11Texture2D> staging;
+        D3D11_MAPPED_SUBRESOURCE m{};
+        if (FAILED(gpu_.device->CreateTexture2D(&td, nullptr, &staging))) return false;
+        gpu_.ctx->CopyResource(staging.Get(), t);
+        if (FAILED(gpu_.ctx->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &m))) return false;
+        w = td.Width, h = td.Height;
+        out.resize((size_t)w * h * bytes);
+        for (UINT y = 0; y < h; y++) memcpy(&out[(size_t)y * w * bytes], (const uint8_t*)m.pData + (size_t)y * m.RowPitch, (size_t)w * bytes);
+        gpu_.ctx->Unmap(staging.Get(), 0);
+        return true;
+    }
+    void gpuDrawOnce(Material& mat) {
         ID3D11DeviceContext* ctx = gpu_.ctx.Get();
         static const char* blitsOnly = getenv("RVC_BLITS");
         bool amp = !gpuAmp_.empty() && (!blitsOnly || strstr(blitsOnly, "gpu") != nullptr);
+        if (gpuPasses_.size() > 3) {
+            gpuDrawIds(mat);
+            mat.setTexture("_GpuDrawIds", drawIdsSrv_.Get(), kDrawIdsW, kDrawIdsH);
+            bool streams = gpuPasses_.size() > 7 && !noStreams_;   // (--define GPU_NO_STREAMS: the draws read RAM, no stream is made)
+            static const int parts = getenv("RVC_STREAM_PARTS") ? atoi(getenv("RVC_STREAM_PARTS")) : 3;   // (timing only: 1 the sums, 2 the stream pass)
+            if (streams && (parts & 1)) gpuStreamSums(mat);
+            if (gpuPasses_.size() > 5) gpuVertices(mat);
+            if (streams && (parts & 2)) gpuStream(mat);
+        }
+        if (gpuPasses_.size() > 2 && !comparing_) gpuUpload(mat, (gpuPasses & 0x10000u) != 0);   // (the levels made on GPU_UPLOADED)
+        mat.setTexture("_GpuVram", vramSrv_.Get(), kVramSide, kVramSide);
         GpuPass& pass = amp ? gpuAmp_[0] : gpuPasses_[0];
         ctx->OMSetRenderTargets(1, gpuRtv_.GetAddressOf(), gpuDsv_.Get());
         ctx->ClearDepthStencilView(gpuDsv_.Get(), D3D11_CLEAR_DEPTH, 1.0f, 0);
@@ -759,6 +1124,7 @@ private:
         for (auto& t : pass.gsLayout.textures) ctx->GSSetShaderResources(t.slot, 1, &none);
         if (amp) ampUnbind();
         ctx->OMSetRenderTargets(0, nullptr, nullptr);
+        if (gpuPasses_.size() > 4 && !comparing_) gpuCopy(mat);   // (after every pass: the picture as the list left it)
     }
 
     // The sound card's mix target: two floats a sample, read back whole.
@@ -1135,7 +1501,7 @@ private:
         // the tick, from R; its state rows into A, which holds R's state rows for the rest
         bool ticks = !(cpuMode && !init);
         UpdateZone core0{32, kHeight - tickRows_ / 2, 64, tickRows_, 0};
-        static const char* const kInplaceLabels[] = {"tick", "unpack", "gather", "commit rows", "commit points", "devices", "", "", "", "", "", ""};
+        static const char* const kInplaceLabels[] = {"tick", "unpack", "gather", "commit rows", "commit points", "gpu draw", "control+sound", "", "", "", "", ""};
         if (getenv("RVC_PASS_PROF") && !init) { prof_.labels = kInplaceLabels; profBegin(tag); }
         // --tick-rounds N (and --unity): the tick and its commit N times before the devices, a tick of the clock on each round
         const uint32_t rounds = ticks && !init ? (std::max)(1u, tickRounds) : 1u;
@@ -1205,12 +1571,13 @@ private:
             prof_.mark(ctx);
         }
         if (timeIt) ctx->End(tsQuery_[2].Get());
-        if (gpuPasses_.size() == 2) {
+        if (gpuPasses_.size() >= 2) {
             bool listDrawn = !listLazy() || listDue > 0;   // (RVC_LIST_LAZY: only while a list is due)
             if (listDrawn) {
                 gpuDraw(mat);
                 if (listDue > 0) listDue--;
             }
+            prof_.mark(gpu_.ctx.Get());   // (RVC_PASS_PROF: the GPU's lists apart from the control words and the sound)
             mat.setInt("_GpuListSkipped", listDrawn ? 0 : 1);   // (the control zone takes the submit word back only when drawn)
             bool mixed = soundMix && !soundPasses_.empty();
             if (mixed) soundDraw(mat, tag);   // before the control zone moves the voices on
@@ -1343,9 +1710,41 @@ private:
     std::deque<uint64_t> soundTags_;   // frames whose mix is still to be read back
     std::vector<uint8_t> lastSound_;
     ComPtr<ID3D11Texture2D> gpuColor_;
+    std::vector<GpuPass> gpuAlt_;   // RVC_GPU_COMPARE: the passes the way before, and their target
+    ComPtr<ID3D11Texture2D> gpuAltColor_;
+    ComPtr<ID3D11RenderTargetView> gpuAltRtv_;
+    bool comparing_ = false;
+    bool noStreams_ = false;
+    int compareEvery_ = 1;
+public:
+    uint64_t compareFrame_ = 0, compareLists_ = 0, compareBad_ = 0;
+private:
     ComPtr<ID3D11RenderTargetView> gpuRtv_;
     ComPtr<ID3D11ShaderResourceView> gpuSrv_;
     ComPtr<ID3D11DepthStencilView> gpuDsv_;
+    static const UINT kVramSide = 4096;   // VRAM_SIDE
+    ComPtr<ID3D11Texture2D> vram_;
+    ComPtr<ID3D11RenderTargetView> vramRtv_;
+    ComPtr<ID3D11ShaderResourceView> vramSrv_;
+    static const UINT kDrawIdsW = 512, kDrawIdsH = 384;   // GPU_DRAW_IDS_W, GPU_DRAW_IDS_H
+    ComPtr<ID3D11Texture2D> drawIds_;
+    ComPtr<ID3D11RenderTargetView> drawIdsRtv_;
+    ComPtr<ID3D11ShaderResourceView> drawIdsSrv_;
+    static const int kMade = 6;   // the vertex front end's targets (GPUVertices)
+    ComPtr<ID3D11Texture2D> made_[kMade];
+    ComPtr<ID3D11RenderTargetView> madeRtv_[kMade];
+    ComPtr<ID3D11ShaderResourceView> madeSrv_[kMade];
+    static const UINT kStreamSide = 256;   // GPU_STREAM_SIDE
+    static const int kStreamSums = 6;      // sizes, parts of rows, rows, groups of rows, starts, offsets (GPU_STREAM_PART 16)
+    static constexpr UINT kStreamSumW[kStreamSums] = {kStreamSide, kStreamSide / 16, kStreamSide, kStreamSide / 16, kStreamSide, kStreamSide};
+    static constexpr UINT kStreamSumH[kStreamSums] = {kStreamSide, kStreamSide, 1, 1, 1, kStreamSide};
+    ComPtr<ID3D11Texture2D> streamSums_[kStreamSums];
+    ComPtr<ID3D11RenderTargetView> streamSumsRtv_[kStreamSums];
+    ComPtr<ID3D11ShaderResourceView> streamSumsSrv_[kStreamSums];
+    ComPtr<ID3D11Texture2D> streams_;
+    ComPtr<ID3D11RenderTargetView> streamsRtv_;
+    ComPtr<ID3D11ShaderResourceView> streamsSrv_;
+    bool vramUsed_ = false;   // something was uploaded: a snapshot keeps the VRAM
     ComPtr<ID3D11DepthStencilState> gpuDepthState_[3];
     ComPtr<ID3D11BlendState> gpuBlend_[kGpuBlendings];
     std::vector<ComPtr<ID3D11ShaderResourceView>> keep_;

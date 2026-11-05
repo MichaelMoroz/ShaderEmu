@@ -224,6 +224,10 @@
   `card_nan` in rvc_cpu): a program must not test a NaN's bits; `op_m` relies on D3D's division by zero
   (divu all ones) and INT_MIN / -1. A guest that wants such an encoding trapped, or RISC-V's NaN from
   them, changes the tick first.
+- The fast loop takes a second word of the texel in the same turn (`docs/machine/tick-costs.md`, "Sixth round", kept):
+  arithmetic or a branch after arithmetic, a branch after a load, each a copy of that kind's decode with its registers
+  taken from the first word's result. A change to what arithmetic or a branch makes (Zba, a funct7 test, an `ok`) is made
+  in those copies too, or the second word runs the old one; they have no test of the budget (a pass may run one past it).
 - `FAST` (`--define FAST` on the harness, `rvc_cpu --fast` or `RVC_TICK_FAST=1`; off by default, never
   the default): a load or store in RAM not on its size takes its word's bytes, fdiv is the card's `a / b`,
   an sc always succeeds, an opcode of no group is no instruction. 0.2 to 0.8% of a tick, and it breaks Red
@@ -450,3 +454,20 @@
 - Chess (`nxchess`, `docs/games/chess.md`): a searcher stores only to its core, its table, its ring and its status; keepers alone store to the shared
   table, each to its shard; the first core stores only `ch_stop` and `ch_deepest`. So a result on workers has no sum: the check is `nxchess solve`, and
   `NXCHESS_WORKERS=0 nxchess search 6` must be `chess_host 6`'s. It asks for 63 workers because 255 has more nodes and less depth on the card: measure depth in fixed time, not nodes.
+- The GPU has a VRAM (`docs/machine/gpu.md`, "VRAM" and "Draw IDs"): Doom, Quake (its light maps too), Quake III, Half-Life,
+  Jedi Outcast and ClassiCube draw their textures from it (`DOOM_VRAM`, `QUAKE_VRAM`, `QUAKE_VRAM_LIGHT`, `QUAKE3_VRAM`,
+  `HLGL_VRAM`, `CLASSICUBE_VRAM` `=0` the ways before). A texture there is a copy made when its pixels are made: a new way
+  of writing a texture's pixels uploads it again (`seglTextureChanged`, `seglVramUpload`), or the card draws the old
+  picture, and `rvc_cpu`, which draws no list, never shows it: capture under `rvc_harness --cpu` with the switch at 1 and
+  0. `gles.c`'s slots and uploads are the swapping core's alone: a frame drawn on a worker takes them where no frame is
+  out or on the drawing core. A sum of a list counts a slot as what it was uploaded from (`gpuListSum`). The vertices find
+  their commands in the draw-ID pass: a change to which vertices a command claims or to its pass changes
+  `gpu_draw_ids_fragment` with `gpu_command_search`, and `--define GPU_DRAW_IDS_CHECK` must leave no magenta.
+  Each vertex is made once a frame by GPUVertices (`gpu_front_fragment`, "The vertex front end"): a change to how a vertex is
+  made is a change there, and `--define GPU_FRONT_CHECK` must leave no magenta. A copy (command 7, `glCopyTexSubImage2D`,
+  framebuffer objects; "Copies") is made after the whole list: a draw after it in its list is a mistake `SEGL_DEBUG=1`
+  reports. GPUDraw reads the VRAM alone ("Streams"): what a draw would read from RAM is copied into the band by the device
+  (GPUStreamSums, GPUStream), and the fragment's RAM paths are compiled out (`GPU_VRAM_ONLY`). A new kind of what a draw
+  reads, or a new command that reads a texture, is an item of `gpu_stream_item`, a conversion of the stream pass's and a read
+  of the fragment's, and `RVC_GPU_READS=1` must still say `vertex no, fragment no`; compare a capture with `--define
+  GPU_NO_STREAMS`.

@@ -45,7 +45,7 @@ uniform float4 _Time;
 #define H1(t, n) ((((t) >> 3) ^ ((t) << ((n) - 3)) ^ ((t) >> (n))) & ((1u << (n)) - 1))
 #define H2(t, n) ((((t) >> 2) ^ ((t) << ((n) - 2)) ^ ((t) >> ((n) + 3))) & ((1u << (n)) - 1))
 #define BUCKET2(t, n) ((n) + ((n) >> 1) + (H2(t, bits - 1) & (((n) >> 2) - 1)))   // the third table's bucket of t
-#define LOAD_UP(f3) (24 - 8 * ((f3) & 3) - (((f3) & 3) == 2 ? 8 : 0))         // the shift up that leaves a load's sign at the top
+#define LOAD_UP(f3) (((f3) & 2) ? 0u : ((f3) & 1) ? 16u : 24u)   // the shift up that leaves a load's sign at the top (by selects)
 #define STALL_MEM 3
 #define STALL_FENCE 7
 #define STALL_COPY 8
@@ -461,6 +461,34 @@ uint fast(uint room) {
                 uint r01 = (f3 & 1) ? a << s : ((reg && alt) ? a - y : a + y), r23 = (a ^ turn) < (y ^ turn) ? 1 : 0;
                 uint r45 = (f3 & 1) ? (alt ? asuint(asint(a) >> s) : a >> s) : a ^ y, r67 = (f3 & 1) ? a & y : a | y;
                 v = (f3 & 4) ? ((f3 & 2) ? r67 : r45) : ((f3 & 2) ? r23 : r01);
+                // A second word in the same turn (docs/machine/tick-costs.md, "Sixth round"): the texel's next word, when
+                // it is arithmetic or a branch, its registers taken from this result where it names this one's. No test of
+                // the budget: a pass may run one instruction past it, which ends it all the same (2% of Tiberian Dawn's tick)
+                uint w2 = cur.y;
+                [branch] if ((w2 & 0x5f) == 0x13 && ((w2 & 0xfe00007f) != 0x02000033 || (w2 & 0x7000) == 0) && (pc & 12) != 12) {   // (mul too: a product here costs a lone arithmetic word nothing)
+                    uint g3 = (w2 >> 12) & 7, d2 = (w2 >> 7) & 31, s1 = (w2 >> 15) & 31, s2 = (w2 >> 20) & 31;
+                    uint a2 = xr[s1], b2 = xr[s2];
+                    a2 = s1 == dst ? v : a2; b2 = s2 == dst ? v : b2;
+                    xr[dst] = v;
+                    bool reg2 = (w2 & 0x20) != 0, alt2 = (w2 & 0x40000000) != 0;
+                    uint y2 = reg2 ? b2 : imm_i(w2), turn2 = (g3 & 1) ? 0 : 0x80000000;
+                    uint q01 = (g3 & 1) ? a2 << y2 : (reg2 && (w2 & 0x02000000) != 0) ? a2 * y2 : ((reg2 && alt2) ? a2 - y2 : a2 + y2), q23 = (a2 ^ turn2) < (y2 ^ turn2) ? 1 : 0;
+                    uint q45 = (g3 & 1) ? (alt2 ? asuint(asint(a2) >> y2) : a2 >> y2) : a2 ^ y2, q67 = (g3 & 1) ? a2 & y2 : a2 | y2;
+                    v = (g3 & 4) ? ((g3 & 2) ? q67 : q45) : ((g3 & 2) ? q23 : q01);
+                    dst = d2 == 0 ? 64 : d2;
+                    cur = cur.yzwx; pc += 4; next = pc + 4; n++;
+                } else [branch] if ((w2 & 0x17f) == 0x63 && (pc & 12) != 12) {
+                    // (a branch: its offset on a word, told by the word, as the loop's own branch tells it)
+                    uint g3 = (w2 >> 12) & 7, s1 = (w2 >> 15) & 31, s2 = (w2 >> 20) & 31;
+                    uint a2 = xr[s1], b2 = xr[s2];
+                    a2 = s1 == dst ? v : a2; b2 = s2 == dst ? v : b2;
+                    xr[dst] = v;
+                    uint tb2 = (g3 & 2) ? 0 : 0x80000000;
+                    bool lt2 = (a2 ^ tb2) < (b2 ^ tb2);
+                    pc += 4;
+                    next = (((g3 & 4) ? lt2 : a2 == b2) != ((g3 & 1) != 0)) ? pc + imm_b(w2) : pc + 4;
+                    dst = 64; cur = cur.yzwx; n++;
+                }
             } else {
                 // lb lh lw lbu lhu, within one word of RAM: lwu is lw, and ld and funct3 7 fail the size test (no test of
                 // funct3 of its own, nor of 0: the range test has it)
@@ -477,6 +505,19 @@ uint fast(uint room) {
                 uint x = ram_word(va & 0x7ffffffc) << (up - ((va & 3) << 3));   // (one shift: (va & 3) * 8 is never over up for a load that may be)
 #endif
                 v = (f3 & 4) ? x >> up : asuint(asint(x) >> up);
+                // (a branch after the load, the texel's next word, in the same turn: its registers taken from the load's word)
+                uint w2 = cur.y;
+                [branch] if (ok && (w2 & 0x17f) == 0x63 && (pc & 12) != 12) {
+                    uint g3 = (w2 >> 12) & 7, s1 = (w2 >> 15) & 31, s2 = (w2 >> 20) & 31;
+                    uint a2 = xr[s1], b2 = xr[s2];
+                    a2 = s1 == dst ? v : a2; b2 = s2 == dst ? v : b2;
+                    xr[dst] = v;
+                    uint tb2 = (g3 & 2) ? 0 : 0x80000000;
+                    bool lt2 = (a2 ^ tb2) < (b2 ^ tb2);
+                    pc += 4;
+                    next = (((g3 & 4) ? lt2 : a2 == b2) != ((g3 & 1) != 0)) ? pc + imm_b(w2) : pc + 4;
+                    dst = 64; cur = cur.yzwx; n++;
+                }
             }
         } else [branch] if (opc == 0x23 || (w & 0x5f) == 0x07 || opc == 0x53) {
             [branch] if (opc == 0x23) {
@@ -549,6 +590,8 @@ uint fast(uint room) {
             v = jump ? pc + 4 : (w & 0xfffff000) + (opc == 0x17 ? pc : 0);
             next = opc == 0x6f ? pc + imm_j(w) : opc == 0x67 ? a + imm_i(w) : next;
             ok = (next & 3) == 0;
+        } else [branch] if (opc == 0x33 && (w >> 25) == 1) {   // (M before the atomics: Tiberian Dawn has 4.5% of mul, the atomics next to none)
+            v = op_m(f3, a, b);
         } else [branch] if ((w & 0x707f) == 0x202f) {
             // amoadd amoswap lr sc amoxor amoor amoand on a word of RAM (min and max are the general step's); a funct5 under
             // 16 that is none of these is amoswap, and lr's rs2 is not looked at
@@ -566,8 +609,6 @@ uint fast(uint room) {
                 res_addr = lr ? a : res_addr;
                 v = sc ? (sc_ok ? 0 : 1) : old;
             }
-        } else [branch] if (opc == 0x33 && (w >> 25) == 1) {
-            v = op_m(f3, a, b);
         } else [branch] if (opc == 0x73 && (f3 & 3) != 0) {
             // csrrw, csrrs, csrrc and their immediates on a CSR nothing else looks at (sscratch, sepc, scause,
             // stval, stvec, scounteren, the float flags, time, the hart): the kernel's trap entry and exit are
@@ -583,6 +624,14 @@ uint fast(uint room) {
                 v = csr_read(cn);
                 if (wr_) csr_write(cn, (f3 & 3) == 1 ? src : (f3 & 3) == 2 ? v | src : v & ~src);
             }
+        } else [branch] if ((w & 0x06000073) == 0x43) {
+            // fmadd, fmsub, fnmsub, fnmadd, as the general step makes them, a float of the loop's own (a program built with
+            // contraction has them; rvc_cpu's fmaf rounds once, as it did before) (bit 3 the product negated, bit 2 the addend)
+            float x = asfloat(xr[32 + rs1]), y = asfloat(xr[32 + rs2]), z = asfloat(xr[32 + (w >> 27)]);
+            precise float p = x * y, zz = (w & 4) ? -z : z;   // (a product and a sum, each rounded: the general step's)
+            uint r = asuint((w & 8) ? zz - p : p + zz);
+            v = (r & 0x7fffffff) > 0x7f800000 ? 0x7fc00000 : r;
+            dst = 32 + rd;
 #ifdef FAST
         } else { ok = opc != 0x73 && (w & 0x73) != 0x43 && (opc != 0x0f || (f3 == 0 && w != 0x0100000f)); dst = 64; }   // (FAST: an opcode of no group is no instruction)
 #else

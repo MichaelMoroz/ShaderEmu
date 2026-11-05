@@ -15,6 +15,7 @@ Texture2D<float4> _Data_ROM;   // the ROM: a 16-byte texel a pixel, read by its 
 #define GPU_STATE _State
 #define GPU_VOLUME
 #define GPU_VOLUME_PASS _VolumePass
+#define GPU_VRAM   // (textures in the VRAM, docs/machine/gpu.md)
 #include "src/gpu.cginc"
 
 struct mesh_point {

@@ -9,6 +9,7 @@ Shader "ShaderEmu/GpuVolume"
     {
         _State ("Machine state texture", 2D) = "black" {}
         _Data_ROM ("ROM, a 16-byte texel a pixel (RGBAFloat, read by its bits)", 2D) = "black" {}
+        _GpuVram ("The GPU's VRAM: textures the guest uploaded, with mip levels", 2D) = "black" {}
         _ScreenSize ("Width and height of the screen", Vector) = (1.28, 0.8, 0, 0)
         _Plane ("Where the screen is between the near plane (0) and the far plane (1)", Range(0, 1)) = 0
     }

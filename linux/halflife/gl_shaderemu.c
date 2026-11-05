@@ -32,6 +32,10 @@ void seglSettle(void);
 void* seglMemory(unsigned int bytes);
 unsigned int seglMemoryLeft(void);
 void* seglMemorySpare(unsigned int* bytes);
+void seglVram(int lod);
+unsigned seglVramTake(unsigned w, unsigned h, int levels, int flags);
+void seglVramGive(unsigned slot, unsigned w, unsigned h);
+void seglVramUpload(unsigned slot, unsigned address, unsigned w, unsigned h, unsigned kind, unsigned key, unsigned palette);
 void seglGetMatrix(unsigned mode, void* matrix);
 void seglSize(int* width, int* height);
 void seglWorldUp(int axis);
@@ -74,20 +78,50 @@ static inline float floor_of(float f) {
 // bytes as tiles and a palette textures with the same one share (fragment mode 5).
 enum { NO_PIXELS, WORDS, TILES };
 typedef struct { uint32_t at, bytes; int kind, width, height, holes, smooth, clamped, key, atlas, palette, opaque;
-    int spillable, drawn; uint8_t* spilled; uint32_t spilled_from; } texture;   // atlas, palette: + 1; spilled: its bytes in RAM
+    int spillable, drawn; uint8_t* spilled; uint32_t spilled_from; uint32_t slot; uint8_t* indexed; } texture;   // atlas, palette: + 1; spilled: its bytes in RAM; indexed: a layer's bytes by rows (the VRAM's)
 typedef struct { uint32_t at, size; int owner; } block;   // of the pool, in order; owner -1: free
 typedef struct { uint32_t at, sum; int refs; } palette;
 #define MAX_PALETTES 2048
 #define PALETTE_OWNER(p) (MAX_NAMES + (p))
-static texture textures[MAX_NAMES];
-static palette palettes[MAX_PALETTES];
-static block blocks[2 * MAX_NAMES + MAX_PALETTES + 8];
-static int block_count;
-static uint8_t* pool;
-static uint32_t pool_size, pool_used, frame = 1, refused, tile_bytes;
+#if defined(SE_DRAW_B) || defined(HLGL_SHARE)
+// (Jedi Outcast's drawing in two copies, linux/jk2/gl_jk2.c, "The drawing on two workers": the textures, their pool and
+// palettes are one, the first copy's (HLGL_SHARE), which the second (SE_DRAW_B) names)
+#ifdef SE_DRAW_B
+#define HLGL_SHARED extern
+#else
+#define HLGL_SHARED
+#endif
+#define textures hlgl_textures
+#define palettes hlgl_palettes
+#define blocks hlgl_blocks
+#define block_count hlgl_block_count
+#define pool hlgl_pool
+#define pool_size hlgl_pool_size
+#define pool_used hlgl_pool_used
+#define refused hlgl_refused
+#define tile_bytes hlgl_tile_bytes
+#define atlas_at hlgl_atlas_at
+#define atlas_block hlgl_atlas_block
+#define atlas_blocks hlgl_atlas_blocks
+#define palette_top hlgl_palette_top
+#define atlas_writer hlgl_atlas_writer
+#else
+#define HLGL_SHARED static
+#endif
+HLGL_SHARED texture textures[MAX_NAMES];
+HLGL_SHARED palette palettes[MAX_PALETTES];
+HLGL_SHARED block blocks[2 * MAX_NAMES + MAX_PALETTES + 8];
+HLGL_SHARED int block_count;
+HLGL_SHARED uint8_t* pool;
+HLGL_SHARED uint32_t pool_size, pool_used, refused, tile_bytes;
+static uint32_t frame = 1;
 // the light maps' atlas (hlglLightAtlas): their blocks one under another, three bytes a texel
-static uint32_t atlas_at = NOWHERE, atlas_block;
-static int atlas_blocks;
+#ifdef SE_DRAW_B
+extern uint32_t atlas_at, atlas_block;
+#else
+HLGL_SHARED uint32_t atlas_at = NOWHERE, atlas_block;
+#endif
+HLGL_SHARED int atlas_blocks;
 #define KEPT_OWNER (MAX_NAMES - 2)
 #define ATLAS_OWNER (MAX_NAMES - 3)
 static int bound, log_uploads, log_frames, log_picsum, log_sum;
@@ -141,7 +175,7 @@ static uint32_t pool_take(uint32_t size, int owner) {
 }
 // A palette of 256 words in GPU memory, the one already there when another texture has it: its
 // number + 1, or 0 when there is no room.
-static int palette_top;   // no palette at or past it has refs
+HLGL_SHARED int palette_top;   // no palette at or past it has refs
 static int palette_take(const uint32_t* colours) {
     uint32_t sum = 2166136261u;
     for (int i = 0; i < 256; i++) sum = (sum ^ colours[i]) * 16777619u;
@@ -164,10 +198,40 @@ static int palette_take(const uint32_t* colours) {
 static void palette_give(int p) {
     if (p > 0 && --palettes[p - 1].refs == 0) seglSettle(), pool_give(PALETTE_OWNER(p - 1));
 }
+// ---- the VRAM (docs/machine/gpu.md, "VRAM"; HLGL_VRAM=0 the way before) ----
+// A texture of words with no holes is drawn from the VRAM, with four levels, and so is a layer of tiles (the game's own
+// paletted textures) from a copy of its bytes by rows (`indexed`), keyed when it has a clear entry: a slot taken when its
+// pixels are made (glTexImage2D, glTexSubImage2D, hlglTexIndexed, a wrap changed), copied there from where it lies, and
+// given back when it leaves the pool, takes holes or another wrap. Taken and uploaded only there, by a GL call the shim
+// settles the drawing job for, never while a draw is made (texture_state reads the slot): the 2D core 0 records is made
+// beside the drawing worker's frame, and the VRAM's blocks and uploads (gles.c) are one core's at a time. Words with holes
+// stay in the pool: the alpha test drops their key there, which the VRAM has only premultiplied (and a blended draw is
+// not); a layer with a key is always drawn keyed. A film's frames (hlglTexLater) stay tiles.
+static int vram_on;
+static void vram_give(texture* t) {
+    if (t->slot) seglVramGive(t->slot, (unsigned)t->width, (unsigned)t->height), t->slot = 0;
+}
+static void vram_again(texture* t) {
+    int layer = t->kind == TILES && t->indexed && t->palette;
+    if (!vram_on || t->at == NOWHERE || !(layer || (t->kind == WORDS && !t->holes))) {
+        vram_give(t);
+        return;
+    }
+    if (!t->slot) t->slot = seglVramTake((unsigned)t->width, (unsigned)t->height, 4, (t->clamped ? 1 : 0) | (layer && t->key >= 0 ? 2 : 0));
+    if (!t->slot) return;
+    if (layer)
+        seglVramUpload(t->slot, gpuAddress(t->indexed), (unsigned)t->width, (unsigned)t->height, 2, (unsigned)(t->key >= 0 ? t->key : 0),
+                       gpuAddress(pool + palettes[t->palette - 1].at));
+    else
+        seglVramUpload(t->slot, gpuAddress(pool + t->at), (unsigned)t->width, (unsigned)t->height, 1, 0, 0);
+}
+
 static void texture_free(int name) {
     texture* t = &textures[name];
+    vram_give(t);
     if (t->at != NOWHERE) pool_give(name);
     free(t->spilled);
+    free(t->indexed);
     palette_give(t->palette);
     if (t->kind == TILES) tile_bytes -= t->bytes;
     memset(t, 0, sizeof *t);
@@ -185,6 +249,7 @@ static uint32_t pool_take_spilling(uint32_t size, int owner) {
         if (!t->spillable || t->at == NOWHERE || i == owner || swaps - t->drawn < 2) continue;
         uint8_t* copy = malloc(t->bytes);
         if (!copy) break;
+        vram_give(t);   // (taken again from where it is next when next drawn)
         seglSettle();
         memcpy(copy, pool + t->at, t->bytes);
         t->spilled = copy, t->spilled_from = gpuAddress(pool + t->at);
@@ -309,6 +374,7 @@ static void s_glTexImage2D(unsigned target, int lvl, int internal, int width, in
     if (t->opaque && format == GL_RGBA) format = OPAQUE_RGBA;
     if (type == GL_SE_WORDS && pixels) memcpy(to, pixels, (size_t)width * height * 4), t->holes = format != 0;
     else if (pixels) words_from_shared(to, pixels, width * height, format, &t->holes);    else memset(to, 0, t->bytes);
+    vram_again(t);
     if (log_uploads) fprintf(stderr, "hlgl: words %d %dx%d holes %d internal %x format %x\n", bound, width, height, t->holes, internal, format);
     static int tex_sum = -1;   // (HLGL_TEX_SUM=1: a line a texture made, its name, size, holes and its words' FNV-1a sum)
     if (tex_sum < 0) tex_sum = getenv("HLGL_TEX_SUM") != NULL;
@@ -319,7 +385,7 @@ static void s_glTexImage2D(unsigned target, int lvl, int internal, int width, in
     }
 }
 // The worker that writes the light maps' atlas now (hlglLightBlock), waited for before this core does.
-static int atlas_writer;
+HLGL_SHARED int atlas_writer;
 unsigned hlglWait(int k);
 void hlglAtlasWriter(int k) { atlas_writer = k; }
 // A light map's block of RGBA bytes written into the atlas, on any one core: whether it was.
@@ -351,11 +417,17 @@ static void s_glTexSubImage2D(unsigned target, int lvl, int x, int y, int width,
         uint8_t* rgb = pool + atlas_at + (((uint32_t)(t->atlas - 1) * atlas_block + (uint32_t)(y + row)) * atlas_block + (uint32_t)x) * 3;
         for (int i = 0; i < width; i++, rgb += 3) rgb[0] = (uint8_t)(words[i] >> 16), rgb[1] = (uint8_t)(words[i] >> 8), rgb[2] = (uint8_t)words[i];
     }
+    vram_again(t);
 }
 static void s_glTexParameteri(unsigned target, unsigned name, int value) {
     (void)target;
     if (name == GL_TEXTURE_MAG_FILTER) textures[bound].smooth = value != GL_NEAREST;
-    else if (name == GL_TEXTURE_WRAP_S || name == GL_TEXTURE_WRAP_T) textures[bound].clamped = value == GL_CLAMP || value == GL_CLAMP_TO_EDGE;
+    else if (name == GL_TEXTURE_WRAP_S || name == GL_TEXTURE_WRAP_T) {
+        int clamped = value == GL_CLAMP || value == GL_CLAMP_TO_EDGE;
+        int changed = clamped != textures[bound].clamped;
+        textures[bound].clamped = clamped;
+        if (changed && textures[bound].slot) vram_give(&textures[bound]), vram_again(&textures[bound]);   // (its padding is another)
+    }
 }
 static void s_glTexParameterf(unsigned target, unsigned name, float value) { s_glTexParameteri(target, name, (int)value); }
 static void s_glTexParameterfv(unsigned target, unsigned name, const float* v) { s_glTexParameteri(target, name, (int)v[0]); }
@@ -423,6 +495,13 @@ int hlglTexIndexed(unsigned name, int width, int height, const uint8_t* bytes, c
     if (k > 0) *later = now, hlglPost(later_k = k, tiles_job, (uint32_t)later, 0);
     else tiles_copy(&now);
     t->key = key, t->holes = key >= 0;
+    if (vram_on && !k && (t->indexed || (t->indexed = malloc((size_t)width * height)) != 0)) {
+        // (by rows for the VRAM's upload, which reads them when the list is drawn: kept with the texture)
+        memcpy(t->indexed, bytes, (size_t)width * height);
+        vram_again(t);
+    } else {
+        vram_give(t);
+    }
     if (log_uploads) fprintf(stderr, "hlgl: tiles %u %dx%d key %d\n", name, width, height, key);
     return 1;
 }
@@ -499,8 +578,8 @@ static unsigned pass_of(void) {
 
 // The draw's state: texture, how it is coloured and in which pass. 0 when it is not to be drawn.
 static void texture_state(gpu_state* s, const texture* t, unsigned pass, int alpha) {
-    s->texture = gpuAddress(pool + t->at), s->width = (unsigned)t->width, s->height = (unsigned)t->height;
-    s->fragment = (t->kind == TILES ? GPU_TILES : GPU_WORDS | (t->smooth ? GPU_SMOOTH : 0)) | GPU_PASS(pass) | (t->clamped ? GPU_CLAMPED : 0);
+    s->texture = t->slot ? t->slot : gpuAddress(pool + t->at), s->width = (unsigned)t->width, s->height = (unsigned)t->height;
+    s->fragment = (t->kind == TILES && !t->slot ? GPU_TILES : GPU_WORDS | (t->smooth ? GPU_SMOOTH : 0)) | GPU_PASS(pass) | (t->clamped ? GPU_CLAMPED : 0);
     // texels the alpha test drops are the key; blended ones are drawn by their own alpha
     if (t->holes && (alpha || pass == 0 || t->kind == TILES)) s->fragment |= GPU_KEYED, s->key = t->kind == TILES ? (unsigned)t->key : KEY_WORD;
 }
@@ -510,7 +589,9 @@ static int draw_state(gpu_state* s) {
     s->fragment = GPU_COLOUR | GPU_PASS(pass);
     if (texturing && bound && textures[bound].spilled) unspill(bound);
     if (texturing && bound && textures[bound].at != NOWHERE) {
+#ifndef SE_DRAW_B   /* (the textures are the first copy's: Jedi Outcast's second part marks none) */
         textures[bound].drawn = swaps;
+#endif
         texture_state(s, &textures[bound], pass, alpha_test);
     } else if (texturing && bound) {
         return 0;   // (no pixels yet, or no room in GPU memory)
@@ -1211,6 +1292,11 @@ int hlglOpen(unsigned int nano_x_window) {
     log_uploads = getenv("HLGL_LOG") != 0, log_frames = getenv("HLGL_FRAMES") != 0, log_picsum = getenv("HLGL_PICSUM") != 0, log_sum = getenv("HLGL_SUM") ? atoi(getenv("HLGL_SUM")) : 0;
     if (log_frames) fprintf(stderr, "hlgl: hlglOpen at %p\n", (void*)hlglOpen);   // (a flat program's place, for a profile)
     for (int i = 0; i < MAX_NAMES; i++) textures[i].at = NOWHERE;
+    {
+        const char* v = getenv("HLGL_VRAM");
+        vram_on = !(v && !strcmp(v, "0"));
+        seglVram(vram_on ? 4 : -1);
+    }
     // the pool: a block of RAM, which the GPU reads as its own memory (HL_POOL_MB, 28 by default);
     // else the display's spare memory when there is some, then what seglMemory has left, with
     // what lies between them as a block that never leaves

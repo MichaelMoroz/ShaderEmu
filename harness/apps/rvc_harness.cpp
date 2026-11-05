@@ -137,6 +137,7 @@ struct Options {
     std::string saveState, loadState;
     std::string recordInput, replayInput;   // the window's input to a file with its times, or from one instead of the window's
     bool printStamp = false;
+    bool printCodeStamp = false;   // --code-stamp
     std::string screenLog, screenFrom;   // --screen-log: the display, every frame, into a file
     int screenFrames = 0, screenEvery = 0;
     std::vector<std::pair<std::string, std::string>> expectSend;
@@ -257,6 +258,9 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
   --replay-input FILE  play FILE's input at its seconds instead of the window's (Ctrl+] still quits)
   --stamp              print the processor folder's WARP stamp (its sources hashed) and exit: the card runs
                        a folder only when its warp_ok holds it (tools/test_card.py --warp --mark-ok)
+  --code-stamp         compile every pass (with --warp, on WARP) and print the code's stamp: the hash of all their
+                       bytecode, which warp_ok may hold in place of the sources' (a change that compiles to the
+                       same bytes needs no WARP run: tools/warp_stamp.py)
   --load-state FILE    resume from a snapshot instead of booting
   --replay DIR;DIR...  with --load-state: the tick (CPUTick pass) of each folder beside the machine's own,
                        each run --replay-frames N (600) frames from the snapshot's state, in turn,
@@ -439,6 +443,7 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--save-state") o.saveState = next("--save-state");
         else if (a == "--record-input") o.recordInput = next("--record-input");
         else if (a == "--stamp") o.printStamp = true;
+        else if (a == "--code-stamp") o.printCodeStamp = true;
         else if (a == "--replay-input") o.replayInput = next("--replay-input");
         else if (a == "--screen-log") o.screenLog = next("--screen-log");
         else if (a == "--screen-from") o.screenFrom = unescape(next("--screen-from"));
@@ -774,7 +779,11 @@ int main(int argc, char** argv) {
             printf("%-12s %s%s\n", im.name, im.title, imageAvailable(im) ? "" : "  (files missing)");
         return 0;
     }
-    if (!opt.printStamp && !run_lock_take(!opt.cpu, opt.cpu ? (opt.gpu.warp ? "rvc_harness --cpu --warp" : "rvc_harness --cpu") : "rvc_harness"))
+    // (the card's side of the lock is a run that draws on the card: one on WARP, a software device, is the processor's,
+    // as --cpu is, and --code-stamp only compiles)
+    const bool onCard = !opt.cpu && !opt.gpu.warp && !opt.printCodeStamp;
+    if (!opt.printStamp && !run_lock_take(onCard, opt.cpu ? (opt.gpu.warp ? "rvc_harness --cpu --warp" : "rvc_harness --cpu")
+                                                          : opt.gpu.warp ? "rvc_harness --warp" : "rvc_harness"))
         return kRunLockRefused;
 
     // Opened with no arguments (or only --resume / --no-viz): act as a terminal on the emulated
@@ -1002,6 +1011,8 @@ int main(int argc, char** argv) {
         bo.compile.defines.push_back({d.substr(0, eq), eq == std::string::npos ? "1" : d.substr(eq + 1)});
     }
 
+    std::string warpOk, sourceStamp;
+    bool sourceStamped = true;
     // The WARP stamp: the card runs a processor folder only when its warp_ok holds the
     // hash of its sources (and of the devices' folder), written by tools/test_card.py --warp --mark-ok after WARP
     // passed its cases: a tick the card has never run is checked in software first. --stamp prints the hash.
@@ -1027,13 +1038,16 @@ int main(int argc, char** argv) {
         char stamp[32];
         snprintf(stamp, sizeof stamp, "%016llx", (unsigned long long)h);
         if (opt.printStamp) { printf("stamp %s (%zu files of %s)\n", stamp, files.size(), opt.rvcDir.c_str()); return 0; }
-        std::string ok;
-        readFileBinary((fs::u8path(opt.rvcDir) / "warp_ok").u8string(), ok);
-        if (ok.find(stamp) == std::string::npos) {
+        readFileBinary((fs::u8path(opt.rvcDir) / "warp_ok").u8string(), warpOk);
+        sourceStamp = stamp;
+        // (not the sources' stamp: the code's, once compiled, below; a run with --blits draws the order probe in its
+        // backend's start, so it needs the sources')
+        if (warpOk.find(stamp) == std::string::npos && opt.blits) {
             fprintf(stderr, "[harness] %s (stamp %s) has not passed WARP's checks as it is: not run on the card "
-                            "(python tools/test_card.py machine --warp --mark-ok --rvc %s)\n", opt.rvcDir.c_str(), stamp, opt.rvcDir.c_str());
+                            "(python tools/warp_stamp.py --rvc %s)\n", opt.rvcDir.c_str(), stamp, opt.rvcDir.c_str());
             return 3;
         }
+        if (warpOk.find(stamp) == std::string::npos) sourceStamped = false;
     }
 
     // --- Material and backend ---
@@ -1044,6 +1058,22 @@ int main(int argc, char** argv) {
     if (!backend.init(bo, shader, mat, err)) {
         fprintf(stderr, "[harness] %s\n", err.c_str());
         return 1;
+    }
+    // The code's stamp: every pass compiled now, before any frame. On WARP it is said, for tools/warp_stamp.py; on the
+    // card a tick whose sources are new runs if the code is the same bytes as one stamped (a rename, a comment, a trim).
+    if (opt.printCodeStamp) {
+        printf("code stamp %s (%zu stages)\n", codeStamp().c_str(), compiledCode().size());
+        return 0;
+    }
+    if (opt.gpu.warp) fprintf(stderr, "[harness] code stamp %s\n", codeStamp().c_str());
+    if (!opt.cpu && !opt.gpu.warp && !sourceStamped) {
+        std::string code = codeStamp();
+        if (warpOk.find(code) == std::string::npos) {
+            fprintf(stderr, "[harness] %s (stamp %s, code %s) has not passed WARP's checks as it is: not run on the card "
+                            "(python tools/warp_stamp.py --rvc %s)\n", opt.rvcDir.c_str(), sourceStamp.c_str(), code.c_str(), opt.rvcDir.c_str());
+            return 3;
+        }
+        fprintf(stderr, "[harness] %s's sources are new, its code (%s) is stamped: run\n", opt.rvcDir.c_str(), code.c_str());
     }
     for (auto& dir : opt.replayDirs) {
         SLShader variant;
@@ -1158,6 +1188,11 @@ int main(int argc, char** argv) {
         if (!backend.setState(snap.data() + sizeof hdr, err)) {
             fprintf(stderr, "[harness] %s\n", err.c_str());
             return 1;
+        }
+        {
+            std::string vram;
+            if (readFileBinary(opt.loadState + ".vram", vram) && !backend.writeVram((const uint8_t*)vram.data(), vram.size()))
+                fprintf(stderr, "[harness] %s.vram: not the VRAM of this machine, left out\n", opt.loadState.c_str());
         }
         timeBase = hdr.time;
         sentTag = consumedTag = hdr.sentTag;
@@ -1317,6 +1352,7 @@ int main(int argc, char** argv) {
     }
     bool netDelivered = false;
     int gpuPassLife[16] = {};     // frames each of the GPU's passes 1-15 is still drawn for
+    bool gpuUploadDue = false;    // a readback saw a list with uploads submitted: the next frame draws them (GPU_UPLOADED)
     // The sound card (docs/machine/sound.md). While the guest has it enabled the host mixes: it names a
     // cursor, the device draws the samples from there on and moves its voices up to it.
     SoundOut audio;
@@ -1408,6 +1444,8 @@ int main(int argc, char** argv) {
         if (raw.size() >= (64 + 2) * 16)
             for (int p = 1; p < 16; ++p)
                 if ((texel(64 + 1, 0) >> (8 + p)) & 1) gpuPassLife[p] = 600;
+        // a list with uploads (SUBMIT_UPLOADS) waits for a frame that draws them and makes the VRAM's levels: the next
+        if (raw.size() >= (64 + 2) * 16 && (texel(64 + 1, 0) & 9) == 9) gpuUploadDue = true;
         if (net.on() && raw.size() >= (64 + kControlTexels + kNetSlot) * 16)
             net.fromGuest(texel(64 + 0x3e, 0), texel(64 + 0x3e, 1), t + (64 + kControlTexels) * 4);
         if (raw.size() >= (64 + 0x25) * 16) openWord = texel(64 + 0x24, 0);
@@ -2057,6 +2095,7 @@ int main(int argc, char** argv) {
                     --gpuPassLife[p];
                     passes |= 1u << p;
                 }
+            if (gpuUploadDue) passes |= 0x10000u, gpuUploadDue = false;   // (GPU_UPLOADED, shader_vm/src/gpu.h)
             backend.gpuPasses = passes;
             mat.setInt("_GpuPasses", passes);
         }
@@ -2379,6 +2418,11 @@ int main(int argc, char** argv) {
             data.insert(data.begin(), (const uint8_t*)&hdr, (const uint8_t*)&hdr + sizeof hdr);
             ok = writeFileBinary(opt.saveState, data.data(), data.size());
         }
+        // the VRAM's textures beside it (docs/machine/gpu.md, "VRAM"), or no file: a machine that uploaded nothing
+        std::vector<uint8_t> vram;
+        std::string vramFile = opt.saveState + ".vram";
+        if (ok && backend.readVram(vram)) ok = writeFileBinary(vramFile, vram.data(), vram.size());
+        else if (ok) std::remove(vramFile.c_str());
         fprintf(stderr, "\n[harness] snapshot %s %s\n", ok ? "written to" : "FAILED:", opt.saveState.c_str());
         if (!ok) exitCode = 1;
     }

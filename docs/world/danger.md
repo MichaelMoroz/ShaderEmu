@@ -34,9 +34,10 @@ costs what it did). For one commit the host sets:
   gather pass makes the zapped texels into the stage, rows 12 to 20 (`RK_ZAPSLOT`, up to 129 x
   129), and the commit's first point draws them into RAM (`RK_ZAP`). The commit's other points come
   after it, so what a core stored to the same texel in that pass wins.
-- `zap_bands()` is or-ed into the bands the commit marks as changed. A zap is one band or two
-  of the 72 (`ram_bands`: each of its bits stands for three), never all, which is why `EmuDanger`
-  chooses the random place and it is not hashed over all RAM in the shader.
+- That point is drawn whenever `_ZapKind` is set, whatever bands the cores wrote: with RAM written
+  in place no band needs marking for it (`zap_bands()`, which marked them, went with the bands' commit).
+  A zap is a square of a few texels, never all of RAM, which is why `EmuDanger` chooses the random place
+  and it is not hashed over all RAM in the shader.
 - It is one commit's. Left set, the next commit would flip the bits back: `EmuMachine` sets
   the uniforms before a round's commit and clears `_ZapKind` after it (`Zap`, `ZapNext`;
   sixteen may wait, one goes a round). A machine switched on or reset starts with none waiting.

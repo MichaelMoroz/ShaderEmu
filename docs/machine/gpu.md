@@ -76,6 +76,7 @@ mesh order.
 | 3 | draw | count | 1: vertex buffer, 2: count, 4: vertex mode, 5: fragment mode, 6: uniforms address, 7-9: texture address, width, height, 10: key, 11: colour (compact vertices), 12-15: where a laid texture lies |
 | 4 | text | 6 a character | 1: colour, 2: font table, 4-5: x, y of the string's top left, 6: characters, 7: address of the string, 8: fragment word (its pass; mode 7 for glyphs of coverage, 8 for distance fields; `0x100`: words 9-11 are there), 9: a scale (16.16; 0: none), 10: a slant in 256ths of a pixel a row, and from bit 16 the row that stays where it is, 11: what the table's bitmap addresses are counted from, 12 (mode 8): the distance range in pixels before the scale (16.16). Drawn at the near plane |
 | 5 | sprites | 6 a record | 1: the records, 2: how many, 4: the passes it is drawn in (bit p: pass p), 5: the first record's place in the order, 6: a palette (256 words) or 0, 7 and 8: the two remaps a picture's green counts (256 bytes each). See "Sprites of a paletted picture" |
+| 6 | upload | 6 | 1: the texture's address (RAM or the ROM), 2: its kind (fragment mode 1, 2 or 4, with `0x100` for the key's texels to be holes), 4-5: width, height, 6: its slot in the VRAM, 7: the key, 8: a palette's address (0: the display's), 9: its row's length in pixels (0: the width). See "VRAM" |
 
 A string for command 4 is a word a character: the glyph's number in its low half and, in the
 high half, how many pixels right of x the character starts (the program adds the widths up;
@@ -131,6 +132,7 @@ Flags added to the vertex mode:
 | `0x20000` facing | with tagged: word 11 is the address of a table of the 256 ways a vertex can face, a texel each of three floats in the model's own space, and a vertex's tag is which. Word 13 is the address of three texels of floats: where the light comes from, its colour, and the colour of the light from everywhere. The vertex's colour is the last plus the second times how much it faces the first: a model is lit by those three texels and nothing is worked out for its vertices |
 
 | `0x40000` bones | floats, not compact: a skinned model's vertex made by the GPU from the model as it lies in memory ("A skinned model" below): word 1 the indices, 12 the vertices, 13 the bones, 14 the texture coordinates, 15 the light or 0 |
+| `0x100000` arrays | floats: a vertex from a renderer's arrays by its index, made as a compact vertex of them would have been ("A renderer's arrays" below): word 1 the indices, 11 one colour, 12 the positions, 13 the texture coordinates, 14 the colours, 15 the flags and the coordinates' least |
 
 A textured quad is then 16 words of vertices instead of 96.
 
@@ -146,6 +148,18 @@ of 0 to 255: from where the light comes in the model's space, its colour, and th
 then floor(min(the last + the second times max(normal . the first, 0), 255) x word 11's colour) / 255 and word 11's
 alpha, otherwise word 11 as it is. The draw's matrices are the modelview flag's; nothing of the model is copied a
 frame but its bones and light.
+
+**A renderer's arrays** (`0x100000`, 5 November 2026; Jedi Outcast's shim, `linux/jk2/gl_jk2.c`'s `fast_triangles`;
+`docs/games/jk2.md`, "The drawing's stores"): drawn vertex k is the vertex whose index is word k of word 1's buffer
+(with flag 16; else two 16-bit indices a word), counted from the arrays' first. Word 12 is its position, a texel each of
+three floats; word 13 its texture coordinates, two floats each; word 14 its colour, the GL's four bytes each (red
+first). Word 15's low byte is flags: 1 the depth the far plane's (-0.9999), 2 every vertex word 11's colour, 4 the
+coordinates as a tagged vertex has them (12 bits each, by an unsigned conversion), 8 alpha 255, 16 the indices a word
+each; bits 8 to 19 and 20 to 31 are the least u and v, integers subtracted before the coordinates are made 1,024ths (16
+bits each by an int, or flag 4's). A colour is made as a compact draw's word: transparency 255 less alpha, then red,
+green, blue. So a program that made a compact vertex's words of its arrays on a core instead copies them as they lie,
+and the picture is the same to the pixel (Jedi Outcast's walk captured both ways at frame 1,450: the same but the HUD's
+two dials, which differ between any two runs). The draw's matrices are the modelview flag's.
 
 **Fragment modes**
 
@@ -401,10 +415,200 @@ before snapshotting. The card's rasteriser is not bit-exact with the model: expe
 away from triangle edges except for single-pixel shifts where a nearest-sampled texture changes
 texel.
 
+## VRAM
+
+The GPU has a texture of its own, 4096 x 4096 colours of four bytes (RGBA8, linear) with mip levels: the VRAM. Command 6
+copies a texture into it from RAM or the ROM, through the palette if it is paletted, and a draw, a rectangle or a light map
+gives the texture's slot in place of its address: an address with its top two bits clear (no RAM or ROM address has them)
+is a slot (`VRAM_IS` in `shader_vm/src/gpu.h`). The fragment shader then samples it with the card's sampler, the four
+texels round the point of a level, or two levels weighed (trilinear), in one instruction, where the same texture in RAM
+is four loads of a 16-byte texel each and a light map four more.
+
+A slot is `x | y << 12 | L << 24 | flags`: (x, y) is the texture's texel (0, 0), L (0 to 4) the most a sample is minified,
+2^L, and so how many of the VRAM's levels are its own. The texture lies in a block padded with 2^L of its own texels each
+way, as it repeats (`0x10000000`, clamped: its edge's, for a light map), the block's corner and size whole multiples of
+2^L (`vram_block`); a level up to L of the whole VRAM is then the texture's own, and its padding, a texel or more at every
+such level, is what the sampler weighs past an edge. `0x08000000`: uploaded with a key, its colours times alpha and the
+key's texels 0; a sample there is divided by its alpha and nothing is drawn where it is under a half (as the weighed
+texels of RAM's keyed path). A sample's level comes from the texture coordinates' derivatives, taken before any branch.
+
+The host draws a list's uploads into the VRAM's level 0 before its passes, every frame a list is drawn (GPUUpload; in the
+world GpuDrawBlit's pass 13), and makes the levels of the whole VRAM only when asked (`GenerateMips`): the submit word's
+bit 3, `SUBMIT_UPLOADS`, says the list has an upload of a texture with levels, and such a list waits, submitted and drawn
+by no pass, until a frame whose passes word has bit 16 (`GPU_UPLOADED`): the host saw it in a readback, made the levels
+and drew the list in that frame. An upload of a texture with no levels (a light map made again) waits for nothing. A
+host's snapshot keeps the VRAM's level 0 beside it (`FILE.vram`, 64 MB, when it is not all zeros).
+
+The VRAM belongs to the program that draws with the GPU's memory (`/dev/gpu`'s DRAW): the GL library gives slots out
+(`seglVram(L)`, `seglTextureChanged()`, `seglVramLevels(L)` for the bound texture's own L, `seglVramPalette()` in
+`programs/linux/include/GLES/segl.h`), on shelves of whole 16 texels, and a texture deleted leaves its block to the next of
+its size. A program whose textures are not the library's takes slots by themselves: `seglVramTake(w, h, L, flags)` (1
+clamped, 2 keyed), `seglVramUpload(slot, address, w, h, kind, key, palette)` (any kind a draw reads, from GPU memory, RAM or
+the ROM) and `seglVramGive`. The library's uploads are the swapping core's: a program whose frame
+is drawn on a worker takes and uploads only where no frame is out, or by the drawing core (Quake's light maps,
+`light_gen` in `world_shaderemu.c`). It is off by default, for a 2D program's pictures to stay those of GPU memory to the
+pixel, and on, each with its way before, in:
+
+| program | in the VRAM | way before |
+|---|---|---|
+| Doom | its pictures, 4 levels; the palette's flashes a rectangle over the view (`doom_tint`) | `DOOM_VRAM=0` |
+| Quake | its textures, 4 levels; the light maps, of none, uploaded again from the pool when made again (the flickering ones by the workers) | `QUAKE_VRAM=0`, `QUAKE_VRAM_LIGHT=0` |
+| Quake III | the pictures a stage the first core registered draws unkeyed, 4 levels; the light maps' pages, from the ROM | `QUAKE3_VRAM=0` |
+| Half-Life, Jedi Outcast | textures of words with no holes and the game's paletted ones (from a copy by rows, keyed), 4 levels | `HLGL_VRAM=0` |
+| ClassiCube | every texture and the chunks' copy four times across, of no levels (the terrain is an atlas) | `CLASSICUBE_VRAM=0` |
+
+A keyed texture is premultiplied in its slot (`VRAM_PREMULTIPLIED`: the key's texels 0, the colours times alpha, divided
+back at the sample and dropped under a half), which suits a texture only ever drawn keyed. A keyed draw of a slot uploaded
+plain drops a nearest texel of no alpha, which is a texture of words' key (ClassiCube's atlas, translucent water and
+leaves' holes in one picture). A texture whose memory the program writes as it runs (a screen, a film's frame) is not given
+a slot unless the program says it changed: it is streamed (below).
+
+An upload converts every kind a fragment reads from RAM into colours (`gpu_upload_fragment`): words, bytes through a
+palette, three bytes, a glyph's distance fields (three bytes), a mask (white, the bit its alpha), coverage (white, its
+alpha), a layer of tiles through its cells, tiles and banks (the key a hole) and a film's frame from its three planes. A
+slot drawn as a mask drops a texel under half alpha, as coverage takes its alpha, as distance fields takes the median of
+four samples at level 0. `gpubench` 11 draws each of the five 64 x 64, twice as large, from RAM and from its slot: under
+`--cpu` the halves are the same bytes, but for 9 of the distance fields' 16,384 pixels, 1 off (the sampler's weights). A sum of a list that should not go by where a texture lies counts a slot as what
+it was uploaded from (Quake III's `gpuListSum`).
+
+The GPU's draw (`RVC_PASS_PROF=1`, "gpu draw") of a game's frame from a snapshot of it, RTX 3090, 5 November 2026, the mean
+of two 10 s runs each way (one line of 200 frames a run): Quake III's q3dm17 0.122 ms with its pictures and light maps in
+the VRAM against 0.197 with `QUAKE3_VRAM=0` (0.62x); Half-Life's hldemo1 0.115 against 0.114, level (its light is the
+atlas's, in GPU memory, and its corridor's textures are near).
+
+`programs/gpubench` (a program in the kernel's place: `tools\make_lazy_image.py DIR --program gpubenchN`) covers a 1280 x
+720 picture eight times in one fragment mode. The GPU's draw (`RVC_PASS_PROF=1`, "gpu draw"), RTX 5090, 4 November 2026:
+
+| mode | ms |
+|---|---|
+| no list | 0.036 |
+| colour (0) | 0.055 |
+| words, nearest (1) | 0.055 |
+| words, four texels (2) | 0.104 |
+| paletted, nearest (3) | 0.075 |
+| paletted, four texels (4) | 0.14 |
+| three bytes, four texels (5) | 0.22 |
+| compact quads, words and a light map (6) | 0.174 |
+| 2 from the VRAM, trilinear (7) | 0.053 |
+| 6 from the VRAM, its light map too (8) | 0.062 |
+
+A texture from the VRAM costs what a colour does; what is left, 0.055 ms, is the vertex shader's: every pass runs all
+196,608 vertices, each finding its command by a binary search (until the draw IDs, next).
+
+## Draw IDs
+
+Every pass draws all 196,608 vertices of the mesh, and each had to find the command that claims it, a binary search of
+up to twelve loads of the list, and then that command's pass: 13 times a frame for every vertex (the upload pass and the
+12 passes), drawn or not. Now the host draws a pass of its own first, every frame a list is drawn (GPUDrawIds,
+`gpu_draw_ids_fragment` in `shader_vm/src/gpu.h`): a fragment a vertex into a 512 x 384 texture of two words (R32G32_UINT,
+`_GpuDrawIds`), the texel of the vertex's command and the passes it is drawn in (bit p for pass p, bit 16 the upload pass;
+a sprite's by its kind, a shade in pass 2; nothing but its uploads for a list that waits, `SUBMIT_WAITS`). Every later
+pass reads its vertex's texel and goes on only where its pass's bit is set (`gpu_command` under `GPU_DRAW_IDS`); a
+triangle of the blits' geometry shader takes it whole when its first and last vertices name one command.
+
+`--define GPU_NO_DRAW_IDS` is the search of before (the D3D12 backend and Unity have it still). `--define GPU_DRAW_IDS_CHECK`
+answers each vertex both ways and makes one that they disagree on a corner of a magenta triangle over the whole target:
+0 magenta pixels on gpubench 9, three held frames of Quake's timedemo and OpenTTD's sprites scrolled 150 s; one triangle
+answered wrong on purpose covers the picture.
+
+The GPU's draw (`RVC_PASS_PROF=1`, "gpu draw", the draw-ID pass in it), RTX 3090, 5 November 2026, the mean of two 8 s runs
+each way:
+
+| gpubench mode | the search | the draw IDs |
+|---|---|---|
+| 3,600 rectangles, a command each, passes 0 to 2 (9) | 0.142 ms | 0.122 ms |
+| words, four texels (2) | 0.299 | 0.278 |
+| compact quads from the VRAM, a light map (8) | 0.170 | 0.149 |
+
+0.020 ms a frame whatever the list: the search was that much of every pass. What is left is not the vertices' search; a
+vertex the pass does not draw still costs its load of the draw IDs and its invocation, 13 x 196,608 a frame.
+
+## The vertex front end
+
+A vertex was made by every pass that drew it, from the list in RAM: 13 passes a frame, each reading the command, its
+matrices and the vertex's words. Now a pass of its own makes every vertex a command claims once a frame, after the draw
+IDs and before the uploads (GPUVertices, `gpu_front_fragment`): a fragment a vertex into six 512 x 384 textures (the
+position, the colour, the two pairs of coordinates and the edge as floats; the texture's words, the key and the light map's
+as words, `_GpuMade*`, which a float target could rewrite), and the draw, upload and copy passes and the blits take a vertex
+from there by its draw ID (`gpu_vertex_made`): their vertex stage reads no RAM (`--define GPU_NO_FRONT` the way before).
+
+`--define GPU_FRONT_CHECK` makes each drawn vertex from the list as well, and a magenta triangle over the target where the
+two differ beyond a rounding (1e-4 of the value): none on Quake's timedemo held at frame 200 or OpenTTD's scroll after 120 s.
+gpubench 9, 2 and 8 give the same bytes with and without the front end.
+
+## Copies
+
+Command 7 copies a rectangle of the list's picture into a slot (`gpu_copy`): `x | y << 16` of the picture, `w | h << 16`, the slot,
+`dx | dy << 16` in it and `COPY_TURNED` (1) for OpenGL's rows, the bottom first. The host draws the copies after all the list's
+passes (GPUCopy, `gpu_copy_fragment`: the target read, the VRAM's level 0 written; found by the draw IDs' bit 17), so a
+copy sees the whole list's picture, never a part: a draw after a copy in its list is drawn before the copy is made.
+`gpubench` 10 copies a moving pattern each frame and draws the frame before's copy four times as large.
+
+A list drawn with `SUBMIT_SIZED` (`0x1000000`) is drawn at `GPU_INTO`'s size and copied into no RAM: a picture only for its
+copies.
+
+In OpenGL (`programs/linux/gles.c`):
+
+- `glCopyTexSubImage2D` and `glCopyTexImage2D` put a copy at the list's end; the texture is then in a slot of no levels.
+- OES framebuffer objects with a texture as their colour (`glGenFramebuffersOES`, `glFramebufferTexture2DOES`,
+  `glBindFramebufferOES`): what is drawn while one is bound is a list of its own, drawn sized and waited for, its colour
+  copied into the texture when another framebuffer is bound. No renderbuffers: depth is the GPU's own.
+- `SEGL_DEBUG=1` says a draw made after a copy in its list (`segl: a draw (command N) after a copy in the same list`) and
+  counts them at exit; `SEGL_DEBUG=abort` stops there. Code copies at the list's end, or draws into a framebuffer of its
+  own: a copy in the middle is never what it seems.
+
+`linux/tcc/tests/glcopy.c` (in `/usr/share/cc-tests`, `test_all.py gl-copies`) draws into a framebuffer's texture, copies
+the window's corner, and on frame 5 makes the mistake once.
+
+## Streams
+
+The draw passes read the VRAM alone: no stage of GPUDraw reads RAM (`RVC_GPU_READS=1` makes the harness say so from the
+compiler's reflection, `GPUDraw reads RAM: vertex no, fragment no`; with `--define GPU_NO_STREAMS`, the way before, its
+fragment does). Its vertices are the front end's, and what a draw would read from RAM, a texture, a light map, a glyph's
+bitmap or a sprite's pixels, the device copies before the list's passes into a texture as large as the VRAM and of the
+VRAM's kind, the streams' (`_GpuStreams`, 4096 x 4096 colours: a picture as large as the screen, as Doom's view at 2048 x
+1600, did not fit in a band of the VRAM).
+
+- **The sums** (GPUStreamSums, six draws of one pass after the draw IDs, `_GpuStreamStep` 0 to 5, `gpu_stream_sums_fragment`):
+  a texel a triangle of the mesh, 256 x 256, of what that triangle begins (`gpu_stream_item`: a rectangle's or a draw's texture
+  and a compact draw's light map at its command's first triangle, a glyph at its character's, a sprite record's pixels at its
+  record's) and its size in texels; sixteen of a row's summed; each row's sum; sixteen rows' summed; where each row starts;
+  and each triangle's first texel in the band. No texel reads more than 31 others: with four steps a row's sum and its start
+  were loops of 256 reads one after another, 0.024 ms of every round, list or none (Doom 1,534 thousand instructions a second
+  against 1,622 without the streams).
+- **The front end** gives a vertex its stream's place, `VRAM_STREAM` (bit 29) and the texel's number, in place of the address.
+- **Sharing**: a rectangle's or a draw's texture the same as one of the 256 commands before it (`GPU_STREAM_LOOK`: mode,
+  address, size, the key if keyed; no light map) takes the earliest one's stream (the second word of the sizes), and the front
+  end follows such a chain 16 steps: Doom's walls and flats are 96 streams for 928 draws.
+- **The stream pass** (GPUStream, `gpu_stream_fragment`) draws a quad over the streams' rows in use; a texel finds its stream
+  by the rows' starts and its row's offsets (two searches of eight steps) and is made as an upload makes a texel
+  (`gpu_upload_fragment`: every kind is a colour there), or, for a sprite, as its fragment would be (`gpu_sprite_fragment`,
+  remaps and the palette applied, a hole of no alpha).
+- **The fragment** reads a stream's texel by its number (`stream_texel`), nearest, four weighed, the distance fields' four
+  samples or the light map's four, as it read RAM; under `GPU_VRAM_ONLY` (the default in GPUDraw with the front end) its RAM
+  paths are not compiled at all, and what a stream did not bring, only what the 16,777,216 texels had no room for, is
+  magenta.
+
+A glyph's and a sprite record's streams are their own. `gles.c` streams its own first, into the VRAM's rows 3072 to 3328 at the
+list's end (`stream_put`), once however many draws name a texture and drawn by the sampler; `SEGL_STREAM=0` leaves them to the
+device. A sum of a list counts a stream as its address (`vram_source_of`).
+
+`RVC_GPU_COMPARE=N` checks it: every N-th frame the harness draws the list a second time the way before (`GPU_NO_STREAMS`, from
+RAM) into a second target that starts from the same picture, and counts the pixels that differ (`[gpu compare] ...`; the first
+such pair to `RVC_GPU_COMPARE_SAVE=PREFIX`, and what the sums held). One run, one memory: two runs, however fixed their clock,
+are not the same machine. Under `--cpu`, 5 November 2026: `gpubench` 11 and 12 (every texture kind and every sprite kind, with
+and without a palette, a 640 x 400 words record) the same bytes as from RAM; Quake's frame 200 of the timedemo with its
+textures and light maps in RAM (`QUAKE_VRAM=0 QUAKE_VRAM_LIGHT=0`), drawn from one snapshot both ways, 0 pixels; Doom's E1M1,
+479 frames both ways, 0 frames with a pixel that differs. Every graphics program of the image, 32 of them (glxgears, Doom, Quake,
+ClassiCube, the NES, both Command & Conquers, Quake III, Half-Life, Jedi Outcast, OpenTTD, Age of Empires, Micropolis, the desktop
+and its programs, the ray and path tracers, nxphys, the examples, the HLSL viewer, the demos), run under `--cpu` with
+`RVC_GPU_COMPARE=7` until they draw: 0 frames with a pixel that differs, no magenta of the streams' (nxpaint's and demo-blit's
+are their own: the RAM's draw has them too), and GPUDraw reading RAM in neither stage.
+
 ## Cost
 
 The graphics card rasterises, so cost follows covered pixels, not pixels times triangles. The vertex
-shader runs for all 196,608 mesh vertices every frame, most of which exit after reading one word. The
+shader runs for all 196,608 mesh vertices in every pass, most of which exit after reading their texel of the draw IDs. The
 devices' passes on the card are in the next section and in `tick-costs.md`, "What a pass is made of".
 
 In D3D12 the state texture must be in the non-pixel-shader-resource state as well as the

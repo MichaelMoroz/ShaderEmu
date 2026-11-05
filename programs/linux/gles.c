@@ -35,6 +35,14 @@
 #endif
 #define REG_VOLUME 0x300           // the last whole frame: list address, command count, frames so far, picture size
 #define MAX_MESH 196608            // vertices the device's mesh has for one list
+// (where a list being built ends: a program that builds one list in parts on two cores gives each part its own; Jedi
+// Outcast's drawing, linux/quake3/gpu_shaderemu.c's SE_HALVES)
+#ifndef GLES_VERTEX_END
+#define GLES_VERTEX_END (set_at + SET_SIZE)
+#define GLES_COMMANDS_END MAX_COMMANDS
+#define GLES_BLOCKS_END MAX_BLOCKS
+#define GLES_MESH_END MAX_MESH
+#endif
 #define REG_PALETTE 0x400
 #define REG_SUBMIT 0x10            // submit, list address, command count
 #define REG_INTO 0x50              // where the picture is copied: address, width, height, row
@@ -43,7 +51,7 @@
 // The pause hint: this machine ends its frame there, which is when the GPU does its work.
 #define next_frame() __asm__ volatile(".word 0x0100000f")
 
-enum { CMD_CLEAR = 1, CMD_DRAW = 3 };
+enum { CMD_CLEAR = 1, CMD_DRAW = 3, CMD_UPLOAD = 6, CMD_COPY = 7 };
 enum { VERTEX_CLIP = 1, VERTEX_MODELVIEW = 0x100, VERTEX_QUADS = 0x200, VERTEX_COMPACT = 0x400, VERTEX_FLOAT = 0x800,
        VERTEX_TAGGED = 0x1000, VERTEX_TABLE = 0x2000, VERTEX_PACKED = 0x4000, VERTEX_POINTS = 0x8000 };
 
@@ -97,9 +105,11 @@ static int view_x, view_y, view_w, view_h;
 
 static uint32_t colour = 0x00ffffff, clear_colour;
 static int texturing, depth_test, blending, alpha_test, blend_kind = 1, key_index;
-typedef struct { uint32_t address, width, height, indexed, used, smooth; } texture;   // smooth: FRAGMENT_SMOOTH or 0
+typedef struct { uint32_t address, width, height, indexed, used, smooth, slot; } texture;   // smooth: FRAGMENT_SMOOTH or 0; slot: in the VRAM, or 0
 static texture textures[MAX_TEXTURES];
 static uint32_t bound;
+// What a draw gives as its texture's address: its slot in the VRAM, or where it is in GPU memory.
+static inline uint32_t drawn_at(const texture* x) { return x->slot ? x->slot : GPU_PHYS + x->address; }
 
 typedef struct { const uint8_t* pointer; int size, stride, enabled, floats; } array;
 static array vertex_array, coord_array;
@@ -260,6 +270,7 @@ unsigned int* seglPalette(void) { return (unsigned int*)(gpu + REG_PALETTE); }
 
 // A list seglSwapEarly() submitted may not be drawn yet: `unsettled` says so, and which set it is.
 static int unsettled;
+static int list_copies, list_late;   // copies in the list being built, and whether a draw came after one (SEGL_DEBUG, below)
 static uint32_t unsettled_set;
 static int not_a_frame;   // seglNotAFrame(): the next swap is not counted in the caption's rate
 void seglNotAFrame(void) { not_a_frame = 1; }
@@ -272,6 +283,8 @@ static volatile uint32_t hand_taken;   // the first core's: hands it has submitt
 static uint32_t hand_settled;          // the worker's: hands it has seen drawn
 static GR_WINDOW_INFO hand_info;       // the first core's: the window the hands are copied into
 static int hand_submit(int wait);
+static uint32_t uploads_put(void);   // (the VRAM's uploads, below)
+static void uploads_done(void);
 
 void seglSettle(void) {
     volatile uint32_t* regs = (volatile uint32_t*)gpu;
@@ -321,7 +334,7 @@ static int hand_submit(int wait) {
         regs[REG_INTO / 4 + 3] = hand_info.surface_row;
         regs[REG_SUBMIT / 4 + 1] = GPU_PHYS + set;
         regs[REG_SUBMIT / 4 + 2] = count;
-        regs[REG_SUBMIT / 4] = 1 | 4 | passes << 8;
+        regs[REG_SUBMIT / 4] = 1 | 4 | (passes & 1 ? 8 : 0) | (passes & ~1u) << 8;
         shown_set = set;
         shown_commands = count | passes << 16;
         __atomic_store_n(&regs[REG_LOCK / 4], 0, __ATOMIC_RELEASE);
@@ -347,6 +360,7 @@ static void swap(int wait) {
         buffers_seen = regs[REG_BUFFERS / 4];
         GrGetWindowInfo(window, &window_info);
     }
+    uint32_t uploading = commands && window_info.realized && window_info.surface_address ? uploads_put() : 0;
     if (commands && window_info.realized && window_info.surface_address) {
         for (;;) {
             while (__atomic_exchange_n(&regs[REG_LOCK / 4], 1, __ATOMIC_ACQUIRE)) sched_yield();
@@ -360,7 +374,8 @@ static void swap(int wait) {
         regs[REG_INTO / 4 + 3] = window_info.surface_row;
         regs[REG_SUBMIT / 4 + 1] = GPU_PHYS + set_at;
         regs[REG_SUBMIT / 4 + 2] = commands;
-        regs[REG_SUBMIT / 4] = 1 | 4 | passes_used << 8;   // draw, copy into the window; the passes used
+        regs[REG_SUBMIT / 4] = 1 | 4 | uploading | passes_used << 8;   // draw, copy into the window; uploads; the passes used
+        uploads_done();
         shown_set = set_at;
         shown_commands = commands | passes_used << 16;
         __atomic_store_n(&regs[REG_LOCK / 4], 0, __ATOMIC_RELEASE);
@@ -379,6 +394,7 @@ static void swap(int wait) {
     }
     not_a_frame = 0;
     commands = kept;
+    list_copies = list_late = 0;
     mesh_vertices = kept_mesh;
     blocks = 0;
     passes_used = kept_passes;
@@ -386,6 +402,41 @@ static void swap(int wait) {
     vertex_top = set_at + VERTICES_IN;
     matrices_dirty = 1;
 }
+// A framebuffer's list (glBindFramebufferOES): drawn into the GPU's picture and not shown, its uploads and copies made, and
+// waited for; the next list starts afresh. (Commands kept at every list's head, seglKeep, are in it too.)
+static void list_draw_hidden(void) {
+    volatile uint32_t* regs = (volatile uint32_t*)gpu;
+    while (gpu && hand[3] != hand_taken) hand_submit(1);
+    uint32_t uploading = commands ? uploads_put() : 0;
+    if (gpu && commands) {
+        for (;;) {
+            while (__atomic_exchange_n(&regs[REG_LOCK / 4], 1, __ATOMIC_ACQUIRE)) sched_yield();
+            if (regs[REG_SUBMIT / 4] == 0) break;
+            __atomic_store_n(&regs[REG_LOCK / 4], 0, __ATOMIC_RELEASE);
+            rest();
+        }
+        regs[REG_INTO / 4] = 0;   // (SUBMIT_SIZED: the window's size, nothing copied into it)
+        regs[REG_INTO / 4 + 1] = window_info.width;
+        regs[REG_INTO / 4 + 2] = window_info.height;
+        regs[REG_INTO / 4 + 3] = window_info.surface_row;
+        regs[REG_SUBMIT / 4 + 1] = GPU_PHYS + set_at;
+        regs[REG_SUBMIT / 4 + 2] = commands;
+        regs[REG_SUBMIT / 4] = 1 | 0x1000000u | uploading | passes_used << 8;   // draw at the window's size, not into it; uploads; the passes used
+        uploads_done();
+        __atomic_store_n(&regs[REG_LOCK / 4], 0, __ATOMIC_RELEASE);
+        while (regs[REG_SUBMIT / 4] != 0) rest();
+        set_at = set_at == SETS_AT ? SETS_AT + SET_SIZE : SETS_AT;
+    }
+    commands = kept;
+    list_copies = list_late = 0;
+    mesh_vertices = kept_mesh;
+    blocks = 0;
+    passes_used = kept_passes;
+    last_draw = 0;
+    vertex_top = set_at + VERTICES_IN;
+    matrices_dirty = 1;
+}
+
 void seglSwap(void) { swap(1); }
 void seglSwapEarly(void) { swap(0); }
 
@@ -395,18 +446,21 @@ void seglSwapHand(void) {
         swap(0);
         return;
     }
+    uint32_t uploading = commands && window_info.realized && window_info.surface_address ? uploads_put() : 0;
     if (commands && window_info.realized && window_info.surface_address) {
         uint32_t n = hand[3];
         // the hand before is submitted and drawn: its set is where the next frame is built
         while (hand_taken != n || regs[REG_SUBMIT / 4] != 0) rest();
         hand_settled = n;
         hand[0] = set_at;
-        hand[1] = commands | passes_used << 16;
+        hand[1] = commands | passes_used << 16 | (uploading ? 1u << 16 : 0);   // (bit 16: uploads; passes are 1-15)
+        uploads_done();
         hand[2] = (uint32_t)window_info.width | (uint32_t)window_info.height << 16 | world_up << 28 | world_flat;
         __atomic_store_n(&hand[3], n + 1, __ATOMIC_RELEASE);
         set_at = set_at == SETS_AT ? SETS_AT + SET_SIZE : SETS_AT;
     }
     commands = kept;
+    list_copies = list_late = 0;
     mesh_vertices = kept_mesh;
     blocks = 0;
     passes_used = kept_passes;
@@ -417,8 +471,34 @@ void seglSwapHand(void) {
 
 // ---- frame ----
 
+// SEGL_DEBUG=1 (docs/machine/gpu.md, "Copies"): what a list must not do, said on stderr the first time and counted at the
+// program's end: a draw made after a copy in the same list (the copy is made after the whole list, so it would not have the
+// draw in it, and the draw would not see the copy). SEGL_DEBUG=abort stops the program at the first.
+static int debug_mode = -1;
+static uint32_t debug_late, debug_lists;
+static void debug_report(void) {
+    if (debug_late) fprintf(stderr, "segl: %u draws after a copy in their list, in %u lists (SEGL_DEBUG)\n", debug_late, debug_lists);
+}
+static int debug_on(void) {
+    if (debug_mode < 0) {
+        const char* e = getenv("SEGL_DEBUG");
+        debug_mode = !e || !*e || !strcmp(e, "0") ? 0 : !strcmp(e, "abort") ? 2 : 1;
+        if (debug_mode) atexit(debug_report);
+    }
+    return debug_mode;
+}
+static void debug_draw_after_copy(uint32_t op) {
+    if (!debug_on()) return;
+    if (!debug_late++)
+        fprintf(stderr, "segl: a draw (command %u) after a copy in the same list: the copy is made after the whole list "
+                        "(SEGL_DEBUG; copy at the list's end, or draw into a framebuffer of its own)\n", op);
+    if (!list_late) list_late = 1, debug_lists++;
+    if (debug_mode == 2) abort();
+}
+
 static uint32_t* command(uint32_t op, uint32_t mesh) {
-    if (commands == MAX_COMMANDS || mesh_vertices + mesh > MAX_MESH) return 0;
+    if (commands == GLES_COMMANDS_END || mesh_vertices + mesh > GLES_MESH_END) return 0;
+    if (list_copies && op != CMD_UPLOAD && op != CMD_COPY) debug_draw_after_copy(op);
     uint32_t* c = (uint32_t*)(gpu + set_at) + 16 * commands++;
     c[0] = op;
     c[3] = mesh_vertices;
@@ -678,6 +758,256 @@ void glGenTextures(GLsizei n, GLuint* out) {
         }
     while (n-- > 0) *out++ = 0;
 }
+// ---- the VRAM (docs/machine/gpu.md, "VRAM") ----
+
+// A texture made by glTexImage2D lies in the VRAM too, padded with 2^L texels of itself each way (L the most it is drawn
+// smaller, its levels' count), in a block of whole 2^L: blocks are taken from shelves of the VRAM, and a dropped one is
+// taken again by a texture of its size. The upload is a command of the next list submitted (CMD_UPLOAD).
+#define VRAM_SIDE 4096
+#define VRAM_PREMULTIPLIED 0x08000000u
+#define MAX_UPLOADS 512
+// The VRAM's rows STREAM_Y to STREAM_END are the library's streams (stream_put): a texture a draw names in GPU memory is
+// uploaded there in every list that draws it, once however many draws name it, and drawn by the sampler (docs/machine/gpu.md,
+// "Streams"). SEGL_STREAM=0 leaves them to the device's streams, the rows after these, one a draw.
+#define STREAM_Y 3072
+#define STREAM_END 3328
+#define MAX_STREAMS 256
+static int stream_off = -1;   // -1: not asked yet
+static struct { uint32_t address, how, width, height, key, slot; } streams[MAX_STREAMS];
+static int stream_count;
+static int vram_lod = -2;   // -2: not asked yet (SEGL_VRAM, then seglVram); -1 off
+typedef struct { uint16_t x, y, w, h; } vram_block;
+static vram_block vram_free[MAX_TEXTURES];
+static int vram_frees;
+static uint32_t shelf_x, shelf_y, shelf_h;
+static uint16_t uploads[MAX_UPLOADS];
+static int upload_count, uploads_left;
+// Uploads by slot (seglVramUpload), for textures that are not the library's: where, how large, of what kind, into which slot.
+typedef struct { uint32_t address, width, height, kind, slot, key, palette; } slot_upload;
+static slot_upload slot_uploads[MAX_UPLOADS];
+static int slot_upload_count, slot_uploads_left;
+// What each slot was last uploaded from, for a sum of a list that should not go by where a texture lies (gpuListSum).
+#define MAX_SOURCES 4096
+static struct { uint32_t slot, address; } vram_sources[MAX_SOURCES];
+static int vram_source_count;
+static uint32_t vram_source_of(uint32_t slot) {
+    for (int i = 0; i < stream_count; i++)
+        if (streams[i].slot == slot) return streams[i].address;
+    for (int i = 0; i < vram_source_count; i++)
+        if (vram_sources[i].slot == slot) return vram_sources[i].address;
+    return slot;
+}
+static void vram_source(uint32_t slot, uint32_t address) {
+    for (int i = 0; i < vram_source_count; i++)
+        if (vram_sources[i].slot == slot) {
+            if (address) vram_sources[i].address = address;
+            else vram_sources[i] = vram_sources[--vram_source_count];
+            return;
+        }
+    if (address && vram_source_count < MAX_SOURCES) vram_sources[vram_source_count].slot = slot, vram_sources[vram_source_count++].address = address;
+}
+static uint32_t vram_palette;   // seglVramPalette: the palette a paletted texture is uploaded with (0: the display's)
+
+void seglVram(int lod) {
+    const char* e = getenv("SEGL_VRAM");
+    vram_lod = e && *e ? atoi(e) : lod;
+    if (vram_lod > 4) vram_lod = 4;
+    if (vram_lod < -1) vram_lod = -1;
+}
+// The block of a texture of w x h at L: 2^L each side, rounded to whole 2^L (shader_vm/src/gpu.h, vram_block).
+static void vram_size(uint32_t w, uint32_t h, uint32_t lod, uint32_t* bw, uint32_t* bh) {
+    uint32_t pad = 1u << lod, mask = (1u << lod) - 1;
+    *bw = (w + 2 * pad + mask) & ~mask;
+    *bh = (h + 2 * pad + mask) & ~mask;
+}
+// The block of a slot of a w x h texture given back, for the next of its size.
+static void vram_block_give(uint32_t slot, uint32_t w, uint32_t h) {
+    uint32_t lod = slot >> 24 & 7, pad = 1u << lod, bw, bh;
+    vram_size(w, h, lod, &bw, &bh);
+    if (vram_frees < MAX_TEXTURES)
+        vram_free[vram_frees++] = (vram_block){(uint16_t)((slot & 0xfff) - pad), (uint16_t)((slot >> 12 & 0xfff) - pad), (uint16_t)bw, (uint16_t)bh};
+}
+// A block for a w x h texture of at most `levels` levels: its slot (without flags), or 0 when the VRAM is full.
+static uint32_t vram_block_take(uint32_t w, uint32_t h, int levels) {
+    if (!w || !h || w > 2048 || h > 2048 || levels < 0) return 0;
+    uint32_t lod = (uint32_t)(levels > 4 ? 4 : levels), bw, bh, at_x = 0, at_y = 0;
+    while (lod && ((w >> lod) < 1 || (h >> lod) < 1)) lod--;   // (no smaller than a texel)
+    vram_size(w, h, lod, &bw, &bh);
+    int found = 0;
+    for (int i = 0; i < vram_frees && !found; i++)
+        if (vram_free[i].w == bw && vram_free[i].h == bh) {
+            at_x = vram_free[i].x, at_y = vram_free[i].y;
+            vram_free[i] = vram_free[--vram_frees];
+            found = 1;
+        }
+    if (!found) {
+        // shelves of whole 16 texels: the corner of a block of any L up to 4 a whole 2^L
+        uint32_t sw = (bw + 15) & ~15u, sh = (bh + 15) & ~15u;
+        if (shelf_x + sw > VRAM_SIDE) shelf_x = 0, shelf_y += shelf_h, shelf_h = 0;
+        if (shelf_y + sh > (stream_off ? VRAM_SIDE : STREAM_Y)) return 0;   // (full: streamed, or drawn from GPU memory)
+        at_x = shelf_x, at_y = shelf_y;
+        shelf_x += sw;
+        if (sh > shelf_h) shelf_h = sh;
+    }
+    uint32_t pad = 1u << lod;
+    return (at_x + pad) | (at_y + pad) << 12 | lod << 24;
+}
+static void vram_drop(texture* x) {
+    if (!x->slot) return;
+    vram_block_give(x->slot, x->width, x->height);
+    for (int i = 0; i < upload_count; i++)
+        if (&textures[uploads[i]] == x) uploads[i] = uploads[--upload_count], i--;
+    x->slot = 0;
+}
+static void vram_upload(texture* x) {
+    for (int i = 0; i < upload_count; i++)
+        if (&textures[uploads[i]] == x) return;
+    if (upload_count < MAX_UPLOADS) uploads[upload_count++] = (uint16_t)(x - textures);
+}
+// A texture into the VRAM with at most `levels` mip levels: a block for it, and its upload in the next list. Paletted and
+// word textures only.
+static void vram_take(texture* x, int levels) {
+    if (x->indexed > 1) return;
+    uint32_t slot = vram_block_take(x->width, x->height, levels), keyed = 0;
+    if (!slot) return;
+    if (x->indexed == 1 && key_index >= 0 && key_index < 256) {
+        const uint8_t* b = gpu + x->address;
+        for (uint32_t n = 0; n < x->width * x->height && !keyed; n++) keyed = b[n] == (uint8_t)key_index;
+    }
+    x->slot = slot | (keyed ? VRAM_PREMULTIPLIED : 0);
+    vram_upload(x);
+}
+// The VRAM by slot (segl.h), for a program whose textures are not the library's.
+#define VRAM_CLAMPED 0x10000000u
+unsigned seglVramTake(unsigned w, unsigned h, int levels, int flags) {
+    if (vram_lod == -2) seglVram(-1);
+    if (vram_lod < 0) return 0;
+    uint32_t slot = vram_block_take(w, h, levels);
+    return slot ? slot | (flags & 1 ? VRAM_CLAMPED : 0) | (flags & 2 ? VRAM_PREMULTIPLIED : 0) : 0;
+}
+void seglVramGive(unsigned slot, unsigned w, unsigned h) {
+    if (!slot) return;
+    vram_source(slot, 0);
+    for (int i = 0; i < slot_upload_count; i++)
+        if (slot_uploads[i].slot == slot) slot_uploads[i] = slot_uploads[--slot_upload_count], i--;
+    vram_block_give(slot, w, h);
+}
+void seglVramUpload(unsigned slot, unsigned address, unsigned w, unsigned h, unsigned kind, unsigned key, unsigned palette) {
+    if (!slot) return;
+    // (keyed: a premultiplied slot's key texels are 0)
+    slot_upload u = {address, w, h, kind | (slot & VRAM_PREMULTIPLIED ? FRAGMENT_KEYED : 0), slot, key, palette};
+    vram_source(slot, address);
+    for (int i = 0; i < slot_upload_count; i++)
+        if (slot_uploads[i].slot == slot) {
+            slot_uploads[i] = u;
+            return;
+        }
+    if (slot_upload_count < MAX_UPLOADS) slot_uploads[slot_upload_count++] = u;
+}
+void seglVramPalette(const unsigned int* words) { vram_palette = words ? (uint32_t)(uintptr_t)words : 0; }
+void seglTextureChanged(void) {
+    texture* x = &textures[bound];
+    if (vram_lod == -2) seglVram(-1);
+    if (x->slot) vram_upload(x);
+    else if (vram_lod >= 0) vram_take(x, vram_lod);
+}
+void seglVramLevels(int levels) {
+    texture* x = &textures[bound];
+    if (vram_lod == -2) seglVram(-1);
+    if (x->slot) vram_upload(x);
+    else if (vram_lod >= 0) vram_take(x, levels);
+}
+// The uploads waiting, as commands at the list's end (the host draws them every frame a list is drawn): SUBMIT_UPLOADS (8)
+// if one has mip levels, which the host then makes before the list is drawn. They are taken off only once the list is
+// submitted (uploads_done).
+static void stream_put(void) {
+    if (stream_off < 0) {
+        const char* e = getenv("SEGL_STREAM");
+        stream_off = e && *e == '0';
+    }
+    stream_count = 0;
+    if (stream_off || !gpu) return;
+    uint32_t x = 0, y = STREAM_Y, shelf = 0, end = commands;
+    for (uint32_t i = kept; i < end; i++) {
+        uint32_t* c = (uint32_t*)(gpu + set_at) + 16 * i;
+        uint32_t mode = c[5] & 0xff, address = c[7], w = c[8], h = c[9];
+        // (a draw of words, a palette's indices, a mask, three bytes, tiles or a film's frame, in GPU memory or the ROM)
+        if (c[0] != CMD_DRAW || mode < 1 || mode > 6 || !w || !h || address >> 30 == 0) continue;
+        uint32_t how = mode | (c[5] & (FRAGMENT_KEYED | 0x1000u)), key = c[10], slot = 0;
+        for (int k = 0; k < stream_count && !slot; k++)
+            if (streams[k].address == address && streams[k].how == how && streams[k].width == w && streams[k].height == h &&
+                (!(how & FRAGMENT_KEYED) || streams[k].key == key))
+                slot = streams[k].slot;
+        if (!slot) {
+            // its block on a shelf of the band: the texture and a texel of padding round it (no mip levels)
+            uint32_t bw = (w + 2 + 3) & ~3u, bh = h + 2;
+            if (x + bw > VRAM_SIDE) x = 0, y += shelf, shelf = 0;
+            if (bw > VRAM_SIDE || y + bh > STREAM_END || stream_count == MAX_STREAMS) continue;   // (the device's streams then)
+            uint32_t* u = command(CMD_UPLOAD, 6);
+            if (!u) break;
+            slot = (x + 1) | (y + 1) << 12 | (how & FRAGMENT_KEYED ? VRAM_PREMULTIPLIED : 0) | (how & 0x1000u ? 0x10000000u : 0);
+            u[1] = address;
+            u[2] = how & (0xff | FRAGMENT_KEYED);
+            u[4] = w;
+            u[5] = h;
+            u[6] = slot;
+            u[7] = key;
+            u[8] = 0;   // (the display's palette, as a draw from GPU memory has it)
+            u[9] = 0;
+            x += bw;
+            if (bh > shelf) shelf = bh;
+            streams[stream_count].address = address, streams[stream_count].how = how, streams[stream_count].width = w;
+            streams[stream_count].height = h, streams[stream_count].key = key, streams[stream_count++].slot = slot;
+        }
+        c[7] = slot;
+    }
+}
+static uint32_t uploads_put(void) {
+    int n = 0;
+    stream_put();
+    uint32_t levels = 0;
+    for (; n < upload_count; n++) {
+        texture* x = &textures[uploads[n]];
+        uint32_t* c = command(CMD_UPLOAD, 6);
+        if (!c) break;
+        c[1] = GPU_PHYS + x->address;
+        c[2] = (x->indexed ? FRAGMENT_INDEXED : FRAGMENT_TEXTURE) | (x->slot & VRAM_PREMULTIPLIED ? FRAGMENT_KEYED : 0);
+        c[4] = x->width;
+        c[5] = x->height;
+        c[6] = x->slot;
+        c[7] = (uint32_t)key_index;
+        c[8] = vram_palette;
+        c[9] = 0;
+        levels |= x->slot >> 24 & 7;
+    }
+    uploads_left = n;
+    for (n = 0; n < slot_upload_count; n++) {
+        const slot_upload* u = &slot_uploads[n];
+        uint32_t* c = command(CMD_UPLOAD, 6);
+        if (!c) break;
+        c[1] = u->address;
+        c[2] = u->kind;
+        c[4] = u->width;
+        c[5] = u->height;
+        c[6] = u->slot;
+        c[7] = u->key;
+        c[8] = u->palette;
+        c[9] = 0;
+        levels |= u->slot >> 24 & 7;
+    }
+    slot_uploads_left = n;
+    return levels ? 8u : 0u;
+}
+// Those put in the list just submitted are done.
+static void uploads_done(void) {
+    for (int i = uploads_left; i < upload_count; i++) uploads[i - uploads_left] = uploads[i];
+    upload_count -= uploads_left;
+    uploads_left = 0;
+    for (int i = slot_uploads_left; i < slot_upload_count; i++) slot_uploads[i - slot_uploads_left] = slot_uploads[i];
+    slot_upload_count -= slot_uploads_left;
+    slot_uploads_left = 0;
+}
+
 // `top` raised to the end of `bytes` at a physical address, if that is texture memory.
 static uint32_t kept_to(uint32_t top, uint32_t address, uint32_t bytes) {
     uint32_t at = address - GPU_PHYS;
@@ -688,7 +1018,10 @@ static uint32_t kept_to(uint32_t top, uint32_t address, uint32_t bytes) {
 void glDeleteTextures(GLsizei n, const GLuint* which) {
     seglSettle();   // (the memory given back is written again)
     for (int i = 0; i < n; i++)
-        if (which[i] < MAX_TEXTURES) textures[which[i]].used = 0;
+        if (which[i] < MAX_TEXTURES) {
+            vram_drop(&textures[which[i]]);
+            textures[which[i]].used = 0;
+        }
     uint32_t top = TEXTURES_AT;
     for (uint32_t t = 1; t < MAX_TEXTURES; t++) {
         texture* x = &textures[t];
@@ -730,6 +1063,7 @@ void glTexParameterx(GLenum target, GLenum name, GLfixed value) { glTexParameter
 
 void seglTexturePointer(const void* pixels, GLsizei width, GLsizei height, GLenum internal) {
     texture* x = &textures[bound];
+    vram_drop(x);   // (the program's own memory, which it goes on writing: drawn from there unless it asks, seglTextureChanged)
     x->address = (uint32_t)((const uint8_t*)pixels - gpu);
     x->width = width;
     x->height = height;
@@ -751,7 +1085,95 @@ void glTexImage2D(GLenum target, GLint level, GLint internal, GLsizei width, GLs
             w[i] = (uint32_t)(255 - p[3]) << 24 | (uint32_t)p[0] << 16 | (uint32_t)p[1] << 8 | p[2];
     }
     seglTexturePointer(to, width, height, internal);
+    if (vram_lod == -2) seglVram(-1);
+    if (vram_lod >= 0) vram_take(&textures[bound], vram_lod);
 }
+// ---- copies from the picture (docs/machine/gpu.md, "Copies") ----
+
+// A rectangle of the framebuffer (x, y from its bottom left, as OpenGL counts) into the bound texture at (xoff, yoff), when
+// the list is drawn: after all its passes. The texture is in the VRAM from then on, in a slot of no levels.
+void glCopyTexSubImage2D(GLenum target, GLint level, GLint xoff, GLint yoff, GLint x, GLint y, GLsizei width, GLsizei height) {
+    (void)target;
+    texture* t = &textures[bound];
+    if (!gpu || level != 0 || !t->used || width <= 0 || height <= 0 || !window_info.height) return;
+    if (!t->slot || (t->slot >> 24 & 7)) {
+        // (a slot of no levels: a copy makes none)
+        vram_drop(t);
+        if (!(t->slot = vram_block_take(t->width, t->height, 0))) return;
+    }
+    if (xoff < 0) width += xoff, x -= xoff, xoff = 0;
+    if (yoff < 0) height += yoff, y -= yoff, yoff = 0;
+    if (x < 0) width += x, xoff -= x, x = 0;
+    if (y < 0) height += y, yoff -= y, y = 0;
+    if (xoff + width > (GLint)t->width) width = (GLint)t->width - xoff;
+    if (yoff + height > (GLint)t->height) height = (GLint)t->height - yoff;
+    if (x + width > window_info.width) width = window_info.width - x;
+    if (y + height > window_info.height) height = window_info.height - y;
+    if (width <= 0 || height <= 0) return;
+    uint32_t* c = command(CMD_COPY, 6);
+    if (!c) return;
+    c[1] = (uint32_t)x | (uint32_t)(window_info.height - y - height) << 16;   // (the picture's rows run down)
+    c[2] = (uint32_t)width | (uint32_t)height << 16;
+    c[4] = t->slot;
+    c[5] = (uint32_t)xoff | (uint32_t)yoff << 16;
+    c[6] = 1;   // (COPY_TURNED: a texture's row 0 is the bottom one)
+    list_copies++;
+    last_draw = 0;
+}
+void glCopyTexImage2D(GLenum target, GLint level, GLenum internal, GLint x, GLint y, GLsizei width, GLsizei height, GLint border) {
+    (void)border;
+    glTexImage2D(target, level, (GLint)internal, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glCopyTexSubImage2D(target, level, 0, 0, x, y, width, height);
+}
+
+// Framebuffer objects (OES_framebuffer_object): a framebuffer with a texture is drawn as a list of its own into the GPU's
+// picture, and when another framebuffer is bound the texture gets the rectangle from the picture's bottom left as large as
+// it (or the window), copied at that list's end; the list is drawn, not shown, and waited for, so what follows draws with
+// it. Bound with draws already in the list, those are drawn with it (SEGL_DEBUG says so). The window's framebuffer is 0.
+#define MAX_FRAMEBUFFERS 64
+static GLuint framebuffer_texture[MAX_FRAMEBUFFERS];   // the texture each one draws into (0: none)
+static GLuint framebuffer_bound;
+static uint32_t list_draws_from(void) { return commands - kept; }
+void glGenFramebuffersOES(GLsizei n, GLuint* out) {
+    for (GLuint f = 1; f < MAX_FRAMEBUFFERS && n > 0; f++)
+        if (!framebuffer_texture[f] && f != framebuffer_bound) {
+            framebuffer_texture[f] = 0xffffffffu;   // (taken: no texture yet)
+            *out++ = f, n--;
+        }
+    while (n-- > 0) *out++ = 0;
+}
+void glDeleteFramebuffersOES(GLsizei n, const GLuint* which) {
+    for (GLsizei i = 0; i < n; i++)
+        if (which[i] && which[i] < MAX_FRAMEBUFFERS) framebuffer_texture[which[i]] = 0;
+}
+void glFramebufferTexture2DOES(GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level) {
+    (void)target, (void)attachment, (void)textarget, (void)level;
+    if (framebuffer_bound && framebuffer_bound < MAX_FRAMEBUFFERS) framebuffer_texture[framebuffer_bound] = texture ? texture : 0xffffffffu;
+}
+GLenum glCheckFramebufferStatusOES(GLenum target) {
+    (void)target;
+    GLuint t = framebuffer_bound < MAX_FRAMEBUFFERS ? framebuffer_texture[framebuffer_bound] : 0;
+    return !framebuffer_bound || (t && t != 0xffffffffu && t < MAX_TEXTURES && textures[t].used) ? 0x8CD5 : 0x8CD6;   // complete, or an attachment missing
+}
+static void list_draw_hidden(void);
+void glBindFramebufferOES(GLenum target, GLuint framebuffer) {
+    (void)target;
+    if (framebuffer == framebuffer_bound) return;
+    GLuint from = framebuffer_bound, t = from < MAX_FRAMEBUFFERS ? framebuffer_texture[from] : 0;
+    if (from && t && t != 0xffffffffu && t < MAX_TEXTURES && textures[t].used) {
+        // the framebuffer left: its texture copied from the picture, the list drawn and waited for
+        GLuint was = bound;
+        bound = t;
+        glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, (GLsizei)textures[t].width, (GLsizei)textures[t].height);
+        bound = was;
+        list_draw_hidden();
+    } else if (framebuffer && list_draws_from()) {
+        if (debug_on()) fprintf(stderr, "segl: framebuffer %u bound with %u commands in the list already: they are drawn with it\n",
+                                framebuffer, list_draws_from());
+    }
+    framebuffer_bound = framebuffer;
+}
+
 void glColorTableEXT(GLenum target, GLenum internal, GLsizei count, GLenum format, GLenum type, const GLvoid* table) {
     (void)target, (void)internal, (void)format, (void)type;
     const uint8_t* p = table;
@@ -765,7 +1187,7 @@ void glColorTableEXT(GLenum target, GLenum internal, GLsizei count, GLenum forma
 // The block of vectors a draw reads its matrices from: the projection with the viewport folded
 // in (rows 0-3), then the modelview (rows 4-6), which the device applies first.
 static void matrix_block_write(void) {
-    if (matrices_dirty && blocks < MAX_BLOCKS) {
+    if (matrices_dirty && blocks < GLES_BLOCKS_END) {
         num* u = (num*)(gpu + set_at + UNIFORMS_IN) + 32 * blocks++;
         const matrix* p = &projection[projection_top];
         const matrix* m = &modelview[modelview_top];
@@ -844,7 +1266,7 @@ void glDrawArrays(GLenum mode, GLint first, GLsizei count) {
                       mode == GL_TRIANGLES ? (uint32_t)count - count % 3 : ((uint32_t)count - 2) * 3;
     uint32_t mesh = quads ? stored / 4 * 6 : stored;
     uint32_t vertex = VERTEX_CLIP | VERTEX_MODELVIEW | VERTEX_COMPACT | NUM_FORMAT | (quads ? VERTEX_QUADS : 0);
-    if (vertex_top + stored * 16 > set_at + SET_SIZE || mesh_vertices + mesh > MAX_MESH) return;
+    if (vertex_top + stored * 16 > GLES_VERTEX_END || mesh_vertices + mesh > GLES_MESH_END) return;
     uint32_t block = matrix_block();
     uint32_t state[6] = {vertex, fragment, block, x->address, colour, (uint32_t)key_index};
     uint32_t* to = (uint32_t*)(gpu + vertex_top);
@@ -863,7 +1285,7 @@ void glDrawArrays(GLenum mode, GLint first, GLsizei count) {
         c[4] = vertex;
         c[5] = fragment;
         c[6] = block;
-        c[7] = GPU_PHYS + x->address;
+        c[7] = drawn_at(x);
         c[8] = x->width;
         c[9] = x->height;
         c[10] = key_index;
@@ -909,7 +1331,7 @@ static uint32_t* compact_begin(GLenum mode, GLsizei count, uint32_t* stored_out,
     if (points) stored = (uint32_t)count;
     uint32_t mesh = quads ? stored / 4 * 6 : points ? stored * 3 : stored;
     uint32_t vertex = VERTEX_CLIP | VERTEX_MODELVIEW | VERTEX_COMPACT | NUM_FORMAT | (quads ? VERTEX_QUADS : 0) | flags;
-    if ((!at && vertex_top + stored * 16 > set_at + SET_SIZE) || mesh_vertices + mesh > MAX_MESH) return 0;
+    if ((!at && vertex_top + stored * 16 > GLES_VERTEX_END) || mesh_vertices + mesh > GLES_MESH_END) return 0;
     uint32_t block = matrix_block();
     uint32_t tint = table ? GPU_PHYS + (uint32_t)((const uint8_t*)table - gpu) : colour;
     uint32_t state[6] = {vertex, fragment, block, x->address, tint, (uint32_t)key_index};
@@ -930,7 +1352,7 @@ static uint32_t* compact_begin(GLenum mode, GLsizei count, uint32_t* stored_out,
         c[4] = vertex;
         c[5] = fragment;
         c[6] = block;
-        c[7] = GPU_PHYS + x->address;
+        c[7] = drawn_at(x);
         c[8] = x->width;
         c[9] = x->height;
         c[10] = key_index;
@@ -1028,7 +1450,7 @@ void seglQuad(const GLfixed* xyz, const GLfixed* uv, GLuint name, unsigned grey,
     uint32_t fragment = (x->indexed == 3 ? 5u : (x->indexed == 4 ? 6u : x->indexed ? FRAGMENT_INDEXED : FRAGMENT_TEXTURE) | x->smooth) | (keyed ? FRAGMENT_KEYED : 0) | pass << 16;
     uint32_t vertex = VERTEX_CLIP | VERTEX_MODELVIEW | VERTEX_COMPACT | VERTEX_QUADS | NUM_FORMAT;
     uint32_t tint = (uint32_t)(255 - alpha) << 24 | grey << 16 | grey << 8 | grey;
-    if (!gpu || vertex_top + 64 > set_at + SET_SIZE || mesh_vertices + 6 > MAX_MESH) return;
+    if (!gpu || vertex_top + 64 > GLES_VERTEX_END || mesh_vertices + 6 > GLES_MESH_END) return;
     uint32_t block = matrices_dirty || !blocks ? matrix_block() : GPU_PHYS + set_at + UNIFORMS_IN + 128 * (blocks - 1);
     uint32_t* restrict to = (uint32_t*)(gpu + vertex_top);
     if (last_draw && last_draw == (uint32_t*)(gpu + set_at) + 16 * (commands - 1) && last_state[0] == vertex &&
@@ -1044,7 +1466,7 @@ void seglQuad(const GLfixed* xyz, const GLfixed* uv, GLuint name, unsigned grey,
         c[4] = last_state[0] = vertex;
         c[5] = last_state[1] = fragment;
         c[6] = last_state[2] = block;
-        c[7] = GPU_PHYS + x->address;
+        c[7] = drawn_at(x);
         last_state[3] = x->address;
         c[8] = x->width;
         c[9] = x->height;
@@ -1086,7 +1508,7 @@ void seglSprite(const GLfixed* box, const int* texels, GLuint name, unsigned col
         last_state[0] == (VERTEX_CLIP | VERTEX_MODELVIEW | VERTEX_COMPACT | VERTEX_QUADS | NUM_FORMAT) && last_state[1] == fragment &&
         last_state[2] == GPU_PHYS + set_at + UNIFORMS_IN + 128 * (blocks - 1) && last_state[3] == x->address &&
         last_state[4] == colour && last_state[5] == (uint32_t)key_index &&
-        vertex_top + 64 <= set_at + SET_SIZE && mesh_vertices + 6 <= MAX_MESH) {
+        vertex_top + 64 <= GLES_VERTEX_END && mesh_vertices + 6 <= GLES_MESH_END) {
         last_draw[2] += 6;
         mesh_vertices += 6;
         sprite_corners((uint32_t*)(gpu + vertex_top), box, texels);
@@ -1102,7 +1524,7 @@ static __attribute__((noinline)) void sprite_command(const GLfixed* box, const i
     uint32_t fragment = (x->indexed == 2 ? 3u : x->indexed == 3 ? 5u : (x->indexed == 4 ? 6u : x->indexed ? FRAGMENT_INDEXED : FRAGMENT_TEXTURE) | x->smooth) |
                         (keyed ? FRAGMENT_KEYED : 0) | 5u << 16;
     uint32_t vertex = VERTEX_CLIP | VERTEX_MODELVIEW | VERTEX_COMPACT | VERTEX_QUADS | NUM_FORMAT;
-    if (!gpu || vertex_top + 64 > set_at + SET_SIZE || mesh_vertices + 6 > MAX_MESH) return;
+    if (!gpu || vertex_top + 64 > GLES_VERTEX_END || mesh_vertices + 6 > GLES_MESH_END) return;
     uint32_t block = matrices_dirty || !blocks ? matrix_block() : GPU_PHYS + set_at + UNIFORMS_IN + 128 * (blocks - 1);
     uint32_t* restrict to = (uint32_t*)(gpu + vertex_top);
     if (last_draw && last_draw == (uint32_t*)(gpu + set_at) + 16 * (commands - 1) && last_state[0] == vertex &&
@@ -1118,7 +1540,7 @@ static __attribute__((noinline)) void sprite_command(const GLfixed* box, const i
         c[4] = last_state[0] = vertex;
         c[5] = last_state[1] = fragment;
         c[6] = last_state[2] = block;
-        c[7] = GPU_PHYS + x->address;
+        c[7] = drawn_at(x);
         last_state[3] = x->address;
         c[8] = x->width;
         c[9] = x->height;
@@ -1136,7 +1558,7 @@ void seglSprites(const SEGLsprite* s, int count) {
     if (!gpu || count <= 0) return;
     const uint32_t vertex = VERTEX_CLIP | VERTEX_MODELVIEW | VERTEX_COMPACT | VERTEX_QUADS | NUM_FORMAT;
     uint32_t block = matrices_dirty || !blocks ? matrix_block() : GPU_PHYS + set_at + UNIFORMS_IN + 128 * (blocks - 1);
-    uint32_t top = vertex_top, mesh = mesh_vertices, made = commands, end = set_at + SET_SIZE;
+    uint32_t top = vertex_top, mesh = mesh_vertices, made = commands, end = GLES_VERTEX_END;
     uint32_t *first = (uint32_t*)(gpu + set_at), *draw = last_draw;
     int joins = draw && draw == first + 16 * (made - 1) && last_state[0] == vertex && last_state[2] == block &&
                 last_state[5] == (uint32_t)key_index;
@@ -1144,7 +1566,7 @@ void seglSprites(const SEGLsprite* s, int count) {
     uint32_t base = 0, address = 0, width = 0, height = 0;
     int any = 0;
     for (; count > 0; count--, s++) {
-        if (top + 64 > end || mesh + 6 > MAX_MESH) break;   // (no sprite fits after this one)
+        if (top + 64 > end || mesh + 6 > GLES_MESH_END) break;   // (no sprite fits after this one)
         if (s->name != name_was) {
             const texture* x = &textures[s->name < MAX_TEXTURES ? s->name : 0];
             base = (x->indexed == 2 ? 3u : x->indexed == 3 ? 5u : (x->indexed == 4 ? 6u : x->indexed ? FRAGMENT_INDEXED : FRAGMENT_TEXTURE) | x->smooth) | 5u << 16;
@@ -1155,7 +1577,7 @@ void seglSprites(const SEGLsprite* s, int count) {
             draw[2] += 6;
             mesh += 6;
         } else {
-            if (made == MAX_COMMANDS) continue;   // (as command() fails: this one is left out)
+            if (made == GLES_COMMANDS_END) continue;   // (as command() fails: this one is left out)
             uint32_t* c = first + 16 * made++;
             c[0] = CMD_DRAW;
             c[1] = GPU_PHYS + top;
@@ -1186,7 +1608,7 @@ void seglSprites(const SEGLsprite* s, int count) {
 
 // Sprites a program writes itself (segl.h): the room for them, and the command for those written.
 unsigned int* seglSpriteSpace(GLsizei* room) {
-    uint32_t fit = gpu ? (set_at + SET_SIZE - vertex_top) / 64 : 0, mesh = (MAX_MESH - mesh_vertices) / 6;
+    uint32_t fit = gpu ? (GLES_VERTEX_END - vertex_top) / 64 : 0, mesh = (GLES_MESH_END - mesh_vertices) / 6;
     *room = (GLsizei)(fit < mesh ? fit : mesh);
     return gpu ? (unsigned int*)(gpu + vertex_top) : 0;
 }
@@ -1205,7 +1627,7 @@ void seglSpritesAt(const void* vertices, GLsizei quads, GLuint name, unsigned co
     c[5] = (x->indexed == 2 ? 3u : x->indexed == 3 ? 5u : (x->indexed == 4 ? 6u : x->indexed ? FRAGMENT_INDEXED : FRAGMENT_TEXTURE) | x->smooth) |
            (keyed ? FRAGMENT_KEYED : 0) | 5u << 16;
     c[6] = block;
-    c[7] = GPU_PHYS + x->address;
+    c[7] = drawn_at(x);
     c[8] = x->width;
     c[9] = x->height;
     c[10] = key_index;
@@ -1231,7 +1653,7 @@ void seglSpritesUsed(GLsizei quads, GLuint name, unsigned colour, int keyed) {
 
 // Whole vertices in screen pixels (segl.h): the frame's room is what compact vertices use too.
 void* seglScreenSpace(GLsizei* room) {
-    uint32_t fit = gpu ? (set_at + SET_SIZE - vertex_top) / 64 : 0, mesh = MAX_MESH - mesh_vertices;
+    uint32_t fit = gpu ? (GLES_VERTEX_END - vertex_top) / 64 : 0, mesh = GLES_MESH_END - mesh_vertices;
     *room = (GLsizei)((fit < mesh ? fit : mesh) / 3 * 3);
     return gpu ? gpu + vertex_top : 0;
 }
@@ -1244,7 +1666,7 @@ void seglScreenUsed(GLsizei count, GLuint name) {
     c[4] = NUM_FORMAT;   // vertex mode 0: positions are pixels
     c[5] = (x->address ? FRAGMENT_TEXTURE : FRAGMENT_COLOUR) | 5u << 16;
     c[6] = 0;
-    c[7] = GPU_PHYS + x->address;
+    c[7] = drawn_at(x);
     c[8] = x->width;
     c[9] = x->height;
     c[10] = c[11] = 0;
@@ -1257,13 +1679,13 @@ void seglWorldUp(int axis) { world_up = axis >= 1 && axis <= 3 ? (uint32_t)axis 
 void seglWorldFlat(int flat) { world_flat = flat ? 1u << 31 : 0; }
 
 unsigned int* seglScreenTable(void) {
-    if (!gpu || vertex_top + 1024 > set_at + SET_SIZE) return 0;
+    if (!gpu || vertex_top + 1024 > GLES_VERTEX_END) return 0;
     unsigned int* table = (unsigned int*)(gpu + vertex_top);
     vertex_top += 1024;
     return table;
 }
 unsigned int* seglScreenCompactSpace(GLsizei* room) {
-    uint32_t fit = gpu ? (set_at + SET_SIZE - vertex_top) / 16 : 0, mesh = (MAX_MESH - mesh_vertices) / 6 * 4;
+    uint32_t fit = gpu ? (GLES_VERTEX_END - vertex_top) / 16 : 0, mesh = (GLES_MESH_END - mesh_vertices) / 6 * 4;
     *room = (GLsizei)(fit < mesh ? fit : mesh);
     return gpu ? (unsigned int*)(gpu + vertex_top) : 0;
 }
@@ -1277,7 +1699,7 @@ void seglScreenCompactUsed(GLsizei count, int quads, GLuint name, const unsigned
     c[4] = NUM_FORMAT | VERTEX_COMPACT | VERTEX_TAGGED | VERTEX_TABLE | (quads ? VERTEX_QUADS : 0);   // vertex mode 0: pixels
     c[5] = (x->address ? FRAGMENT_TEXTURE : FRAGMENT_COLOUR) | 5u << 16;
     c[6] = 0;
-    c[7] = GPU_PHYS + x->address;
+    c[7] = drawn_at(x);
     c[8] = x->width;
     c[9] = x->height;
     c[10] = 0;
@@ -1291,13 +1713,13 @@ void seglScreenCompactUsed(GLsizei count, int quads, GLuint name, const unsigned
 // tagged vertices in screen pixels that are in it already (segl.h).
 void* seglFrameSpace(unsigned int bytes) {
     bytes = (bytes + 15) & ~15u;
-    if (!gpu || bytes > set_at + SET_SIZE - vertex_top) return 0;
+    if (!gpu || bytes > GLES_VERTEX_END - vertex_top) return 0;
     void* at = gpu + vertex_top;
     vertex_top += bytes;
     last_draw = 0;
     return at;
 }
-unsigned int seglFrameLeft(void) { return gpu ? set_at + SET_SIZE - vertex_top : 0; }
+unsigned int seglFrameLeft(void) { return gpu ? GLES_VERTEX_END - vertex_top : 0; }
 void seglScreenCompactAt(const unsigned int* vertices, GLsizei count, int quads, GLuint name, const unsigned int* table) {
     const texture* x = &textures[name < MAX_TEXTURES ? name : 0];
     uint32_t mesh = quads ? (uint32_t)count / 4 * 6 : (uint32_t)count;
@@ -1308,7 +1730,7 @@ void seglScreenCompactAt(const unsigned int* vertices, GLsizei count, int quads,
     c[4] = NUM_FORMAT | VERTEX_COMPACT | VERTEX_TAGGED | VERTEX_TABLE | (quads ? VERTEX_QUADS : 0);   // vertex mode 0: pixels
     c[5] = (x->address ? FRAGMENT_TEXTURE : FRAGMENT_COLOUR) | 5u << 16;
     c[6] = 0;
-    c[7] = GPU_PHYS + x->address;
+    c[7] = drawn_at(x);
     c[8] = x->width;
     c[9] = x->height;
     c[10] = 0;
@@ -1324,6 +1746,7 @@ uint32_t seglAddress(const void* memory) { return GPU_PHYS + (uint32_t)((const u
 // Forgets what was drawn since the last swap.
 void seglDiscard(void) {
     commands = kept;
+    list_copies = list_late = 0;
     mesh_vertices = kept_mesh;
     blocks = 0;
     passes_used = kept_passes;
@@ -1376,6 +1799,7 @@ int seglKeep(int count, int quads) {
     kept_passes = passes_used = 0;
     kept_mesh = (uint32_t)quads * 6;
     commands = kept;   // (the frame being built starts again: call this before drawing in it)
+    list_copies = list_late = 0;
     mesh_vertices = kept_mesh;
     last_draw = 0;
     blocks = 0;
@@ -1393,7 +1817,7 @@ void seglKeptQuads(int index, const void* vertices, int first_quad, int quads, G
         c[4] = VERTEX_CLIP | VERTEX_MODELVIEW | VERTEX_COMPACT | VERTEX_QUADS | NUM_FORMAT;
         c[5] = FRAGMENT_INDEXED | t->smooth | (keyed ? FRAGMENT_KEYED : 0);
         c[6] = GPU_PHYS + SETS_AT + set * SET_SIZE + UNIFORMS_IN;
-        c[7] = GPU_PHYS + t->address;
+        c[7] = drawn_at(t);
         c[8] = t->width;
         c[9] = t->height;
         c[10] = key_index;
@@ -1430,7 +1854,7 @@ void seglKeptTexture(int index, GLuint name) {
     for (int set = 0; set < 2; set++) {
         uint32_t* c = kept_command(set, index);
         c[5] = (c[5] & ~(uint32_t)FRAGMENT_SMOOTH) | t->smooth;
-        c[7] = GPU_PHYS + t->address;
+        c[7] = drawn_at(t);
         c[8] = t->width;
         c[9] = t->height;
     }

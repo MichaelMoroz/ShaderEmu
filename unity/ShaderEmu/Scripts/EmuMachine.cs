@@ -46,6 +46,8 @@ public class EmuMachine : UdonSharpBehaviour
     public Material gatherBlitMaterial;     // MachineCommitBlit.shader, its pass 0: the gather into the stage
     public Material pointsBlitMaterial;     // the same shader, its pass 1: the RAM commit into the state
     public Material gpuBlitMaterial;        // GpuDrawBlit.shader: the depth cleared (pass 8), then the GPU's 12 passes
+    public RenderTexture vram;              // 4096 x 4096 RGBA8 with mip levels: textures the guest uploaded (GpuDrawBlit's pass 13)
+    public RenderTexture drawIds;            // 512 x 384 RGInt: each mesh vertex's command and passes (GpuDrawBlit's pass 14)
     public Material orderMaterial;          // BlitOrder.shader
     public RenderTexture orderTexture;      // 81 x 81: its pass 0's
     public RenderTexture rankTexture;       // 81 x 1: each point's place, which the blits' calls go by (_AmpRank)
@@ -1310,12 +1312,47 @@ public class EmuMachine : UdonSharpBehaviour
 
     // The GPU's list: the camera's mesh, or as blits into its target and depth (GpuDrawBlit.shader).
     private int[] BlitPassOrder = new int[] { 0, 1, 2, 3, 9, 10, 4, 5, 6, 7, 11, 12 };
+    // The VRAM (docs/machine/gpu.md, "VRAM"): a readback saw a list asking for its mip levels (SUBMIT_UPLOADS), which waits,
+    // drawn by no pass, until a frame makes them: the next frame's first GpuDraw does, and says so to the passes and the
+    // control pass (_GpuUploaded, GPU_UPLOADED) for the rest of that frame.
+    private bool vramLevelsDue, vramLevelsMade;
+    private void VramFrame()
+    {
+        uint now = vramLevelsMade ? 0x10000u : 0u;
+        vramLevelsMade = false;
+        if (vramLevelsDue && vram != null)
+        {
+            vramLevelsDue = false;
+            vramLevelsMade = true;   // (made by this frame's first GpuDraw, after the uploads)
+        }
+        uint next = vramLevelsMade ? 0x10000u : 0u;
+        if (now != next || !vramSet)
+        {
+            vramSet = true;
+            if (gpuBlitMaterial != null) gpuBlitMaterial.SetInt("_GpuUploaded", (int)next);
+            machineMaterial.SetInt("_GpuUploaded", (int)next);
+        }
+        vramMipsPending = vramLevelsMade;
+    }
+    private bool vramSet, vramMipsPending;
     private void GpuDraw()
     {
         if ((oldPaths & 64) == 0 && gpuBlitMaterial != null)
         {
             RenderTexture target = gpuCamera.targetTexture;
             gpuBlitMaterial.SetTexture("_State", state);
+            // each vertex's command and passes, found once for the uploads and the 12 passes (docs/machine/gpu.md, "Draw IDs")
+            if (drawIds != null) VRCGraphics.Blit(blackTexture, drawIds, gpuBlitMaterial, 14);
+            if (vram != null)
+            {
+                // the list's uploads into level 0, then its levels when asked (the list waits for them)
+                VRCGraphics.Blit(blackTexture, vram, gpuBlitMaterial, 13);
+                if (vramMipsPending)
+                {
+                    vram.GenerateMips();
+                    vramMipsPending = false;
+                }
+            }
             VRCGraphics.Blit(blackTexture, target, gpuBlitMaterial, 8);
             // the GPU's passes in their order (FRAGMENT_PASS in gpu.h): 0-3, 8 and 9 (the shader's 9 and 10), 4-7,
             // 12 and 13 (its 11 and 12)
@@ -1358,6 +1395,7 @@ public class EmuMachine : UdonSharpBehaviour
         int n = !running ? 1 : steady ? SteadyRounds() : rounds;
         machineMaterial.SetInt("_SoundMixed", 0);
         BlitOrder();
+        VramFrame();
         for (int i = 0; i < n; i++)
         {
             // The tick camera draws what the cores keep of their state (core 0's pixels, and a
@@ -1829,6 +1867,7 @@ public class EmuMachine : UdonSharpBehaviour
             displayHeight = 0;
         }
         gpuFrames = Word(65, 3);
+        if ((Word(65, 0) & 9u) == 9u) vramLevelsDue = true;   // (a list submitted that asks for the VRAM's levels: VramFrame)
         if (gpuFrames != gpuFramesSeen)
         {
             gpuFramesSeen = gpuFrames;

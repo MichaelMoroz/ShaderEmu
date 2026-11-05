@@ -36,6 +36,34 @@ void* seglMemory(unsigned int bytes);
 // Makes the bound texture those pixels, with no copy: GL_COLOR_INDEX8_EXT bytes or GL_RGBA
 // words (0xTTRRGGBB, T being transparency), rows top to bottom.
 void seglTexturePointer(const void* pixels, GLsizei width, GLsizei height, GLenum internal);
+// Textures made from now on by glTexImage2D are copied into the VRAM (docs/machine/gpu.md, "VRAM") and drawn from
+// there, with mip levels down to 2^`lod` times smaller (at most 4; 0 the texture alone, no levels; -1 off: drawn from
+// GPU memory, as before). A paletted one takes the palette as it is when the list is next submitted, and its key's
+// (glColorKeySE) texels are holes. Off by default; SEGL_VRAM=N in the environment overrides it. For 3D programs:
+// a 2D one's pictures stay those of GPU memory to the pixel.
+void seglVram(int lod);
+// The bound texture's pixels changed (its memory, written by the program): copied into the VRAM again, or the first
+// time with seglVram on. The memory is read when the next list is drawn: it may be anywhere (the program's own), and
+// must stay as it is until then (seglSettle).
+void seglTextureChanged(void);
+// The same with at most `levels` mip levels the first time, whatever seglVram's (0: none, a light map that changes, whose
+// upload of no levels waits for nothing); with seglVram off, nothing.
+void seglVramLevels(int levels);
+// The VRAM by slot, for a program whose textures are not the library's (Half-Life's and Jedi Outcast's GL, Quake III's):
+// a block for a w x h texture of at most `levels` levels, its padding the edge's (flags 1, clamped) or its own repeat, and
+// with flags 2 keyed (the key's texels 0 and its colours times alpha: a draw of it drops where they are most): its slot,
+// to give a draw as its texture's address; 0 when the VRAM is full or seglVram is off.
+unsigned seglVramTake(unsigned w, unsigned h, int levels, int flags);
+// The block given back for the next texture of its size, and its upload if one waits.
+void seglVramGive(unsigned slot, unsigned w, unsigned h);
+// w x h texels at `address` (as the GPU reads it: GPU memory, or a file's bytes where it lies in the ROM) into the slot,
+// in the next list submitted: kind 1 words (0xTTRRGGBB), 2 bytes through `palette` (256 words 0x00RRGGBB; 0 the display's),
+// 4 three bytes; `key` the texel (a keyed slot's) that becomes 0. The memory is read when that list is drawn and must stay
+// as it is until then.
+void seglVramUpload(unsigned slot, unsigned address, unsigned w, unsigned h, unsigned kind, unsigned key, unsigned palette);
+// The palette paletted textures are uploaded with from now on (256 words, 0x00RRGGBB, memory the program keeps), not
+// the display's: a program whose display palette flashes (Doom) uploads with its plain one. NULL: the display's.
+void seglVramPalette(const unsigned int* words);
 // The 256-word palette of paletted textures (0x00RRGGBB), for writing directly.
 unsigned int* seglPalette(void);
 // How many bytes seglMemory() still has to give.

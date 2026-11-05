@@ -902,7 +902,10 @@ static u64 trap_counts[2][16];   // exceptions and interrupts, by cause
 static void take_trap(Core& c, u32 cause, u32 value, u32 pc) {
     _InterlockedIncrement64((volatile long long*)&trap_counts[cause >> 31][cause & 15]);
     static int trap_log = getenv("RVC_TRAP_LOG") ? atoi(getenv("RVC_TRAP_LOG")) : 0;   // (the first N traps, said)
-    if (trap_log > 0 && !(cause >> 31) && trap_log--)
+    // (RVC_TRAP_MASK=HEX: only the exceptions whose cause's bit is set, e.g. 0xa0a4 for illegal instructions, access
+    // and page faults: a program's crash among the system calls)
+    static u32 trap_mask = getenv("RVC_TRAP_MASK") ? (u32)strtoul(getenv("RVC_TRAP_MASK"), nullptr, 16) : 0xffffu;
+    if (trap_log > 0 && !(cause >> 31) && (trap_mask >> (cause & 15) & 1) && trap_log--)
         fprintf(stderr, "[trap] core %d cause %u value %08x at %08x, instruction %llu, ra %08x sp %08x\n", c.hart, cause, value, pc,
                 (unsigned long long)c.clock, c.x[1], c.x[2]);
     c.scause = cause;

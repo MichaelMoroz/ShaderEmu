@@ -9,6 +9,11 @@ software and compares.
 SNAPSHOT may also be rvc_cpu's --save-ram (the 288 MB of RAM from 0x80000000), and TARGET `-`: then
 there is no card's picture to compare, and --png PREFIX writes the model's alone (PREFIX_model.png).
 
+Textures in the VRAM (docs/machine/gpu.md, "VRAM": an address with its top two bits clear is a slot) are read from
+the VRAM's level 0 the harness's --save-state writes beside the snapshot (SNAPSHOT.vram, or --vram FILE). The model
+samples level 0 only: where the card minifies a texture (its levels, trilinear), the two differ, and the report says
+how many pixels were drawn from the VRAM. Uploads (command 6) draw nothing in the picture and are skipped.
+
 The real picture comes from the graphics card's rasteriser, so this is not bit-exact: pixels
 on triangle edges can fall either way, and colours can differ by a rounding step. The report
 separates interior agreement from edge pixels.
@@ -18,6 +23,7 @@ import numpy as np
 
 f32 = np.float32
 TARGET = 2048
+VRAM_SIDE = 4096
 RAM_BYTES = 288 << 20
 
 
@@ -26,11 +32,22 @@ class Machine:
         self.rom_words = None
         if os.path.getsize(path) == RAM_BYTES:   # rvc_cpu --save-ram: RAM alone, from 0x80000000
             self.words = np.memmap(path, dtype=np.uint32, mode='r')
+            self.load_vram(path)
             return
         rows = int(np.fromfile(path, dtype=np.uint32, count=4)[3])   # the header's height
         tex = np.memmap(path, dtype=np.uint32, mode='r', offset=32).reshape(rows, 2048, 4)
         self.words = tex[64:].reshape(-1)
         self.rom_words = None
+        self.load_vram(path)
+
+    vram = None
+    vram_drawn = 0   # fragments drawn from the VRAM
+
+    def load_vram(self, path):
+        """The VRAM's level 0, 4096 x 4096 RGBA8, as floats 0..1 (SNAPSHOT.vram or --vram FILE)."""
+        vpath = sys.argv[sys.argv.index('--vram') + 1] if '--vram' in sys.argv else path + '.vram'
+        if os.path.exists(vpath):
+            self.vram = np.fromfile(vpath, np.uint8).reshape(VRAM_SIDE, VRAM_SIDE, 4)
 
     def rom(self):
         """The ROM (addresses from 0x40000000) as words: the Linux image's root file system."""
@@ -95,6 +112,8 @@ def vertices(m):
         op = int(w[0])
         if op == 0:
             break
+        if op == 6:
+            continue   # an upload: into the VRAM, not the picture
         if op == 1:
             pos = place_pixels(np.array([[0, 0], [2, 0], [0, 2]], f32) * size, 1.0)
             out.append(dict(op=op, pos=pos, colour=np.repeat(colour_of(w[1])[None], 3, 0), uv=np.zeros((3, 2), f32),
@@ -205,12 +224,56 @@ def rgb24(m, addr, n):
     return (texel & 0xff) << 16 | (texel & 0xff00) | (texel >> 16) & 0xff
 
 
+def is_slot(addr):
+    """A texture address that is a slot of the VRAM (VRAM_IS): its top two bits clear."""
+    return (addr >> 30) == 0
+
+
+def vram_fetch(m, x, y):
+    if m.vram is None:
+        raise SystemExit('a texture in the VRAM, and no VRAM beside the snapshot (--save-state writes SNAPSHOT.vram; or --vram FILE)')
+    return m.vram[np.clip(y, 0, VRAM_SIDE - 1), np.clip(x, 0, VRAM_SIDE - 1)].astype(np.float64) / 255.0
+
+
+def vram_sample(m, slot, tw, th, uv, clamped, smooth):
+    """A slot's texture at uv, from level 0: the four texels round the point (the padding is the texture's own, so the
+    sampler's neighbours past an edge are its repeat or its edge), or the nearest. RGBA, 0..1."""
+    sx, sy = slot & 0xfff, (slot >> 12) & 0xfff
+    u, v = uv[:, 0].astype(np.float64), uv[:, 1].astype(np.float64)
+    if clamped:
+        u, v = np.clip(u, 0, 1), np.clip(v, 0, 1)
+    else:
+        u, v = u - np.floor(u), v - np.floor(v)
+    if not smooth:
+        if clamped:
+            u, v = u * 0.99999, v * 0.99999
+        x = np.minimum((u * tw).astype(np.int64), tw - 1)
+        y = np.minimum((v * th).astype(np.int64), th - 1)
+        return vram_fetch(m, sx + x, sy + y)
+    ax, ay = sx + u * tw - 0.5, sy + v * th - 0.5
+    lx, ly = np.floor(ax), np.floor(ay)
+    px, py = (ax - lx)[:, None], (ay - ly)[:, None]
+    x0, y0 = lx.astype(np.int64), ly.astype(np.int64)
+    c = [vram_fetch(m, x0 + dx, y0 + dy) for dx, dy in ((0, 0), (1, 0), (0, 1), (1, 1))]
+    return (c[0] * (1 - px) + c[1] * px) * (1 - py) + (c[2] * (1 - px) + c[3] * px) * py
+
+
 def lighting(m, light, uv):
     """A lit draw's light at each fragment: its light map's four texels round the point, weighed,
     the map's edge going on beyond it."""
     addr, tw, th = light
     if not tw or not th:
         return np.ones((len(uv), 3), np.float64)
+    if is_slot(addr):
+        # a light map in the VRAM: level 0, its edge texels a half texel in (gpu_light)
+        sx, sy = addr & 0xfff, (addr >> 12) & 0xfff
+        p = np.clip(np.clip(uv.astype(np.float64), 0, 1) * np.array([tw, th]), 0.5, np.array([tw, th]) - 0.5)
+        ax, ay = sx + p[:, 0] - 0.5, sy + p[:, 1] - 0.5
+        lx, ly = np.floor(ax), np.floor(ay)
+        px, py = (ax - lx)[:, None], (ay - ly)[:, None]
+        x0, y0 = lx.astype(np.int64), ly.astype(np.int64)
+        c = [vram_fetch(m, x0 + dx, y0 + dy)[:, :3] for dx, dy in ((0, 0), (1, 0), (0, 1), (1, 1))]
+        return (c[0] * (1 - px) + c[1] * px) * (1 - py) + (c[2] * (1 - px) + c[3] * px) * py
     ax = np.clip(uv[:, 0], 0, 1).astype(f32) * f32(tw) - f32(0.5)
     ay = np.clip(uv[:, 1], 0, 1).astype(f32) * f32(th) - f32(0.5)
     lx, ly = np.floor(ax), np.floor(ay)
@@ -229,6 +292,16 @@ def shade(m, colour, uv, tex, key, light=None):
         colour = colour.copy()
         colour[:, :3] = (colour[:, :3] * lighting(m, light, uv[:, 2:4])).astype(f32)
     clamped = bool(tex[0] & 0x1000)
+    if is_slot(addr) and mode != 0 and tw and th:
+        # a texture in the VRAM: all colours there now; a keyed one premultiplied, its key's texels 0
+        t = vram_sample(m, addr, tw, th, uv[:, :2], clamped, bool(tex[0] & 0x400))
+        if addr & 0x08000000:
+            keep = t[:, 3] >= 0.5
+            t = np.concatenate([t[:, :3] / np.maximum(t[:, 3:4], 1e-9), np.ones((len(t), 1))], axis=1)
+        elif tex[0] & 0x100 and not tex[0] & 0x400:
+            keep = t[:, 3] > 0   # (a keyed draw of a plain slot: its key is the texel of no alpha)
+        m.vram_drawn += int(keep.sum())
+        return np.clip(colour * t, 0, 1), keep
     if clamped:
         uv = np.clip(uv[:, :2], 0, 1)
     if tex[0] & 0x400 and mode in (1, 2, 4) and tw and th:
@@ -487,6 +560,8 @@ def main():
     inner = ~edge
     print('picture %dx%d, %d commands, %d triangles on screen, %d wholly behind the eye'
           % (width, height, stats['commands'], stats['triangles'], stats['behind_eye']))
+    if m.vram_drawn:
+        print('%d fragments drawn from the VRAM, from its level 0 (where the card minified, its levels differ)' % m.vram_drawn)
     print('away from triangle edges: %d pixels, %.3f%% identical, %.3f%% within 2 levels, %d differ by more than 8'
           % (inner.sum(), (d[inner] == 0).mean() * 100, (d[inner] <= 2).mean() * 100, int((d[inner] > 8).sum())))
     print('on triangle edges: %d pixels, %.2f%% within 2 levels' % (edge.sum(), (d[edge] <= 2).mean() * 100 if edge.any() else 100))

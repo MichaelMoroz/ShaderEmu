@@ -23,6 +23,10 @@
 #include "nano-X.h"
 #include "mcwx.h"
 
+/* the plain palette the view's pictures go into the VRAM with, and whether they do (I_SetPalette, doom_tint) */
+unsigned int doom_plain[256];
+static int vram_on;	/* (DOOM_VRAM): off, the palette's flash is on the view's pictures already */
+
 void I_FinishUpdate_port(void);
 void I_SetPalette_port(unsigned char *palette);
 void I_InitGraphics_port(void);
@@ -30,6 +34,7 @@ GR_WINDOW_ID doom_window(void);
 extern unsigned char *screens[5];
 extern unsigned char gammatable[5][256];
 extern int usegamma;
+void *W_CacheLumpName(char *name, int tag);
 extern int gametic, gameaction;
 extern int doom_gl, doom_gl_scene, doom_gl_kept;
 extern int doom_view_inline;	/* so many views more are this core's own to draw (doom_gl.c) */
@@ -240,6 +245,23 @@ I_InitGraphics(void)
 	seglWorldUp(3);	/* z */
 	if ((soft && *soft == '1') || seglInit(doom_window()) < 0)
 		return;
+	{
+		/* the view's pictures in the VRAM, with mip levels (DOOM_VRAM=0: drawn from GPU memory, as before) */
+		const char *v = getenv("DOOM_VRAM");
+
+		vram_on = !(v && *v == '0');
+		seglVram(vram_on ? 4 : -1);
+		seglVramPalette(doom_plain);
+		if (vram_on) {
+			/* the plain palette now: the game's first I_SetPalette came before the GPU was open */
+			const unsigned char *playpal = W_CacheLumpName("PLAYPAL", 101 /* PU_CACHE */);
+			int i;
+
+			for (i = 0; i < 256; i++, playpal += 3)
+				doom_plain[i] = (unsigned)gammatable[usegamma][playpal[0]] << 16 |
+					gammatable[usegamma][playpal[1]] << 8 | gammatable[usegamma][playpal[2]];
+		}
+	}
 	screen = seglMemory(SCREEN_W * SCREEN_H);
 	if (!screen)
 		return;
@@ -595,6 +617,35 @@ doom_wait(void)
 	all_wait += cycles() - began;
 }
 
+/*
+ * The view's pictures are in the VRAM (docs/machine/gpu.md, "VRAM"), made with the palette as it is with no
+ * flash: Doom's black (index 0) and white (index 4) as they are, whatever the gamma. A flash (damage, a pickup,
+ * the suit) moves both toward its colour by the same share, and the view draws that over itself (doom_tint).
+ */
+
+int
+doom_tint(unsigned int *colour)
+{
+	const unsigned int *words = seglPalette();
+	unsigned int black = words[0], white = words[4];
+	int part = 0, k;
+
+	if (!vram_on)
+		return 0;
+	for (k = 0; k < 3; k++)
+		part += 255 - (int)((white >> 8 * k & 255) - (black >> 8 * k & 255));
+	part /= 3;	/* (in 255ths: how far toward the flash's colour, which black is that far toward) */
+	if (part <= 2)
+		return 0;
+	*colour = 0;
+	for (k = 0; k < 3; k++) {
+		int c = (int)(black >> 8 * k & 255) * 255 / part;
+
+		*colour |= (unsigned)(c > 255 ? 255 : c) << 8 * k;
+	}
+	return part;
+}
+
 void
 I_SetPalette(unsigned char *palette)
 {
@@ -611,6 +662,8 @@ I_SetPalette(unsigned char *palette)
 	for (i = 0; i < 256; i++, palette += 3)
 		words[i] = (unsigned)gammatable[usegamma][palette[0]] << 16 | gammatable[usegamma][palette[1]] << 8 |
 			gammatable[usegamma][palette[2]];
+	if (words[0] == 0 && words[4] == 0xffffff)
+		memcpy(doom_plain, words, sizeof doom_plain);
 }
 
 /* A frame's drawing writes the screen, the kept level and the palette, which the list of the

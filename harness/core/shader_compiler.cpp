@@ -1,3 +1,4 @@
+#include <algorithm>
 #include "shader_compiler.h"
 
 #include <chrono>
@@ -5,6 +6,9 @@
 #include <cstring>
 #include <filesystem>
 #include <map>
+#include <mutex>
+
+void noteCode(uint64_t h);   // (below: compiledCode under its lock)
 
 namespace fs = std::filesystem;
 
@@ -147,6 +151,7 @@ StageResult compileStage(const std::string& source, const std::string& sourceNam
                 memcpy(r.bytecode->GetBufferPointer(), bytes.data(), bytes.size());
                 r.ok = true;
                 r.fromCache = true;
+                noteCode(fnv1a64(bytes.data(), bytes.size()));
                 r.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
                 return r;
             }
@@ -166,7 +171,38 @@ StageResult compileStage(const std::string& source, const std::string& sourceNam
         return r;
     }
     r.ok = true;
+    noteCode(fnv1a64(r.bytecode->GetBufferPointer(), r.bytecode->GetBufferSize()));
     if (!cachePath.empty())
         writeFileBinary(cachePath, r.bytecode->GetBufferPointer(), r.bytecode->GetBufferSize());
     return r;
+}
+
+std::vector<uint64_t>& compiledCode() {
+    static std::vector<uint64_t> hashes;
+    return hashes;
+}
+// (the stages compile on threads of their own, std::async in material.cpp: a push_back of two at once broke the heap,
+// a harness that died now and then with 0xC0000005 as a shader's stages came back)
+static std::mutex& codeLock() {
+    static std::mutex m;
+    return m;
+}
+void noteCode(uint64_t h) {
+    std::lock_guard<std::mutex> hold(codeLock());
+    compiledCode().push_back(h);
+}
+
+std::string codeStamp() {
+    std::vector<uint64_t> sorted;
+    {
+        std::lock_guard<std::mutex> hold(codeLock());
+        sorted = compiledCode();
+    }
+    std::sort(sorted.begin(), sorted.end());
+    sorted.erase(std::unique(sorted.begin(), sorted.end()), sorted.end());
+    uint64_t h = 0xcbf29ce484222325ull;
+    for (uint64_t v : sorted) h = fnv1a64(&v, sizeof v, h);
+    char s[24];
+    snprintf(s, sizeof s, "c%016llx", (unsigned long long)h);
+    return s;
 }

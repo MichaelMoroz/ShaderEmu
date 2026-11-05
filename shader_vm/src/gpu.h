@@ -19,6 +19,17 @@
 #define SUBMIT_WRITEBACK 2   // afterwards copy the picture into the RAM framebuffer
 #define SUBMIT_INTO 4        // afterwards copy it into the rectangle of RAM at GPU_INTO, whose size the picture has
 #define SUBMIT_COPIES (SUBMIT_WRITEBACK | SUBMIT_INTO)
+// The host draws a list's CMD_UPLOADs into the VRAM before its passes, every frame a list is drawn (GPUUpload). The VRAM's mip
+// levels it makes anew only when asked: SUBMIT_UPLOADS, the list has an upload of a texture with levels (VRAM_LOD not 0).
+#define SUBMIT_UPLOADS 8
+// _GpuPasses' bit 16: the host made the levels this frame. A list with SUBMIT_UPLOADS waits, submitted and not drawn, until it
+// has (as one waits for a pass the host does not draw yet), so its draws find their textures' levels; one whose uploads are
+// all of textures without levels (a light map changed) waits for nothing.
+#define GPU_UPLOADED 0x10000u
+// The picture is GPU_INTO's size (its width and height words) though nothing is copied into RAM: a framebuffer's list drawn
+// for its copies into the VRAM alone (gles.c's glBindFramebufferOES), placed as the window's would be.
+#define SUBMIT_SIZED 0x1000000u
+#define SUBMIT_WAITS(submit, passes) ((SUBMIT_PASSES(submit) & ~(passes)) != 0 || (((submit) & SUBMIT_UPLOADS) != 0 && ((passes) & GPU_UPLOADED) == 0))
 // Bits 9-23: the list has commands for passes 1-15. It is drawn, and the submit word taken back,
 // once the host draws all of those (it learns of them by reading these words back).
 #define SUBMIT_PASSES(submit) (((submit) >> 8) & 0xfffe)
@@ -37,6 +48,9 @@
 #define CMD_DRAW 3      // `count` vertices
 #define CMD_TEXT 4      // 6 vertices a character
 #define CMD_SPRITES 5   // 6 vertices a sprite record (docs/machine/gpu.md, "Sprites of a paletted picture")
+#define CMD_UPLOAD 6    // 6 vertices: a texture copied into the VRAM with its mip levels (docs/machine/gpu.md, "VRAM")
+#define CMD_COPY 7      // 6 vertices: a rectangle of the picture copied into a slot of the VRAM after the list's passes ("Copies")
+#define COPY_TURNED 1u  // (CMD_COPY's flags) the rows turned over: the picture's top row is the slot's last (OpenGL's order)
 
 // How a draw's vertices are projected.
 #define VERTEX_SCREEN 0   // position is already in pixels (x, y) and depth (z, 0..1)
@@ -54,6 +68,7 @@
 #define VERTEX_MOVED 0x10000     // flag: word 15 is the address of two rows of three numbers the texture coordinates are turned and moved by
 #define VERTEX_BONES 0x40000     // flag (floats, not compact): a skinned model's vertex, made from its indices, vertices, bones and light (words 1, 12-15; gpu.md)
 #define VERTEX_ENV 0x80000       // flag (compact, floats): u and v made from a normal a vertex (word 12, a texel each) and the eye (words 13-15), as rd-vanilla's environment map
+#define VERTEX_ARRAYS 0x100000   // flag (floats): a vertex from a renderer's arrays by its index, made as a compact vertex of them would be (words 1, 11, 12-15; gpu_arrays_vertex)
 
 // How fragments are coloured (low byte), plus flags.
 #define FRAGMENT_COLOUR 0     // interpolated colour
@@ -99,6 +114,78 @@
 #define SPRITE_WORDS 7        // a picture these commands drew, a word a pixel: red the index, green its remaps (the command's table)
 #define SPRITE_RAW 8          // the byte, 0 too
 #define SPRITE_SHADES(kind) ((kind) == SPRITE_SHADE || (kind) == SPRITE_FILL_SHADE)
+
+// The VRAM (docs/machine/gpu.md, "VRAM"): a texture of VRAM_SIDE x VRAM_SIDE colours, RGBA8, with mip levels the host makes
+// of all of it after the uploads (GenerateMips), into which CMD_UPLOAD copies textures from RAM or the ROM. A texture lies in
+// a block padded with its own texels as it repeats (or with VRAM_CLAMPED its edge's), 2^L of them each side, the block's
+// corner and size whole multiples of 2^L: so its levels up to L are its own, and a sample of a level up to L weighs only its
+// texels. A draw's texture address (or a light map's) with its top two bits clear is not an address but such a texture:
+#define VRAM_SIDE 4096
+#define VRAM_X(slot) ((slot) & 0xfffu)               // its texel (0, 0), past the padding
+#define VRAM_Y(slot) (((slot) >> 12) & 0xfffu)
+#define VRAM_LOD(slot) (((slot) >> 24) & 7u)         // L, the most a sample is minified (2^L); its padding is 2^L (1 for L = 0)
+#define VRAM_PREMULTIPLIED 0x08000000u               // uploaded with a key: colours times alpha, the key's texels 0
+#define VRAM_CLAMPED 0x10000000u                     // padded with the edge's texels (a light map), not the other side's
+#define VRAM_IS(address) (((address) >> 30) == 0u)
+// Streams (docs/machine/gpu.md, "Streams"): what a list's draws would read from RAM (a texture, a light map, a glyph, a
+// sprite's pixels) copied by the device into a texture of its own as large as the VRAM (_GpuStreams: VRAM as well, the
+// textures' rows left to them) before the list's passes, a texel a pixel,
+// one after another in the band's order. Such an address is VRAM_STREAM | its first texel's number in the band (an
+// address of VRAM_IS, never a slot: a slot has bit 29 clear).
+#define VRAM_STREAM 0x20000000u
+#define STREAM_IS(address) (((address) >> 29) == 1u)
+#define STREAM_AT(address) ((address) & 0x1fffffffu)
+#define GPU_STREAM_SIDE_TEXELS 4096u   // the streams' texture, square (VRAM_SIDE)
+#define GPU_STREAM_TEXELS (GPU_STREAM_SIDE_TEXELS * GPU_STREAM_SIDE_TEXELS)
+#define GPU_STREAM_SIDE 256u   // the streams' sums: a texel a triangle of the mesh (65,536), 256 a row
+uint vram_pad(uint slot) { return 1u << VRAM_LOD(slot); }
+// The block CMD_UPLOAD covers for a w x h texture (programs/common/gpu.h has the same): from 2^L before its texel (0, 0),
+// rounded up to whole 2^L.
+uint2 vram_block(uint2 size, uint slot) {
+    uint pad = vram_pad(slot), mask = (1u << VRAM_LOD(slot)) - 1;
+    return (size + 2 * pad + mask) & ~mask;
+}
+
+#ifdef GPU_VRAM
+Texture2D<float4> _GpuVram;           // the VRAM, with its mip levels (VRAM_SIDE square)
+SamplerState sampler_linear_clamp;    // (its name is the sampler's kind, in Unity and the harness)
+#endif
+#ifdef GPU_STREAMS
+// The streams' sums (GPUStreamSums): a triangle's stream's size and its first texel in the band, a row's sizes summed and
+// where the row's streams start. (A host whose integer targets are signed defines GPU_STREAM_WORD int.)
+#ifndef GPU_STREAM_WORD
+#define GPU_STREAM_WORD uint
+#endif
+Texture2D<GPU_STREAM_WORD> _GpuStreamOffsets, _GpuStreamRows, _GpuStreamStarts, _GpuStreamParts, _GpuStreamGroups;
+// (the sizes' texel: the size, and the triangle + 1 whose stream a texture the same as an earlier command's takes, 0 none)
+#ifndef GPU_STREAM_PAIR
+#define GPU_STREAM_PAIR uint2
+#endif
+Texture2D<GPU_STREAM_PAIR> _GpuStreamSizes;
+#define STREAM_SIZE(t) asuint(_GpuStreamSizes.Load(int3((t) % GPU_STREAM_SIDE, (t) / GPU_STREAM_SIDE, 0)).x)
+#define STREAM_SHARED(t) asuint(_GpuStreamSizes.Load(int3((t) % GPU_STREAM_SIDE, (t) / GPU_STREAM_SIDE, 0)).y)
+#define STREAM_OFFSET(t) asuint(_GpuStreamOffsets.Load(int3((t) % GPU_STREAM_SIDE, (t) / GPU_STREAM_SIDE, 0)))
+#define STREAM_ROW(r) asuint(_GpuStreamRows.Load(int3((r), 0, 0)))
+#define STREAM_START(r) asuint(_GpuStreamStarts.Load(int3((r), 0, 0)))
+// (sixteen triangles' sizes of a row summed, GPU_STREAM_PARTS x GPU_STREAM_SIDE; sixteen rows' sums, GPU_STREAM_PARTS x 1)
+#define GPU_STREAM_PART 16
+#define GPU_STREAM_PARTS (GPU_STREAM_SIDE / GPU_STREAM_PART)
+#define STREAM_PART(r, g) asuint(_GpuStreamParts.Load(int3((g), (r), 0)))
+#define STREAM_GROUP(g) asuint(_GpuStreamGroups.Load(int3((g), 0, 0)))
+#ifdef GPU_VRAM
+Texture2D<float4> _GpuStreams;   // the streams, one after another in rows of GPU_STREAM_SIDE_TEXELS
+// Texel (x, y) of a stream of rows of `width`.
+float4 stream_texel(uint address, uint x, uint y, uint width) {
+    uint n = STREAM_AT(address) + y * width + x;
+    return _GpuStreams.Load(int3(n % GPU_STREAM_SIDE_TEXELS, n / GPU_STREAM_SIDE_TEXELS, 0));
+}
+#endif
+#endif
+// Whether a texture of this fragment mode, address and size is read from RAM by a draw, and so streamed: every kind of
+// gpu_upload_fragment's (sprites apart).
+bool gpu_streamed(uint mode, uint address, uint width, uint height) {
+    return mode >= 1u && mode <= 8u && width != 0 && height != 0 && !VRAM_IS(address) && width * height <= GPU_STREAM_TEXELS;
+}
 
 #ifndef GPU_STATE_ROW
 #define GPU_STATE_ROW 64u   // the state texture's row RAM starts in
@@ -202,6 +289,45 @@ void gpu_compact_vertex(uint base, uint4 head, uint4 how, uint4 more, uint k, ou
         uint light = texel_of(ram(base + 3).g);
         colour = float4(saturate(asfloat(ram(light + 2)).rgb + max(dot(facing, asfloat(ram(light)).xyz), 0.0) * asfloat(ram(light + 1)).rgb), 1.0);
     }
+}
+
+// Vertex k of a draw of a renderer's arrays (VERTEX_ARRAYS; docs/machine/gpu.md, "A renderer's arrays"), as Jedi
+// Outcast's shim made a compact vertex of them (linux/jk2/gl_jk2.c, fast_triangles), so that a picture is that draw's to
+// the pixel: word 1 the indices, two of 16 bits a word, from the arrays' first vertex; word 12 the positions, a texel of
+// floats each (x, y, z); word 13 the texture coordinates, two floats each; word 14 the colours, the GL's four bytes each;
+// word 15 the flags in its low byte and the coordinates' least, two integers of 12 bits from bit 8 (subtracted, as the
+// shim made a compact vertex's coordinates from them, then in 1,024ths: 16 bits by an int, or with ARRAYS_SMALL 12 bits by
+// an unsigned, as a tagged vertex's); word 11 the colour of every vertex with ARRAYS_ONE, else each its own, made as the
+// shim's word of it (0xTTRRGGBB, T 255 less alpha; alpha 255 with ARRAYS_OPAQUE)
+#define ARRAYS_FAR 1      // z the far plane's, -0.9999: 2D before the frame's first 3D
+#define ARRAYS_ONE 2      // every vertex word 11's colour
+#define ARRAYS_SMALL 4    // the coordinates a tagged vertex's (12 bits, unsigned)
+#define ARRAYS_OPAQUE 8   // the alpha 255 (GL_ONE, GL_ONE)
+#define ARRAYS_WIDE 16    // the indices a word each (the renderer's own, copied as they are)
+void gpu_arrays_vertex(uint4 head, uint4 more, uint4 w, uint k, out float4 pos, out float2 uv, out float4 colour) {
+    uint index;
+    [branch]
+    if ((w.a & ARRAYS_WIDE) != 0) {
+        index = ram_word(head.g + 4 * k);
+    } else {
+        uint pair = ram_word(head.g + 4 * (k >> 1));
+        index = (k & 1) != 0 ? pair >> 16 : pair & 0xffff;
+    }
+    float4 p = asfloat(ram(texel_of(w.r) + index));
+    pos = float4(p.x, p.y, (w.a & ARRAYS_FAR) != 0 ? -0.9999f : p.z, 1.0);
+    float2 t = asfloat(uint2(ram_word(w.g + 8 * index), ram_word(w.g + 8 * index + 4)));
+    float2 low = float2((float)((int)(w.a << 12) >> 20), (float)((int)w.a >> 20));
+    precise float2 d = t - low;
+    precise float2 s = d * 1024.0;
+    uint2 q = (w.a & ARRAYS_SMALL) != 0 ? uint2(s) & 0xfff : uint2(int2(s)) & 0xffff;
+    uv = float2(q) / 1024.0;
+    uint word = more.a;
+    if ((w.a & ARRAYS_ONE) == 0) {
+        uint c = ram_word(w.b + 4 * index);
+        word = (255 - (c >> 24)) << 24 | (c & 0xff) << 16 | (c & 0xff00) | ((c >> 16) & 0xff);
+        if ((w.a & ARRAYS_OPAQUE) != 0) word &= 0x00ffffff;
+    }
+    colour = colour_of(word);
 }
 
 // Vertex k of a skinned draw (VERTEX_BONES; docs/machine/gpu.md, "A skinned model"), as Jedi Outcast's Ghoul2 makes
@@ -321,18 +447,32 @@ float4 place_pixels(float2 p, float depth) {
     return float4(p.x * 2.0 / GPU_TARGET_W - 1.0, 1.0 - p.y * 2.0 / GPU_TARGET_H, depth, 1.0);
 }
 
-// The command that claims mesh vertices `id` to `id + span - 1`: its first texel and first
-// word (op, a, b, first slot). False while no list is submitted, when no command claims all of
-// them, or when the command belongs to another pass than the one being drawn.
-bool gpu_command(uint id, uint span, out uint base, out uint4 head) {
+// The draw IDs (docs/machine/gpu.md, "Draw IDs"): a texture of GPU_DRAW_IDS_W x GPU_DRAW_IDS_H texels, one a mesh vertex, drawn
+// once a frame a list is drawn (GPUDrawIds), before the upload pass: the texel of the command that claims the vertex and
+// the passes it is drawn in (bit p pass p, GPU_DRAW_ID_UPLOAD the upload pass). Every later pass reads its vertex's texel in
+// place of the search for its command, which 13 passes made 13 times for every vertex, drawn or not.
+#define GPU_DRAW_IDS_W 512u
+#define GPU_DRAW_IDS_H 384u   // (65,536 triangles' vertices)
+#define GPU_DRAW_ID_UPLOAD 0x10000u
+#define GPU_DRAW_ID_COPY 0x20000u     // the copy pass's (CMD_COPY), after every other
+#ifdef GPU_DRAW_IDS
+// (a host whose integer target is signed, Unity's RGInt, defines GPU_DRAW_IDS_TEXEL int2: the bits are the same)
+#ifndef GPU_DRAW_IDS_TEXEL
+#define GPU_DRAW_IDS_TEXEL uint2
+#endif
+Texture2D<GPU_DRAW_IDS_TEXEL> _GpuDrawIds;
+uint2 gpu_draw_id(uint id) { return asuint(_GpuDrawIds.Load(int3(id % GPU_DRAW_IDS_W, id / GPU_DRAW_IDS_W, 0))); }
+#endif
+
+// The command whose vertex range holds mesh vertex `id`, whatever its pass: its first texel and
+// first word (op, a, b, first slot), and the vertices it claims.
+bool gpu_owner(uint id, out uint base, out uint4 head, out uint slots) {
     base = 0;
     head = 0;
+    slots = 0;
     uint4 ctrl = ram(GPU_CTRL);
     uint list = texel_of(ctrl.g), count = min(ctrl.b, GPU_MAX_COMMANDS);
     if ((ctrl.r & SUBMIT_DRAW) == 0 || count == 0) return false;
-#ifdef GPU_PASS_UNIFORMS
-    if ((SUBMIT_PASSES(ctrl.r) & ~_GpuPasses) != 0) return false;   // not until every pass it needs is drawn
-#endif
     // Commands claim rising vertex ranges, so the owner is the last one starting at or before
     // this vertex: a binary search, twelve steps for the largest list.
     uint lo = 0, hi = count;
@@ -346,8 +486,49 @@ bool gpu_command(uint id, uint span, out uint base, out uint4 head) {
     base = list + 4 * lo;
     head = ram(base);
     uint op = head.r;
-    uint slots = op == CMD_CLEAR ? 3 : op == CMD_RECT ? 6 : op == CMD_DRAW ? head.b : op == CMD_TEXT ? 6 * ram(base + 1).b : op == CMD_SPRITES ? 6 * head.b : 0;
-    if (id < head.a || id + span > head.a + slots) return false;
+    slots = op == CMD_CLEAR ? 3 : op == CMD_RECT ? 6 : op == CMD_DRAW ? head.b : op == CMD_TEXT ? 6 * ram(base + 1).b : op == CMD_SPRITES ? 6 * head.b
+          : op == CMD_UPLOAD || op == CMD_COPY ? 6 : 0;
+    return id >= head.a && id < head.a + slots;
+}
+
+#ifdef GPU_DRAW_IDS_PASS
+// The draw-ID pass's texel for mesh vertex `id`: its command's texel and the passes it is drawn in. A list waiting for a
+// pass or for its levels (SUBMIT_WAITS) has only its uploads drawn. A sprite's is the passes of its kind: a shade in
+// pass 2, the rest in the command's others (gpu_vertex_sized collapses it elsewhere).
+uint2 gpu_draw_ids_fragment(uint id) {
+    uint base, slots;
+    uint4 head;
+    if (!gpu_owner(id, base, head, slots)) return 0;
+    uint op = head.r, passes;
+    if (op == CMD_UPLOAD) return uint2(base, GPU_DRAW_ID_UPLOAD);
+    if (SUBMIT_WAITS(ram(GPU_CTRL).r, _GpuPasses)) return 0;
+    if (op == CMD_COPY) return uint2(base, GPU_DRAW_ID_COPY);   // (with its list: not while that waits)
+    if (op == CMD_SPRITES) {
+        uint kind = (ram(texel_of(head.g) + (id - head.a) / 6).a >> 22) & 15;
+        passes = ram(base + 1).r & (SPRITE_SHADES(kind) ? 4u : ~4u);
+    } else {
+        passes = 1u << (op == CMD_RECT || op == CMD_TEXT ? FRAGMENT_PASS(ram(base + 2).r) : op == CMD_DRAW ? FRAGMENT_PASS(ram(base + 1).g) : 0);
+    }
+    return uint2(base, passes & 0xffff);
+}
+#endif
+
+// The command that claims mesh vertices `id` to `id + span - 1` and is drawn in the pass being drawn, found by searching
+// the list (the way without the draw IDs): its first texel and first word.
+bool gpu_command_search(uint id, uint span, out uint base, out uint4 head) {
+    uint slots;
+    if (!gpu_owner(id, base, head, slots) || id + span > head.a + slots) return false;
+#ifdef GPU_PASS_UNIFORMS
+    if (SUBMIT_WAITS(ram(GPU_CTRL).r, _GpuPasses)) return false;   // not until every pass it needs is drawn, and its uploads
+#endif
+    uint op = head.r;
+#ifdef GPU_UPLOAD_PASS
+    return op == CMD_UPLOAD;   // (the pass into the VRAM draws the uploads alone, before every other pass)
+#elif defined(GPU_COPY_PASS)
+    return op == CMD_COPY;     // (and the copies alone, after every other)
+#else
+    if (op == CMD_UPLOAD || op == CMD_COPY) return false;
+#endif
 #ifdef GPU_PASS_UNIFORMS
     uint drawn_in = op == CMD_RECT || op == CMD_TEXT ? FRAGMENT_PASS(ram(base + 2).r) : op == CMD_DRAW ? FRAGMENT_PASS(ram(base + 1).g) : 0;
     if (op == CMD_SPRITES) return ((ram(base + 1).r >> _GpuPass) & 1) != 0;   // (its word 4: the passes it is drawn in)
@@ -356,11 +537,135 @@ bool gpu_command(uint id, uint span, out uint base, out uint4 head) {
     return true;
 }
 
+// The command that claims mesh vertices `id` to `id + span - 1`: its first texel and first
+// word (op, a, b, first slot). False while no list is submitted, when no command claims all of
+// them, or when the command belongs to another pass than the one being drawn.
+bool gpu_command(uint id, uint span, out uint base, out uint4 head) {
+#ifdef GPU_DRAW_IDS
+    base = 0;
+    head = 0;
+    uint2 c = gpu_draw_id(id);
+#ifdef GPU_UPLOAD_PASS
+    if ((c.g & GPU_DRAW_ID_UPLOAD) == 0) return false;
+#elif defined(GPU_COPY_PASS)
+    if ((c.g & GPU_DRAW_ID_COPY) == 0) return false;
+#else
+    if (((c.g >> _GpuPass) & 1) == 0) return false;
+#endif
+    if (span > 1) {
+        uint last = id + span - 1;
+        if (gpu_draw_id(last).r != c.r) return false;
+    }
+    base = c.r;
+    head = ram(base);
+    return true;
+#else
+    return gpu_command_search(id, span, base, head);
+#endif
+}
+#if defined(GPU_STREAMS) && defined(GPU_DRAW_IDS)
+// What the triangle of mesh vertices 3t to 3t + 2 begins that a draw would read from RAM (docs/machine/gpu.md, "Streams"): a
+// rectangle's or a draw's texture (as the vertex has it: mode and flags, address, width, height, and the key) and a compact
+// draw's light map (address, width, height), at its command's first triangle; a glyph's bitmap at its character's first, a
+// sprite record's pixels (`sprite`: the record's four words in `info`, the command's palette and tables in `light`) at the
+// record's first. `size` texels in the band: the texture's (`pixels`), then the light map's.
+struct gpu_item {
+    uint size, pixels, sprite, base;   // (base: the command's first texel)
+    uint4 info;
+    uint key;
+    uint3 light;
+};
+gpu_item gpu_stream_item(uint t) {
+    gpu_item it;
+    it.size = 0, it.pixels = 0, it.sprite = 0, it.base = 0, it.info = 0, it.key = 0, it.light = 0;
+    // (the vertex of the three where a command, a character or a record begins: a command's first vertex need not be a
+    // triangle's, after one of a count that is not a multiple of 3)
+    uint v = 3 * t, base = 0, op = 0, k = 1;
+    uint4 head = 0;
+    [loop]
+    for (uint j = 0; j < 3; j++) {
+        uint2 c = gpu_draw_id(3 * t + j);
+        if (c.g == 0 || (c.g & (GPU_DRAW_ID_UPLOAD | GPU_DRAW_ID_COPY)) != 0) continue;
+        uint4 h = ram(c.r);
+        uint kk = 3 * t + j - h.a;
+        if (kk == 0 || ((h.r == CMD_TEXT || h.r == CMD_SPRITES) && kk % 6 == 0)) {
+            v = 3 * t + j, base = c.r, head = h, op = h.r, k = kk;
+            break;
+        }
+    }
+    if (base == 0) return it;
+    it.base = base;
+    [branch]
+    if (op == CMD_RECT && k == 0) {
+        uint4 tex = ram(base + 2);
+        if (gpu_streamed(tex.r & 0xff, tex.g, tex.b, tex.a)) it.info = tex, it.key = head.b, it.pixels = tex.b * tex.a;
+    } else if (op == CMD_DRAW && k == 0) {
+        uint4 how = ram(base + 1), more = ram(base + 2);
+        if (gpu_streamed(how.g & 0xff, how.a, more.r, more.g)) it.info = uint4(how.g, how.a, more.r, more.g), it.key = more.b, it.pixels = more.r * more.g;
+        if ((how.g & FRAGMENT_LIT) && (how.r & VERTEX_COMPACT)) {
+            uint4 lit = ram(base + 3);
+            uint w = lit.b & 0xffff, h = lit.b >> 16;
+            if (!VRAM_IS(lit.g) && w != 0 && h != 0 && w * h <= GPU_STREAM_TEXELS) it.light = uint3(lit.g, w, h);
+        }
+    } else if (op == CMD_TEXT && k % 6 == 0) {
+        // (as gpu_vertex_sized makes the character's quad)
+        uint4 at = ram(base + 1), how = ram(base + 2);
+        bool more = (how.r & TEXT_MORE) != 0, msdf = (how.r & 0xff) == FRAGMENT_MSDF;
+        uint letter = ram_word(at.a + 4 * (k / 6));
+        uint4 glyph = texture_texel(head.b + 16 * (letter & 0xffff));
+        uint mode = msdf ? FRAGMENT_MSDF : (how.r & 0xff) == FRAGMENT_COVER ? FRAGMENT_COVER : FRAGMENT_MASK;
+        uint4 tex = uint4(mode, glyph.r + (more ? how.a : 0), msdf ? glyph.g & 0xffff : glyph.g, msdf ? glyph.g >> 16 : glyph.b);
+        if (gpu_streamed(mode, tex.g, tex.b, tex.a)) it.info = tex, it.pixels = tex.b * tex.a;
+    } else if (op == CMD_SPRITES && k % 6 == 0) {
+        uint4 rec = ram(texel_of(head.g) + k / 6), cw = ram(base + 1);
+        uint kind = (rec.a >> 22) & 15, w = rec.a & 0x7ff, h = (rec.a >> 11) & 0x7ff;
+        it.sprite = 1, it.info = rec, it.light = uint3(cw.b, cw.a, ram(base + 2).r);
+        // (a fill's or a checker's colour through the palette is one texel; a shade over the whole rectangle reads nothing)
+        if (kind == SPRITE_FILL || kind == SPRITE_CHECKER) it.pixels = cw.b != 0 ? 1 : 0;
+        else if (kind != SPRITE_FILL_SHADE && w * h <= GPU_STREAM_TEXELS) it.pixels = w * h;
+        it.size = it.pixels;
+        return it;
+    }
+    it.size = it.pixels + it.light.g * it.light.b;
+    return it;
+}
+// The first triangle + 1 of the earliest of the GPU_STREAM_LOOK commands before a rectangle's or a draw's at `base` whose texture is the
+// same (fragment mode and key flag, address, size, the key if keyed), neither with a light map; 0 if none. That one's
+// stream serves both (a texture many draws name, as the walls of Doom's view, is streamed once).
+#define GPU_STREAM_LOOK 256u   // (commands looked back at for the same texture)
+uint gpu_stream_shared(uint base, gpu_item it) {
+    if (it.sprite != 0 || it.pixels == 0 || it.light.g != 0) return 0;
+    uint list = texel_of(ram(GPU_CTRL).g), found = 0;
+    [loop]
+    for (uint j = GPU_STREAM_LOOK; j >= 1; j--) {
+        if (base < list + 4 * j) continue;
+        uint at = base - 4 * j;
+        uint4 head = ram(at), tex = 0;
+        uint key = 0;
+        if (head.r == CMD_RECT) {
+            tex = ram(at + 2), key = head.b;
+        } else if (head.r == CMD_DRAW) {
+            uint4 how = ram(at + 1), more = ram(at + 2);
+            if ((how.g & FRAGMENT_LIT) && (how.r & VERTEX_COMPACT)) continue;
+            tex = uint4(how.g, how.a, more.r, more.g), key = more.b;
+        } else {
+            continue;
+        }
+        bool keyed = (it.info.r & FRAGMENT_KEYED) != 0;
+        if ((tex.r & (0xff | FRAGMENT_KEYED)) == (it.info.r & (0xff | FRAGMENT_KEYED)) && all(tex.gba == it.info.gba) && (!keyed || key == it.key)) {
+            found = head.a / 3 + 1;
+            break;
+        }
+    }
+    return found;
+}
+#endif
+
 // (text, FRAGMENT_MSDF) how much steeper than a box filter's the coverage rises across an edge:
 // fitted to the hinted bitmaps at 11 to 17 pixels (docs/system/fonts.md, "Distance fields")
 #define MSDF_SHARP 1.2
 
-// Mesh vertex `id`, which the command at `base` claims, placed and coloured for a picture of
+// Mesh vertex `id`, which the command at `base` draw IDs, placed and coloured for a picture of
 // `size` pixels.
 gpu_varyings gpu_vertex_sized(uint id, uint base, uint4 head, float2 size) {
     gpu_varyings o;
@@ -398,6 +703,30 @@ gpu_varyings gpu_vertex_sized(uint id, uint base, uint4 head, float2 size) {
             o.uv = float2(right ? uv.z : uv.x, low ? uv.w : uv.y);
             o.texture_info = tex;
             o.key = head.b;
+        } else if (op == CMD_UPLOAD) {
+            // head.g where the texture is (RAM or the ROM), head.b its kind (FRAGMENT_TEXTURE, _INDEXED or _RGB24, and
+            // FRAGMENT_KEYED); then width, height, the slot, the key; the palette's address (0: the display's) and the
+            // row's length in pixels (0: the width). A quad over the slot's block in the VRAM, drawn in the upload pass.
+            uint4 size = ram(base + 1), more = ram(base + 2);
+            uint slot = size.b, pad = vram_pad(slot);
+            uint2 block = vram_block(size.rg, slot);
+            uint corner = k < 3 ? k : (k == 3 ? 2 : (k == 4 ? 1 : 3));
+            float2 p = float2(VRAM_X(slot) - pad + ((corner & 1) ? block.x : 0), VRAM_Y(slot) - pad + ((corner & 2) ? block.y : 0));
+            o.position = float4(p.x * 2.0 / VRAM_SIDE - 1.0, 1.0 - p.y * 2.0 / VRAM_SIDE, 0.0, 1.0);
+            o.texture_info = uint4(head.b, head.g, size.r, size.g);
+            o.key = size.a;
+            o.light_info = uint3(slot, more.g != 0 ? more.g : size.r, more.r);
+        } else if (op == CMD_COPY) {
+            // head.g the picture's rectangle's corner (x | y << 16, pixels from its top left), head.b its size (w | h << 16);
+            // then the slot, where in it (x | y << 16), the flags (COPY_TURNED). A quad over that place in the VRAM, drawn in
+            // the copy pass, which takes each texel from the target.
+            uint4 to = ram(base + 1);
+            uint w = head.b & 0xffff, h = head.b >> 16, slot = to.r;
+            uint corner = k < 3 ? k : (k == 3 ? 2 : (k == 4 ? 1 : 3));
+            float2 p = float2(VRAM_X(slot) + (to.g & 0xffff) + ((corner & 1) ? w : 0), VRAM_Y(slot) + (to.g >> 16) + ((corner & 2) ? h : 0));
+            o.position = float4(p.x * 2.0 / VRAM_SIDE - 1.0, 1.0 - p.y * 2.0 / VRAM_SIDE, 0.0, 1.0);
+            o.texture_info = uint4(to.b, head.g, w, h);
+            o.light_info = uint3(slot, to.g, 0);
         } else if (op == CMD_SPRITES) {
             // head.g the records, head.b how many; then the passes (a bit each), the first record's place in the
             // order, the palette (0: the picture is of indices), then words 7 and 8 the two remaps green counts (SPRITE_WORDS). A record is a
@@ -468,6 +797,8 @@ gpu_varyings gpu_vertex_sized(uint id, uint base, uint4 head, float2 size) {
             [branch]
             if (how.r & VERTEX_BONES) {
                 gpu_bones_vertex(head, more, ram(base + 3), k, pos, o.uv, o.colour);
+            } else if (how.r & VERTEX_ARRAYS) {
+                gpu_arrays_vertex(head, more, ram(base + 3), k, pos, o.uv, o.colour);
             } else if (how.r & VERTEX_COMPACT) {
                 gpu_compact_vertex(base, head, how, more, k, pos, o.uv, o.colour);
             } else {
@@ -535,7 +866,7 @@ float2 gpu_picture_size() {
     uint4 ctrl = ram(GPU_CTRL);
     uint4 disp = ram(GPU_DISPLAY);
     float2 size = float2(disp.g, disp.b);
-    if (ctrl.r & SUBMIT_INTO) {
+    if (ctrl.r & (SUBMIT_INTO | SUBMIT_SIZED)) {
         uint4 into = ram(GPU_INTO);
         size = float2(into.g, into.b);
     }
@@ -546,6 +877,103 @@ float2 gpu_picture_size() {
 gpu_varyings gpu_vertex_of(uint id, uint base, uint4 head) {
     return gpu_vertex_sized(id, base, head, gpu_picture_size());
 }
+
+// ---- the vertex front end (docs/machine/gpu.md, "The vertex front end") ----
+// Every vertex a command claims is made once a frame, by the GPUVertices pass, from the list in RAM, into six textures of
+// GPU_DRAW_IDS_W x GPU_DRAW_IDS_H, a texel each (floats: the position, the colour, the two pairs of coordinates, the edge;
+// words: the texture's four, the key and the light map's three). The passes after it take a vertex from there by its draw ID
+// and read no RAM for it: a draw pass's vertex stage reads only the VRAM's textures.
+#if defined(GPU_FRONT) || defined(GPU_FRONT_PASS)
+uint2 gpu_made_at(uint id) { return uint2(id % GPU_DRAW_IDS_W, id / GPU_DRAW_IDS_W); }
+#endif
+#ifdef GPU_FRONT
+#ifndef GPU_MADE_WORDS
+#define GPU_MADE_WORDS uint4   // (a host whose integer targets are signed defines int4: the bits are the same)
+#endif
+Texture2D<float4> _GpuMadePos, _GpuMadeColour, _GpuMadeUv, _GpuMadeEdge;
+Texture2D<GPU_MADE_WORDS> _GpuMadeTex, _GpuMadeMore;
+gpu_varyings gpu_vertex_made(uint id) {
+    gpu_varyings o;
+    int3 at = int3(gpu_made_at(id), 0);
+    float4 uv = _GpuMadeUv.Load(at);
+    uint4 more = asuint(_GpuMadeMore.Load(at));
+    o.position = _GpuMadePos.Load(at);
+    o.colour = _GpuMadeColour.Load(at);
+    o.uv = uv.xy;
+    o.light_uv = uv.zw;
+    o.texture_info = asuint(_GpuMadeTex.Load(at));
+    o.key = more.r;
+    o.light_info = more.gba;
+#ifdef GPU_EDGE
+    o.edge = _GpuMadeEdge.Load(at).xy;
+#endif
+    return o;
+}
+// Whether the pass being drawn draws mesh vertices id to id + span - 1 (all of one command's): the draw IDs alone.
+bool gpu_drawn(uint id, uint span) {
+    uint2 c = gpu_draw_id(id);
+#ifdef GPU_UPLOAD_PASS
+    if ((c.g & GPU_DRAW_ID_UPLOAD) == 0) return false;
+#elif defined(GPU_COPY_PASS)
+    if ((c.g & GPU_DRAW_ID_COPY) == 0) return false;
+#else
+    if (((c.g >> _GpuPass) & 1) == 0) return false;
+#endif
+    return span < 2 || gpu_draw_id(id + span - 1).r == c.r;
+}
+#endif
+#ifdef GPU_FRONT_PASS
+struct gpu_made {
+    float4 pos : SV_Target0;
+    float4 colour : SV_Target1;
+    float4 uv : SV_Target2;
+    float4 edge : SV_Target3;
+    uint4 tex : SV_Target4;
+    uint4 more : SV_Target5;
+};
+// Mesh vertex `id` as the draw passes made it, for all of them (a sprite's shade or not is in its draw ID's passes).
+gpu_made gpu_front_fragment(uint id) {
+    gpu_made m;
+    m.pos = float4(2, 2, 2, 1);
+    m.colour = 0, m.uv = 0, m.edge = 0, m.tex = 0, m.more = 0;
+    uint2 c = gpu_draw_id(id);
+    [branch]
+    if (c.g != 0) {
+        uint4 head = ram(c.r);
+        gpu_varyings o = gpu_vertex_of(id, c.r, head);
+#ifdef GPU_STREAMS
+        // (docs/machine/gpu.md, "Streams"): what the draw would read from RAM, where the stream pass puts it in the band
+        uint op = head.r, k = id - head.a;
+        uint t = (op == CMD_TEXT || op == CMD_SPRITES ? head.a + 6 * (k / 6) : head.a) / 3;
+        [loop]
+        for (uint hop = 0; hop < 16 && STREAM_SHARED(t) != 0; hop++) t = STREAM_SHARED(t) - 1;   // (a texture streamed for an earlier draw: 16 x GPU_STREAM_LOOK commands)
+        uint size = STREAM_SIZE(t), first = STREAM_OFFSET(t);
+        [branch]
+        if (size != 0 && first + size <= GPU_STREAM_TEXELS && op != CMD_UPLOAD && op != CMD_COPY) {
+            if (op == CMD_SPRITES) {
+                o.texture_info.g = VRAM_STREAM | first;
+                uint4 rec = ram(texel_of(head.g) + k / 6);
+                // (its rows there are its width; a checker's parity, whose colour is one texel)
+                o.texture_info.b = ((rec.a >> 22) & 15) == SPRITE_CHECKER ? (rec.r >> 8) & 1 : rec.a & 0x7ff;
+            } else {
+                uint tex = gpu_streamed(o.texture_info.r & 0xff, o.texture_info.g, o.texture_info.b, o.texture_info.a) ? o.texture_info.b * o.texture_info.a : 0;
+                if (tex != 0) o.texture_info.g = VRAM_STREAM | first;
+                if (size > tex) o.light_info.r = VRAM_STREAM | (first + tex);
+            }
+        }
+#endif
+        m.pos = o.position;
+        m.colour = o.colour;
+        m.uv = float4(o.uv, o.light_uv);
+#ifdef GPU_EDGE
+        m.edge = float4(o.edge, 0, 0);
+#endif
+        m.tex = o.texture_info;
+        m.more = uint4(o.key, o.light_info);
+    }
+    return m;
+}
+#endif
 
 // The mesh's vertex `id` belongs to whichever command claims that slot. Vertices no command
 // claims, and everything while no list is submitted, collapse to nothing.
@@ -563,8 +991,47 @@ gpu_varyings gpu_vertex(uint id) {
 #endif
     uint base;
     uint4 head;
+#if defined(GPU_DRAW_IDS) && defined(GPU_DRAW_IDS_CHECK)
+    // (--define GPU_DRAW_IDS_CHECK: a vertex the draw IDs and the search disagree on is a corner of a magenta triangle over the
+    // whole target; a sprite's shade counted as gpu_vertex_sized collapses it)
+    uint sb;
+    uint4 sh;
+    bool by_draw_ids = gpu_command(id, 1, base, head), by_search = gpu_command_search(id, 1, sb, sh);
+#ifndef GPU_UPLOAD_PASS
+    if (by_search && sh.r == CMD_SPRITES)
+        by_search = SPRITE_SHADES((ram(texel_of(sh.g) + (id - sh.a) / 6).a >> 22) & 15) == (_GpuPass == 2);
+#endif
+    if (by_draw_ids != by_search || (by_draw_ids && sb != base)) {
+        o.position = float4(id % 3 == 1 ? 3.0 : -1.0, id % 3 == 2 ? -3.0 : 1.0, 0.0, 1.0);
+        o.colour = float4(1, 0, 1, 1);
+        return o;
+    }
+#endif
+#ifdef GPU_FRONT
+    [branch]
+    if (gpu_drawn(id, 1)) {
+        o = gpu_vertex_made(id);
+#ifdef GPU_FRONT_CHECK
+        // (--define GPU_FRONT_CHECK: the vertex made again here from the list; one the front end made otherwise, beyond a
+        // rounding, is a corner of a magenta triangle over the whole target)
+        gpu_command(id, 1, base, head);
+        gpu_varyings f = gpu_vertex_of(id, base, head);
+        float4 dp = abs(f.position - o.position), dc = abs(f.colour - o.colour);
+        float2 du = abs(f.uv - o.uv), dl = abs(f.light_uv - o.light_uv);
+        float tol = 1e-4 * (1.0 + max(abs(f.position.w), max(abs(f.uv.x), abs(f.uv.y))));
+        bool differs = any(dp > tol) || any(dc > 1e-4) || any(du > tol) || any(dl > 1e-4) || any(f.texture_info != o.texture_info) ||
+                       f.key != o.key || any(f.light_info != o.light_info);
+        if (differs) {
+            o.position = float4(id % 3 == 1 ? 3.0 : -1.0, id % 3 == 2 ? -3.0 : 1.0, 0.0, 1.0);
+            o.colour = float4(1, 0, 1, 1);
+            o.texture_info = 0;
+        }
+#endif
+    }
+#else
     [branch]
     if (gpu_command(id, 1, base, head)) o = gpu_vertex_of(id, base, head);
+#endif
     return o;
 }
 
@@ -586,15 +1053,23 @@ gpu_varyings gpu_vertex(uint id) {
 [instance(AMP_INST)]
 void gpu_amp_geom(point amp_d I[1], inout TriangleStream<gpu_varyings> stream, uint inst : SV_GSInstanceID) {
     // nothing to do unless the submitted list says it has commands for this pass
+#ifndef GPU_FRONT
     if (_GpuPass != 0 && ((ram(GPU_CTRL).r >> (8 + _GpuPass)) & 1) == 0) return;
+#endif
     uint first = amp_call(I[0], inst) * GPU_AMP_EACH;
     for (uint t = 0; t < GPU_AMP_EACH; t++) {
         if (first + t >= GPU_TRIANGLES) break;
         uint v = (first + t) * 3, base;
         uint4 head;
+#ifdef GPU_FRONT
+        if (gpu_drawn(v, 3)) {
+            for (uint k = 0; k < 3; k++) {
+                gpu_varyings o = gpu_vertex_made(v + k);
+#else
         if (gpu_command(v, 3, base, head)) {
             for (uint k = 0; k < 3; k++) {
                 gpu_varyings o = gpu_vertex_of(v + k, base, head);
+#endif
                 GPU_AMP_Z(o);
                 stream.Append(o);
             }
@@ -629,12 +1104,133 @@ float4 gpu_texel(gpu_varyings i, uint mode, uint x, uint y, uint width, out floa
     return colour_of(texel);
 }
 
+// The upload pass (CMD_UPLOAD): a texel of the VRAM in the texture's block, the texel of the texture it repeats (or, clamped,
+// the edge's nearest), as a colour; with VRAM_PREMULTIPLIED times its alpha, and the key's 0.
+float4 gpu_upload_fragment(gpu_varyings i) {
+    uint slot = i.light_info.r, row = i.light_info.g, width = i.texture_info.b, height = i.texture_info.a;
+    uint mode = i.texture_info.r & 0xff;
+    int2 at = int2(i.position.xy) - int2(VRAM_X(slot), VRAM_Y(slot));
+    uint x, y;
+    if (slot & VRAM_CLAMPED) {
+        x = (uint)clamp(at.x, 0, (int)width - 1);
+        y = (uint)clamp(at.y, 0, (int)height - 1);
+    } else {
+        // (the padding is under the texture's size or a few of its repeats: whole repeats added first)
+        x = (uint)(at.x + 64 * (int)width) % width;
+        y = (uint)(at.y + 64 * (int)height) % height;
+    }
+    uint n = y * row + x, texel;
+    // (every kind a fragment reads from RAM becomes colours here, but a sprite record's: docs/machine/gpu.md, "VRAM")
+    [branch]
+    if (mode == FRAGMENT_MASK) {
+        // a bit a pixel, rows of whole bytes: white, its alpha the bit (a draw of the slot in FRAGMENT_MASK tests it)
+        n = y * ((width + 7) >> 3) + (x >> 3);
+        texel = (texture_word(i.texture_info.g + (n & ~3u)) >> (8 * (n & 3))) & 0xff;
+        return ((texel << (x & 7)) & 0x80) ? 1.0 : float4(1, 1, 1, 0);
+    } else if (mode == FRAGMENT_COVER) {
+        // four bits of coverage a pixel, the left in the high half: white, its alpha the coverage
+        n = y * ((width + 1) >> 1) + (x >> 1);
+        texel = (texture_word(i.texture_info.g + (n & ~3u)) >> (8 * (n & 3))) & 0xff;
+        return float4(1, 1, 1, (float)((x & 1) ? texel & 15 : texel >> 4) / 15.0);
+    } else if (mode == FRAGMENT_TILES) {
+        // a layer of tiles (as gpu_fragment reads one): the pixel's cell, its tile's byte, the bank's colour; the key 0
+        uint4 layer = ram(texel_of(i.texture_info.g));
+        uint tile_w = max(layer.a & 0xff, 1), tile_h = max((layer.a >> 8) & 0xff, 1);
+        uint cell_at = layer.r + 2 * ((y / tile_h) * ((layer.a >> 16) & 0xfff) + x / tile_w);
+        uint cell = (ram_word(cell_at & ~3u) >> (8 * (cell_at & 3))) & 0xffff;
+        uint px = x % tile_w, py = y % tile_h;
+        if (cell & 0x400) px = tile_w - 1 - px;
+        if (cell & 0x800) py = tile_h - 1 - py;
+        uint tile = cell & 0x3ff, piece = layer.a >> 28, tiles = layer.g;
+        if (piece != 0) {
+            tiles = ram_word(layer.g + 4 * (tile >> piece));
+            tile &= (1u << piece) - 1;
+        }
+        uint tat = tiles + (tile * tile_h + py) * tile_w + px;
+        texel = (ram_word(tat & ~3u) >> (8 * (tat & 3))) & 0xff;
+        if ((i.texture_info.r & FRAGMENT_KEYED) && texel == i.key) return 0.0;
+        texel = ram_word(layer.b + 4 * (texel + 16 * (cell >> 12)));
+    } else if (mode == FRAGMENT_YUV) {
+        // a film's frame: luma, and the chroma of its 2 x 2 (BT.601, 16 to 235)
+        uint half_w = width >> 1, luma_at = i.texture_info.g + y * width + x;
+        uint blue_at = i.texture_info.g + width * height + (y >> 1) * half_w + (x >> 1), red_at = blue_at + half_w * (height >> 1);
+        float luma = 1.164 * ((float)((texture_word(luma_at & ~3u) >> (8 * (luma_at & 3))) & 0xff) - 16.0);
+        float blue = (float)((texture_word(blue_at & ~3u) >> (8 * (blue_at & 3))) & 0xff) - 128.0;
+        float red = (float)((texture_word(red_at & ~3u) >> (8 * (red_at & 3))) & 0xff) - 128.0;
+        return saturate(float4((luma + 1.596 * red) / 255.0, (luma - 0.392 * blue - 0.813 * red) / 255.0, (luma + 2.017 * blue) / 255.0, 1.0));
+    } else if (mode == FRAGMENT_INDEXED) {
+        texel = (texture_word(i.texture_info.g + (n & ~3u)) >> (8 * (n & 3))) & 0xff;
+        if ((i.texture_info.r & FRAGMENT_KEYED) && texel == i.key) return 0.0;
+        texel = ram_word((i.light_info.b != 0 ? i.light_info.b : DEV_AT + 0x1000400u) + 4 * texel);
+    } else {
+        // (a glyph's three distance fields are three bytes a pixel as RGB24's: the median does not mind their order)
+        texel = mode == FRAGMENT_RGB24 || mode == FRAGMENT_MSDF ? gpu_rgb24(i.texture_info.g, n) : texture_word(i.texture_info.g + 4 * n);
+        if ((i.texture_info.r & FRAGMENT_KEYED) && texel == i.key) return 0.0;
+    }
+    float4 c = colour_of(texel);
+    if (slot & VRAM_PREMULTIPLIED) c.rgb *= c.a;
+    return c;
+}
+
+#ifdef GPU_COPY_PASS
+// The copy pass (CMD_COPY): a texel of the slot's rectangle, the picture's texel it stands for (the rows turned with COPY_TURNED).
+Texture2D<float4> _GpuTarget;   // the GPU's colour target, where the list was drawn
+float4 gpu_copy_fragment(gpu_varyings i) {
+    uint slot = i.light_info.r, at = i.light_info.g, from = i.texture_info.g, h = i.texture_info.a;
+    int2 local = int2(i.position.xy) - int2(VRAM_X(slot) + (at & 0xffff), VRAM_Y(slot) + (at >> 16));
+    int row = (i.texture_info.r & COPY_TURNED) ? (int)h - 1 - local.y : local.y;
+    return _GpuTarget.Load(int3((int)(from & 0xffff) + local.x, (int)(from >> 16) + row, 0));
+}
+#endif
+
+#ifdef GPU_VRAM
+// A texture in the VRAM at uv (repeating, or clamped), its texel (0, 0) at `at` and `size` texels: the four texels round
+// the point weighed, at `lod` (a level, or between two; at most the slot's L).
+float4 vram_sample(uint slot, uint2 size, float2 uv, float lod, bool clamped) {
+    float2 p = (clamped ? saturate(uv) : frac(uv)) * float2(size);
+    float2 at = float2(VRAM_X(slot), VRAM_Y(slot)) + p;
+    return _GpuVram.SampleLevel(sampler_linear_clamp, at / VRAM_SIDE, min(lod, (float)VRAM_LOD(slot)));
+}
+// The nearest texel, of level `level` (whole, at most L).
+float4 vram_texel(uint slot, uint2 size, float2 uv, uint level, bool clamped) {
+    if (clamped) uv = saturate(uv) * 0.99999;
+    uint2 t = min((uint2)(frac(uv) * float2(size)), size - 1);
+    uint2 at = (uint2(VRAM_X(slot), VRAM_Y(slot)) + t) >> level;
+    return _GpuVram.Load(int3(at, level));
+}
+#endif
+
 // The light a lit draw's fragment is times: its light map's four texels round the point,
 // weighed, the map's edge going on beyond it.
 float3 gpu_light(gpu_varyings i) {
     uint width = i.light_info.g, height = i.light_info.b;
     if (width == 0 || height == 0) return 1.0;
+#ifdef GPU_VRAM
+    [branch]
+    if (VRAM_IS(i.light_info.r) && !STREAM_IS(i.light_info.r)) {
+        // (clamped, at level 0: the map's edge texels a half texel in, as below)
+        float2 p = clamp(saturate(i.light_uv) * float2(width, height), 0.5, float2(width, height) - 0.5);
+        return _GpuVram.SampleLevel(sampler_linear_clamp, (float2(VRAM_X(i.light_info.r), VRAM_Y(i.light_info.r)) + p) / VRAM_SIDE, 0).rgb;
+    }
+#endif
     float2 at = saturate(i.light_uv) * float2(width, height) - 0.5;
+#if defined(GPU_STREAMS) && defined(GPU_VRAM)
+    [branch]
+    if (STREAM_IS(i.light_info.r)) {
+        // (a stream: the four texels as below)
+        float2 sl = floor(at), sp = at - sl;
+        uint sx0 = (uint)clamp((int)sl.x, 0, (int)width - 1), sy0 = (uint)clamp((int)sl.y, 0, (int)height - 1);
+        uint sx1 = min(sx0 + 1, width - 1), sy1 = min(sy0 + 1, height - 1);
+        if (sl.x < 0.0) sx1 = sx0;
+        if (sl.y < 0.0) sy1 = sy0;
+        float3 s00 = stream_texel(i.light_info.r, sx0, sy0, width).rgb, s10 = stream_texel(i.light_info.r, sx1, sy0, width).rgb;
+        float3 s01 = stream_texel(i.light_info.r, sx0, sy1, width).rgb, s11 = stream_texel(i.light_info.r, sx1, sy1, width).rgb;
+        return lerp(lerp(s00, s10, sp.x), lerp(s01, s11, sp.x), sp.y);
+    }
+#endif
+#ifdef GPU_VRAM_ONLY
+    return 1.0;
+#else
     float2 low = floor(at), part = at - low;
     uint x0 = (uint)clamp((int)low.x, 0, (int)width - 1), y0 = (uint)clamp((int)low.y, 0, (int)height - 1);
     uint x1 = min(x0 + 1, width - 1), y1 = min(y0 + 1, height - 1);
@@ -643,6 +1239,7 @@ float3 gpu_light(gpu_varyings i) {
     float3 c00 = colour_of(gpu_rgb24(i.light_info.r, y0 * width + x0)).rgb, c10 = colour_of(gpu_rgb24(i.light_info.r, y0 * width + x1)).rgb;
     float3 c01 = colour_of(gpu_rgb24(i.light_info.r, y1 * width + x0)).rgb, c11 = colour_of(gpu_rgb24(i.light_info.r, y1 * width + x1)).rgb;
     return lerp(lerp(c00, c10, part.x), lerp(c01, c11, part.x), part.y);
+#endif
 }
 
 // Pixels n and n + 1 of a glyph's distance fields, three bytes a pixel, in RAM or the ROM.
@@ -664,18 +1261,39 @@ uint gpu_byte(uint address) {
 
 // A pixel of a sprite record (CMD_SPRITES): an index of a paletted picture in red, or with a palette its colour. A
 // shade adds to green, which a later SPRITE_WORDS read takes as the remaps made since the index was drawn.
+#ifdef GPU_STREAM_PASS
+#define SPRITE_HOLE return float4(0.0, 0.0, 0.0, 0.0)   // (a hole's texel in the band: no alpha)
+#else
+#define SPRITE_HOLE discard
+#endif
 float4 gpu_sprite_fragment(gpu_varyings i) {
     uint kind = (i.texture_info.r >> 24) & 15, at = i.texture_info.g, stride = i.texture_info.b;
     uint2 p = (uint2)i.position.xy;
     uint u = p.x - (i.key & 0xffff), v = p.y - (i.key >> 16), index = 0;
+#if defined(GPU_STREAMS) && defined(GPU_VRAM)
+    [branch]
+    if (STREAM_IS(at)) {
+        // what the record's pixel would have been, made in the stream pass (alpha 0 a hole; a fill's colour is one texel)
+        if (kind == SPRITE_CHECKER && ((p.x + p.y) & 1) != stride) discard;   // (a checker's parity there in place of its rows)
+        float4 t = kind == SPRITE_FILL || kind == SPRITE_CHECKER ? stream_texel(at, 0, 0, 1) : stream_texel(at, u, v, stride);
+        if (t.a == 0.0) discard;
+        return t;
+    }
+#endif
     [branch]
     if (kind == SPRITE_FILL) {
         index = at & 0xff;
     } else if (kind == SPRITE_CHECKER) {
-        if (((p.x + p.y) & 1) != ((at >> 8) & 1)) discard;
+        if (((p.x + p.y) & 1) != ((at >> 8) & 1)) SPRITE_HOLE;
         index = at & 0xff;
     } else if (kind == SPRITE_FILL_SHADE) {
         return float4(0.0, (float)i.texture_info.a / 255.0, 0.0, 1.0);
+#ifdef GPU_VRAM_ONLY
+    } else {
+        return float4(1.0, 0.0, 1.0, 1.0);   // (pixels of RAM a stream did not bring: none, unless the band is full)
+    }
+    if (i.light_info.r != 0) return float4(1.0, 0.0, 1.0, 1.0);
+#else
     } else if (kind == SPRITE_WORDS) {
         uint word = ram_word(at + v * stride + 4 * u), later = (word >> 8) & 0xff;
         index = (word >> 16) & 0xff;
@@ -690,27 +1308,247 @@ float4 gpu_sprite_fragment(gpu_varyings i) {
         }
     } else {
         uint s = gpu_byte(at + v * stride + u);
-        if (s == 0 && kind != SPRITE_RAW) discard;
+        if (s == 0 && kind != SPRITE_RAW) SPRITE_HOLE;
         if (kind == SPRITE_SHADE) return float4(0.0, (float)i.texture_info.a / 255.0, 0.0, 1.0);
         index = kind == SPRITE_REMAP ? gpu_byte(i.texture_info.a + s) : kind == SPRITE_BLACK ? 0 : s;
-        if (index == 0 && kind == SPRITE_REMAP) discard;
+        if (index == 0 && kind == SPRITE_REMAP) SPRITE_HOLE;
     }
     if (i.light_info.r != 0) return float4(colour_of(ram_word(i.light_info.r + 4 * index) & 0xffffff).rgb, 1.0);
+#endif
     return float4((float)index / 255.0, 0.0, 0.0, 1.0);
 }
 
+#ifdef GPU_STREAM_SUMS_PASS
+// The streams' sums (docs/machine/gpu.md, "Streams"), a texel each, in six steps after the draw IDs: 0 a triangle's stream's
+// size (GPU_STREAM_SIDE square), 1 sixteen of a row's sizes summed (GPU_STREAM_PARTS x GPU_STREAM_SIDE), 2 a row's sizes
+// summed (GPU_STREAM_SIDE x 1), 3 sixteen rows' sums summed (GPU_STREAM_PARTS x 1), 4 where a row's streams start (the rows
+// before summed), 5 a triangle's stream's first texel in the band (GPU_STREAM_SIDE square). No texel reads more than 31 others:
+// a loop of 256 reads one after another, in every round with or without a list, was 0.024 ms of each.
+uint2 gpu_stream_sums_fragment(uint2 at, uint step) {
+    uint sum = 0, k;
+    [branch]
+    if (step == 0) {
+        uint t = at.y * GPU_STREAM_SIDE + at.x;
+        gpu_item it = gpu_stream_item(t);
+        uint same = it.size != 0 ? gpu_stream_shared(it.base, it) : 0;
+        return uint2(same != 0 ? 0 : it.size, same);
+    } else if (step == 1) {
+        [unroll]
+        for (k = 0; k < GPU_STREAM_PART; k++) sum += STREAM_SIZE(at.y * GPU_STREAM_SIDE + at.x * GPU_STREAM_PART + k);
+    } else if (step == 2) {
+        [unroll]
+        for (k = 0; k < GPU_STREAM_PARTS; k++) sum += STREAM_PART(at.x, k);
+    } else if (step == 3) {
+        [unroll]
+        for (k = 0; k < GPU_STREAM_PART; k++) sum += STREAM_ROW(at.x * GPU_STREAM_PART + k);
+    } else if (step == 4) {
+        // (unrolled and masked: sixteen reads at once, not one after another)
+        uint g = at.x / GPU_STREAM_PART, r = at.x % GPU_STREAM_PART;
+        [unroll]
+        for (k = 0; k < GPU_STREAM_PART; k++)
+            sum += (k < g ? STREAM_GROUP(k) : 0) + (k < r ? STREAM_ROW(g * GPU_STREAM_PART + k) : 0);
+    } else {
+        sum = STREAM_START(at.y);
+        [branch]
+        if (STREAM_ROW(at.y) != 0) {
+            uint g = at.x / GPU_STREAM_PART, r = at.x % GPU_STREAM_PART;
+            [unroll]
+            for (k = 0; k < GPU_STREAM_PART; k++)
+                sum += (k < g ? STREAM_PART(at.y, k) : 0) + (k < r ? STREAM_SIZE(at.y * GPU_STREAM_SIDE + g * GPU_STREAM_PART + k) : 0);
+        }
+    }
+    return uint2(sum, 0);
+}
+#endif
+
+#ifdef GPU_STREAM_PASS
+// The stream pass: every stream's texels, converted as an upload converts them, into the band. A quad over the band's rows
+// in use; a texel finds its stream by the rows' starts and then its row's offsets, both rising.
+uint gpu_stream_total() { return STREAM_START(GPU_STREAM_SIDE - 1) + STREAM_ROW(GPU_STREAM_SIDE - 1); }
+float4 gpu_stream_vertex(uint id) {
+    uint rows = (min(gpu_stream_total(), GPU_STREAM_TEXELS) + GPU_STREAM_SIDE_TEXELS - 1) / GPU_STREAM_SIDE_TEXELS;
+    uint corner = id < 3 ? id : (id == 3 ? 2 : (id == 4 ? 1 : 3));
+    float2 p = float2((corner & 1) ? GPU_STREAM_SIDE_TEXELS : 0, (corner & 2) ? rows : 0);
+    return float4(p.x * 2.0 / GPU_STREAM_SIDE_TEXELS - 1.0, 1.0 - p.y * 2.0 / GPU_STREAM_SIDE_TEXELS, 0.0, 1.0);
+}
+float4 gpu_stream_fragment(float4 position) {
+    uint2 p = uint2(position.xy);
+    uint n = p.y * GPU_STREAM_SIDE_TEXELS + p.x;
+    if (n >= gpu_stream_total()) return 0.0;
+    // the last row whose streams start at or before n, then the last triangle in it
+    uint r = 0, c = 0, step;
+    [unroll]
+    for (step = GPU_STREAM_SIDE / 2; step >= 1; step >>= 1)
+        if (STREAM_START(r + step) <= n) r += step;
+    [unroll]
+    for (step = GPU_STREAM_SIDE / 2; step >= 1; step >>= 1)
+        if (STREAM_OFFSET(r * GPU_STREAM_SIDE + c + step) <= n) c += step;
+    uint t = r * GPU_STREAM_SIDE + c, local = n - STREAM_OFFSET(t);
+    gpu_item it = gpu_stream_item(t);
+    if (local >= it.size) return 0.0;
+    gpu_varyings v = (gpu_varyings)0;
+    [branch]
+    if (it.sprite != 0) {
+        uint kind = (it.info.a >> 22) & 15, w = max(it.info.a & 0x7ff, 1);
+        if (kind == SPRITE_FILL || kind == SPRITE_CHECKER)
+            return float4(colour_of(ram_word(it.light.r + 4 * (it.info.r & 0xff)) & 0xffffff).rgb, 1.0);
+        v.position = float4(local % w + 0.5, local / w + 0.5, 0.0, 1.0);
+        v.texture_info = uint4(FRAGMENT_SPRITE | kind << 24, it.info.r, (it.info.b >> 22) | (it.info.a >> 26) << 10, it.info.g);
+        v.light_info = it.light;
+        return gpu_sprite_fragment(v);
+    }
+    [branch]
+    if (local < it.pixels) {
+        uint w = it.info.b;
+        v.position = float4(local % w + 0.5, local / w + 0.5, 0.0, 1.0);
+        v.texture_info = uint4(it.info.r & (0xff | FRAGMENT_KEYED), it.info.g, w, it.info.a);
+        v.key = it.key;
+        v.light_info = uint3(0, w, 0);   // (no slot: the texel itself; rows of its width; the display's palette)
+        return gpu_upload_fragment(v);
+    }
+    return float4(colour_of(gpu_rgb24(it.light.r, local - it.pixels)).rgb, 1.0);
+}
+#endif
+
 float4 gpu_fragment(gpu_varyings i) {
     uint mode = i.texture_info.r & 0xff, width = i.texture_info.b, height = i.texture_info.a;
-    [branch]
-    if (mode == FRAGMENT_SPRITE) return gpu_sprite_fragment(i);
     float4 c = i.colour;
     float2 uv = i.uv;
     if (i.texture_info.r & FRAGMENT_LAID) {
         uv += i.position.xy * c.xy / 1024.0;
         c = 1.0;
     }
+#ifdef GPU_VRAM
+    // (how far apart the texels of neighbouring pixels are, before any branch: the level a VRAM texture is sampled at)
+    float2 across = ddx(uv) * float2(width, height), down = ddy(uv) * float2(width, height);
+    float lod = max(0.5 * log2(max(dot(across, across), dot(down, down))), 0.0);
+#endif
+    [branch]
+    if (mode == FRAGMENT_SPRITE) return gpu_sprite_fragment(i);
+#ifdef GPU_VRAM_ONLY
+    // (GPU_VRAM_ONLY, docs/machine/gpu.md, "Streams": the draw reads the VRAM alone, its RAM paths compiled out. What a stream
+    // did not bring, which is only what the band had no room for, is magenta)
+    bool from_ram = (i.texture_info.r & FRAGMENT_LIT) && i.light_info.g != 0 && !VRAM_IS(i.light_info.r);
+    if (from_ram || gpu_streamed(mode, i.texture_info.g, width, height)) return float4(1.0, 0.0, 1.0, 1.0);
+#endif
     [branch]
     if (i.texture_info.r & FRAGMENT_LIT) c.rgb *= gpu_light(i);
+#ifdef GPU_VRAM
+    [branch]
+    if (VRAM_IS(i.texture_info.g) && !STREAM_IS(i.texture_info.g) && width != 0 && height != 0 && mode != FRAGMENT_COLOUR) {
+        // a texture in the VRAM (an upload's kind: words, indexed or three bytes, all colours there now)
+        uint slot = i.texture_info.g;
+        bool clamped = (i.texture_info.r & FRAGMENT_CLAMPED) != 0, keyed = (slot & VRAM_PREMULTIPLIED) != 0;
+        float4 t;
+        // (a mask's and a coverage's alpha is the upload's: the bit, the coverage; their colour the draw's)
+        [branch]
+        if (mode == FRAGMENT_MASK || mode == FRAGMENT_COVER) {
+            t = vram_texel(slot, uint2(width, height), uv, 0, clamped);
+            if (t.a <= (mode == FRAGMENT_MASK ? 0.5 : 0.0)) discard;
+            if (mode == FRAGMENT_COVER) c.a *= t.a;
+            return saturate(c);
+        }
+        [branch]
+        if (mode == FRAGMENT_MSDF) {
+            // as below from RAM: four quarters' coverage, each the median of the three fields the sampler weighs at level 0
+            if (width < 2 || height < 2) discard;
+            float range = 2.0 * asfloat(i.key), cover = 0.0;
+            [loop]
+            for (uint n = 0; n < 4; n++) {
+                float2 at = saturate(uv + float2((n & 1) ? 0.25 : -0.25, (n & 2) ? 0.25 : -0.25) * i.light_uv) * float2(width - 1, height - 1);
+                float3 s = _GpuVram.SampleLevel(sampler_linear_clamp, (float2(VRAM_X(slot), VRAM_Y(slot)) + at + 0.5) / VRAM_SIDE, 0).rgb;
+                cover += saturate(range * (max(min(s.r, s.g), min(max(s.r, s.g), s.b)) - 0.5) + 0.5);
+            }
+            if (cover <= 0.0) discard;
+            c.a *= 0.25 * cover;
+            return saturate(c);
+        }
+        [branch]
+        if (i.texture_info.r & FRAGMENT_SMOOTH) {
+            t = vram_sample(slot, uint2(width, height), uv, lod, clamped);
+            // a key's texels are 0 and count for nothing; where they are most of it, nothing is drawn
+            if (keyed) {
+                if (t.a < 0.5) discard;
+                t.rgb /= t.a;
+                t.a = 1.0;
+            }
+        } else {
+            t = vram_texel(slot, uint2(width, height), uv, (uint)min(lod + 0.5, (float)VRAM_LOD(slot)), clamped);
+            if (keyed) {
+                if (t.a < 0.5) discard;
+                t.rgb /= t.a;
+                t.a = 1.0;
+            } else if ((i.texture_info.r & FRAGMENT_KEYED) && t.a == 0.0) {
+                // a keyed draw of a slot uploaded plain: its key is the word of no alpha (ClassiCube's KEY_TEXEL), and
+                // a nearest texel is the texel itself (a premultiplied slot would make the texture's translucent ones opaque)
+                discard;
+            }
+        }
+        return saturate(c * t);
+    }
+#endif
+#if defined(GPU_STREAMS) && defined(GPU_VRAM)
+    [branch]
+    if (STREAM_IS(i.texture_info.g) && width != 0 && height != 0 && mode != FRAGMENT_COLOUR) {
+        // a stream (docs/machine/gpu.md, "Streams"): the texels the paths below read from RAM, made colours in the band; drawn
+        // as below, a key's texels 0
+        uint at = i.texture_info.g;
+        bool keyed = (i.texture_info.r & FRAGMENT_KEYED) != 0, clamped = (i.texture_info.r & FRAGMENT_CLAMPED) != 0;
+        [branch]
+        if (mode == FRAGMENT_MSDF) {
+            if (width < 2 || height < 2) discard;
+            float range = 2.0 * asfloat(i.key), cover = 0.0;
+            [loop]
+            for (uint n = 0; n < 4; n++) {
+                float2 q = saturate(uv + float2((n & 1) ? 0.25 : -0.25, (n & 2) ? 0.25 : -0.25) * i.light_uv) * float2(width - 1, height - 1);
+                uint x0 = min((uint)q.x, width - 2), y0 = min((uint)q.y, height - 2);
+                float2 part = q - float2(x0, y0);
+                float3 s00 = stream_texel(at, x0, y0, width).rgb, s10 = stream_texel(at, x0 + 1, y0, width).rgb;
+                float3 s01 = stream_texel(at, x0, y0 + 1, width).rgb, s11 = stream_texel(at, x0 + 1, y0 + 1, width).rgb;
+                float3 s = lerp(lerp(s00, s10, part.x), lerp(s01, s11, part.x), part.y);
+                cover += saturate(range * (max(min(s.r, s.g), min(max(s.r, s.g), s.b)) - 0.5) + 0.5);
+            }
+            if (cover <= 0.0) discard;
+            c.a *= 0.25 * cover;
+            return saturate(c);
+        }
+        [branch]
+        if ((i.texture_info.r & FRAGMENT_SMOOTH) && (mode == FRAGMENT_INDEXED || mode == FRAGMENT_TEXTURE || mode == FRAGMENT_RGB24)) {
+            float2 q = (clamped ? saturate(uv) : frac(uv)) * float2(width, height) - 0.5;
+            float2 low = floor(q), part = q - low;
+            uint x0 = (uint)((int)low.x + (int)width) % width, y0 = (uint)((int)low.y + (int)height) % height;
+            uint x1 = (x0 + 1) % width, y1 = (y0 + 1) % height;
+            if (clamped) {
+                x0 = (uint)clamp((int)low.x, 0, (int)width - 1), y0 = (uint)clamp((int)low.y, 0, (int)height - 1);
+                x1 = (uint)clamp((int)low.x + 1, 0, (int)width - 1), y1 = (uint)clamp((int)low.y + 1, 0, (int)height - 1);
+            }
+            float4 c00 = stream_texel(at, x0, y0, width), c10 = stream_texel(at, x1, y0, width);
+            float4 c01 = stream_texel(at, x0, y1, width), c11 = stream_texel(at, x1, y1, width);
+            float t00 = keyed && !any(c00) ? 0.0 : 1.0, t10 = keyed && !any(c10) ? 0.0 : 1.0;
+            float t01 = keyed && !any(c01) ? 0.0 : 1.0, t11 = keyed && !any(c11) ? 0.0 : 1.0;
+            float w00 = (1 - part.x) * (1 - part.y) * t00, w10 = part.x * (1 - part.y) * t10;
+            float w01 = (1 - part.x) * part.y * t01, w11 = part.x * part.y * t11;
+            float all = w00 + w10 + w01 + w11;
+            if (all < 0.5) discard;
+            return saturate(c * (c00 * w00 + c10 * w10 + c01 * w01 + c11 * w11) / all);
+        }
+        if (clamped) uv = saturate(uv) * 0.99999;
+        uint x = min((uint)(frac(uv.x) * width), width - 1), y = min((uint)(frac(uv.y) * height), height - 1);
+        float4 t = stream_texel(at, x, y, width);
+        if (mode == FRAGMENT_MASK) {
+            if (t.a <= 0.5) discard;
+            return saturate(c);
+        }
+        if (mode == FRAGMENT_COVER) {
+            if (t.a <= 0.0) discard;
+            c.a *= t.a;
+            return saturate(c);
+        }
+        if (keyed && !any(t)) discard;
+        return saturate(c * t);
+    }
+#endif
+#ifndef GPU_VRAM_ONLY
     [branch]
     if (mode == FRAGMENT_MSDF) {
         // the pixel's coverage as four quarters' (2 x 2 samples): at each the four atlas pixels
@@ -817,6 +1655,7 @@ float4 gpu_fragment(gpu_varyings i) {
         }
         c *= colour_of(texel);
     }
+#endif
     return saturate(c);
 }
 
@@ -938,11 +1777,13 @@ gpu_varyings volume_vertex(uint id, uint base, uint4 head, out float3 eye, out f
     float4 pos, normal = 0;
     uint corner = 0;
     if (how.r & VERTEX_POINTS) { corner = k % 3; k = k / 3; }
-    // (the same kinds of vertex as gpu_vertex: without the skinned kind Jedi Outcast's Ghoul2 models were
-    // read as plain vertices, torn triangles from the seat)
+    // (the same kinds of vertex as gpu_vertex: without the skinned and the arrays' kinds Jedi Outcast's
+    // models and kept faces were read as plain vertices, a room of torn triangles from the seat)
     [branch]
     if (how.r & VERTEX_BONES) {
         gpu_bones_vertex(head, more, ram(base + 3), k, pos, o.uv, o.colour);
+    } else if (how.r & VERTEX_ARRAYS) {
+        gpu_arrays_vertex(head, more, ram(base + 3), k, pos, o.uv, o.colour);
     } else if (how.r & VERTEX_COMPACT) {
         gpu_compact_vertex(base, head, how, more, k, pos, o.uv, o.colour);
     } else {
@@ -982,21 +1823,6 @@ gpu_varyings volume_vertex(uint id, uint base, uint4 head, out float3 eye, out f
 #endif
 
 #ifdef GPU_WRITEBACK
-// The 4 MB bands of RAM the pending copy writes (ram_bands).
-uint gpu_copy_bands() {
-    uint4 copy = ram(GPU_COPY);
-    if (copy.r == 0) return 0;
-    uint first = GPU_PIXELS * 16, bytes;
-    if (copy.r & SUBMIT_INTO) {
-        first = copy.g & 0x7ffffffc;
-        bytes = max(copy.a, copy.b & 0xffff) * (copy.b >> 16) * 4;
-    } else {
-        uint4 disp = ram(GPU_DISPLAY);
-        bytes = disp.g * disp.b * 4;
-    }
-    return ram_bands(first >> 22, min((first + bytes) >> 22, (uint)(RAM_MAX - 1) >> 22));
-}
-
 // For the Commit pass. The control pass leaves the copy a drawn list asked for in GPU_COPY; the
 // next commit makes it: the RAM texels it covers take the picture (one 0x00RRGGBB word per
 // pixel) and GPU_COPY is cleared. False for every other texel.
@@ -1203,7 +2029,7 @@ uint4 gpu_control(uint2 pos) {
     // for is noted in GPU_COPY, for the next commit to make.
     // (A list that needs passes the host is not drawing yet waits, submitted, until it is.)
 #ifdef GPU_INPUT
-    bool served = (SUBMIT_PASSES(ram(GPU_CTRL).r) & ~_GpuPasses) == 0;
+    bool served = !SUBMIT_WAITS(ram(GPU_CTRL).r, _GpuPasses);
 #if defined(GPU_LIST_SKIP)
     served = served && _GpuListSkipped == 0;   // (rvc_harness's RVC_LIST_LAZY: the same; Unity draws it every frame)
 #endif

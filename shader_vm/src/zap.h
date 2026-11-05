@@ -21,12 +21,6 @@ uint zap_zone(uint row) {
     return megabyte < 16 ? 2 : megabyte < 23 ? 3 : megabyte < 27 ? 4 : megabyte < 32 ? 5 : megabyte < 41 ? 0 : 1;
 }
 
-// The 4 MB bands of RAM a zap of this commit is in, a bit each.
-uint zap_bands() {
-    if (_ZapKind == 0) return 0;
-    uint reach = _ZapKind == 2 ? _ZapR : 0;
-    return ram_bands((_ZapY - min(_ZapY, reach)) >> 7, min((_ZapY + reach) >> 7, (STATE_TEX_HEIGHT - 65) >> 7));
-}
 
 uint zap_hash(uint n) {
     n ^= n >> 16;

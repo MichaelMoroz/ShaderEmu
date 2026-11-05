@@ -292,7 +292,7 @@ def run(name, g, image, log, calls, salt, show, profile=None, plain=False, guest
     exe = os.path.join(ROOT, 'bin', 'rvc_cpu.exe')
     if os.path.exists(log):
         os.remove(log)
-    args = [exe, '--quiet', '--uart-log', log, '--wall', str(g.get('wall', 280)), '--expect', '/ # ',
+    args = [exe, '--quiet', '--uart-log', log, '--wall', os.environ.get('GAME_PAR_WALL') or str(g.get('wall', 280)), '--expect', '/ # ',
             '--send', (f': {salt}; ' if salt else '') + ''.join(f'export {v}; ' for v in guest) + g['cmd'] + '; ' + DONE + '\\n', '--until', g.get('until', 'LX-DONE'), '--count-from', g['mark']] + g.get('more', [])
     if image:
         args += ['--image', image]

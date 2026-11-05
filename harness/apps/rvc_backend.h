@@ -152,6 +152,10 @@ public:
     virtual bool takeState(std::vector<uint8_t>& out) { (void)out; return false; }
     // Blocking read of the top-left w x h texels of the current state.
     virtual bool readState(UINT w, UINT h, std::vector<uint8_t>& out) = 0;
+    // The VRAM's level 0 (shader_vm/src/gpu.h, "VRAM"): 4096 x 4096 RGBA8, for a snapshot's FILE.vram; false when nothing
+    // was ever uploaded. writeVram puts it back and makes its levels.
+    virtual bool readVram(std::vector<uint8_t>& out) { (void)out; return false; }
+    virtual bool writeVram(const uint8_t* texels, size_t bytes) { (void)texels; (void)bytes; return false; }
     // Time on the graphics card of the last frame run with timeIt, once it is known: the CPUTick
     // draw, the Commit draw, and the emulated GPU device's two draws together (0 without one).
     virtual bool gpuTimes(double& tickMs, double& commitMs, double& deviceMs) = 0;

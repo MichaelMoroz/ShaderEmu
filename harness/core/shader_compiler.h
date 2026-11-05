@@ -47,3 +47,8 @@ bool preprocessStage(const std::string& source, const std::string& sourceName, c
 StageResult compileStage(const std::string& source, const std::string& sourceName, const std::string& rootDir,
                          const std::string& entry, const std::string& profile, const Defines& extraDefines,
                          const CompileSettings& settings);
+
+// The bytecode of every stage compiled so far (fresh or from the cache), a hash each, and those hashes as one stamp: the
+// code the card would run, whatever its sources' text (the WARP stamp's second form, rvc_harness.cpp).
+std::vector<uint64_t>& compiledCode();
+std::string codeStamp();

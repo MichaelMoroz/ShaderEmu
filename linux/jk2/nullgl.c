@@ -85,6 +85,21 @@ void glReadPixels(GLint x, GLint y, int width, int height, GLenum format, GLenum
 /* the drawing on a worker (gl_jk2.c, the machine's): never on the build computer */
 int jk2RenderOn(void) { return 0; }
 void jk2RenderSettle(void) {}
+void jk2RenderSettleBack(void) {}
+void jk2ServerPoll(void) {}
+int jk2MixOut(void) { return 0; }
+int jk2MixPartPost(unsigned (*fn)(unsigned, unsigned), unsigned a0, unsigned a1) { (void)fn, (void)a0, (void)a1; return 0; }
+void jk2MixPartJoin(void) {}
+int jk2VoicePost(unsigned (*fn)(unsigned, unsigned), unsigned a0, unsigned a1) { (void)fn, (void)a0, (void)a1; return 0; }
+int jk2WorldPost(unsigned (*fn)(unsigned, unsigned), unsigned a0, unsigned a1) { (void)fn, (void)a0, (void)a1; return 0; }
+int jk2WorldJoin(void) { return 0; }
+void jk2VoiceJoin(void) {}
+int jk2HandPost(unsigned (*fn)(unsigned, unsigned), unsigned a0, unsigned a1) { (void)fn, (void)a0, (void)a1; return 0; }
+void jk2HandJoin(void) {}
+void jk2FrontSettle(void) {}
+int jk2FrontOn(void) { return 0; }
+void jk2FrontGive(void (*fn)(void *), void *arg) { fn(arg); }
+void jk2FrontAwait(volatile unsigned *made, unsigned seq) { (void)made, (void)seq; }
 void jk2RenderGive(void (*fn)(const void *), const void *arg) { fn(arg); }
 void jk2RenderPresent(void) {}
 int jk2RenderSwapMark(void) { return 0; }
@@ -107,6 +122,11 @@ int jk2glEnvElements(int count, const unsigned *idx, const float *normal, const 
 void jk2glKey(const void *surface, int frame) { (void)surface; (void)frame; }
 void jk2glKeysForget(void) {}
 int jk2MixWorkerHere(void) { return 0; }
+/* tess's arrays in the frame's GPU memory (gl_jk2.c's): none on the build computer, tr_shade.cpp's own arrays */
+void *jk2glTessRoom(unsigned bytes) { (void)bytes; return 0; }
+int jk2glTessTrim(void *at, unsigned bytes) { (void)at; (void)bytes; return 0; }
+void jk2glRooms(const void *xyz, const void *colours, const void *tc0, const void *tc1) { (void)xyz; (void)colours; (void)tc0; (void)tc1; }
+void jk2glVertexCount(int n) { (void)n; }
 
 /* the GL's kept and tagged words, the in-play test and the joins' counts (gl_jk2.c's, sys_shaderemu.cpp's under SE_WINDOW):
    none on the build computer, so the renderer makes tess's words itself, which leaves the game as it is */
@@ -129,3 +149,8 @@ int jk2glKeptFaces(unsigned rgba, const unsigned *const *words, const int *count
 unsigned se_join_waits, se_rs_waits;
 /* mcwx.h's loop over the workers: the whole range on this core */
 void mcw_for_opt(unsigned n, void (*fn)(void *ctx, unsigned from, unsigned to), void *ctx, const void *o) { (void)o; if (n) fn(ctx, 0, n); }
+/* the drawing on two workers (gl_jk2.c's): never on the build computer */
+int jk2DrawHalfGive(void *half, void *gl) { (void)half; (void)gl; return 0; }
+int jk2DrawHalfJoin(void *gl) { (void)gl; return 0; }
+void jk2glHalfInit(const void *gl) { (void)gl; }
+void jk2glHalfEnd(void *gl) { (void)gl; }

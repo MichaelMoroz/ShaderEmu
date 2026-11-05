@@ -59,6 +59,8 @@ cp "$MW/src/lib/libnano-X.a" "$STAGE/usr/lib/" 2>/dev/null || cp "$MW/lib/libnan
 cp "$MW/include/nano-X.h" "$MW/include/mwtypes.h" "$MW/include/mwconfig.h" "$STAGE/usr/include/" 2>/dev/null || true
 mkdir -p "$STAGE/usr/include/GLES"
 cp "$GL"/include/GLES/*.h "$STAGE/usr/include/GLES/"
+# the vectors, matrices and quaternions games and graphics want (docs/system/semath.md): one header
+cp "$GL/semath.h" "$STAGE/usr/include/"
 # (the library's float build: what a program here hands it is floats)
 rv32-cc -O2 -Wall -c -DSEGL_FLOAT -idirafter "$GL/include" -I"$MW/include" "$GL/gles.c" -o "$WORK/build/gles.o"
 rm -f "$STAGE/usr/lib/libgles.a"
@@ -117,6 +119,8 @@ tr -d '\r' < "$HERE/cc" > "$ROOT/usr/bin/cc"
 tr -d '\r' < "$HERE/example" > "$ROOT/usr/bin/example"
 chmod +x "$ROOT/usr/bin/cc" "$ROOT/usr/bin/example"
 for f in "$HERE"/examples/*.c "$HERE"/examples/*.hlsl; do cp "$f" "$ROOT/usr/share/example-$(basename "$f")"; done
+# the tests a program compiled here runs (tools/test_all.py): not examples, not in the menu
+mkdir -p "$ROOT/usr/share/cc-tests" && cp "$HERE"/tests/*.c "$ROOT/usr/share/cc-tests/"
 # (each opens in the IDE, to be read, changed and run from there; `example NAME` still builds and runs one)
 printf '%s\n' "Programming/Cube (C example)=nxide /usr/share/example-cube.c" "Programming/Home (C example)=nxide /usr/share/example-home.c" \
     "Programming/Shader on 255 cores (C example)=nxide /usr/share/example-shader.c" \

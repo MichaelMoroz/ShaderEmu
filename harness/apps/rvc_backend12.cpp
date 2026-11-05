@@ -597,8 +597,8 @@ private:
         Dxc dxc;
         dxc.init(b.dxcDir);
         std::string err, vsText, psText, rootDir = fs::u8path(shader.path).parent_path().u8string();
-        if (!preprocessStage(sp->code, shader.path, rootDir, {{"SHADER_STAGE_VERTEX", "1"}}, cs, vsText, err) ||
-            !preprocessStage(sp->code, shader.path, rootDir, {{"SHADER_STAGE_FRAGMENT", "1"}}, cs, psText, err))
+        if (!preprocessStage(sp->code, shader.path, rootDir, {{"SHADER_STAGE_VERTEX", "1"}, {"GPU_NO_DRAW_IDS", "1"}}, cs, vsText, err) ||
+            !preprocessStage(sp->code, shader.path, rootDir, {{"SHADER_STAGE_FRAGMENT", "1"}, {"GPU_NO_DRAW_IDS", "1"}}, cs, psText, err))
             die(err.c_str());
         StageLayout &vl = gpuVl_, &pl = gpuPl_;
         std::vector<uint8_t> vs = dxcCompile(dxc, vsText, sp->vertexEntry, "vs_" + b.dxcSm, b.dxcOpt, vl);
@@ -702,8 +702,8 @@ private:
         Dxc dxc;
         dxc.init(b.dxcDir);
         std::string err, vsText, psText, rootDir = fs::u8path(shader.path).parent_path().u8string();
-        if (!preprocessStage(sp->code, shader.path, rootDir, {{"SHADER_STAGE_VERTEX", "1"}}, cs, vsText, err) ||
-            !preprocessStage(sp->code, shader.path, rootDir, {{"SHADER_STAGE_FRAGMENT", "1"}}, cs, psText, err))
+        if (!preprocessStage(sp->code, shader.path, rootDir, {{"SHADER_STAGE_VERTEX", "1"}, {"GPU_NO_DRAW_IDS", "1"}}, cs, vsText, err) ||
+            !preprocessStage(sp->code, shader.path, rootDir, {{"SHADER_STAGE_FRAGMENT", "1"}, {"GPU_NO_DRAW_IDS", "1"}}, cs, psText, err))
             die(err.c_str());
         StageLayout vl;
         StageLayout& pl = soundPl_;

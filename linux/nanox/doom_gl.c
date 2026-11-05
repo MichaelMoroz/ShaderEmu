@@ -268,6 +268,7 @@ wall_texture(int number)
 	wall_copy(picture, number, NULL);
 	glBindTexture(GL_TEXTURE_2D, name);
 	seglTexturePointer(picture, height, width, GL_COLOR_INDEX8_EXT);
+	seglTextureChanged();	/* (into the VRAM, when it is on) */
 	return wall_gl[number] = name;	/* (named last: a worker core may be looking) */
 }
 
@@ -325,6 +326,7 @@ flat_texture(int number)
 	memcpy(picture, W_CacheLumpNum(firstflat + number, PU_CACHE), 64 * 64);
 	glBindTexture(GL_TEXTURE_2D, name);
 	seglTexturePointer(picture, 64, 64, GL_COLOR_INDEX8_EXT);
+	seglTextureChanged();
 	return flat_gl[number] = name;
 }
 
@@ -357,6 +359,7 @@ sprite_texture(int lump)
 	sprite_height[lump] = height;
 	glBindTexture(GL_TEXTURE_2D, name);
 	seglTexturePointer(picture, height, width, GL_COLOR_INDEX8_EXT);
+	seglTextureChanged();
 	return sprite_gl[lump] = name;
 }
 
@@ -814,6 +817,34 @@ uv_word(fixed_t u, fixed_t v)
 	return ((uint32_t)(u >> 6) & 0xffff) | (uint32_t)(v >> 6) << 16;
 }
 
+/*
+ * A flat's coordinates (in repeats, 16.16) are kept in 1/1024ths of 16 bits, 32 repeats either
+ * way (2,048 units): taken from a polygon's first corner, a subsector more than that across had
+ * its far corners wrap round, and the flat smeared across it. Whole repeats from the middle of
+ * the corners given instead, which reaches 2,048 units each way from there.
+ */
+static void
+flat_origin(fixed_t (*c)[2], const int *which, int n, fixed_t *u0, fixed_t *v0)
+{
+	fixed_t ulo = 0, uhi = 0, vlo = 0, vhi = 0;
+	int i;
+
+	for (i = 0; i < n; i++) {
+		fixed_t u = c[which ? which[i] : i][0] >> 6, v = -c[which ? which[i] : i][1] >> 6;
+
+		if (!i || u < ulo)
+			ulo = u;
+		if (!i || u > uhi)
+			uhi = u;
+		if (!i || v < vlo)
+			vlo = v;
+		if (!i || v > vhi)
+			vhi = v;
+	}
+	*u0 = (fixed_t)(((int64_t)ulo + uhi) >> 1) & ~0xffff;
+	*v0 = (fixed_t)(((int64_t)vlo + vhi) >> 1) & ~0xffff;
+}
+
 /* A wall's quad, from the heights and pictures the view was told; one of no size if it is not there. */
 static void
 wall_piece(const struct piece *p)
@@ -898,11 +929,12 @@ plane_piece(const struct piece *p, fixed_t height)
 	fixed_t (*c)[2] = corners + polygon[p->of].first;
 	int n = polygon[p->of].count, i, k;
 	uint32_t *to = world_vertices + 16 * p->quad;
-	fixed_t u0 = (c[0][0] >> 6) & ~0xffff, v0 = (-c[0][1] >> 6) & ~0xffff;
+	fixed_t u0, v0;
 
 	for (i = 1; i + 1 < n; i += 2) {
 		int corner[4] = { 0, i, i + 1, i + 2 < n ? i + 2 : n - 1 };
 
+		flat_origin(c, corner, 4, &u0, &v0);	/* (each quad its own: the same picture, as it repeats) */
 		for (k = 0; k < 4; k++, to += 4) {
 			to[0] = c[corner[k]][0];
 			to[1] = c[corner[k]][1];
@@ -1181,11 +1213,13 @@ pictures_ahead(void)
 			glBindTexture(GL_TEXTURE_2D, m[k].name);
 			if (m[k].flat) {
 				seglTexturePointer(m[k].picture, 64, 64, GL_COLOR_INDEX8_EXT);
+				seglTextureChanged();
 				flat_gl[number] = m[k].name;
 				W_CacheLumpNum(firstflat + number, PU_CACHE);
 				continue;
 			}
 			seglTexturePointer(m[k].picture, textureheight[number] >> FRACBITS, texturewidthmask[number] + 1, GL_COLOR_INDEX8_EXT);
+			seglTextureChanged();
 			wall_gl[number] = m[k].name;
 			wall_lumps(number, PU_CACHE, NULL);
 			if (texturecomposite[number])
@@ -2351,8 +2385,7 @@ plane(int subsector, fixed_t height, int picture, int level)
 
 	if (n < 3 || !name)
 		return;
-	u0 = (p[0][0] >> 6) & ~0xffff;
-	v0 = (-p[0][1] >> 6) & ~0xffff;
+	flat_origin(p, NULL, n, &u0, &v0);
 	for (i = 0; i < n; i++) {
 		fan_xyz[i * 3] = p[i][0];
 		fan_xyz[i * 3 + 1] = p[i][1];
@@ -2520,6 +2553,34 @@ flash(void)
 	glDrawArrays(GL_QUADS, 0, 4);
 	glEnableClientState(GL_TEXTURE_COORD_ARRAY);
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	glDisable(GL_BLEND);
+	glEnable(GL_TEXTURE_2D);
+}
+
+/*
+ * Doom's palette flash over the view and the weapon, whose pictures are in the VRAM with the plain palette
+ * (doom_tint in doom_video.c): what the flash does to every colour, c (1 - a) + colour a, as one rectangle.
+ */
+int doom_tint(unsigned int *colour);
+
+static void
+tint(void)
+{
+	static const GLfixed over[12] = { 0, 0, FRACUNIT - 2, FRACUNIT, 0, FRACUNIT - 2, FRACUNIT, FRACUNIT, FRACUNIT - 2,
+					  0, FRACUNIT, FRACUNIT - 2 };
+	unsigned int colour;
+	int part = doom_tint(&colour);
+
+	if (!part)
+		return;
+	glDisable(GL_TEXTURE_2D);
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	glColor4ub(colour >> 16 & 255, colour >> 8 & 255, colour & 255, part);
+	glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+	glVertexPointer(3, GL_FIXED, 0, over);
+	glDrawArrays(GL_QUADS, 0, 4);
+	glEnableClientState(GL_TEXTURE_COORD_ARRAY);
 	glDisable(GL_BLEND);
 	glEnable(GL_TEXTURE_2D);
 }
@@ -2859,6 +2920,7 @@ doom_view_draw(int share)
 	if (!held)
 		weapon();
 	glDisable(GL_ALPHA_TEST);
+	tint();
 	__asm__ volatile("rdcycle %0" : "=r"(now));
 	me->cost += now - began;
 }

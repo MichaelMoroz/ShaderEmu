@@ -12,6 +12,7 @@
 #define GPU_PACKED	0x4000		/* a vertex is a word, its coordinates a word in a second buffer */
 #define GPU_FACING	0x20000		/* colour: a table of 256 normals; more[1]: the light's direction, its colour, the ambient colour */
 #define GPU_MOVED	0x10000		/* more[3]: two rows of three floats the texture coordinates are moved by */
+#define GPU_ARRAYS	0x100000	/* a renderer's arrays by index: more[0..2] positions, coordinates, colours, more[3] flags (gpu.h) */
 /* a draw's fragment word: how it is coloured, what else, and in which pass */
 #define GPU_COLOUR	0
 #define GPU_WORDS	1		/* a texture of 0xTTRRGGBB words */
@@ -56,6 +57,14 @@ unsigned gpuMatricesBlock (void);
 void gpuMatricesChanged (void);
 void gpuDrawPut (unsigned *c, const gpu_state *s, unsigned block, unsigned vertices, unsigned first_mesh, int mesh);
 void *gpuFrameMemory (unsigned bytes);		/* memory of this frame's own, for a draw to point at */
+int gpuFrameTrim (void *at, unsigned bytes);	/* the last such memory cut to `bytes` (0: not the last, or not so large) */
+int gpuFrameHolds (const void *p, unsigned bytes);	/* those bytes are this frame's memory */
+/* A list built in two parts at once (SE_HALVES: Jedi Outcast's drawing on two workers): the first's split of what is left,
+ * the second's beginning and end of its part, and its commands moved after the first's; each takes 256 bytes. */
+int gpuHalfSplit (void *half);
+void gpuHalfBegin (const void *half);
+void gpuHalfEnd (void *half);
+void gpuHalfMerge (const void *half);
 
 /* Commands that stay at the head of every frame's list: so many, of so many vertices in all. */
 int gpuKeep (int commands, int mesh);
