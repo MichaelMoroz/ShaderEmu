@@ -419,7 +419,10 @@ left unaccepted.
 
 A second run the same day accepted them, as the owner allowed (`build/unity_checks/20261105c`). Half-Life from the seat: the
 world round it, the menu by `HL_SCRIPT` flat on the large screen, Escape back to the world; `kill` stays the world (the dead view
-looks up from the floor), and 20 s after `hldemo2`'s spawn the room was still black with a world told (not followed further).
+looks up from the floor), and 20 s after `hldemo2`'s spawn the room was still black with a world told. The game does draw
+there: `halflife-seated` on the same image gives 784 frames of world after `hldemo2`'s load and 0 empty, and `rvc_harness --cpu
+--gpu-capture` at its end shows a lit wall; so the holodeck's drawing of that level is wrong, not the game (still to be found in
+Unity: `volume_view` takes the camera from the first 24 commands, a place to look first).
 Jedi Outcast's level drew as torn triangles: `volume_vertex` (`src/gpu.h`) read only compact and plain vertices, so Ghoul2's
 skinned draws (`VERTEX_BONES`) were read as plain ones; it reads them now as `gpu_vertex_sized` does (2fda440a). That image's
 `jk2.bin` came from a tree with the uncommitted arrays' vertices (`VERTEX_ARRAYS`), which the shaders of that run did not have
