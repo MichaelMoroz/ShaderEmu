@@ -434,3 +434,12 @@
 - Chess (`nxchess`, `docs/games/chess.md`): a searcher stores only to its core, its table, its ring and its status; keepers alone store to the shared
   table, each to its shard; the first core stores only `ch_stop` and `ch_deepest`. So a result on workers has no sum: the check is `nxchess solve`, and
   `NXCHESS_WORKERS=0 nxchess search 6` must be `chess_host 6`'s. It asks for 63 workers because 255 has more nodes and less depth on the card: measure depth in fixed time, not nodes.
+- The GPU has a VRAM (`docs/machine/gpu.md`, "VRAM" and "Claims"): Doom, Quake (its light maps too), Quake III, Half-Life,
+  Jedi Outcast and ClassiCube draw their textures from it (`DOOM_VRAM`, `QUAKE_VRAM`, `QUAKE_VRAM_LIGHT`, `QUAKE3_VRAM`,
+  `HLGL_VRAM`, `CLASSICUBE_VRAM` `=0` the ways before). A texture there is a copy made when its pixels are made: a new way
+  of writing a texture's pixels uploads it again (`seglTextureChanged`, `seglVramUpload`), or the card draws the old
+  picture, and `rvc_cpu`, which draws no list, never shows it: capture under `rvc_harness --cpu` with the switch at 1 and
+  0. `gles.c`'s slots and uploads are the swapping core's alone: a frame drawn on a worker takes them where no frame is
+  out or on the drawing core. A sum of a list counts a slot as what it was uploaded from (`gpuListSum`). The vertices find
+  their commands in the claims pass: a change to which vertices a command claims or to its pass changes
+  `gpu_claims_fragment` with `gpu_command_search`, and `--define GPU_CLAIMS_CHECK` must leave no magenta.

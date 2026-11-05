@@ -1207,21 +1207,6 @@ gpu_varyings volume_vertex(uint id, uint base, uint4 head, out float3 eye, out f
 #endif
 
 #ifdef GPU_WRITEBACK
-// The 4 MB bands of RAM the pending copy writes (ram_bands).
-uint gpu_copy_bands() {
-    uint4 copy = ram(GPU_COPY);
-    if (copy.r == 0) return 0;
-    uint first = GPU_PIXELS * 16, bytes;
-    if (copy.r & SUBMIT_INTO) {
-        first = copy.g & 0x7ffffffc;
-        bytes = max(copy.a, copy.b & 0xffff) * (copy.b >> 16) * 4;
-    } else {
-        uint4 disp = ram(GPU_DISPLAY);
-        bytes = disp.g * disp.b * 4;
-    }
-    return ram_bands(first >> 22, min((first + bytes) >> 22, (uint)(RAM_MAX - 1) >> 22));
-}
-
 // For the Commit pass. The control pass leaves the copy a drawn list asked for in GPU_COPY; the
 // next commit makes it: the RAM texels it covers take the picture (one 0x00RRGGBB word per
 // pixel) and GPU_COPY is cleared. False for every other texel.

@@ -39,19 +39,5 @@
 #define L1A
 #define L1A0
 #endif
-#define tlb_state_texel(a0, a1) tlb_state_texel_l1(L1A a0, a1)
 #define encode(a0) encode_l1(L1A a0)
-#define fast_exec(a0) fast_exec_l1(L1A a0)
-#define fast_run(a0) fast_run_l1(L1A a0)
-#define ins_select(a0, a1) ins_select_l1(L1A a0, a1)
-#define load_page(a0) load_page_l1(L1A a0)
-#define l1_find(a0) l1_find_l1(L1A a0)
-#define l1_holds(a0, a1) l1_holds_l1(L1A a0, a1)
-#define mem_get_cached_or_tex(a0) mem_get_cached_or_tex_l1(L1A a0)
-#define mem_get_word(a0) mem_get_word_l1(L1A a0)
-#define mem_set(a0, a1, a2) mem_set_l1(L1A a0, a1, a2)
-#define mem_set_byte(a0, a1, a2) mem_set_byte_l1(L1A a0, a1, a2)
 #define mem_set_ram(a0, a1, a2, a3) mem_set_ram_l1(L1A a0, a1, a2, a3)
-#define mem_get_slow(a0) mem_get_slow_l1(L1A a0)
-#define pend_unmap(a0, a1) pend_unmap_l1(L1A a0, a1)
-#define mmu_translate(a0, a1, a2) mmu_translate_l1(L1A a0, a1, a2)

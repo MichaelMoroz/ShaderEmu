@@ -427,11 +427,29 @@ and drew the list in that frame. An upload of a texture with no levels (a light 
 host's snapshot keeps the VRAM's level 0 beside it (`FILE.vram`, 64 MB, when it is not all zeros).
 
 The VRAM belongs to the program that draws with the GPU's memory (`/dev/gpu`'s DRAW): the GL library gives slots out
-(`seglVram(L)`, `seglTextureChanged()`, `seglVramPalette()` in `programs/linux/include/GLES/segl.h`), on shelves of whole
-16 texels, and a texture deleted leaves its block to the next of its size. It is off by default, for a 2D program's
-pictures to stay those of GPU memory to the pixel, and on in Quake (`QUAKE_VRAM=0` the way before) and Doom (`DOOM_VRAM=0`;
-its palette's flashes, which the VRAM's colours do not take, are a rectangle over the view: `doom_tint`). A texture whose
-memory the program writes as it runs (a screen, a film's frame) stays where it is unless the program says it changed.
+(`seglVram(L)`, `seglTextureChanged()`, `seglVramLevels(L)` for the bound texture's own L, `seglVramPalette()` in
+`programs/linux/include/GLES/segl.h`), on shelves of whole 16 texels, and a texture deleted leaves its block to the next of
+its size. A program whose textures are not the library's takes slots by themselves: `seglVramTake(w, h, L, flags)` (1
+clamped, 2 keyed), `seglVramUpload(slot, address, w, h, kind, key, palette)` (words, bytes through a palette, three bytes;
+from GPU memory, RAM or the ROM) and `seglVramGive`. The library's uploads are the swapping core's: a program whose frame
+is drawn on a worker takes and uploads only where no frame is out, or by the drawing core (Quake's light maps,
+`light_gen` in `world_shaderemu.c`). It is off by default, for a 2D program's pictures to stay those of GPU memory to the
+pixel, and on, each with its way before, in:
+
+| program | in the VRAM | way before |
+|---|---|---|
+| Doom | its pictures, 4 levels; the palette's flashes a rectangle over the view (`doom_tint`) | `DOOM_VRAM=0` |
+| Quake | its textures, 4 levels; the light maps, of none, uploaded again from the pool when made again (the flickering ones by the workers) | `QUAKE_VRAM=0`, `QUAKE_VRAM_LIGHT=0` |
+| Quake III | the pictures a stage the first core registered draws unkeyed, 4 levels; the light maps' pages, from the ROM | `QUAKE3_VRAM=0` |
+| Half-Life, Jedi Outcast | textures of words with no holes and the game's paletted ones (from a copy by rows, keyed), 4 levels | `HLGL_VRAM=0` |
+| ClassiCube | every texture and the chunks' copy four times across, of no levels (the terrain is an atlas) | `CLASSICUBE_VRAM=0` |
+
+A keyed texture is premultiplied in its slot (`VRAM_PREMULTIPLIED`: the key's texels 0, the colours times alpha, divided
+back at the sample and dropped under a half), which suits a texture only ever drawn keyed. A keyed draw of a slot uploaded
+plain drops a nearest texel of no alpha, which is a texture of words' key (ClassiCube's atlas, translucent water and
+leaves' holes in one picture). A texture whose memory the program writes as it runs (a screen, a film's frame) stays where
+it is unless the program says it changed. A sum of a list that should not go by where a texture lies counts a slot as what
+it was uploaded from (Quake III's `gpuListSum`).
 
 `programs/gpubench` (a program in the kernel's place: `tools\make_lazy_image.py DIR --program gpubenchN`) covers a 1280 x
 720 picture eight times in one fragment mode. The GPU's draw (`RVC_PASS_PROF=1`, "gpu draw"), RTX 5090, 4 November 2026:
