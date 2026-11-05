@@ -907,7 +907,7 @@ dropped):
 
 | What | Quake | Tiberian Dawn | Shell | Verdict |
 |---|---|---|---|---|
-| **`same` as a difference** (`next - pc == 4`, not `next == pc + 4`) | +0.05%, -1.2% | -1.9%, -1.0% | -0.7%, -0.7% | **kept**: stamp `a97c7e448c1eea3c`, the four card cases pass |
+| **`same` as a difference** (`next - pc == 4`, not `next == pc + 4`: in 32-bit unsigned arithmetic the two hold for the same pc and next, a pc near the top and a jump of +4 included) | +0.05%, -1.2% | -1.9%, -1.0% | -0.7%, -0.7% | **kept**: stamp `a97c7e448c1eea3c`, the four card cases pass |
 | The same with `next - 4 == pc`; with the two tests swapped; with `(next & 12) > 0` | -0.9%; -0.3%; -0.2% | -1.25%; +0.1%; +0.35% | -0.65%; +0.25%; +0.5% | the subtraction is what gains, not the change |
 | `ot` declared before the cache; the data texel's statics first; `ot[9]`; the cache 480 and the registers 96 | -0.25 to +0.3% | -0.7 to -0.2% | -0.0 to +0.9% | level |
 
