@@ -13,6 +13,7 @@ void qglModel (const void *model, int pose, const unsigned char *vertices, const
 	int count);
 unsigned *qglLights (int key, int *fresh);
 unsigned *qglLightWords (unsigned name);
+void qglLightChanged (unsigned name);
 void R_StoreEfrags (efrag_t **ppefrag);
 void SE_NewMap (void);
 
@@ -172,6 +173,10 @@ static int	styled_cached[MAX_STYLED][MAXLIGHTMAPS] __attribute__ ((aligned (16))
 static struct { int values[MAX_LIGHTSTYLES]; int count, unused[3]; } light_job __attribute__ ((aligned (16)));
 static int	light_how = -1, light_on, light_was;
 static se_group_t	light_out;	/* the workers' calls, while they are out */
+/* The pages of light maps the workers make, each copied into the VRAM again (qglLightChanged) in every list while their job
+ * is out and in the first after it is in: the GPU reads them there, not in the pool the workers write. */
+static unsigned char	light_pages[64];
+static int	light_page_count, light_upload;
 
 /* A worker's share: the light maps of every `step`th page of them, so that no two workers
  * store to the same 16 bytes. GLQuake's sum of a surface's maps by their styles (R_BuildLightMap). */
@@ -217,6 +222,7 @@ static void light_build (model_t *world)
 
 	light_on = 0;
 	light_job.count = 0;
+	light_page_count = light_upload = 0;
 	if (light_how < 0) {
 		light_how = how_of ("QUAKE_LIGHT", SE_WORKER_LIGHT, SE_LIGHT_WORKERS);
 		text_here (light_share);
@@ -243,6 +249,11 @@ static void light_build (model_t *world)
 		e->to = words + s->light_t * LIGHT_ROW + s->light_s;
 		e->wide = (s->extents[0] >> 4) + 1, e->high = (s->extents[1] >> 4) + 1;
 		e->page = s->lightmaptexturenum, e->maps = m;
+		for (m = 0; m < light_page_count && light_pages[m] != e->page; m++)
+			;
+		if (m == light_page_count)
+			light_pages[light_page_count++] = e->page;
+		m = e->maps;
 		for (m = 0; m < MAXLIGHTMAPS; m++) {
 			e->styles[m] = s->styles[m];
 			styled_cached[n][m] = s->cached_light[m];
@@ -292,6 +303,7 @@ static void light_frame (void)
 	/* (two calls: in a demo the styles change nearly every frame, and a call is a cost of its own here) */
 	for (k = 0; k < LIGHT_CALLS; k++)
 		SE_GroupAdd (&light_out, light_share, k, LIGHT_CALLS);
+	light_upload = 2;
 	if (light_how == HOW_WAIT)
 		light_settle ();
 }
@@ -299,10 +311,23 @@ static void light_frame (void)
 /* The light maps' job for the frame, if the styles have changed (on this core: it is a call). */
 void SE_LightFrame (void)
 {
+	int	i;
+
 	if (kept_on && SE_LightsApart ())
 		light_frame ();
 	else
 		light_was = 0;
+	if (light_out.n) {
+		/* (a job done and not yet joined, as no style changed since: joined, so the pages stop going again) */
+		if (SE_GroupReady (&light_out))
+			SE_GroupJoin (&light_out);
+		light_upload = 2;
+	}
+	if (light_upload > 0) {
+		light_upload--;
+		for (i = 0; i < light_page_count; i++)
+			qglLightChanged (lightmap_textures + light_pages[i]);
+	}
 }
 
 int SE_LightWait (void) { return light_how == HOW_WAIT; }

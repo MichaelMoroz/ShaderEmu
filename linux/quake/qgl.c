@@ -101,6 +101,11 @@ static uint32_t uploads;   // goes up when a texture's pixels or kind may be oth
 // from its memory here into the VRAM once, with mip levels, and drawn from there; the pool is then the light maps' and poses'.
 static int vram_on;
 static inline int vram_kind(const texture* t) { return vram_on && (t->kind == INDEXED || (t->kind == WORDS && t->width != LIGHT_BLOCK)); }
+// A light map stays in the pool, where it is made (by this core, and the flickering ones by workers), and is in the VRAM
+// too, of no levels, copied there again from the pool whenever it is made again (qglLightChanged; QUAKE_VRAM_LIGHT=0: drawn
+// from the pool as before).
+static int vram_lights;
+static inline int vram_light(const texture* t) { return vram_lights && t->kind == WORDS && t->width == LIGHT_BLOCK; }
 // The texture's pixels were written: copied into the VRAM again when it is there.
 static void vram_again(int name) {
     texture* t = &textures[name];
@@ -141,6 +146,7 @@ static void pool_give(int owner) {
         break;
     }
     textures[owner].at = NOWHERE;
+    if (vram_light(&textures[owner])) textures[owner].in_vram = 0;   // (its slot goes when it is in the pool again)
 }
 
 static uint32_t pool_take(uint32_t size, int owner) {
@@ -221,6 +227,11 @@ static int resident(int name) {
     glBindTexture(GL_TEXTURE_2D, name);
     seglTexturePointer(pool + at, t->width, t->height, t->kind == INDEXED ? GL_COLOR_INDEX8_EXT : GL_RGBA);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, t->smooth ? GL_LINEAR : GL_NEAREST);
+    if (vram_light(t)) {
+        seglVramLevels(0);   // (from the pool, where it is made again)
+        t->in_vram = 1;
+        uploads++;   // (a kept command drawn with its pool address)
+    }
     glBindTexture(GL_TEXTURE_2D, bound);
     if (head_made) head_texture(name);
     return 1;
@@ -386,6 +397,12 @@ void qglLight(GLuint name, int x, int y, int width, int height, const unsigned i
             to[i] = also[i] = (v > 255 ? 255 : v) * 0x010101u;
         }
     }
+    vram_again(name);
+}
+
+// A light map made again where it lies in the pool (by the workers, world_shaderemu.c): into the VRAM again.
+void qglLightChanged(GLuint name) {
+    if (name < MAX_TEXTURES) vram_again((int)name);
 }
 
 // The words of a light map that stays in GPU memory (qglStay), for a worker to write a
@@ -1231,6 +1248,8 @@ int qglOpen(unsigned int nano_x_window, const unsigned char* palette) {
         const char* v = getenv("QUAKE_VRAM");
         vram_on = !(v && !strcmp(v, "0"));
         seglVram(vram_on ? 4 : -1);
+        const char* l = getenv("QUAKE_VRAM_LIGHT");
+        vram_lights = vram_on && !(l && !strcmp(l, "0"));
     }
     // the ramp a model's shading is looked up in, which stays; the rest is the textures' pool
     uint32_t* ramp = seglMemory(256 * 4);

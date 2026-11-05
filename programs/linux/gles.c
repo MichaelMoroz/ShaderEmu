@@ -730,10 +730,11 @@ static void vram_upload(texture* x) {
         if (&textures[uploads[i]] == x) return;
     if (upload_count < MAX_UPLOADS) uploads[upload_count++] = (uint16_t)(x - textures);
 }
-// A texture into the VRAM: a block for it, and its upload in the next list. Paletted and word textures only.
-static void vram_take(texture* x) {
-    if (x->indexed > 1 || !x->width || !x->height || x->width > 2048 || x->height > 2048) return;
-    uint32_t lod = (uint32_t)vram_lod, bw, bh, at_x = 0, at_y = 0;
+// A texture into the VRAM with at most `levels` mip levels: a block for it, and its upload in the next list. Paletted and
+// word textures only.
+static void vram_take(texture* x, int levels) {
+    if (x->indexed > 1 || !x->width || !x->height || x->width > 2048 || x->height > 2048 || levels < 0) return;
+    uint32_t lod = (uint32_t)(levels > 4 ? 4 : levels), bw, bh, at_x = 0, at_y = 0;
     while (lod && ((x->width >> lod) < 1 || (x->height >> lod) < 1)) lod--;   // (no smaller than a texel)
     vram_size(x->width, x->height, lod, &bw, &bh);
     int found = 0;
@@ -765,7 +766,13 @@ void seglTextureChanged(void) {
     texture* x = &textures[bound];
     if (vram_lod == -2) seglVram(-1);
     if (x->slot) vram_upload(x);
-    else if (vram_lod >= 0) vram_take(x);
+    else if (vram_lod >= 0) vram_take(x, vram_lod);
+}
+void seglVramLevels(int levels) {
+    texture* x = &textures[bound];
+    if (vram_lod == -2) seglVram(-1);
+    if (x->slot) vram_upload(x);
+    else if (vram_lod >= 0) vram_take(x, levels);
 }
 // The uploads waiting, as commands at the list's end (the host draws them every frame a list is drawn): SUBMIT_UPLOADS (8)
 // if one has mip levels, which the host then makes before the list is drawn. They are taken off only once the list is
@@ -875,7 +882,7 @@ void glTexImage2D(GLenum target, GLint level, GLint internal, GLsizei width, GLs
     }
     seglTexturePointer(to, width, height, internal);
     if (vram_lod == -2) seglVram(-1);
-    if (vram_lod >= 0) vram_take(&textures[bound]);
+    if (vram_lod >= 0) vram_take(&textures[bound], vram_lod);
 }
 void glColorTableEXT(GLenum target, GLenum internal, GLsizei count, GLenum format, GLenum type, const GLvoid* table) {
     (void)target, (void)internal, (void)format, (void)type;

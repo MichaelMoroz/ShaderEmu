@@ -46,6 +46,9 @@ void seglVram(int lod);
 // time with seglVram on. The memory is read when the next list is drawn: it may be anywhere (the program's own), and
 // must stay as it is until then (seglSettle).
 void seglTextureChanged(void);
+// The same with at most `levels` mip levels the first time, whatever seglVram's (0: none, a light map that changes, whose
+// upload of no levels waits for nothing); with seglVram off, nothing.
+void seglVramLevels(int levels);
 // The palette paletted textures are uploaded with from now on (256 words, 0x00RRGGBB, memory the program keeps), not
 // the display's: a program whose display palette flashes (Doom) uploads with its plain one. NULL: the display's.
 void seglVramPalette(const unsigned int* words);
