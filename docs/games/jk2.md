@@ -1057,6 +1057,14 @@ wrong (streaks, no sky, no HUD): at the merge the frame's 288 KB of vertex memor
 after it found none; with 1 MB sets (800 KB of vertices) nothing was refused, but `rvc_harness --cpu --warp` then
 stopped at frame 400. To find: what in the second part draws wrong, and room enough for two parts.
 
+**The frame's list sets 1 MB** (`gpu_shaderemu.c` under `SE_HALVES`, Jedi Outcast's build only): a frame's vertices
+nearly filled the 288 KB a 512 KB set has (`JK2_ROOMS_LOG`'s "least left": 0 to 13 KB, up to 1,496 rooms refused in 100
+frames); now 800 KB, 529 KB or more left; the textures' memory is 1 MB less (32 of 35.8 MB used).
+
+**An error off the first core** (`common.cpp`'s `Com_Error`): an `ERR_DROP` thrown on a worker's or the drawing's stack
+has no catch there and ends the program ("terminate called after throwing an instance of 'int'") with no word of why: it
+is printed first now ("jk2: an error off the first core"). Seen once in the world (5 November 2026), not on `rvc_cpu`.
+
 **Measured** (the walk, frames 1,500 to 1,700, calibrated, `JK2_SPLIT=worker`): 238.2 passes a frame (3.2 a second) when
 this round began, 226.1 (3.4) with all of the above but the two workers; core 0 916 thousand instructions a frame.
 Runs of different builds or switches play other game states (one build repeated gives the same numbers to the last
