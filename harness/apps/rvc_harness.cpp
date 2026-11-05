@@ -147,7 +147,7 @@ struct Options {
     std::vector<std::pair<std::string, std::string>> hostFiles;   // --host-file URL=FILE: an address answered with a file of this computer
     std::string openAfter;           // --open-after: not before the console has shown this
     std::string persist;             // --persist: the file the guest's /persistence is kept in (docs/system/persist.md)
-    int ticks = 8192;
+    int ticks = 12288;   // (the world's too, EmuMachine.TicksPerRound: tick-costs.md, sixth round)
     int initFrames = 2;
     uint64_t maxFrames = 0;
     double maxSeconds = 0;
@@ -236,7 +236,7 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
   --payload DIR        folder with the payload PNGs (default <rvc>/data-net)
   --ram/--mtd P        PNG name prefixes in the payload folder (default linux_payload, rootfs;
                        "none" leaves that texture black)
-  --ticks N            emulated instructions per tick pass (default 8192; upstream uses 2048). Large values on a real
+  --ticks N            emulated instructions per tick pass (default 12288, the world's; 8192 before 5 November 2026). Large values on a real
                        GPU can trigger a driver timeout (TDR); WARP has no timeout.
   --frames N           stop after N frames          --seconds S   stop after S seconds
   --until TEXT         stop (exit 0) once the UART output contains TEXT; exit 3 if a limit hits first

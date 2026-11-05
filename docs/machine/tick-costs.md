@@ -790,7 +790,12 @@ Where core 0's passes end with a budget of 32,768 (`--frame-log`, `python tools/
   each other every frame (nxphys, Doom's view, Jedi Outcast's drawing worker) pays every wait longer with a longer pass,
   as stores reach RAM only at the commit; none was measured here.
 - 12,288 is where the gain of fewer rounds' fixed costs (about 6% of a round at 8,192) meets the write cache and the waits:
-  +3.7 to +4.7% on all three. Not taken: it is the machine's setting for every program and every world, measured on two.
+  +3.7 to +4.7% on all three. **Taken** (5 November 2026, the developer's decision): the harness's default is 12,288, as the
+  world's already was (`EmuMachine.TicksPerRound`); `rvc_cpu` stays at 8,192, as the tests and the card's model are fitted to
+  it, and `--ticks 8192` gives a harness run the pass of before. At 12,288 `test_card.py mctest-3 fptest lanetest tdawn-300
+  doom-3 nxpath-balls` pass on the card. What a program whose cores wait for each other pays: nxphys's 120 substeps of
+  scene 1 with its workers took 777 and 784 ms at 8,192, 790 and 798 at 12,288 (+1.7%); Doom's timedemo with its view on workers
+  (`DOOM_VIEW=told`) took 2,301 and 2,300 realtics at 8,192, 2,258 and 2,256 at 12,288 (-1.9%).
 
 **What a round is made of on this card** (`RVC_PASS_PROF=1`, 600 frames from each snapshot, ms a round):
 
