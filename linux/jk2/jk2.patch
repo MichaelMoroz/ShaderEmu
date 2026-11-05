@@ -1789,7 +1789,7 @@ index 97b4f4b4..d6516fde 100644
  
  		sfx->eSoundCompressionMethod = ct_16;
 diff --git a/code/client/snd_mix.cpp b/code/client/snd_mix.cpp
-index d245590d..08623df2 100644
+index d245590d..35eed8b0 100644
 --- a/code/client/snd_mix.cpp
 +++ b/code/client/snd_mix.cpp
 @@ -36,6 +36,22 @@ void S_WriteLinearBlastStereo16 (void)
@@ -1899,7 +1899,7 @@ index d245590d..08623df2 100644
  			break;
  
  		default:
-@@ -262,6 +295,87 @@ void ChannelPaint(channel_t *ch, sfx_t *sc, int count, int sampleOffset, int buf
+@@ -262,6 +295,104 @@ void ChannelPaint(channel_t *ch, sfx_t *sc, int count, int sampleOffset, int buf
  
  
  
@@ -1933,7 +1933,10 @@ index d245590d..08623df2 100644
 +			count = sc->iSoundLengthInSamples - sampleOffset;
 +		if ( count <= 0 )
 +			break;
-+		ChannelPaintTo( ch, sc, count, sampleOffset, ltime - from, pb, vol );
++		// (an MP3 in pieces of the paint buffer's size: S_PaintChannelFromMP3's buffer holds that many)
++		for ( int done = 0 ; done < count ; done += PAINTBUFFER_SIZE )
++			ChannelPaintTo( ch, sc, count - done < PAINTBUFFER_SIZE ? count - done : PAINTBUFFER_SIZE, sampleOffset + done,
++				ltime - from + done, pb, vol );
 +		ltime += count;
 +	} while ( ltime < end && ch->loopSound );
 +}
@@ -1950,55 +1953,138 @@ index d245590d..08623df2 100644
 +	return 0;
 +}
 +// (the first core, at S_Update before the mix is given: the helpers' channels, from s_paintedtime to endtime)
++// (JK2_MIX_MP3, docs/games/jk2.md, "The voices decoded beside the mix": the MP3 channels, the characters' voices, all given
++// to the first helper, which decodes and paints them into its buffer while the mix's worker paints the rest; one helper,
++// as S_PaintChannelFromMP3's buffer is one. JK2_MIX_MP3=0 the way before)
 +void SE_MixPartsGive( int endtime )
 +{
-+	static int on = -1;
++	static int on = -1, mp3_on = -1;
 +	if ( on < 0 ) {
-+		const char *e = getenv( "JK2_MIX_PARTS" );
++		const char *e = getenv( "JK2_MIX_PARTS" ), *m = getenv( "JK2_MIX_MP3" );
 +		on = e && !strcmp( e, "1" );
++		mp3_on = !( m && !strcmp( m, "0" ) );
 +		jk2Touch( se_mix_pb, sizeof se_mix_pb ), jk2Touch( (void *)se_mix_done, sizeof se_mix_done );
 +	}
 +	jk2MixPartJoin();	// (the frame before's, done with the mix that was settled)
 +	memset( se_mix_owner, 0, sizeof se_mix_owner );
 +	se_mix_parts.helpers = 0;
-+	if ( !on || endtime - s_paintedtime > SE_MIX_SAMPLES || endtime <= s_paintedtime )
++	if ( ( !on && !mp3_on ) || endtime - s_paintedtime > SE_MIX_SAMPLES || endtime <= s_paintedtime )
 +		return;
++	const int mp3_fits = mp3_on;	// (painted in pieces of PAINTBUFFER_SIZE: se_paint_channel)
 +	se_mix_parts.from = s_paintedtime, se_mix_parts.end = endtime;
 +	se_mix_parts.normal_vol = s_volume->value * 256.0f, se_mix_parts.voice_vol = s_volumeVoice->value * 256.0f;
-+	int n = 0;
++	int n = 0, needed = 0;
 +	const channel_t *ch = s_channels;
-+	for ( int i = 0 ; i < MAX_CHANNELS ; i++, ch++ )
-+		if ( ch->thesfx && !( ch->leftvol < 0.25 && ch->rightvol < 0.25 ) && ch->thesfx->eSoundCompressionMethod == ct_16 )
++	for ( int i = 0 ; i < MAX_CHANNELS ; i++, ch++ ) {
++		if ( !ch->thesfx || ( ch->leftvol < 0.25 && ch->rightvol < 0.25 ) )
++			continue;
++		if ( on && ch->thesfx->eSoundCompressionMethod == ct_16 )
 +			se_mix_owner[i] = (unsigned char)( 1 + n++ % SE_MIX_HELPERS );
-+	if ( !n )
++		else if ( mp3_fits && ch->thesfx->eSoundCompressionMethod == ct_MP3 )
++			se_mix_owner[i] = 1;
++		else
++			continue;
++		if ( se_mix_owner[i] > needed )
++			needed = se_mix_owner[i];
++	}
++	if ( !needed )
 +		return;
 +	se_mix_gen++;
 +	int posted = 0;
-+	for ( int k = 0 ; k < SE_MIX_HELPERS ; k++ )
++	for ( int k = 0 ; k < needed ; k++ )
 +		posted += jk2MixPartPost( se_mix_part_job, (unsigned)k, (unsigned)se_mix_gen ) != 0;
-+	if ( posted < SE_MIX_HELPERS ) {	// (too few workers: the mix's worker paints them all; those posted find no channel... joined)
++	if ( posted < needed ) {	// (too few workers: the mix's worker paints them all; those posted find no channel... joined)
 +		memset( se_mix_owner, 0, sizeof se_mix_owner );
 +		jk2MixPartJoin();
 +		return;
 +	}
-+	se_mix_parts.helpers = SE_MIX_HELPERS;
++	se_mix_parts.helpers = needed;
 +}
 +#endif
  void S_PaintChannels( int endtime ) {
  	int 	i;
  	int 	end;
-@@ -316,6 +430,10 @@ void S_PaintChannels( int endtime ) {
+@@ -274,6 +405,19 @@ void S_PaintChannels( int endtime ) {
+ 	snd_vol = normal_vol = s_volume->value*256.0f;
+ 	voice_vol  = (s_volumeVoice->value*256.0f);
+ 
++#ifdef SHADEREMU
++	// (docs/games/jk2.md, "The mix in blocks": the 16-bit channels painted a block of SE_MIX_BLOCK samples at a time, every
++	// channel into the block before the next block, so that the block's texels of the paint buffer stay in the pass's
++	// write cache: a channel over the whole buffer was 512 texels a piece and three or four passes ended full, some 29
++	// passes a frame of the walk. A block is cleared where it is painted, not the piece first. The MP3 channels as before
++	// (their decoder's stream goes on by whole calls). The sums are integers: the same samples in any order.
++	// JK2_MIX_BLOCK=0 the way before)
++	static int se_block_on = -1;
++	if ( se_block_on < 0 ) {
++		const char *e = getenv( "JK2_MIX_BLOCK" );
++		se_block_on = !( e && !strcmp( e, "0" ) );
++	}
++#endif
+ //Com_Printf ("%i to %i\n", s_paintedtime, endtime);
+ 	while ( s_paintedtime < endtime ) {
+ 		// if paintbuffer is smaller than DMA buffer
+@@ -288,6 +432,9 @@ void S_PaintChannels( int endtime ) {
+ 			if ( s_rawend ) {
+ 				//Com_DPrintf ("background sound underrun\n");
+ 			}
++#ifdef SHADEREMU
++			if ( !se_block_on )	// (each block cleared where it is painted, below)
++#endif
+ 			memset(paintbuffer, 0, (end - s_paintedtime) * sizeof(portable_samplepair_t));
+ 		} else {
+ 			// copy from the streaming sound source
+@@ -310,12 +457,49 @@ void S_PaintChannels( int endtime ) {
+ 			}
+ 		}
+ 
++#ifdef SHADEREMU
++		if ( se_block_on ) {	// (the 16-bit channels by blocks: above, before the loop)
++			enum { SE_MIX_BLOCK = 128 };
++			const int clear = s_rawend < s_paintedtime;
++			for ( int bs = s_paintedtime ; bs < end ; bs += SE_MIX_BLOCK ) {
++				const int be = end - bs > SE_MIX_BLOCK ? bs + SE_MIX_BLOCK : end;
++				if ( clear )
++					memset( paintbuffer + ( bs - s_paintedtime ), 0, ( be - bs ) * sizeof( portable_samplepair_t ) );
++				ch = s_channels;
++				for ( i = 0 ; i < MAX_CHANNELS ; i++, ch++ ) {
++					if ( !ch->thesfx || ( ch->leftvol < 0.25 && ch->rightvol < 0.25 ) || ch->thesfx->eSoundCompressionMethod != ct_16 )
++						continue;
++					if ( se_mix_parts.helpers && se_mix_owner[i] )
++						continue;
++					snd_vol = ( ch->entchannel == CHAN_VOICE || ch->entchannel == CHAN_VOICE_ATTEN || ch->entchannel == CHAN_VOICE_GLOBAL ) ? voice_vol : normal_vol;
++					sc = ch->thesfx;
++					ltime = bs;
++					do {
++						sampleOffset = ch->loopSound ? ltime % sc->iSoundLengthInSamples : ltime - ch->startSample;
++						count = be - ltime;
++						if ( sampleOffset + count > sc->iSoundLengthInSamples )
++							count = sc->iSoundLengthInSamples - sampleOffset;
++						if ( count > 0 ) {
++							ChannelPaint( ch, sc, count, sampleOffset, ltime - s_paintedtime );
++							ltime += count;
++						}
++					} while ( ltime < be && ch->loopSound );
++				}
++			}
++		}
++#endif
+ 		// paint in the channels.
+ 		ch = s_channels;
+ 		for ( i = 0; i < MAX_CHANNELS ; i++, ch++ ) {
  			if ( !ch->thesfx || (ch->leftvol<0.25 && ch->rightvol<0.25 )) {
  				continue;
  			}
 +#ifdef SHADEREMU
 +			if ( se_mix_parts.helpers && se_mix_owner[i] )
 +				continue;	// (a helper's)
++			if ( se_block_on && ch->thesfx->eSoundCompressionMethod == ct_16 )
++				continue;	// (painted by blocks above)
 +#endif
  
  			if ( ch->entchannel == CHAN_VOICE || ch->entchannel == CHAN_VOICE_ATTEN || ch->entchannel == CHAN_VOICE_GLOBAL )
  				snd_vol = voice_vol;
-@@ -385,8 +503,24 @@ void S_PaintChannels( int endtime ) {
+@@ -385,8 +569,24 @@ void S_PaintChannels( int endtime ) {
  			}
  		}
  */
@@ -6729,7 +6815,7 @@ index afbbb175..5fec07ac 100644
  	else
  	{
 diff --git a/code/rd-vanilla/tr_cmds.cpp b/code/rd-vanilla/tr_cmds.cpp
-index 04ad9bdb..7fd5bda6 100644
+index 04ad9bdb..1cec9fd3 100644
 --- a/code/rd-vanilla/tr_cmds.cpp
 +++ b/code/rd-vanilla/tr_cmds.cpp
 @@ -35,30 +35,37 @@ R_PerformanceCounters
@@ -6786,7 +6872,7 @@ index 04ad9bdb..7fd5bda6 100644
  }
  
  /*
-@@ -89,6 +98,24 @@ void R_PerformanceCounters( void ) {
+@@ -89,6 +98,25 @@ void R_PerformanceCounters( void ) {
  R_IssueRenderCommands
  ====================
  */
@@ -6799,7 +6885,8 @@ index 04ad9bdb..7fd5bda6 100644
 +extern "C" void jk2RenderGive( void ( *fn )( const void * ), const void *arg );
 +extern "C" void jk2RenderPresent( void );
 +extern "C" void jk2RenderGo( void );
-+int SE_RSBones( void );
++int SE_RSBonesGive( void );
++int SE_RSBonesJoin( void );
 +void SE_RSInline( void );
 +unsigned SE_RSFrom( void );
 +void SE_SkinGive( unsigned from, unsigned to );
@@ -6811,14 +6898,18 @@ index 04ad9bdb..7fd5bda6 100644
  void R_IssueRenderCommands( qboolean runPerformanceCounters ) {
  	renderCommandList_t	*cmdList;
  
-@@ -101,6 +128,25 @@ void R_IssueRenderCommands( qboolean runPerformanceCounters ) {
+@@ -101,6 +129,29 @@ void R_IssueRenderCommands( qboolean runPerformanceCounters ) {
  	// clear it out, in case this is a sync and not a buffer flip
  	cmdList->used = 0;
  
 +#ifdef SHADEREMU
-+	jk2RenderSettleBack();	// (the frame before done, and shown; not this frame's front end, which the drawing waits for)
 +	unsigned se_from = SE_RSFrom();
-+	if ( runPerformanceCounters && !r_skipBackEnd->integer && jk2RenderOn() && se_backEndData[1] && SE_RSBones() >= 0 ) {
++	// (the frame's bones given to the slots first, then the frame before waited for, done and shown (not this frame's
++	// front end, which the drawing waits for), then the bones: the two waits at once)
++	const int se_give = runPerformanceCounters && !r_skipBackEnd->integer && jk2RenderOn() && se_backEndData[1];
++	const int se_bones = se_give ? SE_RSBonesGive() : -1;
++	jk2RenderSettleBack();
++	if ( se_give && se_bones >= 0 && SE_RSBonesJoin() >= 0 ) {
 +		R_PerformanceCounters();
 +		R_SE_FrontGiven( 1 );	// (its views are made by the worker: waited for at the next RE_BeginFrame)
 +		jk2RenderGive( RB_ExecuteRenderCommands, cmdList->cmds );	// (it waits for jk2RenderGo: the skins given out first)
@@ -6837,7 +6928,7 @@ index 04ad9bdb..7fd5bda6 100644
  	// at this point, the back end thread is idle, so it is ok
  	// to look at it's performance counters
  	if ( runPerformanceCounters ) {
-@@ -166,6 +212,9 @@ make sure there is enough command space
+@@ -166,6 +217,9 @@ make sure there is enough command space
  static void *R_GetCommandBuffer( int bytes ) {
  	return R_GetCommandBufferReserved( bytes, PAD( sizeof( swapBuffersCommand_t ), sizeof(void *) ) );
  }
@@ -6847,7 +6938,7 @@ index 04ad9bdb..7fd5bda6 100644
  
  
  /*
-@@ -309,6 +358,9 @@ void RE_RotatePic2 ( float x, float y, float w, float h,
+@@ -309,6 +363,9 @@ void RE_RotatePic2 ( float x, float y, float w, float h,
  
  void RE_LAGoggles( void )
  {
@@ -6857,7 +6948,7 @@ index 04ad9bdb..7fd5bda6 100644
  	tr.refdef.rdflags |= (RDF_doLAGoggles|RDF_doFullbright);
  	tr.refdef.doLAGoggles = qtrue;
  
-@@ -322,6 +374,9 @@ void RE_LAGoggles( void )
+@@ -322,6 +379,9 @@ void RE_LAGoggles( void )
  	fog->tcScale = 2.0f / ( fog->parms.depthForOpaque * (1.0f + cos( tr.refdef.floatTime) * 0.1f));
  }
  
@@ -6867,7 +6958,7 @@ index 04ad9bdb..7fd5bda6 100644
  void RE_RenderWorldEffects(void)
  {
  	setModeCommand_t	*cmd;
-@@ -329,6 +384,9 @@ void RE_RenderWorldEffects(void)
+@@ -329,6 +389,9 @@ void RE_RenderWorldEffects(void)
  	if (!tr.registered) {
  		return;
  	}
@@ -6877,7 +6968,7 @@ index 04ad9bdb..7fd5bda6 100644
  
  	cmd = (setModeCommand_t *)R_GetCommandBuffer( sizeof( *cmd ) );
  	if ( !cmd ) {
-@@ -369,12 +427,26 @@ If running in stereo, RE_BeginFrame will be called twice
+@@ -369,12 +432,26 @@ If running in stereo, RE_BeginFrame will be called twice
  for each RE_EndFrame
  ====================
  */
@@ -6904,7 +6995,7 @@ index 04ad9bdb..7fd5bda6 100644
  	glState.finishCalled = qfalse;
  
  	tr.frameCount++;
-@@ -509,7 +581,9 @@ void RE_EndFrame( int *frontEndMsec, int *backEndMsec ) {
+@@ -509,7 +586,9 @@ void RE_EndFrame( int *frontEndMsec, int *backEndMsec ) {
  	if ( backEndMsec ) {
  		*backEndMsec = backEnd.pc.msec;
  	}
@@ -7032,7 +7123,7 @@ index c67c5d0a..0ac08dfc 100644
  		{
  			for ( int x=0; x<*piWidth; x++ )
 diff --git a/code/rd-vanilla/tr_ghoul2.cpp b/code/rd-vanilla/tr_ghoul2.cpp
-index 5062daf5..fe75e249 100644
+index 5062daf5..56c15e2c 100644
 --- a/code/rd-vanilla/tr_ghoul2.cpp
 +++ b/code/rd-vanilla/tr_ghoul2.cpp
 @@ -83,8 +83,19 @@ extern	cvar_t	*r_Ghoul2UnSqashAfterSmooth;
@@ -7066,7 +7157,7 @@ index 5062daf5..fe75e249 100644
  
  CRenderableSurface *AllocRS()
  {
-@@ -723,6 +734,105 @@ CRenderableSurface *AllocRS()
+@@ -723,6 +734,172 @@ CRenderableSurface *AllocRS()
  	return ret;
  }
  
@@ -7089,6 +7180,19 @@ index 5062daf5..fe75e249 100644
 +struct seRsJob_t { unsigned from, to; int part, unused; } __attribute__(( aligned( 16 ) ));
 +seRsJob_t se_rs_jobs[SE_RS_JOBS];
 +static inline int SE_RsPart( const CBoneCache *c ) { return (int)( ( (uintptr_t)c >> 4 ) * 2654435761u >> 16 ) % SE_RS_JOBS; }
++// (the caches shared out by their work, the largest first to the least loaded slot, not by their address's hash: about ten
++// models a frame in eight slots, two or three in one slot by the hash; a cache's work is its surfaces' bone references, at
++// most its bones. JK2_RSBONES=hash the way before)
++#define SE_RS_CACHES 64
++static const CBoneCache *se_rs_cache[SE_RS_CACHES];
++static int se_rs_cost[SE_RS_CACHES], se_rs_nc;
++static unsigned char se_rs_cpart[SE_RS_CACHES];
++static unsigned char se_rs_ci[MAX_RENDER_SURFACES];
++static inline int SE_RsPartOf( unsigned i, const CBoneCache *c )
++{
++	const unsigned ci = se_rs_ci[i];
++	return ci < (unsigned)se_rs_nc ? se_rs_cpart[ci] : SE_RsPart( c );
++}
 +static void SE_RsEval( CRenderableSurface *rs )
 +{
 +	const mdxmSurface_t *surface = rs->surfaceData;
@@ -7103,19 +7207,24 @@ index 5062daf5..fe75e249 100644
 +	for ( unsigned i = j->from ; i != j->to ; i = ( i + 1 ) % MAX_RENDER_SURFACES )
 +	{
 +		CRenderableSurface *rs = &RSStorage[i];
-+		if ( rs->seBones && SE_RsPart( rs->boneCache ) == j->part )
++		if ( rs->seBones && SE_RsPartOf( i, rs->boneCache ) == j->part )
 +			SE_RsEval( rs );
 +	}
 +}
-+int SE_RSBones( void )
++// (given out before this core waits for the frame before's drawing, joined after it: R_IssueRenderCommands. The drawing
++// out reads the other set and its own surfaces' bones, never a cache's)
++static int se_rs_handles[SE_RS_JOBS], se_rs_made;
++int SE_RSBonesGive( void )
 +{
-+	static int on_slots = -1;
++	static int on_slots = -1, by_work = 1;
 +	if ( on_slots < 0 ) {
 +		const char *e = getenv( "JK2_RSBONES" );
 +		on_slots = !( e && !strcmp( e, "core" ) );
++		by_work = !( e && !strcmp( e, "hash" ) );
 +	}
 +	float *pool = se_rs_bones[se_rs_set];
-+	int used = 0, made = 0;
++	int used = 0, made = 0, last = -1;
++	se_rs_nc = 0;
 +	for ( unsigned i = (unsigned)se_rs_from ; i != NextRS ; i = ( i + 1 ) % MAX_RENDER_SURFACES )
 +	{
 +		CRenderableSurface *rs = &RSStorage[i];
@@ -7132,28 +7241,77 @@ index 5062daf5..fe75e249 100644
 +		rs->seBones = pool + used;
 +		used += surface->numBoneReferences * 12;
 +		made++;
++		if ( by_work ) {	// (its cache's place in the table, and the cache's work)
++			int ci = last;
++			if ( ci < 0 || se_rs_cache[ci] != rs->boneCache ) {
++				for ( ci = 0 ; ci < se_rs_nc && se_rs_cache[ci] != rs->boneCache ; ci++ )
++					;
++				if ( ci == se_rs_nc ) {
++					if ( se_rs_nc < SE_RS_CACHES )
++						se_rs_cache[se_rs_nc] = rs->boneCache, se_rs_cost[se_rs_nc++] = 0;
++					else
++						ci = 255;	// (by the hash)
++				}
++			}
++			se_rs_ci[i] = (unsigned char)ci;
++			if ( ci != 255 )
++				se_rs_cost[ci] += surface->numBoneReferences, last = ci;
++		} else
++			se_rs_ci[i] = 255;
 +	}
-+	int handles[SE_RS_JOBS] = { 0 };
-+	if ( on_slots && made > 1 && SE_SlotMode() == 2 ) {
-+		for ( int k = 0 ; k < SE_RS_JOBS ; k++ ) {
-+			se_rs_jobs[k].from = (unsigned)se_rs_from, se_rs_jobs[k].to = NextRS, se_rs_jobs[k].part = k;
-+			handles[k] = SE_SlotGive( 1 + k, SE_RsJob, &se_rs_jobs[k] );
++	if ( by_work && se_rs_nc ) {	// (the largest first, each to the least loaded slot)
++		int load[SE_RS_JOBS] = { 0 };
++		unsigned char order[SE_RS_CACHES];
++		for ( int c = 0 ; c < se_rs_nc ; c++ ) {
++			const int bones = se_rs_cache[c]->mNumBones;
++			if ( se_rs_cost[c] > bones )
++				se_rs_cost[c] = bones;
++			int k = c;
++			for ( ; k > 0 && se_rs_cost[order[k - 1]] < se_rs_cost[c] ; k-- )
++				order[k] = order[k - 1];
++			order[k] = (unsigned char)c;
++		}
++		for ( int k = 0 ; k < se_rs_nc ; k++ ) {
++			int best = 0;
++			for ( int s = 1 ; s < SE_RS_JOBS ; s++ )
++				if ( load[s] < load[best] )
++					best = s;
++			se_rs_cpart[order[k]] = (unsigned char)best;
++			load[best] += se_rs_cost[order[k]];
 +		}
 +	}
 +	for ( int k = 0 ; k < SE_RS_JOBS ; k++ )
-+		if ( !handles[k] ) {	// (no worker for it, or all on this core)
++		se_rs_handles[k] = 0;
++	if ( on_slots && made > 1 && SE_SlotMode() == 2 ) {
++		for ( int k = 0 ; k < SE_RS_JOBS ; k++ ) {
++			se_rs_jobs[k].from = (unsigned)se_rs_from, se_rs_jobs[k].to = NextRS, se_rs_jobs[k].part = k;
++			se_rs_handles[k] = SE_SlotGive( 1 + k, SE_RsJob, &se_rs_jobs[k] );
++		}
++	}
++	se_rs_made = made;
++	return made;
++}
++// (the parts given to no worker made here, the others waited for; the next frame's set)
++int SE_RSBonesJoin( void )
++{
++	for ( int k = 0 ; k < SE_RS_JOBS ; k++ )
++		if ( !se_rs_handles[k] ) {	// (no worker for it, or all on this core)
 +			se_rs_jobs[k].from = (unsigned)se_rs_from, se_rs_jobs[k].to = NextRS, se_rs_jobs[k].part = k;
 +			SE_RsJob( &se_rs_jobs[k] );
 +		}
 +	extern unsigned se_join_waits, se_rs_waits;
 +	const unsigned waited = se_join_waits;
 +	for ( int k = 0 ; k < SE_RS_JOBS ; k++ )
-+		if ( handles[k] )
-+			SE_SlotJoin( handles[k] );
++		if ( se_rs_handles[k] )
++			SE_SlotJoin( se_rs_handles[k] ), se_rs_handles[k] = 0;
 +	se_rs_waits += se_join_waits - waited;	// (JK2_STATS: the passes the bones were waited for)
 +	se_rs_from = NextRS;
 +	se_rs_set ^= 1;
-+	return made;
++	return se_rs_made;
++}
++int SE_RSBones( void )
++{
++	return SE_RSBonesGive() < 0 ? -1 : SE_RSBonesJoin();
 +}
 +unsigned SE_RSFrom( void ) { return (unsigned)se_rs_from; }
 +int R_SE_IsRS( const void *p ) { return (const byte *)p >= (const byte *)RSStorage && (const byte *)p < (const byte *)( RSStorage + MAX_RENDER_SURFACES ); }
@@ -7172,7 +7330,7 @@ index 5062daf5..fe75e249 100644
  /*
  
  All bones should be an identity orientation to display the mesh exactly
-@@ -762,15 +872,15 @@ static int R_GCullModel( trRefEntity_t *ent ) {
+@@ -762,15 +939,15 @@ static int R_GCullModel( trRefEntity_t *ent ) {
    	switch ( R_CullLocalPointAndRadius( vec3_origin,  ent->e.radius * largestScale) )
    	{
    	case CULL_OUT:
@@ -7191,7 +7349,7 @@ index 5062daf5..fe75e249 100644
  		return CULL_IN;
   	}
  	return CULL_IN;
-@@ -1091,6 +1201,7 @@ void G2_TimingModel(boneInfo_t &bone,int currentTime,int numFramesInFile,int &cu
+@@ -1091,6 +1268,7 @@ void G2_TimingModel(boneInfo_t &bone,int currentTime,int numFramesInFile,int &cu
  				}
  				else
  				{
@@ -7199,7 +7357,53 @@ index 5062daf5..fe75e249 100644
  					bone.flags &= ~(BONE_ANIM_TOTAL);
  				}
  
-@@ -2768,6 +2879,197 @@ void G2_ConstructGhoulSkeleton( CGhoul2Info_v &ghoul2,const int frameNum,bool ch
+@@ -2235,6 +2413,32 @@ void G2API_SetSurfaceOnOffFromSkin (CGhoul2Info *ghlInfo, qhandle_t renderSkin)
+ 	}
+ }
+ 
++#ifdef SHADEREMU
++// ---- a skin's shader for a model's surface, found by name (RenderSurfaces): on the first core kept in a table by the skin
++// and the surface, as some 1,350 names a frame of the walk were compared there (31 thousand instructions). The table is
++// emptied when a skin is made or added to (tr_skin.cpp); other cores (the front end's worker) compare as before
++extern "C" int SE_OnFirstCore( void );
++struct seSkinHit_t { const skin_t *skin; const mdxmSurfHierarchy_t *surf; const shader_t *shader; int pad; };
++#define SE_SKIN_HITS 512
++static seSkinHit_t se_skin_hits[SE_SKIN_HITS];
++void SE_SkinHitsClear( void ) { memset( se_skin_hits, 0, sizeof se_skin_hits ); }
++static const shader_t *SE_SkinMatch( const skin_t *skin, const mdxmSurfHierarchy_t *surfInfo )
++{
++	for ( int j = 0 ; j < skin->numSurfaces ; j++ )
++		if ( !strcmp( skin->surfaces[j]->name, surfInfo->name ) )	// (the names have both been lowercased)
++			return skin->surfaces[j]->shader;
++	return R_GetShaderByHandle( surfInfo->shaderIndex );
++}
++static const shader_t *SE_SkinShader( const skin_t *skin, const mdxmSurfHierarchy_t *surfInfo )
++{
++	if ( !SE_OnFirstCore() )
++		return SE_SkinMatch( skin, surfInfo );
++	seSkinHit_t *e = &se_skin_hits[( ( (uintptr_t)skin >> 3 ) * 2654435761u ^ ( (uintptr_t)surfInfo >> 2 ) ) % SE_SKIN_HITS];
++	if ( e->skin != skin || e->surf != surfInfo )
++		e->shader = SE_SkinMatch( skin, surfInfo ), e->skin = skin, e->surf = surfInfo;
++	return e->shader;
++}
++#endif
+ // set up each surface ready for rendering in the back end
+ void RenderSurfaces(CRenderSurface &RS)
+ {
+@@ -2274,6 +2478,12 @@ void RenderSurfaces(CRenderSurface &RS)
+ 		}
+ 		else if ( RS.skin )
+ 		{
++#ifdef SHADEREMU
++			shader = SE_SkinShader( RS.skin, surfInfo );
++		}
++		else if ( 0 )
++		{
++#endif
+ 			int		j;
+ 
+ 			// match the surface name to something in the skin file
+@@ -2768,6 +2978,197 @@ void G2_ConstructGhoulSkeleton( CGhoul2Info_v &ghoul2,const int frameNum,bool ch
  RB_SurfaceGhoul
  ==============
  */
@@ -7397,7 +7601,7 @@ index 5062daf5..fe75e249 100644
  void RB_SurfaceGhoul( CRenderableSurface *surf )
  {
  #ifdef G2_PERFORMANCE_ANALYSIS
-@@ -2901,6 +3203,24 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
+@@ -2901,6 +3302,24 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
  	mdxmSurface_t	*surface = surf->surfaceData;
  
  	CBoneCache *bones = surf->boneCache;
@@ -7422,7 +7626,7 @@ index 5062daf5..fe75e249 100644
  
  	// first up, sanity check our numbers
  	RB_CheckOverflow( surface->numVerts, surface->numTriangles );
-@@ -2989,10 +3309,32 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
+@@ -2989,10 +3408,32 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
  		float t2;
  		const mdxaBone_t *bone;
  		const mdxaBone_t *bone2;
@@ -7456,7 +7660,7 @@ index 5062daf5..fe75e249 100644
  #else
  			bone = &bones->EvalRender(piBoneReferences[G2_GetVertBoneIndex( v, 0 )]);
  #endif // JK2_MODE
-@@ -3013,7 +3355,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
+@@ -3013,7 +3454,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
  				if (iNumWeights==2)
  				{
  #ifdef JK2_MODE
@@ -7465,7 +7669,7 @@ index 5062daf5..fe75e249 100644
  #else
  					bone2 = &bones->EvalRender(piBoneReferences[G2_GetVertBoneIndex( v, 1 )]);
  #endif // JK2_MODE
-@@ -3046,7 +3388,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
+@@ -3046,7 +3487,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
  					for (k=1; k < iNumWeights-1 ; k++)
  					{
  #ifdef JK2_MODE
@@ -7474,7 +7678,7 @@ index 5062daf5..fe75e249 100644
  #else
  						bone = &bones->EvalRender(piBoneReferences[G2_GetVertBoneIndex( v, k )]);
  #endif // JK2_MODE
-@@ -3060,7 +3402,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
+@@ -3060,7 +3501,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
  					}
  
  #ifdef JK2_MODE
@@ -7483,7 +7687,7 @@ index 5062daf5..fe75e249 100644
  #else
  					bone = &bones->EvalRender(piBoneReferences[G2_GetVertBoneIndex( v, k )]);
  #endif // JK2_MODE
-@@ -3075,6 +3417,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
+@@ -3075,6 +3516,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
  			tess.texCoords[baseVertex][0][0] = pTexCoords[j].texCoords[0];
  			tess.texCoords[baseVertex][0][1] = pTexCoords[j].texCoords[1];
  		}
@@ -9717,6 +9921,30 @@ index c0331e97..1b07af0f 100644
  		if (spost2 < 0.0f)
  		{
  			spost2 = -spost2;
+diff --git a/code/rd-vanilla/tr_skin.cpp b/code/rd-vanilla/tr_skin.cpp
+index 48e474a8..047f61c3 100644
+--- a/code/rd-vanilla/tr_skin.cpp
++++ b/code/rd-vanilla/tr_skin.cpp
+@@ -280,6 +280,9 @@ qhandle_t RE_RegisterIndividualSkin( const char *name , qhandle_t hSkin)
+ 	}
+ 
+ 	assert (tr.skins[hSkin]);	//should already be setup, but might be an 3part append
++#ifdef SHADEREMU
++	{ void SE_SkinHitsClear( void ); SE_SkinHitsClear(); }	// (tr_ghoul2.cpp's table of a skin's shaders by surface)
++#endif
+ 
+ 	skin = tr.skins[hSkin];
+ 
+@@ -439,6 +442,9 @@ R_InitSkins
+ */
+ void	R_InitSkins( void ) {
+ 	skin_t		*skin;
++#ifdef SHADEREMU
++	{ void SE_SkinHitsClear( void ); SE_SkinHitsClear(); }
++#endif
+ 
+ 	tr.numSkins = 1;
+ 
 diff --git a/code/rd-vanilla/tr_sky.cpp b/code/rd-vanilla/tr_sky.cpp
 index 4c4dfcfb..0c670192 100644
 --- a/code/rd-vanilla/tr_sky.cpp
@@ -11369,7 +11597,7 @@ index 63add3c3..41e7273b 100644
  	CPoly *pol = FX_AddPoly(p, uv, 4,			// verts, ST, vertCount
  			vel, accel,				// motion
 diff --git a/codeJK2/cgame/cg_ents.cpp b/codeJK2/cgame/cg_ents.cpp
-index bad8c736..8eb9fd4b 100644
+index bad8c736..0d174f61 100644
 --- a/codeJK2/cgame/cg_ents.cpp
 +++ b/codeJK2/cgame/cg_ents.cpp
 @@ -118,7 +118,12 @@ Also called by event processing code
@@ -11412,7 +11640,7 @@ index bad8c736..8eb9fd4b 100644
  {
  	// event-only entities will have been dealt with already
  	if ( cent->currentState.eType >= ET_EVENTS ) {
-@@ -2162,6 +2186,251 @@ CG_AddPacketEntities
+@@ -2162,6 +2186,330 @@ CG_AddPacketEntities
  
  ===============
  */
@@ -11449,6 +11677,7 @@ index bad8c736..8eb9fd4b 100644
 +	int num, wave, slot, handle;	// (the first core's)
 +	int look, unused[3];	// look: the player it waits for, or -1
 +	struct { int state, why, bytes, ran; } __attribute__(( aligned( 16 ) )) out;	// ran: its instructions (JK2_PLAYERS_LOG)	// (the maker's) state: 0 not yet, 1 made ahead (to replay), 2 to make in its turn
++	struct { volatile int gen, unused[3]; } __attribute__(( aligned( 16 ) )) eye;	// (the maker's) its eye made this frame: se_eye_gen
 +	__attribute__(( aligned( 16 ) )) centity_t cent_was;
 +	gentity_t gent_was;
 +	gclient_t client_was;
@@ -11466,10 +11695,35 @@ index bad8c736..8eb9fd4b 100644
 +static int se_ahead_frame;		// cg.time of the players made ahead (CG_SE_LookPoint asks within it)
 +
 +unsigned long long SE_Instructions( void );
++// ---- a player that looks at another waits for that one's eye, not its whole turn (docs/games/jk2.md, "The players'
++// waves at once"): every player is given at once, one that looks at a player before it waits in its job until that
++// player's maker has its eye point (CG_SE_EyeReady, after the head's bolt in CG_Player), all that it reads of it. If that
++// player ends unmade, this one is made in its turn too: before it begins, or put back by the first core after the joins.
++// JK2_PLAYERS_EYE=0: the waves one after another, as before
++static int se_eye_mode = -1, se_eye_gen;
++static struct { sePlayer_t *p; int unused[3]; } __attribute__(( aligned( 16 ) )) se_slot_making[SE_SLOTS + 1];	// (each slot's)
++extern "C" void jk2WaitPass( void );
++void CG_SE_EyeReady( centity_t *cent )
++{
++	const int s = SE_Slot();
++	if ( s && se_slot_making[s].p && se_slot_making[s].p->cent == cent )
++		se_slot_making[s].p->eye.gen = se_eye_gen;
++}
 +static void se_player_run( void *arg )
 +{
 +	sePlayer_t *p = (sePlayer_t *)arg;
 +	const int slot = SE_Slot();
++	if ( se_eye_mode > 0 && p->look >= 0 ) {
++		const sePlayer_t *t = &se_players[p->look];
++		while ( t->eye.gen != se_eye_gen && t->out.state == 0 )
++			jk2WaitPass();
++		if ( t->out.state == 2 ) {	// (the one it looks at is made in its turn: so is this one)
++			p->out.why = 0, p->out.ran = 0;
++			p->out.state = 2;
++			return;
++		}
++	}
++	se_slot_making[slot].p = p;
 +	const unsigned se_t0 = (unsigned)SE_Instructions();
 +	centity_t *cent = p->cent;
 +	memcpy( &p->cent_was, cent, sizeof( centity_t ) );
@@ -11489,6 +11743,7 @@ index bad8c736..8eb9fd4b 100644
 +			memcpy( client, &p->client_was, sizeof( gclient_t ) );
 +		p->out.why = se_abort[slot].why;
 +		p->out.ran = (int)( (unsigned)SE_Instructions() - se_t0 );
++		se_slot_making[slot].p = NULL;
 +		p->out.state = 2;
 +		return;
 +	}
@@ -11498,6 +11753,7 @@ index bad8c736..8eb9fd4b 100644
 +	p->out.bytes = SE_RecEnd();
 +	se_abort[slot].jb = NULL;
 +	p->out.ran = (int)( (unsigned)SE_Instructions() - se_t0 );
++	se_slot_making[slot].p = NULL;
 +	p->out.state = 1;
 +}
 +
@@ -11573,6 +11829,57 @@ index bad8c736..8eb9fd4b 100644
 +				p->wave = se_players[k].wave + 1;
 +			}
 +	}
++	if ( se_eye_mode < 0 ) {
++		const char *e = getenv( "JK2_PLAYERS_EYE" );
++		se_eye_mode = !( e && !strcmp( e, "0" ) );
++	}
++	if ( se_eye_mode > 0 && mode == 2 ) {	// (every wave given at once: a player waits for its look's eye in its job)
++		se_eye_gen++;
++		int slot = 0;
++		for ( int wave = 0; ; wave++ ) {
++			int any = 0;
++			for ( int i = 0; i < se_nplayers; i++ ) {
++				sePlayer_t *p = &se_players[i];
++				if ( p->wave != wave )
++					continue;
++				any = 1;
++				if ( slot < SE_SLOTS && ( p->handle = SE_SlotGive( slot + 1, se_player_run, p ) ) ) {
++					p->slot = ++slot;
++					se_counts[2]++;
++					continue;
++				}
++				p->slot = 0;
++				se_recording0 = 1;
++				se_player_run( p );
++				se_recording0 = 0;
++				if ( p->out.state == 2 && p->look >= 0 && se_players[p->look].out.state == 2 )
++					se_counts[3]++;
++			}
++			if ( !any )
++				break;
++		}
++		for ( int i = 0; i < se_nplayers; i++ )
++			if ( se_players[i].handle ) {
++				SE_SlotJoin( se_players[i].handle );
++				se_players[i].handle = 0;
++			}
++		// (a player made while the one it looks at ended unmade, after its eye: put back as it was, made in its turn; in
++		// the waves' order, so that one that looks at it follows)
++		for ( int wave = 1; wave < SE_PLAYERS; wave++ )
++			for ( int i = 0; i < se_nplayers; i++ ) {
++				sePlayer_t *p = &se_players[i];
++				if ( p->wave != wave || p->look < 0 || p->out.state != 1 || se_players[p->look].out.state == 1 )
++					continue;
++				centity_t *cent = p->cent;
++				gclient_t *client = cent->gent->client;
++				memcpy( cent, &p->cent_was, sizeof( centity_t ) );
++				memcpy( cent->gent, &p->gent_was, sizeof( gentity_t ) );
++				if ( client )
++					memcpy( client, &p->client_was, sizeof( gclient_t ) );
++				p->out.state = 2;
++				se_counts[3]++;
++			}
++	} else
 +	// the waves: a player after the one it waits for, on workers while there are free ones, else here
 +	for ( int wave = 0; ; wave++ ) {
 +		int any = 0, slot = 0;
@@ -11664,7 +11971,7 @@ index bad8c736..8eb9fd4b 100644
  void CG_AddPacketEntities( void ) {
  	int					num;
  	centity_t			*cent;
-@@ -2209,10 +2478,29 @@ void CG_AddPacketEntities( void ) {
+@@ -2209,10 +2557,29 @@ void CG_AddPacketEntities( void ) {
  //	CG_AddCEntity( cent );					//
  
  	// add each entity sent over by the server
@@ -11817,7 +12124,7 @@ index f4bcfa8d..69d7b6ba 100644
  		}
  
 diff --git a/codeJK2/cgame/cg_players.cpp b/codeJK2/cgame/cg_players.cpp
-index ef21d32f..879d98e4 100644
+index ef21d32f..ba6fad32 100644
 --- a/codeJK2/cgame/cg_players.cpp
 +++ b/codeJK2/cgame/cg_players.cpp
 @@ -231,10 +231,19 @@ static const char *GetCustomSound_VariantCapped(const char *ppsTable[], int iEnt
@@ -12017,6 +12324,21 @@ index ef21d32f..879d98e4 100644
  			centity_t	*chair = &cg_entities[cent->gent->owner->s.number];
  			if ( chair && chair->gent )
  			{
+@@ -5311,6 +5433,14 @@ extern vmCvar_t	cg_thirdPersonAlpha;
+ 				gi.G2API_GiveMeVectorFromMatrix(boltMatrix,	NEGATIVE_Z, tempAxis);//go down to find neck
+ 				VectorMA( cent->gent->client->renderInfo.eyePoint, 8, tempAxis, cent->gent->client->renderInfo.headPoint );
+ 			}
++#ifdef SHADEREMU
++			// (its eye as it will stay this frame, unless the view is this entity's camera: a player made ahead that looks at
++			// this one may go on, cg_ents.cpp's "The players' waves at once")
++			if ( !( cg.snap->ps.viewEntity > 0 && cg.snap->ps.viewEntity < ENTITYNUM_WORLD && cg.snap->ps.viewEntity == cent->currentState.clientNum ) ) {
++				void CG_SE_EyeReady( centity_t *cent );
++				CG_SE_EyeReady( cent );
++			}
++#endif
+ 			//Get torsoPoint & torsoAngles
+ 			if (cent->gent->chestBolt>=0)
+ 			{
 diff --git a/codeJK2/cgame/cg_predict.cpp b/codeJK2/cgame/cg_predict.cpp
 index 8c73e521..2cded4c6 100644
 --- a/codeJK2/cgame/cg_predict.cpp
@@ -12158,10 +12480,30 @@ index 8c73e521..2cded4c6 100644
  
  /*
 diff --git a/codeJK2/cgame/cg_syscalls.cpp b/codeJK2/cgame/cg_syscalls.cpp
-index d1b2d1be..865dcf1d 100644
+index d1b2d1be..c96544d5 100644
 --- a/codeJK2/cgame/cg_syscalls.cpp
 +++ b/codeJK2/cgame/cg_syscalls.cpp
-@@ -119,6 +119,36 @@ int		cgi_CM_NumInlineModels( void ) {
+@@ -34,6 +34,19 @@ extern "C" Q_EXPORT void QDECL dllEntry( intptr_t (QDECL  *syscallptr)( intptr_t
+ 	Q_syscall = syscallptr;
+ 	CG_PreInit();
+ }
++#ifdef SHADEREMU
++// (the engine's dispatcher called with the arguments' array made here: the client game is in the same program, and
++// VM_DllSyscall's list of 13 words taken from a va_list was 80 of the 134 instructions of each of some 370 calls a frame
++// of the walk on the first core. The dispatcher polls the game's frame and records for a player made ahead as before)
++intptr_t CL_CgameSystemCalls( intptr_t *args );
++template<typename... T> static inline intptr_t SE_Qsys( intptr_t op, T... a )
++{
++	static_assert( sizeof...( T ) < 13, "at most 12 arguments" );
++	intptr_t args[13] = { op, (intptr_t)a... };
++	return CL_CgameSystemCalls( args );
++}
++#define Q_syscall SE_Qsys
++#endif
+ 
+ inline int PASSFLOAT( float x ) {
+ 	byteAlias_t fi;
+@@ -119,6 +132,36 @@ int		cgi_CM_NumInlineModels( void ) {
  	return Q_syscall( CG_CM_NUMINLINEMODELS );
  }
  
@@ -12198,7 +12540,7 @@ index d1b2d1be..865dcf1d 100644
  clipHandle_t cgi_CM_InlineModel( int index ) {
  	return Q_syscall( CG_CM_INLINEMODEL, index );
  }
-@@ -147,6 +177,7 @@ void	cgi_CM_TransformedBoxTrace( trace_t *results, const vec3_t start, const vec
+@@ -147,6 +190,7 @@ void	cgi_CM_TransformedBoxTrace( trace_t *results, const vec3_t start, const vec
  						  const vec3_t origin, const vec3_t angles ) {
  	Q_syscall( CG_CM_TRANSFORMEDBOXTRACE, results, start, end, mins, maxs, model, brushmask, origin, angles );
  }
@@ -12300,10 +12642,10 @@ index 221cf26d..f87c9246 100644
  void WriteInUseBits(void);
  void ReadInUseBits(void);
 diff --git a/codeJK2/game/g_main.cpp b/codeJK2/game/g_main.cpp
-index 671b309a..efa57d71 100644
+index 671b309a..791ead5c 100644
 --- a/codeJK2/game/g_main.cpp
 +++ b/codeJK2/game/g_main.cpp
-@@ -28,6 +28,626 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
+@@ -28,6 +28,634 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
  #include "Q3_Interface.h"
  #include "g_nav.h"
  #include "g_roff.h"
@@ -12488,6 +12830,9 @@ index 671b309a..efa57d71 100644
 +static int se_g2_clone[MAX_GENTITIES];
 +struct seG2Given_t { unsigned char *buf; int room, used, orig; };
 +static seG2Given_t se_g2_given[MAX_GENTITIES];
++// (the entities given a copy at the give, in order: the take and the copies' handles go through them, not through every
++// entity; an entity's orig is set only while it is listed)
++static int se_g2_list[MAX_GENTITIES], se_g2_n;
 +static unsigned se_g2_conflicts, se_g2_remade;
 +static inline int &se_g2_item( CGhoul2Info_v &v ) { return *(int *)&v; }
 +static inline size_t se_bone_words( void ) { boneInfo_t *b = 0; return ( (char *)&b->lastTimeUpdated - (char *)b ) / 4; }
@@ -12710,6 +13055,7 @@ index 671b309a..efa57d71 100644
 +	SE_GameHooks( NULL, NULL );
 +	for ( int i = 0 ; i < MAX_GENTITIES ; i++ )
 +		se_g2_clean( se_g2_clone[i] ), se_g2_given[i].orig = 0;
++	se_g2_n = 0;
 +}
 +void SE_GameUp( void ) { if ( !se_game_up ) SE_GameHooks( SE_GameGive, SE_GameTake ); se_game_up = 1; }
 +// ---- the handover's ranges (docs/games/jk2.md, "The game's frame apart"): an entity's client and NPC copied, its pointers
@@ -12827,16 +13173,19 @@ index 671b309a..efa57d71 100644
 +		se_give_range( 0, MAX_GENTITIES );
 +	if ( se_g2_mode ) {
 +		const unsigned long long se_g0 = SE_Instructions();
++		se_g2_n = 0;
 +		for ( int i = 0 ; i < MAX_GENTITIES ; i++ )
-+			if ( g_entities[i].inuse )
++			if ( g_entities[i].inuse && se_g2_item( g_entities[i].ghoul2 ) ) {	// (no instance: nothing given)
 +				se_g2_give( i, &g_entities[i], &se_sh[i] );
++				if ( se_g2_given[i].orig )
++					se_g2_list[se_g2_n++] = i;
++			}
 +		se_hp[5] += SE_Instructions() - se_g0;
 +	}
 +	jk2HandJoin();
 +	if ( se_g2_mode )
-+		for ( int i = 0 ; i < MAX_GENTITIES ; i++ )
-+			if ( se_g2_given[i].orig )
-+				se_g2_item( se_sh[i].ghoul2 ) = se_g2_clone[i];
++		for ( int k = 0 ; k < se_g2_n ; k++ )
++			se_g2_item( se_sh[se_g2_list[k]].ghoul2 ) = se_g2_clone[se_g2_list[k]];
 +	se_u = SE_Instructions(), se_hp[1] += se_u - se_t, se_t = se_u;
 +	if ( se_split == 2 ) {	// (=check: every word as given, for the difference)
 +		se_copy( se_gv, se_sh, sizeof( gentity_t ) * MAX_GENTITIES );
@@ -12870,8 +13219,9 @@ index 671b309a..efa57d71 100644
 +			if ( !jk2HandPost( se_take_range, r * ( MAX_GENTITIES / SE_HAND_PARTS ), ( r + 1 ) * ( MAX_GENTITIES / SE_HAND_PARTS ) ) )
 +				se_take_range( r * ( MAX_GENTITIES / SE_HAND_PARTS ), ( r + 1 ) * ( MAX_GENTITIES / SE_HAND_PARTS ) );
 +	if ( se_g2_mode > 0 ) {
-+		for ( int i = 0 ; i < MAX_GENTITIES ; i++ )
-+			se_g2_take( i );
++		for ( int k = 0 ; k < se_g2_n ; k++ )
++			se_g2_take( se_g2_list[k] );
++		se_g2_n = 0;
 +		se_hp[3] += SE_Instructions() - se_t, se_t = SE_Instructions();
 +		if ( ++se_frames % 100 == 0 ) {
 +			gi.Printf( "jk2split: Ghoul2 copies: %u given back over the game's own change, %u made again, %u bones copied%s\n",
@@ -12930,7 +13280,7 @@ index 671b309a..efa57d71 100644
  #include "g_navigator.h"
  #include "b_local.h"
  #include "anims.h"
-@@ -74,12 +694,14 @@ void ClearInUse(gentity_t *ent)
+@@ -74,12 +702,14 @@ void ClearInUse(gentity_t *ent)
  	g_entityInUseBits[entNum/32]&=~(((unsigned int)1)<<(entNum&0x1f));
  }
  
@@ -12945,7 +13295,7 @@ index 671b309a..efa57d71 100644
  
  qboolean PInUse2(gentity_t *ent)
  {
-@@ -736,6 +1358,10 @@ ShutdownGame
+@@ -736,6 +1366,10 @@ ShutdownGame
  =================
  */
  void ShutdownGame( void ) {
@@ -12956,7 +13306,7 @@ index 671b309a..efa57d71 100644
  	gi.Printf ("==== ShutdownGame ====\n");
  
  	gi.Printf ("... ICARUS_Shutdown\n");
-@@ -1256,6 +1882,9 @@ void G_RunFrame( int levelTime ) {
+@@ -1256,6 +1890,9 @@ void G_RunFrame( int levelTime ) {
  	int			i;
  	gentity_t	*ent;
  	int			ents_inuse=0; // someone's gonna be pissed I put this here...
@@ -12966,7 +13316,7 @@ index 671b309a..efa57d71 100644
  #if	AI_TIMERS
  	AITime = 0;
  	navTime = 0;
-@@ -1482,8 +2111,84 @@ void G_RunFrame( int levelTime ) {
+@@ -1482,8 +2119,84 @@ void G_RunFrame( int levelTime ) {
  		ValidateInUseBits();
  	}
  #endif
@@ -12974,8 +13324,8 @@ index 671b309a..efa57d71 100644
 +	extern void SE_GameSum( void );
 +	SE_GameSum();
 +#endif
-+}
-+
+ }
+ 
 +#ifdef SHADEREMU
 +// JK2_SUM=N: a jk2sum: line every N frames of the game, a sum over every entity in use (what it is, its health, where
 +// it is and faces, a client's place, speed and weapon, an NPC's behaviour), its places to an eighth of a unit (the
@@ -12990,8 +13340,8 @@ index 671b309a..efa57d71 100644
 +static int se_eighth( float f )
 +{
 +	return (int)( f * 8.0f + ( f < 0 ? -0.5f : 0.5f ) );
- }
- 
++}
++
 +extern "C" unsigned se_rand_state;    // (linux/jk2/se_rand.c)
 +extern "C" uint32_t SE_Holdrand( void );    // (q_math.c)
 +
@@ -13051,6 +13401,21 @@ index 671b309a..efa57d71 100644
  
  
  extern qboolean player_locked;
+@@ -1518,5 +2231,14 @@ void PrintEntClassname( int gentNum )
+ 
+ IGhoul2InfoArray &TheGameGhoul2InfoArray()
+ {
++#ifdef SHADEREMU
++	// (the renderer's array, made once and never freed: kept, not asked for through two calls at each use; the give and
++	// the take asked some 1,670 times a frame of the walk on the first core)
++	static IGhoul2InfoArray *se_array;
++	if ( !se_array )
++		se_array = &gi.TheGhoul2InfoArray();
++	return *se_array;
++#else
+ 	return gi.TheGhoul2InfoArray();
++#endif
+ }
 diff --git a/codeJK2/game/g_misc_model.cpp b/codeJK2/game/g_misc_model.cpp
 index 657ed823..bf34d99f 100644
 --- a/codeJK2/game/g_misc_model.cpp

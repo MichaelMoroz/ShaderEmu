@@ -1097,6 +1097,76 @@ this round began, 226.1 (3.4) with all of the above but the two workers; core 0 
 Runs of different builds or switches play other game states (one build repeated gives the same numbers to the last
 digit): a row's passes are the game's as much as the change's.
 
+### The mix, the bones, the players (5 November 2026, later)
+
+**A skin's shader kept by surface** (`tr_ghoul2.cpp`'s `SE_SkinShader`): `RenderSurfaces` found a Ghoul2 surface's shader
+by comparing its name with every name of the skin, some 1,350 `strcmp` a frame of the walk on the first core (31
+thousand instructions); the first core keeps the answers in a table by skin and surface, emptied when a skin is made or
+added to (`tr_skin.cpp`). Other cores compare as before. **The game's Ghoul2 array kept** (`g_main.cpp`'s
+`TheGameGhoul2InfoArray`): the give and the take asked for it through two calls some 1,670 times a frame.
+
+**The mix in blocks** (`snd_mix.cpp`; `JK2_MIX_BLOCK=0` the way before): the 16-bit channels are painted 128 samples at a
+time, every channel into the block before the next, and a block is cleared where it is painted: a channel over the whole
+buffer was 512 texels a piece, more than a pass's write cache, and three or four passes ended full each, about 29
+passes a frame of the mix's worker, and the buffer's clear another 10. The sums are integers: the same samples.
+
+**The voices decoded beside the mix** (`SE_MixPartsGive`; `JK2_MIX_MP3=0` the way before): the characters' voices are
+MP3 streams decoded in the mix (about 95 instructions a sample, some 600 thousand a frame while one speaks: the sound
+card plays 22,050 samples a second of the guest's time, so a frame at 3.5 a second mixes about 6,300). They go to one
+helper at the mix's start, which paints them into a buffer of its own in pieces of `PAINTBUFFER_SIZE` (the decoder's
+buffer holds that many, which first kept it from running at all: 1,024 against a frame's 6,300), while the mix's worker
+paints the rest; one helper, as the engine's decoder works through one global stream pointer. Not PCM: a voice's level
+for the lips (`S_CheckAmplitude`) reads an MP3's samples 50 apart and a PCM's 100 apart, and libmedia may place a voice a
+frame of 1,152 samples apart from the engine; the game reads those levels.
+
+**The client game's calls straight to the dispatcher** (`cg_syscalls.cpp`'s `SE_Qsys`): `Q_syscall` builds the
+arguments' array and calls `CL_CgameSystemCalls`; `VM_DllSyscall`'s 13 words from a `va_list` were 80 of the 134
+instructions of each of about 370 calls a frame. The dispatcher polls the game's frame and records for a player made
+ahead as before.
+
+**The Ghoul2 copies by a list** (`g_main.cpp`'s `se_g2_list`): the take and the copies' handles go through the entities
+given a copy at the give, not all 1,024.
+
+**The bones by their work** (`tr_ghoul2.cpp`; `JK2_RSBONES=hash` the way before): a frame's bone caches go to the eight
+slots the largest first to the least loaded (a cache's work its surfaces' bone references, at most its bones), not by
+the hash of their address, which put two or three of about ten models on one slot. **Given before the wait**
+(`SE_RSBonesGive`, `SE_RSBonesJoin`, `tr_cmds.cpp`): at a frame's end the bones go to the slots first, then the first core
+waits for the frame before's drawing, then for the bones: the drawing out reads the other set of bones and its own
+surfaces', never a cache.
+
+**The players' waves at once** (`cg_ents.cpp`; `JK2_PLAYERS_EYE=0` the way before): a player that looks at a player
+before it waited for that one's whole turn, a second wave (1.79 waves a frame of the walk, 209 thousand instructions
+along them against the longest player's 126). Every player is given at once now, and one that looks at another waits in
+its job until that player's maker has its eye point (`CG_SE_EyeReady`, after the head's bolt in `CG_Player`), all it
+reads of it. If that player ends unmade, this one is made in its turn too: before it begins, or put back as it was by
+the first core after the joins, in the waves' order. The walk: 1.24 waves a frame.
+
+**Checked**: `test_all.py jk2 jk2-sums` on private images after each step, 9 of 9 (`jk2-sums`, `jk2-split` and
+`jk2-ahead` among them); `RVC_RACES` on the walk and the march: 1 undone, libmedia's inflate (cores 19 and 20), as on the
+build before.
+
+**Measured** (calibrated, `JK2_SPLIT=worker`, frames 1,500 to 1,700; each row adds to the one above). The voices' levels
+the game reads come from the mix, which the card's pace drives, so a build that moves the timing plays another game
+state: the walk goes by one of two (core 0 about 850 or 990 thousand instructions a frame), and builds with no change
+that ran (rows 2 and 3) differ by 7 passes on the march. Read the rows as a trend.
+
+| Change | Walk | March |
+|---|---|---|
+| As committed (3076266c) | 209.8 | 225.66 |
+| A skin's shader kept, the game's array kept, the mix in blocks | 207.20 | 219.48 |
+| (the voices' helper, which did not run) | 222.93 | 212.09 |
+| The client game's calls straight | 221.22 | 209.61 |
+| The voices in pieces, the blocks cleared in place | 222.41 | 204.72 |
+| The Ghoul2 copies by a list | 217.82 | 203.39 |
+| The bones by their work | 218.18 | 198.58 |
+| Given before the wait | 213.68 | 193.26 |
+| The players' waves at once | 211.07 | 193.50 |
+
+**Where the frame goes now** (`RVC_PROF_CORES=1`, `RVC_PROF_PCS=1`, frames 1,500 to 1,600 of the walk: 182.5 passes a
+frame): the game's frame on its worker is the chain, about 135 passes without a break, core 0 resting for it; after it
+core 0 does about 50 passes alone (the take and the give, each with about 5 passes waiting for its helpers' ranges, and
+the mix's settle). The drawing's two parts 127 and 85 passes, the front end 62, the mix 44.
+
 ### What bounds it
 
 After both rounds (3 November 2026, calibrated, `game_par.py`): the walk 655 passes a frame (1.1 frames a second), the
