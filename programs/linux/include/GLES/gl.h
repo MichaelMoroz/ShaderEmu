@@ -119,6 +119,22 @@ void glTexParameterx(GLenum target, GLenum name, GLfixed value);
 // GL_COLOR_INDEX8_EXT with GL_COLOR_INDEX bytes, or GL_RGBA with GL_RGBA bytes. Level 0 only.
 void glTexImage2D(GLenum target, GLint level, GLint internal, GLsizei width, GLsizei height, GLint border, GLenum format,
                   GLenum type, const GLvoid* pixels);
+// A rectangle of the framebuffer (from its bottom left) into the bound texture, made after the whole list is drawn: a draw
+// after it in the same list is a mistake (SEGL_DEBUG=1 says so; docs/machine/gpu.md, "Copies"). The texture is then in
+// the VRAM, of no mip levels. glCopyTexImage2D makes the texture that size first.
+void glCopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y, GLsizei width, GLsizei height);
+void glCopyTexImage2D(GLenum target, GLint level, GLenum internal, GLint x, GLint y, GLsizei width, GLsizei height, GLint border);
+// OES_framebuffer_object with a texture as its colour: drawn as a list of its own, copied into the texture when another
+// framebuffer is bound (as large as the texture or the window), and waited for. No renderbuffers; depth is the GPU's own.
+#define GL_FRAMEBUFFER_OES 0x8D40
+#define GL_COLOR_ATTACHMENT0_OES 0x8CE0
+#define GL_FRAMEBUFFER_COMPLETE_OES 0x8CD5
+#define GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT_OES 0x8CD6
+void glGenFramebuffersOES(GLsizei n, GLuint* framebuffers);
+void glDeleteFramebuffersOES(GLsizei n, const GLuint* framebuffers);
+void glBindFramebufferOES(GLenum target, GLuint framebuffer);
+void glFramebufferTexture2DOES(GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level);
+GLenum glCheckFramebufferStatusOES(GLenum target);
 // The palette every paletted texture is looked up in: `count` entries of red, green, blue bytes.
 void glColorTableEXT(GLenum target, GLenum internal, GLsizei count, GLenum format, GLenum type, const GLvoid* table);
 

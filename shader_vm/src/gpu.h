@@ -26,6 +26,9 @@
 // has (as one waits for a pass the host does not draw yet), so its draws find their textures' levels; one whose uploads are
 // all of textures without levels (a light map changed) waits for nothing.
 #define GPU_UPLOADED 0x10000u
+// The picture is GPU_INTO's size (its width and height words) though nothing is copied into RAM: a framebuffer's list drawn
+// for its copies into the VRAM alone (gles.c's glBindFramebufferOES), placed as the window's would be.
+#define SUBMIT_SIZED 0x1000000u
 #define SUBMIT_WAITS(submit, passes) ((SUBMIT_PASSES(submit) & ~(passes)) != 0 || (((submit) & SUBMIT_UPLOADS) != 0 && ((passes) & GPU_UPLOADED) == 0))
 // Bits 9-23: the list has commands for passes 1-15. It is drawn, and the submit word taken back,
 // once the host draws all of those (it learns of them by reading these words back).
@@ -676,7 +679,7 @@ float2 gpu_picture_size() {
     uint4 ctrl = ram(GPU_CTRL);
     uint4 disp = ram(GPU_DISPLAY);
     float2 size = float2(disp.g, disp.b);
-    if (ctrl.r & SUBMIT_INTO) {
+    if (ctrl.r & (SUBMIT_INTO | SUBMIT_SIZED)) {
         uint4 into = ram(GPU_INTO);
         size = float2(into.g, into.b);
     }

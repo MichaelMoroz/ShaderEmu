@@ -119,6 +119,8 @@ tr -d '\r' < "$HERE/cc" > "$ROOT/usr/bin/cc"
 tr -d '\r' < "$HERE/example" > "$ROOT/usr/bin/example"
 chmod +x "$ROOT/usr/bin/cc" "$ROOT/usr/bin/example"
 for f in "$HERE"/examples/*.c "$HERE"/examples/*.hlsl; do cp "$f" "$ROOT/usr/share/example-$(basename "$f")"; done
+# the tests a program compiled here runs (tools/test_all.py): not examples, not in the menu
+mkdir -p "$ROOT/usr/share/cc-tests" && cp "$HERE"/tests/*.c "$ROOT/usr/share/cc-tests/"
 # (each opens in the IDE, to be read, changed and run from there; `example NAME` still builds and runs one)
 printf '%s\n' "Programming/Cube (C example)=nxide /usr/share/example-cube.c" "Programming/Home (C example)=nxide /usr/share/example-home.c" \
     "Programming/Shader on 255 cores (C example)=nxide /usr/share/example-shader.c" \

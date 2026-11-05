@@ -43,7 +43,7 @@
 // The pause hint: this machine ends its frame there, which is when the GPU does its work.
 #define next_frame() __asm__ volatile(".word 0x0100000f")
 
-enum { CMD_CLEAR = 1, CMD_DRAW = 3, CMD_UPLOAD = 6 };
+enum { CMD_CLEAR = 1, CMD_DRAW = 3, CMD_UPLOAD = 6, CMD_COPY = 7 };
 enum { VERTEX_CLIP = 1, VERTEX_MODELVIEW = 0x100, VERTEX_QUADS = 0x200, VERTEX_COMPACT = 0x400, VERTEX_FLOAT = 0x800,
        VERTEX_TAGGED = 0x1000, VERTEX_TABLE = 0x2000, VERTEX_PACKED = 0x4000, VERTEX_POINTS = 0x8000 };
 
@@ -262,6 +262,7 @@ unsigned int* seglPalette(void) { return (unsigned int*)(gpu + REG_PALETTE); }
 
 // A list seglSwapEarly() submitted may not be drawn yet: `unsettled` says so, and which set it is.
 static int unsettled;
+static int list_copies, list_late;   // copies in the list being built, and whether a draw came after one (SEGL_DEBUG, below)
 static uint32_t unsettled_set;
 static int not_a_frame;   // seglNotAFrame(): the next swap is not counted in the caption's rate
 void seglNotAFrame(void) { not_a_frame = 1; }
@@ -385,6 +386,7 @@ static void swap(int wait) {
     }
     not_a_frame = 0;
     commands = kept;
+    list_copies = list_late = 0;
     mesh_vertices = kept_mesh;
     blocks = 0;
     passes_used = kept_passes;
@@ -392,6 +394,41 @@ static void swap(int wait) {
     vertex_top = set_at + VERTICES_IN;
     matrices_dirty = 1;
 }
+// A framebuffer's list (glBindFramebufferOES): drawn into the GPU's picture and not shown, its uploads and copies made, and
+// waited for; the next list starts afresh. (Commands kept at every list's head, seglKeep, are in it too.)
+static void list_draw_hidden(void) {
+    volatile uint32_t* regs = (volatile uint32_t*)gpu;
+    while (gpu && hand[3] != hand_taken) hand_submit(1);
+    uint32_t uploading = commands ? uploads_put() : 0;
+    if (gpu && commands) {
+        for (;;) {
+            while (__atomic_exchange_n(&regs[REG_LOCK / 4], 1, __ATOMIC_ACQUIRE)) sched_yield();
+            if (regs[REG_SUBMIT / 4] == 0) break;
+            __atomic_store_n(&regs[REG_LOCK / 4], 0, __ATOMIC_RELEASE);
+            rest();
+        }
+        regs[REG_INTO / 4] = 0;   // (SUBMIT_SIZED: the window's size, nothing copied into it)
+        regs[REG_INTO / 4 + 1] = window_info.width;
+        regs[REG_INTO / 4 + 2] = window_info.height;
+        regs[REG_INTO / 4 + 3] = window_info.surface_row;
+        regs[REG_SUBMIT / 4 + 1] = GPU_PHYS + set_at;
+        regs[REG_SUBMIT / 4 + 2] = commands;
+        regs[REG_SUBMIT / 4] = 1 | 0x1000000u | uploading | passes_used << 8;   // draw at the window's size, not into it; uploads; the passes used
+        uploads_done();
+        __atomic_store_n(&regs[REG_LOCK / 4], 0, __ATOMIC_RELEASE);
+        while (regs[REG_SUBMIT / 4] != 0) rest();
+        set_at = set_at == SETS_AT ? SETS_AT + SET_SIZE : SETS_AT;
+    }
+    commands = kept;
+    list_copies = list_late = 0;
+    mesh_vertices = kept_mesh;
+    blocks = 0;
+    passes_used = kept_passes;
+    last_draw = 0;
+    vertex_top = set_at + VERTICES_IN;
+    matrices_dirty = 1;
+}
+
 void seglSwap(void) { swap(1); }
 void seglSwapEarly(void) { swap(0); }
 
@@ -415,6 +452,7 @@ void seglSwapHand(void) {
         set_at = set_at == SETS_AT ? SETS_AT + SET_SIZE : SETS_AT;
     }
     commands = kept;
+    list_copies = list_late = 0;
     mesh_vertices = kept_mesh;
     blocks = 0;
     passes_used = kept_passes;
@@ -425,8 +463,34 @@ void seglSwapHand(void) {
 
 // ---- frame ----
 
+// SEGL_DEBUG=1 (docs/machine/gpu.md, "Copies"): what a list must not do, said on stderr the first time and counted at the
+// program's end: a draw made after a copy in the same list (the copy is made after the whole list, so it would not have the
+// draw in it, and the draw would not see the copy). SEGL_DEBUG=abort stops the program at the first.
+static int debug_mode = -1;
+static uint32_t debug_late, debug_lists;
+static void debug_report(void) {
+    if (debug_late) fprintf(stderr, "segl: %u draws after a copy in their list, in %u lists (SEGL_DEBUG)\n", debug_late, debug_lists);
+}
+static int debug_on(void) {
+    if (debug_mode < 0) {
+        const char* e = getenv("SEGL_DEBUG");
+        debug_mode = !e || !*e || !strcmp(e, "0") ? 0 : !strcmp(e, "abort") ? 2 : 1;
+        if (debug_mode) atexit(debug_report);
+    }
+    return debug_mode;
+}
+static void debug_draw_after_copy(uint32_t op) {
+    if (!debug_on()) return;
+    if (!debug_late++)
+        fprintf(stderr, "segl: a draw (command %u) after a copy in the same list: the copy is made after the whole list "
+                        "(SEGL_DEBUG; copy at the list's end, or draw into a framebuffer of its own)\n", op);
+    if (!list_late) list_late = 1, debug_lists++;
+    if (debug_mode == 2) abort();
+}
+
 static uint32_t* command(uint32_t op, uint32_t mesh) {
     if (commands == MAX_COMMANDS || mesh_vertices + mesh > MAX_MESH) return 0;
+    if (list_copies && op != CMD_UPLOAD && op != CMD_COPY) debug_draw_after_copy(op);
     uint32_t* c = (uint32_t*)(gpu + set_at) + 16 * commands++;
     c[0] = op;
     c[3] = mesh_vertices;
@@ -962,6 +1026,92 @@ void glTexImage2D(GLenum target, GLint level, GLint internal, GLsizei width, GLs
     if (vram_lod == -2) seglVram(-1);
     if (vram_lod >= 0) vram_take(&textures[bound], vram_lod);
 }
+// ---- copies from the picture (docs/machine/gpu.md, "Copies") ----
+
+// A rectangle of the framebuffer (x, y from its bottom left, as OpenGL counts) into the bound texture at (xoff, yoff), when
+// the list is drawn: after all its passes. The texture is in the VRAM from then on, in a slot of no levels.
+void glCopyTexSubImage2D(GLenum target, GLint level, GLint xoff, GLint yoff, GLint x, GLint y, GLsizei width, GLsizei height) {
+    (void)target;
+    texture* t = &textures[bound];
+    if (!gpu || level != 0 || !t->used || width <= 0 || height <= 0 || !window_info.height) return;
+    if (!t->slot || (t->slot >> 24 & 7)) {
+        // (a slot of no levels: a copy makes none)
+        vram_drop(t);
+        if (!(t->slot = vram_block_take(t->width, t->height, 0))) return;
+    }
+    if (xoff < 0) width += xoff, x -= xoff, xoff = 0;
+    if (yoff < 0) height += yoff, y -= yoff, yoff = 0;
+    if (x < 0) width += x, xoff -= x, x = 0;
+    if (y < 0) height += y, yoff -= y, y = 0;
+    if (xoff + width > (GLint)t->width) width = (GLint)t->width - xoff;
+    if (yoff + height > (GLint)t->height) height = (GLint)t->height - yoff;
+    if (x + width > window_info.width) width = window_info.width - x;
+    if (y + height > window_info.height) height = window_info.height - y;
+    if (width <= 0 || height <= 0) return;
+    uint32_t* c = command(CMD_COPY, 6);
+    if (!c) return;
+    c[1] = (uint32_t)x | (uint32_t)(window_info.height - y - height) << 16;   // (the picture's rows run down)
+    c[2] = (uint32_t)width | (uint32_t)height << 16;
+    c[4] = t->slot;
+    c[5] = (uint32_t)xoff | (uint32_t)yoff << 16;
+    c[6] = 1;   // (COPY_TURNED: a texture's row 0 is the bottom one)
+    list_copies++;
+    last_draw = 0;
+}
+void glCopyTexImage2D(GLenum target, GLint level, GLenum internal, GLint x, GLint y, GLsizei width, GLsizei height, GLint border) {
+    (void)border;
+    glTexImage2D(target, level, (GLint)internal, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glCopyTexSubImage2D(target, level, 0, 0, x, y, width, height);
+}
+
+// Framebuffer objects (OES_framebuffer_object): a framebuffer with a texture is drawn as a list of its own into the GPU's
+// picture, and when another framebuffer is bound the texture gets the rectangle from the picture's bottom left as large as
+// it (or the window), copied at that list's end; the list is drawn, not shown, and waited for, so what follows draws with
+// it. Bound with draws already in the list, those are drawn with it (SEGL_DEBUG says so). The window's framebuffer is 0.
+#define MAX_FRAMEBUFFERS 64
+static GLuint framebuffer_texture[MAX_FRAMEBUFFERS];   // the texture each one draws into (0: none)
+static GLuint framebuffer_bound;
+static uint32_t list_draws_from(void) { return commands - kept; }
+void glGenFramebuffersOES(GLsizei n, GLuint* out) {
+    for (GLuint f = 1; f < MAX_FRAMEBUFFERS && n > 0; f++)
+        if (!framebuffer_texture[f] && f != framebuffer_bound) {
+            framebuffer_texture[f] = 0xffffffffu;   // (taken: no texture yet)
+            *out++ = f, n--;
+        }
+    while (n-- > 0) *out++ = 0;
+}
+void glDeleteFramebuffersOES(GLsizei n, const GLuint* which) {
+    for (GLsizei i = 0; i < n; i++)
+        if (which[i] && which[i] < MAX_FRAMEBUFFERS) framebuffer_texture[which[i]] = 0;
+}
+void glFramebufferTexture2DOES(GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level) {
+    (void)target, (void)attachment, (void)textarget, (void)level;
+    if (framebuffer_bound && framebuffer_bound < MAX_FRAMEBUFFERS) framebuffer_texture[framebuffer_bound] = texture ? texture : 0xffffffffu;
+}
+GLenum glCheckFramebufferStatusOES(GLenum target) {
+    (void)target;
+    GLuint t = framebuffer_bound < MAX_FRAMEBUFFERS ? framebuffer_texture[framebuffer_bound] : 0;
+    return !framebuffer_bound || (t && t != 0xffffffffu && t < MAX_TEXTURES && textures[t].used) ? 0x8CD5 : 0x8CD6;   // complete, or an attachment missing
+}
+static void list_draw_hidden(void);
+void glBindFramebufferOES(GLenum target, GLuint framebuffer) {
+    (void)target;
+    if (framebuffer == framebuffer_bound) return;
+    GLuint from = framebuffer_bound, t = from < MAX_FRAMEBUFFERS ? framebuffer_texture[from] : 0;
+    if (from && t && t != 0xffffffffu && t < MAX_TEXTURES && textures[t].used) {
+        // the framebuffer left: its texture copied from the picture, the list drawn and waited for
+        GLuint was = bound;
+        bound = t;
+        glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, (GLsizei)textures[t].width, (GLsizei)textures[t].height);
+        bound = was;
+        list_draw_hidden();
+    } else if (framebuffer && list_draws_from()) {
+        if (debug_on()) fprintf(stderr, "segl: framebuffer %u bound with %u commands in the list already: they are drawn with it\n",
+                                framebuffer, list_draws_from());
+    }
+    framebuffer_bound = framebuffer;
+}
+
 void glColorTableEXT(GLenum target, GLenum internal, GLsizei count, GLenum format, GLenum type, const GLvoid* table) {
     (void)target, (void)internal, (void)format, (void)type;
     const uint8_t* p = table;
@@ -1534,6 +1684,7 @@ uint32_t seglAddress(const void* memory) { return GPU_PHYS + (uint32_t)((const u
 // Forgets what was drawn since the last swap.
 void seglDiscard(void) {
     commands = kept;
+    list_copies = list_late = 0;
     mesh_vertices = kept_mesh;
     blocks = 0;
     passes_used = kept_passes;
@@ -1586,6 +1737,7 @@ int seglKeep(int count, int quads) {
     kept_passes = passes_used = 0;
     kept_mesh = (uint32_t)quads * 6;
     commands = kept;   // (the frame being built starts again: call this before drawing in it)
+    list_copies = list_late = 0;
     mesh_vertices = kept_mesh;
     last_draw = 0;
     blocks = 0;
