@@ -44,6 +44,7 @@ static struct {
 	int count, hover, x, y, width;
 } ui_menu_level[UI_MENU_LEVELS];
 static int ui_menu_depth;
+static int ui_menu_button, ui_menu_root_x, ui_menu_root_y;	/* the button an item was chosen with (0: a key), and where */
 static GR_GC_ID ui_menu_gc;
 static GR_FONT_ID ui_menu_font;		/* the look's (0: the one a new GC has), which the menu and the bar draw in */
 static struct ui_widths ui_menu_widths;	/* its widths */
@@ -321,9 +322,12 @@ ui_menu_event(GR_EVENT *event, int *chosen)
 			break;
 		}
 		*chosen = ui_menu_level[k].items[row].id;
+		ui_menu_button = event->button.changebuttons ? event->button.changebuttons : event->button.buttons;
+		ui_menu_root_x = event->button.rootx, ui_menu_root_y = event->button.rooty;
 		ui_menu_close();
 		return UI_MENU_CHOSEN;
 	case GR_EVENT_TYPE_KEY_DOWN:
+		ui_menu_button = 0;
 		return ui_menu_key(event->keystroke.ch, chosen);
 	case GR_EVENT_TYPE_CLOSE_REQ:
 		ui_menu_close();

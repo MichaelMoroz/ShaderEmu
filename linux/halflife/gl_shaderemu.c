@@ -912,7 +912,7 @@ unsigned hlglWait(int k) {
 static void jobs_wait(void) {
     for (int k = 1; rings.on && !ring_closed() && k <= workers; k++) if (rp.posted[k] == 1) while (!ring_poll(k)) ;
     for (int k = 1; k <= workers; k++)
-        if (posted[k] == 1) { unsigned w = mcw_wait(k); dbg_swapwait[k] += w, posted[k] = 0; if (w > 1 && (swaps & 255) == 7) fprintf(stderr, "swapwait %d %u fn %x\n", k, w, dbg_fn[k]); }
+        if (posted[k] == 1) { unsigned w = mcw_wait(k); dbg_swapwait[k] += w, posted[k] = 0; if (log_frames && w > 1 && (swaps & 255) == 7) fprintf(stderr, "swapwait %d %u fn %x\n", k, w, dbg_fn[k]); }
 }
 void hlglJobsWait(void) { jobs_wait(); }
 // Every job out done, the late ones too.

@@ -260,6 +260,9 @@ def rest(thing, support):
         print("RESTS %s on %s: let down %.1f mm, its lowest point now at %.3f" % (thing.name, support.name, gap * 1000, min(p.z for p in points) - gap))
 
 
+HAND_LIFT = {"alarm_clock_01": 0.0023}   # metres a clock's hands are brought towards the glass
+
+
 def spawn_hands(body, asset, hands, collection):
     """A clock's hands as objects of their own, for ClockHand.shader to turn: `hands` is the dial's
     middle in the file (Blender's axes, the dial facing -y) and then (name, part) pairs. A hand's
@@ -275,7 +278,10 @@ def spawn_hands(body, asset, hands, collection):
         up = max((v.co for v in mesh.vertices), key=lambda p: p.x * p.x + p.z * p.z)
         print("HAND %s %s points to (%.3f, %.3f) of the dial" % (asset, label, up.x, up.z))
         ob = bpy.data.objects.new("Clock hand %s %s" % (label, body.name), mesh)
-        ob.matrix_world = body.matrix_world @ Matrix.Translation(pivot)
+        # the alarm clock's hands lay in the planes of the hubs in its file, and fought them as they turned:
+        # brought forward between those and the glass
+        before = (body.matrix_world.to_3x3() @ Vector((0, -1, 0))).normalized() * HAND_LIFT.get(asset, 0.0)
+        ob.matrix_world = Matrix.Translation(before) @ body.matrix_world @ Matrix.Translation(pivot)
         collection.objects.link(ob)
         made.append(ob)
     return made

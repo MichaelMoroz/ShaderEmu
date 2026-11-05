@@ -107,10 +107,10 @@ def low_table(b):
     with b.at(at):
         top = 0.401
         mug(b, (0.32, top, 0.08), turn=40)
-        # a game and the software it wants, and magazines spread where the papers were
-        pile(b, ["windows95", "half_life"], (-0.17, top, -0.05), (-12, 7))
-        pile(b, ["computer_gaming_world_issue_156", "pc_computing_magazine_v8i11"], (0.03, top, 0.15), (96, 81), drift=0.03)
-        lying(b, "bytevol1808199307pentiumpcs", (0.25, top, -0.12), 64)
+        # a game and the software it wants, and magazines spread where the papers were, apart and read from the sofa
+        pile(b, ["windows95", "half_life"], (-0.36, top, -0.04), (TOP_AWAY - 12, TOP_AWAY + 7))
+        pile(b, ["computer_gaming_world_issue_156", "pc_computing_magazine_v8i11"], (0.0, top, 0.05), (TOP_AWAY - 4, TOP_AWAY + 9), drift=0.05)
+        lying(b, "bytevol1808199307pentiumpcs", (0.33, top, -0.14), TOP_AWAY - 15)
 
 
 # The classroom in the middle of the den: three rows of two tables in the main desk's oak, an
@@ -522,7 +522,7 @@ def classroom(b):
                 if index in ON_TOWERS:   # what was left on the tower's top (not where a hub stands)
                     b.obj("Classroom things")
                     things, turns = ON_TOWERS[index]
-                    pile(b, things, (pc.TOWER_X, pc.TOWER_HIGH, pc.TOWER_Z + pc.FRONT + pc.TOWER_DEEP / 2 + 0.01), turns)
+                    pile(b, things, (pc.TOWER_X, pc.TOWER_HIGH, pc.TOWER_Z + pc.FRONT + pc.TOWER_DEEP / 2 + 0.01), [TOP_AWAY + t for t in turns])
             pc.MODE = "full"
             places.append({"x": at[0], "z": at[2], "turn": turn, "keyboard": list(lie["keyboard"])})
             frames.append(world)
@@ -561,27 +561,29 @@ def shelf(b):
         with b.at((-2.6, 0, 0)):
             b.obj("Shelf")
             b.pose("against", (wide, high, deep), at=(0, high / 2, -deep / 2), rot=(0, 180, 0), name="Shelf", back=0.05, clear=0.6)
-            b.box((0, high / 2, -0.008), (wide - 0.03, high - 0.02, 0.012), "WoodOak", grain=1)
+            b.box((0, high / 2, -0.008), (wide - 0.06, high - 0.02, 0.012), "WoodOak", grain=1)   # the back, between the sides
             for x in (-wide / 2 + 0.015, wide / 2 - 0.015):
                 b.box((x, high / 2, -deep / 2), (0.03, high, deep), "WoodOak", bevel=0.003, segs=1, grain=1)
-            b.box((0, high + 0.012, -deep / 2 - 0.01), (wide + 0.04, 0.03, deep + 0.03), "WoodOak", bevel=0.008, grain=0)
-            b.box((0, 0.025, -deep / 2 + 0.01), (wide - 0.06, 0.05, deep - 0.03), "WoodDark", grain=0)
+            # the top on the sides, the plinth, the back and the shelves between the sides (and the shelves before the back)
+            b.box((0, high + 0.015, -(deep + 0.025) / 2), (wide + 0.04, 0.03, deep + 0.025), "WoodOak", bevel=0.008, grain=0)   # (its back on the wall)
+            b.box((0, 0.0175, -(deep + 0.014) / 2), (wide - 0.06, 0.035, deep - 0.014), "WoodDark", grain=0)
             for s in range(6):
-                b.box((0, 0.05 + s * 0.40, -deep / 2), (wide - 0.06, 0.03, deep - 0.012), "WoodOak", bevel=0.003, segs=1, grain=0)
+                b.box((0, 0.05 + s * 0.40, -(deep + 0.008) / 2), (wide - 0.06, 0.03, deep - 0.020), "WoodOak", bevel=0.003, segs=1, grain=0)
             b.box((0, 1.25 + 0.2, -deep / 2), (0.025, 0.37, deep - 0.03), "WoodOak", grain=1)   # a divider on the games' shelf
             import random
             rng = random.Random(41)   # (its own: the room's other chances stay what they were)
             games, software, magazines = list(SHELF_GAMES), list(SOFTWARE), list(MAGAZINES)
             front = -deep + 0.03   # where the spines stand
+            back = -0.014          # the back's face, which a game standing face out leans on
             for s in range(5):
                 y = 0.05 + s * 0.40 + 0.015
                 if s == 3:   # games, face out, and a radio of its decade
                     b.obj("Books")
-                    for i, game in enumerate(("red_alert", "command_conquer", "steel_sky")):   # (against the shelf's back, whose face is at -0.014)
-                        leaning_box(b, -0.78 + i * 0.24, y, -0.014, 0, 8, game)
+                    for i, game in enumerate(("red_alert", "command_conquer", "steel_sky")):
+                        leaning_box(b, -0.78 + i * 0.24, y, back, 0, 8, game)
                     b.asset("boombox", (0.5, y, -0.17), rot=(0, 180, 0), size=(0.56, None, None))
                     continue
-                # an encyclopedia at one end of three shelves; games and software standing spine out, and piles of magazines
+                # an encyclopedia at one end of three shelves; games standing face out on two, spine out on one; software, magazines in piles
                 b.obj("Books")
                 left = -wide / 2 + 0.05
                 right = wide / 2 - 0.05
@@ -597,16 +599,59 @@ def shelf(b):
                     end = shelf_row(b, software, left, right - 0.62, y, front, rng)
                     for k, at in enumerate((end + 0.17, end + 0.45)):
                         some = [magazines.pop(0) for _ in range(4 if k == 0 else 3)]
-                        pile(b, some, (at, y, -deep / 2 - 0.01), [rng.uniform(-6, 6) for _ in some])
-                elif s == 4:   # a pile of magazines first, then games
+                        pile(b, some, (at, y, -deep / 2 - 0.01), [TOP_AWAY + rng.uniform(-6, 6) for _ in some])
+                elif s == 1:   # the games' fronts, leaning on the back
+                    faceout_row(b, games, left, right, y, back, rng)
+                elif s == 4:   # a pile of magazines, three games lying in a pile, and games face out
                     some = [magazines.pop(0) for _ in range(5)]
-                    pile(b, some, (left + 0.15, y, -deep / 2 - 0.01), [90 + rng.uniform(-5, 5) for _ in some])
-                    shelf_row(b, games, left + 0.32, right, y, front, rng)
-                else:   # (the games over three shelves: on this one alone they filled it and left the top bare)
-                    shelf_row(b, games, left, right, y, front, rng, most=18 if s == 1 else 14)
+                    pile(b, some, (left + 0.13, y, -deep / 2 - 0.01), [TOP_AWAY + rng.uniform(-5, 5) for _ in some])
+                    some = take(games, 3, 0.26)
+                    pile(b, some, (left + 0.42, y, -deep / 2 - 0.01), [TOP_AWAY + rng.uniform(-4, 4) for _ in some], drift=0.004)
+                    faceout_row(b, games, left + 0.58, right, y, back, rng)
+                else:   # s == 2: a row spine out
+                    shelf_row(b, games, left, right, y, front, rng, most=14)
             b.obj("Books")   # on the shelf's top: a box too large for a shelf
-            lying(b, "id_anthology", (-0.45, high + 0.027, -0.17), 4)
-            b.asset("cardboard_box_01", (0.5, high + 0.027, -0.17), rot=(0, 98, 0), size=(0.4, 0.3, 0.5), limit=5000)
+            lying(b, "id_anthology", (-0.45, high + 0.03, -0.17), TOP_AWAY + 4)
+            b.asset("cardboard_box_01", (0.5, high + 0.03, -0.2), rot=(0, 98, 0), size=(0.4, 0.3, 0.45), limit=5000)
+    return games
+
+
+TOP_AWAY = 0.0   # a magazine's or a box's turn, lying face up, at which its top is away from whoever stands before it (towards +z)
+
+
+def take(names, count, widest):
+    """The first `count` of names no wider nor taller than `widest`, taken out of the list."""
+    some = [name for name in names if max(thing_size(name)[:2]) <= widest][:count]
+    for name in some:
+        names.remove(name)
+    return some
+
+
+def faceout_row(b, names, left, right, y, back, rng, most=99):
+    """Games standing face out along a shelf from `left`, each leaning back on the face at z = back,
+    taken from `names` while they fit (and no more than `most`). Gives where the row ends."""
+    x, stood = left, 0
+    while names and stood < most:
+        fits = [name for name in names if thing_size(name)[0] <= 0.3 and thing_size(name)[1] <= 0.34]
+        if not fits:
+            break
+        name = fits[0]
+        w = thing_size(name)[0]
+        if x + w > right:
+            break
+        names.remove(name)
+        leaning_box(b, x + w / 2, y, back, rng.uniform(-2, 2), rng.uniform(6, 11), name)
+        x += w + rng.uniform(0.015, 0.035)
+        stood += 1
+    return x
+
+
+def scatter(b, games):
+    """The games the shelf had no room for, about the den, face up: a pile on the floor by the sofa's end."""
+    print("GAMES not on the shelf:", " ".join(games))
+    b.obj("Books")
+    some = take(games, 3, 0.28)
+    pile(b, some, (-1.85, 0.0, -HALF_D + 0.36), [TOP_AWAY + 180 + t for t in (8, -5, 14)], drift=0.012)   # read from the room
 
 
 def boxes(b):
@@ -702,7 +747,8 @@ def build(b):
     low_table(b)
     classroom(b)
     floor_lamp(b)
-    shelf(b)
+    left = shelf(b)
+    scatter(b, left)
     boxes(b)
     posters(b)
     plants(b)

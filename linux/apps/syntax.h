@@ -1,4 +1,5 @@
-/* syntax.h: what each character of a line of C, JavaScript, Python or HLSL is, for its colour (docs/apps/ide.md).
+/* syntax.h: what each character of a line of C, JavaScript, Python or HLSL is, for its colour (docs/apps/ide.md): the
+ * IDE's and the editor's (nxedit, its View menu's "Colours for code"; sx_lang_of says a file's language by its name).
  * A lexer, not a compiler: it knows words, numbers, strings, comments and lines for the
  * preprocessor, and the one thing a line needs from the lines before it, the state it begins in:
  * inside a comment, a JavaScript template or a Python string of three quotes. */
@@ -6,6 +7,7 @@
 #define IDE_SYNTAX_H
 #include <ctype.h>
 #include <string.h>
+#include <strings.h>
 
 enum { SX_PLAIN, SX_KEYWORD, SX_TYPE, SX_DIRECTIVE, SX_STRING, SX_NUMBER, SX_COMMENT, SX_CALL, SX_KINDS };
 enum { SX_C, SX_JS, SX_PY, SX_HLSL, SX_LANGS };
@@ -16,10 +18,11 @@ static int sx_lang;	/* the language of the text being lexed */
 
 static const char *const sx_c_keywords[] = { "if", "else", "for", "while", "do", "return", "break", "continue", "switch", "case",
 	"default", "goto", "sizeof", "typedef", "struct", "union", "enum", "static", "extern", "const", "volatile", "inline",
-	"register", "restrict", NULL };
+	"register", "restrict", "class", "public", "private", "protected", "namespace", "template", "new", "delete", "this",
+	"true", "false", NULL };	/* (and C++'s commonest, for the editor's .cpp) */
 static const char *const sx_c_types[] = { "int", "char", "float", "double", "void", "long", "short", "unsigned", "signed",
 	"uint8_t", "uint16_t", "uint32_t", "uint64_t", "int8_t", "int16_t", "int32_t", "int64_t", "size_t", "ssize_t", "uintptr_t",
-	"bool", "FILE", "NULL", "GLfloat", "GLint", "GLuint", "GLubyte", "GLfixed", "GR_EVENT", "GR_WINDOW_ID", "GR_GC_ID", NULL };
+	"bool", "FILE", "NULL", "auto", "GLfloat", "GLint", "GLuint", "GLubyte", "GLfixed", "GR_EVENT", "GR_WINDOW_ID", "GR_GC_ID", NULL };
 static const char *const sx_js_keywords[] = { "break", "case", "catch", "class", "const", "continue", "debugger", "default",
 	"delete", "do", "else", "export", "extends", "finally", "for", "function", "if", "import", "in", "instanceof", "let", "new",
 	"of", "return", "super", "switch", "this", "throw", "try", "typeof", "var", "void", "while", "with", "yield", "async",
@@ -204,6 +207,80 @@ sx_line(const char *text, int state, unsigned char *kinds)
 			directive = directive ? directive : -1;	/* a # further on is not a directive */
 			kinds[i++] = SX_PLAIN;
 		}
+	}
+	return state;
+}
+/* A file's language by its name's ending, or -1 for none of the four. */
+static int
+sx_lang_of(const char *path)
+{
+	static const struct { const char *ending; int lang; } endings[] = {
+		{ ".c", SX_C }, { ".h", SX_C }, { ".cc", SX_C }, { ".cpp", SX_C }, { ".cxx", SX_C }, { ".hpp", SX_C }, { ".hh", SX_C },
+		{ ".ino", SX_C }, { ".js", SX_JS }, { ".mjs", SX_JS }, { ".py", SX_PY }, { ".hlsl", SX_HLSL }, { ".hlsli", SX_HLSL },
+		{ ".fx", SX_HLSL }, { ".cginc", SX_HLSL }, { ".shader", SX_HLSL },
+	};
+	const char *leaf = strrchr(path, '/'), *dot;
+	unsigned i;
+
+	dot = strrchr(leaf ? leaf + 1 : path, '.');
+	for (i = 0; dot && i < sizeof endings / sizeof endings[0]; i++)
+		if (!strcasecmp(dot, endings[i].ending))
+			return endings[i].lang;
+	return -1;
+}
+
+/* Only the state the line after n bytes of t begins in (SX_IN_...), from `state`: for a line that is not drawn, as
+ * sx_line would say it, without the kinds (the editor works it out for every line above the first one drawn). */
+static int
+sx_carry(const char *t, int n, int state)
+{
+	int i = 0, c, py = sx_lang == SX_PY;
+
+	while (i < n) {
+		if (state == SX_IN_COMMENT) {
+			for (; i + 1 < n && !(t[i] == '*' && t[i + 1] == '/'); i++)
+				continue;
+			if (i + 1 >= n)
+				return state;
+			i += 2, state = SX_IN_NONE;
+			continue;
+		}
+		if (state) {	/* a template's or a string of three quotes' rest */
+			int q = state == SX_IN_TEMPLATE ? '`' : state == SX_IN_SINGLES ? '\'' : '"', three = state != SX_IN_TEMPLATE;
+
+			for (; i < n; i++) {
+				if (t[i] == '\\') {
+					i++;
+					continue;
+				}
+				if (t[i] == q && (!three || (i + 2 < n && t[i + 1] == q && t[i + 2] == q)))
+					break;
+			}
+			if (i >= n)
+				return state;
+			i += three ? 3 : 1, state = SX_IN_NONE;
+			continue;
+		}
+		c = t[i];
+		if (!py && c == '/' && i + 1 < n && t[i + 1] == '*') {
+			i += 2, state = SX_IN_COMMENT;
+			continue;
+		}
+		if ((!py && c == '/' && i + 1 < n && t[i + 1] == '/') || (py && c == '#'))
+			return SX_IN_NONE;
+		if (sx_lang == SX_JS && c == '`') {
+			i++, state = SX_IN_TEMPLATE;
+			continue;
+		}
+		if (c == '"' || c == '\'') {
+			if (py && i + 2 < n && t[i + 1] == c && t[i + 2] == c) {
+				i += 3, state = c == '\'' ? SX_IN_SINGLES : SX_IN_DOUBLES;
+				continue;
+			}
+			for (i++; i < n && t[i] != c; i++)
+				i += t[i] == '\\';
+		}
+		i++;
 	}
 	return state;
 }

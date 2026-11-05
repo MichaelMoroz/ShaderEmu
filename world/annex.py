@@ -159,6 +159,43 @@ def holo_room(b, k):
             console(b)
 
 
+def feet():
+    """What stands on a room's floor, as outlines in its frame (x, z): the seat's round foot and
+    the console's base. The floor's lines stop short of them (grid_bars), not under them."""
+    import lib
+    from mathutils import Vector
+    chair = [(0.245 * math.cos(a), SEAT_Z + 0.245 * math.sin(a)) for a in (i * math.pi / 24 for i in range(48))]
+    frame = lib.place((STAND[0], 0, STAND[1]), (0, CONSOLE_TURN, 0)) @ lib.place((0, 0, 0), (-90, 0, 0))
+    base = [frame @ Vector((x, y, 0)) for x, y in pc.rrect(0.30, 0.36, 0.07, 0, -0.09)]
+    return [chair, [(p.x, p.z) for p in base]]
+
+
+def cut_line(along, across, half, a0, a1, outlines, gap=0.003):
+    """The pieces of a line at `across` (of half width `half`) from a0 to a1 along `along` (0 x,
+    1 z) that are clear of every outline by `gap`."""
+    pieces = [(a0, a1)]
+    for outline in outlines:
+        inside = []
+        for p, q in zip(outline, outline[1:] + outline[:1]):   # the outline's edges, finely
+            for k in range(20):
+                point = [p[i] + (q[i] - p[i]) * k / 20 for i in (0, 1)]
+                if abs(point[1 - along] - across) <= half + gap:
+                    inside.append(point[along])
+        if not inside:
+            continue
+        low, high = min(inside) - gap, max(inside) + gap
+        pieces = [piece for a, c in pieces for piece in ((a, min(c, low)), (max(a, high), c)) if piece[1] - piece[0] > 0.002]
+    return pieces
+
+
+def less(a0, a1, cuts):
+    """What is left of a0 to a1 without the intervals `cuts`."""
+    pieces = [(a0, a1)]
+    for lo, hi in cuts:
+        pieces = [piece for a, e in pieces for piece in ((a, min(e, lo)), (max(a, hi), e)) if piece[1] - piece[0] > 0.002]
+    return pieces
+
+
 def grid_bars(b):
     """The grid's lines in a room's frame: a lit bar along every line between two panels of the
     shell (world/shell.py's holo_room), and a heavier one along each of the room's twelve edges,

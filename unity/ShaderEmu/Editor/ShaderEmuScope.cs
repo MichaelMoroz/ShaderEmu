@@ -100,6 +100,13 @@ public static partial class ShaderEmuBuilder
         }
         Apply(scope);
         for (int i = 0; i < 3; i++) OnClick(buttons[i], scope, methods[i]);
+        // the danger zone's laser burns only while this shows RAM (EmuDanger.LaserOn): the old
+        // Scope is gone, and a danger zone that still named it had no laser at all
+        foreach (EmuDanger danger in Object.FindObjectsOfType<EmuDanger>(true))
+        {
+            danger.scope = scope;
+            Apply(danger);
+        }
 
         // and how the speed slider is read, beside its title
         Button mode = MakeButton(panel, "Speed mode", "Fixed: per frame", bx + 300, 190, 300, 44, 22, out machine.modeLabel);

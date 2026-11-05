@@ -84,6 +84,15 @@ static void reaped(pid_t pid, int status);
 #define TASK_WINDOW 1300	/* a window of a program's list: + its task */
 #define PIN_REMOVE 1100		/* a pinned program's menu: + which */
 #define PIN_START 1200
+#define START_OPEN 1400		/* a Start menu program's own menu (its right button) */
+#define START_FIRST 1401
+#define START_PIN 1402
+#define START_FORGET 1403
+#define FIRST_KEY "start.first"	/* the registry's: the programs on the Start menu's first level, commands parted by commas */
+#define FIRST_DEFAULT "nxfiles,nxedit,nxterm,nxweb,nxcalc"
+#define RECENT_KEY "start.recent"	/* and those started from it last, the last first */
+#define RECENT_MOST 5
+#define FIRST_MOST 12
 
 static struct { char path[64], command[64]; } items[MAX_ITEMS];	/* path: Folder/Folder/Label */
 static int item_count;
@@ -112,6 +121,13 @@ static GR_WINDOW_ID desk_hidden[MAX_TASKS];	/* windows the strip put away, to br
 static int desk_hidden_count;
 static int volume_silent;	/* (the card's page is mapped only while the popup is up) */
 
+/* The Start menu as it opens: what was used last, the programs of its first level, then the folders and the
+ * programs of no folder (the system's), each part under a line. */
+static struct ui_menu_item start_rows[RECENT_MOST + FIRST_MOST + MAX_ITEMS + 40];
+static struct ui_icon_ref start_icons[RECENT_MOST + FIRST_MOST];
+static int start_count, start_asked = -1;
+
+static void say(const char *format, const char *text);
 static GR_WINDOW_ID bar, calendar, volume;	/* calendar, volume: the popups, while they are open */
 static GR_WINDOW_ID preview_window, switcher;	/* where a frame would snap; the windows to go to */
 static GR_GC_ID gc;
@@ -247,6 +263,107 @@ label_of(const char *command, char *out, int room)
 			return;
 		}
 	snprintf(out, room, "%.*s", (int)strcspn(command, " "), command);
+}
+
+/* The menu's program of a command, or -1. */
+static int
+item_of(const char *command)
+{
+	int i;
+
+	for (i = 0; i < item_count && strcmp(items[i].command, command); i++)
+		;
+	return i < item_count ? i : -1;
+}
+
+/* Whether a list of the registry's (commands parted by commas) has the command. */
+static int
+listed(const char *key, const char *otherwise, const char *command)
+{
+	char list[1024], *word, *rest;
+
+	snprintf(list, sizeof list, "%s", reg_get(key, otherwise));
+	for (word = strtok_r(list, ",", &rest); word; word = strtok_r(NULL, ",", &rest))
+		if (!strcmp(word, command))
+			return 1;
+	return 0;
+}
+
+/* The list with the command taken out, then put first (`first` > 0) or last (`first` < 0), or left
+ * out (`first` 0); `most` commands at most. */
+static void
+list_edit(const char *key, const char *otherwise, const char *command, int first, int most)
+{
+	char list[1024], out[1024] = "", *word, *rest;
+	int n = 0;
+
+	snprintf(list, sizeof list, "%s", reg_get(key, otherwise));
+	if (first > 0)
+		snprintf(out, sizeof out, "%s", command), n = 1;
+	for (word = strtok_r(list, ",", &rest); word && n < most; word = strtok_r(NULL, ",", &rest))
+		if (*word && strcmp(word, command) && strlen(out) + strlen(word) + 2 < sizeof out) {
+			if (n++)
+				strcat(out, ",");
+			strcat(out, word);
+		}
+	if (first < 0 && n < most && strlen(out) + strlen(command) + 2 < sizeof out) {
+		if (n)
+			strcat(out, ",");
+		strcat(out, command);
+	}
+	reg_set(key, out);
+}
+
+/* The rows of a list's programs (those the menu has), the first with `flags`; how many. */
+static int
+start_listed(const char *key, const char *otherwise, int most, int *icons, int flags)
+{
+	char list[1024], *word, *rest;
+	int n = 0, i;
+
+	snprintf(list, sizeof list, "%s", reg_get(key, otherwise));
+	for (word = strtok_r(list, ",", &rest); word && n < most; word = strtok_r(NULL, ",", &rest)) {
+		const char *slash;
+		struct ui_menu_item *row = &start_rows[start_count];
+
+		if ((i = item_of(word)) < 0)
+			continue;
+		slash = strrchr(items[i].path, '/');
+		memset(row, 0, sizeof *row);
+		row->label = slash ? slash + 1 : items[i].path;
+		row->id = i + 1;
+		ui_icon_of_command(items[i].command, &start_icons[*icons]);
+		row->icon = start_icons[*icons].cell;
+		row->icon_file = start_icons[*icons].file;
+		row->flags = n ? 0 : flags;
+		(*icons)++, start_count++, n++;
+	}
+	return n;
+}
+
+/* The Start menu's first level made anew, from the registry's lists and the folders. */
+static void
+start_compose(void)
+{
+	int icons = 0, i, plain = 0;
+
+	memset(&start_rows[0], 0, sizeof start_rows[0]);
+	start_rows[0].label = "Recently used";
+	start_rows[0].icon = -1;
+	start_rows[0].flags = UI_MENU_GREY;
+	start_count = 1;
+	if (!start_listed(RECENT_KEY, "", RECENT_MOST, &icons, 0))
+		start_count = 0;
+	start_listed(FIRST_KEY, FIRST_DEFAULT, FIRST_MOST, &icons, start_count ? UI_MENU_LINE : 0);
+	for (i = 0; i < top_count; i++) {
+		start_rows[start_count] = top[i];
+		if ((i == 0 && start_count) || (top[i].id && !plain++ && i))
+			start_rows[start_count].flags |= UI_MENU_LINE;
+		start_count++;
+	}
+	for (i = 0; i < start_count; i++)
+		say(i ? "|%s" : "nxbar: start %s", start_rows[i].label);
+	say("%s\n", "");
 }
 
 /* A rectangle with a lit top-left and a shaded bottom-right edge, or the reverse. */
@@ -912,8 +1029,11 @@ show_menu(int open, int keyboard)
 {
 	task_asked = pin_asked = -1;
 	asked_frame = 0;
-	if (open)
-		ui_menu_open(top, top_count, 0, screen.rows - BAR_HEIGHT, 1, keyboard);
+	start_asked = -1;
+	if (open) {
+		start_compose();
+		ui_menu_open(start_rows, start_count, 0, screen.rows - BAR_HEIGHT, 1, keyboard);
+	}
 	else
 		ui_menu_close();
 	draw_bar();
@@ -1029,6 +1149,28 @@ show_group_menu(int button)
 	ui_menu_open(menu, n, task_x(button), screen.rows - BAR_HEIGHT, 1, 1);
 	task_asked = first;
 	asked_frame = tasks[first].frame;
+}
+
+/* A Start menu program's own menu, where its right button chose it: start it, put it on the menu's first
+ * level or take it off, pin it to the bar or unpin it, forget it was used. */
+static void
+show_start_menu(int item)
+{
+	static struct ui_menu_item menu[4];
+	int n = 0;
+
+	memset(menu, 0, sizeof menu);
+	menu[n].label = "Open", menu[n].id = START_OPEN, menu[n].icon = -1, n++;
+	menu[n].label = listed(FIRST_KEY, FIRST_DEFAULT, items[item].command) ? "Take off the Start menu's first level" :
+		"Show on the Start menu's first level";
+	menu[n].id = START_FIRST, menu[n].icon = -1, menu[n].flags = UI_MENU_LINE, n++;
+	menu[n].label = pinned_index(items[item].command) >= 0 ? "Unpin from the bar" : "Pin to the bar";
+	menu[n].id = START_PIN, menu[n].icon = -1, n++;
+	if (listed(RECENT_KEY, "", items[item].command))
+		menu[n].label = "Take off Recently used", menu[n].id = START_FORGET, menu[n].icon = -1, n++;
+	ui_menu_open(menu, n, ui_menu_root_x, ui_menu_root_y, 0, 0);
+	start_asked = item;
+	say("nxbar: own menu of %s\n", items[item].command);
 }
 
 /* A pinned program's menu: start it, or take it off the bar. */
@@ -2072,10 +2214,35 @@ chosen(int id)
 
 	task_asked = pin_asked = -1;
 	asked_frame = 0;
-	if (id >= 1 && id <= item_count) {
+	if (id >= 1 && id <= item_count && (ui_menu_button & GR_BUTTON_R))
+		show_start_menu(id - 1);
+	else if (id >= 1 && id <= item_count) {
 		const char *label = strrchr(items[id - 1].path, '/');
 
 		start(label ? label + 1 : items[id - 1].path, items[id - 1].command);
+		list_edit(RECENT_KEY, "", items[id - 1].command, 1, RECENT_MOST);
+	} else if (start_asked >= 0 && id >= START_OPEN && id <= START_FORGET) {
+		const char *command = items[start_asked].command, *label = strrchr(items[start_asked].path, '/');
+		int at = pinned_index(command);
+
+		if (id == START_OPEN) {
+			start(label ? label + 1 : items[start_asked].path, command);
+			list_edit(RECENT_KEY, "", command, 1, RECENT_MOST);
+		} else if (id == START_FIRST)
+			list_edit(FIRST_KEY, FIRST_DEFAULT, command, listed(FIRST_KEY, FIRST_DEFAULT, command) ? 0 : -1, FIRST_MOST);
+		else if (id == START_FORGET)
+			list_edit(RECENT_KEY, "", command, 0, RECENT_MOST);
+		else if (at >= 0) {
+			memmove(&pinned[at], &pinned[at + 1], (pinned_count - at - 1) * sizeof pinned[0]);
+			pinned_count--;
+			save_pinned();
+		} else if (pinned_count < MAX_PINNED) {
+			snprintf(pinned[pinned_count].command, sizeof pinned[0].command, "%s", command);
+			ui_icon_of_command(command, &pinned[pinned_count].icon);
+			pinned_count++;
+			save_pinned();
+		}
+		start_asked = -1;
 	} else if (task >= 0 && task < task_count && id == TASK_RESTORE)
 		task_front(task);
 	else if (task >= 0 && task < task_count && id == TASK_MINIMISE)
@@ -2130,6 +2297,7 @@ chosen(int id)
 	} else if (pin >= 0 && pin < pinned_count && id == PIN_START) {
 		label_of(pinned[pin].command, label, sizeof label);
 		start(label, pinned[pin].command);
+		list_edit(RECENT_KEY, "", pinned[pin].command, 1, RECENT_MOST);
 	}
 }
 

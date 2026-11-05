@@ -826,10 +826,47 @@ CASES = [
     case('wm-close-corner', 'desktop wm', WMC + "nxwintest plain p & sleep 2; nxwintest list; set -- $(nxwintest list | awk '/^win [0-9]+ p /{split($4,a,\",\"); split($5,b,\"x\"); print a[1]+b[1]-1\",\"a[2]+1}'); "
          "echo CORNER $1; nxkey $1 2000; nxwintest list", wall=120,
          has=[r'^CORNER \d+,\d+', r'^wins \d'], count=[(r'^win \d+ p ', 1)]),
+    # and at the X's top left, where a beam's press lands short of its middle
+    case('wm-close-box', 'desktop wm', WMC + "nxwintest plain p & sleep 2; nxwintest list; set -- $(nxwintest list | awk '/^win [0-9]+ p /{split($4,a,\",\"); split($5,b,\"x\"); print a[1]+b[1]-22\",\"a[2]+6}'); "
+         "echo AT $1; nxkey $1 2000; nxwintest list", wall=120,
+         has=[r'^AT \d+,\d+', r'^wins \d'], count=[(r'^win \d+ p ', 1)]),
+    # and of a window without the keyboard (the desktop clicked first)
+    case('wm-close-inactive', 'desktop wm', WMC + "nxwintest plain p & sleep 2; nxkey 600,300 1000; nxwintest list; set -- $(nxwintest list | awk '/^win [0-9]+ p /{split($4,a,\",\"); split($5,b,\"x\"); print a[1]+b[1]-22\",\"a[2]+6}'); "
+         "echo AT $1; nxkey $1 2000; nxwintest list", wall=120,
+         has=[r'^AT \d+,\d+', r'^wins \d'], count=[(r'^win \d+ p ', 1)]),
+    # the Task Manager by its X (a program that closes on the window manager's request)
+    case('wm-close-nxmon', 'desktop wm', WM + "nxmon & sleep 5; nxwintest list; set -- $(nxwintest list | awk '/ Monitor /{split($4,a,\",\"); split($5,b,\"x\"); print a[1]+b[1]-22\",\"a[2]+6}'); "
+         "echo AT $1; nxkey $1 4000; nxwintest list; pidof nxmon || echo NXMON-GONE", wall=120,
+         has=[r'^AT \d+,\d+', r'^NXMON-GONE']),
+    # the same through the host's pointer, as in the world: held on the X (624,26), the left button from second 40 to 40.3
+    case('wm-close-host', 'desktop wm', WM + "nxmon & sleep 5; nxwintest list; cut -d' ' -f1 /proc/uptime; while [ $(cut -d. -f1 /proc/uptime) -lt 45 ]; do sleep 1; done; "
+         "nxwintest list; pidof nxmon || echo NXMON-GONE", wall=180,
+         more=['--pointer-sweep', '0', '--pointer-circle', '624,26,4', '--pointer-button', '1,40,40.3'],
+         has=[r'^NXMON-GONE']),
     # a button under the pointer is lit and put back when the pointer leaves (ui_hot_* in ui.h): Settings' tabs
     case('ui-hover', 'desktop wm', WM + "export UI_HOVER_PRINT=1; nxsettings & sleep 5; "
          "nxkey $(for y in 40 52 64 76 88 100 112 124; do echo at:200,$y at:260,$y; done) at:790,560 1000", wall=120,
          has=[r'^ui: lit \d+,6 \d+x22', r'^ui: unlit']),
+    # a window opened under the pointer (in the middle at the start): no coming is told, the place is asked; Look's Classic
+    case('ui-hover-under', 'desktop wm', WM + "export UI_HOVER_PRINT=1; nxsettings & sleep 5; nxkey right 1000 at:300,112 1000", wall=120,
+         has=[r'^ui: lit 176,56 160x22']),
+    # the editors' text larger and smaller: Ctrl +, Ctrl and the wheel up, Ctrl 0; kept in the registry
+    case('edit-zoom', 'desktop', WM + "echo hello > /tmp/z.c; nxedit /tmp/z.c & sleep 5; nxkey ctrl+= ctrl+= 800; echo Z1 $(nxreg get nxedit.zoom); "
+         "nxkey down:ctrl wheel:300,200:1 up:ctrl 800; echo Z2 $(nxreg get nxedit.zoom); nxkey ctrl+- 800; echo Z3 $(nxreg get nxedit.zoom); "
+         "nxkey ctrl+0 800; echo Z4 $(nxreg get nxedit.zoom); killall nxedit; nxreg unset nxedit.zoom", wall=120,
+         has=[r'^Z1 2$', r'^Z2 3$', r'^Z3 2$', r'^Z4 0$']),
+    case('ide-zoom', 'desktop', WM + "echo 'int main(void) { return 0; }' > /tmp/z.c; nxide /tmp/z.c & sleep 8; nxkey ctrl+= 800; echo Z1 $(nxreg get nxide.zoom); "
+         "nxkey down:ctrl wheel:400,200:1 up:ctrl 800; echo Z2 $(nxreg get nxide.zoom); nxkey ctrl+0 800; echo Z3 $(nxreg get nxide.zoom); "
+         "killall nxide; nxreg unset nxide.zoom", wall=120,
+         has=[r'^Z1 1$', r'^Z2 2$', r'^Z3 0$']),
+    # the Start menu's first level: the programs of start.first, the folders, the system's rows; a program started from it is
+    # used recently; its right button's own menu takes Files off the first level
+    case('start-menu', 'desktop wm', WM + "nxkey meta 1500 escape 800; nxkey meta 1500 enter; sleep 4; killall nxfiles; sleep 1; "
+         "nxkey meta 1500 r:40,262 1000 60,294 1000; nxkey meta 1500 escape 500; echo FIRST $(nxreg get start.first); echo RECENT $(nxreg get start.recent); "
+         "nxreg unset start.first; nxreg unset start.recent", wall=120,
+         has=[r'^nxbar: start Files\|Editor\|Terminal\|Web\|Calculator\|Games\|Utilities\|Other\|Programming\|Settings\|Monitor\|Network\|Restart the desktop\|Save and shut down\|Shut down$',
+              r'^nxbar: start Recently used\|Files\|Files\|Editor\|', r'^nxbar: own menu of nxfiles$',
+              r'^nxbar: start Recently used\|Files\|Editor\|Terminal\|Web\|Calculator\|Games\|', r'^FIRST nxedit,nxterm,nxweb,nxcalc$', r'^RECENT nxfiles$']),
     # a dead client's windows go, with its button
     case('wm-kill', 'desktop wm', WM + "nxwintest two a & P=$!; sleep 2; nxwintest list; kill -9 $P; sleep 2; nxwintest list", wall=120,
          has=[r'^win 0 second', r'^nxbar: buttons: \s*$'], count=[(r'^win \d second', 1)]),
