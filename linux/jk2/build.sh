@@ -63,7 +63,11 @@ if [ "${JK2_TREE:-}" != keep ]; then
         (cd "$P" && git apply "$HERE/jk2.patch")
         while read -r f; do put "$P/$f" "$SRC/$f"; done < "$P.files"
     fi
-    for f in $( [ -f "$OLD" ] && grep -vxFf "$P.files" "$OLD" ); do git -C "$SRC" checkout -q "$COMMIT" -- "$f"; done
+    # (what the last build's patch touched and this one does not, back as the commit has it; a file that patch added,
+    # which the commit has not, goes: a tree built with a newer patch stopped here, exit 1)
+    for f in $( [ -f "$OLD" ] && grep -vxFf "$P.files" "$OLD" ); do
+        git -C "$SRC" cat-file -e "$COMMIT:$f" 2>/dev/null && git -C "$SRC" checkout -q "$COMMIT" -- "$f" || rm -f "$SRC/$f"
+    done
     mv "$P.files" "$OLD"; rm -rf "$P"
 fi
 S=$SRC
