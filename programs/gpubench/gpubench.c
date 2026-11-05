@@ -4,6 +4,7 @@
 //   0 colour   1 words, nearest   2 words, smooth   3 indexed, nearest   4 indexed, smooth
 //   5 three bytes, smooth   6 compact quads, words smooth, times a light map (Quake's walls)
 //   7 as 2 and 8 as 6, the texture and the light map uploaded into the VRAM first (trilinear, at most 16 times smaller)
+//   9 the vertices' cost: 3,600 rectangles of 16 x 16 tiling the picture, a command each, in passes 0, 1 and 2 by turns
 
 #include "../common/gpu.h"
 
@@ -19,7 +20,7 @@
 static uint32_t words[TEX * TEX] GPU_ALIGNED;
 static uint8_t bytes[TEX * TEX * 3] GPU_ALIGNED;
 static uint8_t light[64 * 64 * 3] GPU_ALIGNED;
-#define VRAM (MODE >= 7)
+#define VRAM (MODE == 7 || MODE == 8)
 #define BASE (MODE == 7 ? 2 : MODE == 8 ? 6 : MODE)
 #define WORDS_SLOT GPU_VRAM_SLOT(16, 16, 4)
 #define LIGHT_SLOT (GPU_VRAM_SLOT(400, 1, 0) | GPU_VRAM_CLAMPED)
@@ -49,6 +50,13 @@ int main(void) {
 #endif
     gpu_begin();
     gpu_clear(0x00203040);
+#if MODE == 9
+    for (int n = 0; n < (W / 16) * (H / 16); n++) {
+        int x = (n % (W / 16)) * 16, y = (n / (W / 16)) * 16;
+        gpu_rect_in(x, y, x + 16, y + 16, (uint32_t)(0x80000000u | (n * 2654435761u >> 8)), (uint32_t)(n % 3));
+    }
+    for (;;) gpu_submit();
+#endif
     for (int l = 0; l < LAYERS; l++) {
 #if BASE == 6
         static const int at[4][2] = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};

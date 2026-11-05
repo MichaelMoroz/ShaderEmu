@@ -355,18 +355,26 @@ float4 place_pixels(float2 p, float depth) {
     return float4(p.x * 2.0 / GPU_TARGET_W - 1.0, 1.0 - p.y * 2.0 / GPU_TARGET_H, depth, 1.0);
 }
 
-// The command that claims mesh vertices `id` to `id + span - 1`: its first texel and first
-// word (op, a, b, first slot). False while no list is submitted, when no command claims all of
-// them, or when the command belongs to another pass than the one being drawn.
-bool gpu_command(uint id, uint span, out uint base, out uint4 head) {
+// The claims (docs/machine/gpu.md, "Claims"): a texture of GPU_CLAIMS_W x GPU_CLAIMS_H texels, one a mesh vertex, drawn
+// once a frame a list is drawn (GPUClaims), before the upload pass: the texel of the command that claims the vertex and
+// the passes it is drawn in (bit p pass p, GPU_CLAIM_UPLOAD the upload pass). Every later pass reads its vertex's texel in
+// place of the search for its command, which 13 passes made 13 times for every vertex, drawn or not.
+#define GPU_CLAIMS_W 512u
+#define GPU_CLAIMS_H 384u   // (65,536 triangles' vertices)
+#define GPU_CLAIM_UPLOAD 0x10000u
+#ifdef GPU_CLAIMS
+Texture2D<uint2> _GpuClaims;
+#endif
+
+// The command whose vertex range holds mesh vertex `id`, whatever its pass: its first texel and
+// first word (op, a, b, first slot), and the vertices it claims.
+bool gpu_owner(uint id, out uint base, out uint4 head, out uint slots) {
     base = 0;
     head = 0;
+    slots = 0;
     uint4 ctrl = ram(GPU_CTRL);
     uint list = texel_of(ctrl.g), count = min(ctrl.b, GPU_MAX_COMMANDS);
     if ((ctrl.r & SUBMIT_DRAW) == 0 || count == 0) return false;
-#ifdef GPU_PASS_UNIFORMS
-    if (SUBMIT_WAITS(ctrl.r, _GpuPasses)) return false;   // not until every pass it needs is drawn, and its uploads
-#endif
     // Commands claim rising vertex ranges, so the owner is the last one starting at or before
     // this vertex: a binary search, twelve steps for the largest list.
     uint lo = 0, hi = count;
@@ -380,9 +388,41 @@ bool gpu_command(uint id, uint span, out uint base, out uint4 head) {
     base = list + 4 * lo;
     head = ram(base);
     uint op = head.r;
-    uint slots = op == CMD_CLEAR ? 3 : op == CMD_RECT ? 6 : op == CMD_DRAW ? head.b : op == CMD_TEXT ? 6 * ram(base + 1).b : op == CMD_SPRITES ? 6 * head.b
-               : op == CMD_UPLOAD ? 6 : 0;
-    if (id < head.a || id + span > head.a + slots) return false;
+    slots = op == CMD_CLEAR ? 3 : op == CMD_RECT ? 6 : op == CMD_DRAW ? head.b : op == CMD_TEXT ? 6 * ram(base + 1).b : op == CMD_SPRITES ? 6 * head.b
+          : op == CMD_UPLOAD ? 6 : 0;
+    return id >= head.a && id < head.a + slots;
+}
+
+#ifdef GPU_CLAIMS_PASS
+// The claims pass's texel for mesh vertex `id`: its command's texel and the passes it is drawn in. A list waiting for a
+// pass or for its levels (SUBMIT_WAITS) has only its uploads drawn. A sprite's is the passes of its kind: a shade in
+// pass 2, the rest in the command's others (gpu_vertex_sized collapses it elsewhere).
+uint2 gpu_claims_fragment(uint id) {
+    uint base, slots;
+    uint4 head;
+    if (!gpu_owner(id, base, head, slots)) return 0;
+    uint op = head.r, passes;
+    if (op == CMD_UPLOAD) return uint2(base, GPU_CLAIM_UPLOAD);
+    if (SUBMIT_WAITS(ram(GPU_CTRL).r, _GpuPasses)) return 0;
+    if (op == CMD_SPRITES) {
+        uint kind = (ram(texel_of(head.g) + (id - head.a) / 6).a >> 22) & 15;
+        passes = ram(base + 1).r & (SPRITE_SHADES(kind) ? 4u : ~4u);
+    } else {
+        passes = 1u << (op == CMD_RECT || op == CMD_TEXT ? FRAGMENT_PASS(ram(base + 2).r) : op == CMD_DRAW ? FRAGMENT_PASS(ram(base + 1).g) : 0);
+    }
+    return uint2(base, passes & 0xffff);
+}
+#endif
+
+// The command that claims mesh vertices `id` to `id + span - 1` and is drawn in the pass being drawn, found by searching
+// the list (the way without the claims): its first texel and first word.
+bool gpu_command_search(uint id, uint span, out uint base, out uint4 head) {
+    uint slots;
+    if (!gpu_owner(id, base, head, slots) || id + span > head.a + slots) return false;
+#ifdef GPU_PASS_UNIFORMS
+    if (SUBMIT_WAITS(ram(GPU_CTRL).r, _GpuPasses)) return false;   // not until every pass it needs is drawn, and its uploads
+#endif
+    uint op = head.r;
 #ifdef GPU_UPLOAD_PASS
     return op == CMD_UPLOAD;   // (the pass into the VRAM draws the uploads alone, before every other pass)
 #else
@@ -396,6 +436,30 @@ bool gpu_command(uint id, uint span, out uint base, out uint4 head) {
     return true;
 }
 
+// The command that claims mesh vertices `id` to `id + span - 1`: its first texel and first
+// word (op, a, b, first slot). False while no list is submitted, when no command claims all of
+// them, or when the command belongs to another pass than the one being drawn.
+bool gpu_command(uint id, uint span, out uint base, out uint4 head) {
+#ifdef GPU_CLAIMS
+    base = 0;
+    head = 0;
+    uint2 c = _GpuClaims.Load(int3(id % GPU_CLAIMS_W, id / GPU_CLAIMS_W, 0));
+#ifdef GPU_UPLOAD_PASS
+    if ((c.g & GPU_CLAIM_UPLOAD) == 0) return false;
+#else
+    if (((c.g >> _GpuPass) & 1) == 0) return false;
+#endif
+    if (span > 1) {
+        uint last = id + span - 1;
+        if (_GpuClaims.Load(int3(last % GPU_CLAIMS_W, last / GPU_CLAIMS_W, 0)).r != c.r) return false;
+    }
+    base = c.r;
+    head = ram(base);
+    return true;
+#else
+    return gpu_command_search(id, span, base, head);
+#endif
+}
 // (text, FRAGMENT_MSDF) how much steeper than a box filter's the coverage rises across an edge:
 // fitted to the hinted bitmaps at 11 to 17 pixels (docs/system/fonts.md, "Distance fields")
 #define MSDF_SHARP 1.2
@@ -616,6 +680,22 @@ gpu_varyings gpu_vertex(uint id) {
 #endif
     uint base;
     uint4 head;
+#if defined(GPU_CLAIMS) && defined(GPU_CLAIMS_CHECK)
+    // (--define GPU_CLAIMS_CHECK: a vertex the claims and the search disagree on is a corner of a magenta triangle over the
+    // whole target; a sprite's shade counted as gpu_vertex_sized collapses it)
+    uint sb;
+    uint4 sh;
+    bool by_claims = gpu_command(id, 1, base, head), by_search = gpu_command_search(id, 1, sb, sh);
+#ifndef GPU_UPLOAD_PASS
+    if (by_search && sh.r == CMD_SPRITES)
+        by_search = SPRITE_SHADES((ram(texel_of(sh.g) + (id - sh.a) / 6).a >> 22) & 15) == (_GpuPass == 2);
+#endif
+    if (by_claims != by_search || (by_claims && sb != base)) {
+        o.position = float4(id % 3 == 1 ? 3.0 : -1.0, id % 3 == 2 ? -3.0 : 1.0, 0.0, 1.0);
+        o.colour = float4(1, 0, 1, 1);
+        return o;
+    }
+#endif
     [branch]
     if (gpu_command(id, 1, base, head)) o = gpu_vertex_of(id, base, head);
     return o;

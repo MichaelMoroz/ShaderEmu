@@ -51,6 +51,9 @@ Shader "ShaderEmu/gpu"
             #define GPU_EDGE   // the clear cut at the picture's edge (gpu_varyings; --define GPU_NO_EDGE: drawn past it)
             #endif
             #define GPU_VRAM   // textures uploaded into the VRAM (docs/machine/gpu.md, "VRAM")
+            #ifndef GPU_NO_CLAIMS
+            #define GPU_CLAIMS   // each vertex's command from the claims pass (docs/machine/gpu.md, "Claims")
+            #endif
             #include "src/gpu.h"
 
             // In Unity the mesh carries its vertex number; here SV_VertexID is the same thing.
@@ -80,6 +83,9 @@ Shader "ShaderEmu/gpu"
             #define GPU_ROM
             #define GPU_STATE _State
             #define GPU_UPLOAD_PASS
+            #ifndef GPU_NO_CLAIMS
+            #define GPU_CLAIMS
+            #endif
             #include "src/gpu.h"
 
             gpu_varyings vert(uint id : SV_VertexID) {
@@ -87,6 +93,36 @@ Shader "ShaderEmu/gpu"
             }
             float4 frag(gpu_varyings i) : SV_Target {
                 return gpu_upload_fragment(i);
+            }
+            ENDCG
+        }
+
+        Pass
+        {
+            // Each mesh vertex's command and passes (gpu_claims_fragment), a texel each of a GPU_CLAIMS_W x GPU_CLAIMS_H
+            // R32G32_UINT target, drawn first every frame a list is drawn: the upload pass and the GPUDraw passes read it.
+            Name "GPUClaims"
+            ZTest Off
+            ZWrite Off
+
+            CGPROGRAM
+            #pragma target 5.0
+            #pragma vertex vert
+            #pragma fragment frag
+
+            Texture2D<uint4> _State;
+            uniform uint _GpuPasses;
+            #define GPU_STATE _State
+            #define GPU_CLAIMS_PASS
+            #include "src/gpu.h"
+
+            // one triangle over the target
+            float4 vert(uint id : SV_VertexID) : SV_Position {
+                return float4(id == 1 ? 3.0 : -1.0, id == 2 ? -3.0 : 1.0, 0.0, 1.0);
+            }
+            uint2 frag(float4 p : SV_Position) : SV_Target {
+                uint2 at = uint2(p.xy);
+                return gpu_claims_fragment(at.y * GPU_CLAIMS_W + at.x);
             }
             ENDCG
         }

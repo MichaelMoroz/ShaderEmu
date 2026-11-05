@@ -49,10 +49,18 @@ how it was checked, and what is left, in the order it is worth doing.
    in the Game view and compare with the harness. Check the holodeck and the volume display read `_GpuVram` (a seated
    Quake). Then the profile of every device in Unity (`docs/machine/multicore.md`, "In Unity"): the ticks, commit, GPU
    passes, upload pass, sound, room, by `totalInstructions` and the frame's GPU time.
-2. **The vertex cost**, now most of the GPU's: 12 passes x 196,608 vertices, each with a binary search for its command
-   (`gpu_command`). The plan: a float VRAM (RGBA32F) the commands' vertices are transformed into once a frame by a pass of
-   their own (position, uv, colour, the command's index), and the 12 passes' vertex shader a few loads from it. The
-   holodeck's volume path draws from the same. This is what should make the GPU 3x cheaper with lists that draw a lot.
+2. **The vertex cost.** Done in the harness (5 November 2026, `docs/machine/gpu.md`, "Claims"): a claims pass finds every
+   vertex's command and passes once a frame, and the upload pass and the 12 passes read one texel a vertex in place of the
+   search. Checked by `GPU_CLAIMS_CHECK` (Quake, OpenTTD, gpubench 9, the blits). On the RTX 3090 it is 0.020 ms a frame
+   of the GPU's draw in every gpubench mode (9: 0.142 to 0.122 ms, 2: 0.299 to 0.278, 8: 0.170 to 0.149): not the 3x
+   hoped for, as what is left is 13 x 196,608 vertex invocations a frame that each load their claim and stop. The next
+   cut is fewer invocations: a draw of only the list's vertices (its last command's end), which the host does not know
+   without a readback a frame late, or the passes' draws limited by an indirect count (not in VRChat). Left: **Unity** has the search still
+   (`GpuDrawPass.cginc` does not define `GPU_CLAIMS`): it wants a `GPUClaims` pass in `GpuDrawBlit.shader` blitted into a
+   512 x 384 RGInt render texture before the upload pass (read as `int2`, `asuint`), `_GpuClaims` set globally, and
+   `GPU_CLAIMS` in the draw and upload passes; the volume and holodeck passes too. A float VRAM of transformed vertices
+   was the first plan; with the claims a vertex is transformed once a frame already (in its own pass), so it would save
+   only the passes' few loads of a drawn vertex and cost 96 bytes a vertex written and read: not done.
 3. **Other games into the VRAM** with `seglVram` and `seglTextureChanged` where they write a texture's pixels: Quake III
    (`gpu_shaderemu.h`, its own path; light maps from the ROM), Half-Life (`gl_shaderemu.c`), Jedi Outcast (`gl_jk2.c`),
    ClassiCube, OpenTTD's sprites if they gain. Quake's light maps into the VRAM at L 0, uploaded again when they change.
@@ -73,4 +81,6 @@ how it was checked, and what is left, in the order it is worth doing.
   --no-desktop --no-viz --no-stdin --input "nano-X -p & sleep 1; doom -warp 1 1\n" --seconds 40 --gpu-capture FILE.bmp`,
   once with the game's VRAM switch at 0. `--save-state FILE` also writes `FILE.vram` (4096 x 4096 x 4 bytes, level 0):
   colours all 0 there is a palette not yet filled.
-- Card timings: `RVC_PASS_PROF=1` with the `gpubench` images.
+- Card timings: `RVC_PASS_PROF=1` with the `gpubench` images, `--image` the image's folder
+  (`build\gpubench\mN\build\images\linux`: `linux-net` by name is refused on the card) and `--define NO_PAGING`.
+  gpubench 7 and 8 (uploads) draw nothing under `--cpu`, the search of before too: not looked into.
