@@ -203,10 +203,20 @@ unsigned gpuListSum(unsigned rom) {
     if (!gpu) return 0;
     sum_rom = rom;
     uint32_t sum = passes_used;
-    // (only the words written: a clear's first two and its fourth, a block's 28)
+    // (only the words written: a clear's first two and its fourth, a block's 28; a texture or light map in the VRAM as
+    // what it was uploaded from, and the uploads not at all: when a picture takes its slot is not what was drawn)
     for (uint32_t i = 0; i < commands; i++) {
         const uint32_t* c = (const uint32_t*)(gpu + set_at) + 16 * i;
-        sum = c[0] == CMD_DRAW ? list_sum(sum, c, 16) : list_sum(list_sum(sum, c, 2), c + 3, 1);
+        if (c[0] == CMD_UPLOAD) continue;
+        if (c[0] == CMD_DRAW) {
+            uint32_t w[16];
+            for (int k = 0; k < 16; k++) w[k] = c[k];
+            if (w[7] && w[7] >> 30 == 0) w[7] = vram_source_of(w[7]);
+            if ((w[5] & 0x800) && w[13] && w[13] >> 30 == 0) w[13] = vram_source_of(w[13]);
+            sum = list_sum(sum, w, 16);
+        } else {
+            sum = list_sum(list_sum(sum, c, 2), c + 3, 1);
+        }
     }
     for (uint32_t i = 0; i < blocks; i++) sum = list_sum(sum, (const uint32_t*)(gpu + set_at + UNIFORMS_IN) + 32 * i, 28);
     return list_sum(sum, (const uint32_t*)(gpu + set_at + VERTICES_IN), (vertex_top - set_at - VERTICES_IN) / 4);

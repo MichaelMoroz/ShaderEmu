@@ -519,6 +519,14 @@ static float wave (const se_wave_t *w, float time)
 /* ---- a stage: what the GPU is told of it ---- */
 
 static unsigned	*picture_at;	/* each texture's address as the GPU reads it: GPU memory, the ROM; 0 not decoded */
+/* The VRAM (docs/machine/gpu.md, "VRAM"; QUAKE3_VRAM=0 the way before): a picture a stage this core registered draws
+   is drawn from a slot of four levels, copied there from where it was decoded or lies in the ROM, unless a stage draws
+   it keyed (the VRAM has a key only premultiplied, which a blended stage of it is not); a light map's page from a slot
+   of none, from the ROM. Slots are taken and uploaded with no frame out on the scene's worker (vram_pictures,
+   RE_LoadWorld), as gles.c's uploads are the swapping core's; stage_state only reads them. */
+static int		vram_on;
+static unsigned		*picture_slot, *light_slot;
+static unsigned char	*picture_keyed, *picture_repeats, *picture_wanted;
 static float		scene_time;	/* the scene's clock, in seconds */
 static int		scene_mode = -1;	/* 1: a frame is drawn by a job on a worker core ("The scene on a worker core") */
 
@@ -536,7 +544,7 @@ static void stage_state (gpu_state *s, const se_stage_t *st, int flat)
 	if (st->frames > 1)
 		which = (int)(scene_time * st->fps) % st->frames;
 	t = &textures[st->texture + which];
-	s->texture = picture_at[st->texture + which];
+	s->texture = picture_slot[st->texture + which] ? picture_slot[st->texture + which] : picture_at[st->texture + which];
 	if (!s->texture)
 		return;		/* (its sheet is not decoded: drawn in its colour) */
 	s->width = t->width, s->height = t->height;
@@ -867,6 +875,46 @@ static void pictures_open (void)
 	for (i = 0; i < texture_count; i++)
 		if (textures[i].sheet == SE_NO_SHEET)
 			picture_at[i] = dat_rom + textures[i].at;
+	{
+		const char	*v = getenv ("QUAKE3_VRAM");
+		int		f;
+
+		vram_on = !(v && !strcmp (v, "0"));
+		seglVram (vram_on ? 4 : -1);
+		picture_slot = calloc (texture_count + 1, sizeof *picture_slot);
+		light_slot = calloc (texture_count + 1, sizeof *light_slot);
+		picture_keyed = calloc (texture_count + 1, 1);
+		picture_repeats = calloc (texture_count + 1, 1);
+		picture_wanted = calloc (texture_count + 1, 1);
+		for (i = 0; i < stage_count; i++)
+			for (f = 0; stages[i].texture != 0xffff && f < stages[i].frames; f++) {
+				if (stages[i].flags & SE_KEYED)
+					picture_keyed[stages[i].texture + f] = 1;
+				if (!(stages[i].flags & SE_CLAMP))
+					picture_repeats[stages[i].texture + f] = 1;
+			}
+	}
+}
+
+/* Slots for the pictures wanted and decoded that have none (with no frame out on the scene's worker): whether any was
+   taken, and the stages' states are to be made again. */
+static int vram_pictures (void)
+{
+	int	i, taken = 0;
+
+	if (!vram_on)
+		return 0;
+	for (i = 0; i < texture_count; i++) {
+		const se_texture_t	*t = &textures[i];
+
+		if (picture_slot[i] || !picture_wanted[i] || !picture_at[i] || picture_keyed[i] || !t->width || !t->height)
+			continue;
+		if ((picture_slot[i] = seglVramTake (t->width, t->height, 4, picture_repeats[i] ? 0 : 1)) == 0)
+			continue;
+		seglVramUpload (picture_slot[i], picture_at[i], t->width, t->height, t->format == SE_WORDS ? 1 : 4, 0, 0);
+		taken = 1;
+	}
+	return taken;
 }
 
 static void *picture_room (unsigned bytes)
@@ -938,6 +986,10 @@ static void sheet_decode (int s)
 		pictures_stale = 1;
 		return;
 	}
+	if (vram_pictures ()) {
+		stages_refresh ();
+		return;
+	}
 	for (i = 0; (int)i < stage_count; i++)
 		if (stages[i].texture != 0xffff && textures[stages[i].texture].sheet == s) {
 			stage_state (&stage_kept[0][i], &stages[i], 0);
@@ -953,13 +1005,16 @@ static void want_stage (const se_stage_t *st)
 
 	if (st->texture == 0xffff)
 		return;
-	for (f = 0; f < st->frames; f++)
+	for (f = 0; f < st->frames; f++) {
+		if (!core)
+			picture_wanted[st->texture + f] = 1;	/* (this core's to write: the VRAM's, vram_pictures) */
 		if (!picture_at[st->texture + f] && (s = textures[st->texture + f].sheet) != SE_NO_SHEET) {
 			if (!core)
 				sheet_decode (s);
 			else if (core < SE_CORES)
 				wanted[core * WANT_ROW + s] = 1, wants[core].asked++;
 		}
+	}
 }
 
 static void want_shader (const se_shader_t *sh)
@@ -993,6 +1048,8 @@ static void pictures_take (void)
 				if (wanted[core * WANT_ROW + s])
 					sheet_decode (s);
 		}
+	if (!scene_out && vram_pictures ())
+		pictures_stale = 1;
 	if (pictures_stale && !scene_out)
 		pictures_stale = 0, stages_refresh ();
 }
@@ -1005,6 +1062,9 @@ static void pictures_free (void)
 	if (!picture_at)
 		return;
 	seglSettle ();		/* (the list being drawn may read them) */
+	for (i = 0; i < texture_count; i++)
+		if (picture_slot[i])
+			seglVramGive (picture_slot[i], textures[i].width, textures[i].height), picture_slot[i] = 0;
 	spare_used = 0;
 	gpuMemoryRelease (pictures_mark);
 	memset (sheet_at, 0, sheet_count * sizeof *sheet_at);
@@ -1069,11 +1129,16 @@ static void gpu_rooms (void)
 
 static void world_free (void)
 {
+	int	i;
+
 	SE_SceneFlush ();
 	if (!world_loaded)
 		return;
 	gpuKeep (0, 0);
 	seglSettle ();		/* (the list being drawn may read it) */
+	for (i = 0; light_slot && i < texture_count; i++)
+		if (light_slot[i])
+			seglVramGive (light_slot[i], textures[i].width, textures[i].height), light_slot[i] = 0;
 	world_used = 0;
 	free (world_runs);
 	free (world_changing);
@@ -1091,6 +1156,8 @@ static void RE_LoadWorld (const char *name)
 	world_count = (int)world->runs;
 	for (i = 0; i < world_count; i++)
 		want_stage (&stages[runs[i].stage]);
+	if (vram_pictures ())
+		stages_refresh ();
 	world_runs = calloc (world_count ? world_count : 1, sizeof (run_t));
 	vertices = gpu_copy (world->vertices_at, world->vertices * 16);
 	for (i = 0; i < world_count; i++) {
@@ -1108,7 +1175,9 @@ static void RE_LoadWorld (const char *name)
 
 			w->state.fragment |= GPU_LIT;
 			w->state.more[0] = gpuAddress (gpu_copy (r->light_at, r->count * 4));
-			w->state.more[1] = dat_rom + page->at;
+			if (vram_on && !light_slot[r->light] && (light_slot[r->light] = seglVramTake (page->width, page->height, 0, 1)) != 0)
+				seglVramUpload (light_slot[r->light], dat_rom + page->at, page->width, page->height, 4, 0, 0);
+			w->state.more[1] = light_slot[r->light] ? light_slot[r->light] : dat_rom + page->at;
 			w->state.more[2] = page->width | (unsigned)page->height << 16;
 		}
 		if (r->flags & SE_RUN_TAGGED) {

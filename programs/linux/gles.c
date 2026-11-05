@@ -705,6 +705,24 @@ static int upload_count, uploads_left;
 typedef struct { uint32_t address, width, height, kind, slot, key, palette; } slot_upload;
 static slot_upload slot_uploads[MAX_UPLOADS];
 static int slot_upload_count, slot_uploads_left;
+// What each slot was last uploaded from, for a sum of a list that should not go by where a texture lies (gpuListSum).
+#define MAX_SOURCES 4096
+static struct { uint32_t slot, address; } vram_sources[MAX_SOURCES];
+static int vram_source_count;
+static uint32_t vram_source_of(uint32_t slot) {
+    for (int i = 0; i < vram_source_count; i++)
+        if (vram_sources[i].slot == slot) return vram_sources[i].address;
+    return slot;
+}
+static void vram_source(uint32_t slot, uint32_t address) {
+    for (int i = 0; i < vram_source_count; i++)
+        if (vram_sources[i].slot == slot) {
+            if (address) vram_sources[i].address = address;
+            else vram_sources[i] = vram_sources[--vram_source_count];
+            return;
+        }
+    if (address && vram_source_count < MAX_SOURCES) vram_sources[vram_source_count].slot = slot, vram_sources[vram_source_count++].address = address;
+}
 static uint32_t vram_palette;   // seglVramPalette: the palette a paletted texture is uploaded with (0: the display's)
 
 void seglVram(int lod) {
@@ -786,6 +804,7 @@ unsigned seglVramTake(unsigned w, unsigned h, int levels, int flags) {
 }
 void seglVramGive(unsigned slot, unsigned w, unsigned h) {
     if (!slot) return;
+    vram_source(slot, 0);
     for (int i = 0; i < slot_upload_count; i++)
         if (slot_uploads[i].slot == slot) slot_uploads[i] = slot_uploads[--slot_upload_count], i--;
     vram_block_give(slot, w, h);
@@ -794,6 +813,7 @@ void seglVramUpload(unsigned slot, unsigned address, unsigned w, unsigned h, uns
     if (!slot) return;
     // (keyed: a premultiplied slot's key texels are 0)
     slot_upload u = {address, w, h, kind | (slot & VRAM_PREMULTIPLIED ? FRAGMENT_KEYED : 0), slot, key, palette};
+    vram_source(slot, address);
     for (int i = 0; i < slot_upload_count; i++)
         if (slot_uploads[i].slot == slot) {
             slot_uploads[i] = u;
