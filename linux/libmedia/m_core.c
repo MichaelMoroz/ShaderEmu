@@ -536,6 +536,36 @@ m_for(uint32_t n, mcw_body fn, void *ctx, uint32_t out_bytes, int workers)
 		told_for.on = 0;
 }
 
+/* a piece a share: as many pieces as cores (the first among them), at most */
+uint32_t
+m_grain(uint32_t n, int workers)
+{
+	uint32_t shares = (uint32_t)(workers > 0 ? workers : 0) + 1;
+
+	return n ? (n + shares - 1) / shares : 1;
+}
+
+void
+m_for_grain(uint32_t n, mcw_body fn, void *ctx, uint32_t grain, int workers)
+{
+	mcw_for_opts o;
+	int tell = media_progress && !told_for.on && !mcw_on_worker();
+
+	if (workers <= 0 || n < 2) {
+		if (n)
+			fn(ctx, 0, n);
+		return;
+	}
+	memset(&o, 0, sizeof o);
+	o.workers = workers;
+	o.grain = grain;
+	if (tell)
+		told_for.fn = fn, told_for.n = n, told_for.on = 1;
+	mcw_for_opt(n, tell ? told_piece : fn, ctx, &o);
+	if (tell)
+		told_for.on = 0;
+}
+
 void
 media_image_fit(const struct media_image *in, struct media_image *out, int cover, int workers)
 {
