@@ -845,13 +845,17 @@ public static partial class ShaderEmuBuilder
         return made;
     }
 
-    // One triangle for the front end's camera (its shader places the corners over the targets by their number).
+    // Two quads for the front end's camera (its shader places the corners by their number: the rows the list takes, and the
+    // frame's row; gpu_rows_vertex).
     static Mesh FrontTriangle()
     {
         Mesh mesh = LoadOrCreate(Generated + "/GpuFrontTriangle.asset", () => new Mesh { name = "GpuFrontTriangle" });
         mesh.Clear();
-        mesh.vertices = new Vector3[] { Vector3.zero, Vector3.right, Vector3.up };
-        mesh.triangles = new int[] { 0, 1, 2 };
+        Vector3[] corners = new Vector3[12];
+        int[] order = new int[12];
+        for (int i = 0; i < 12; i++) { corners[i] = new Vector3(i, 0, 0); order[i] = i; }
+        mesh.vertices = corners;
+        mesh.triangles = order;
         mesh.bounds = new Bounds(Vector3.zero, Vector3.one * 100f);
         EditorUtility.SetDirty(mesh);
         return mesh;

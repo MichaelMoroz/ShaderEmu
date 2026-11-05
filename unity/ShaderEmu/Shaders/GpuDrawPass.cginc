@@ -30,7 +30,8 @@ uniform uint _GpuUploaded;
 // GpuDrawBlit.shader's pass 14: each mesh vertex's command and passes, a texel of the 512 x 384 draw IDs each (a blit's
 // quad is 0 to 1 each way, which way up does not matter: the texel is the fragment's pixel)
 float4 vert(float4 v : POSITION) : SV_Position {
-    return float4(v.xy * 2.0 - 1.0, 0.5, 1.0);
+    // (the blit's quad over the rows the list's vertices take alone: past them the draws read no texel)
+    return float4(v.x * 2.0 - 1.0, 1.0 - v.y * 2.0 * gpu_used_rows() / GPU_DRAW_IDS_H, 0.5, 1.0);
 }
 
 int2 frag(float4 p : SV_Position) : SV_Target {

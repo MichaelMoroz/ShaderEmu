@@ -35,9 +35,9 @@ Shader "ShaderEmu/GpuFront"
             #define GPU_TARGET_H 720.0
             #include "src/gpu_draw.cginc"
 
-            // one triangle over the targets: a texel is the fragment's pixel, whichever way up
+            // the rows the list's vertices take and the frame's row (gpu_rows_vertex: the mesh's twelve vertices)
             float4 vert(uint id : SV_VertexID) : SV_Position {
-                return float4(id == 1 ? 3.0 : -1.0, id == 2 ? -3.0 : 1.0, 0.5, 1.0);
+                return gpu_rows_vertex(id, gpu_used_rows(), GPU_DRAW_IDS_H + 1);
             }
             gpu_made frag(float4 p : SV_Position) {
                 uint2 at = uint2(p.xy);

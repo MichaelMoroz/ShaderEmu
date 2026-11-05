@@ -131,8 +131,9 @@ Shader "ShaderEmu/gpu"
             #define _GpuPass 0u
             #include "src/gpu_draw.h"
 
+            // (the rows the list's vertices take, and the frame's row: gpu_rows_vertex, twelve vertices)
             float4 vert(uint id : SV_VertexID) : SV_Position {
-                return float4(id == 1 ? 3.0 : -1.0, id == 2 ? -3.0 : 1.0, 0.0, 1.0);
+                return gpu_rows_vertex(id, gpu_used_rows(), GPU_DRAW_IDS_H + 1);
             }
             gpu_made frag(float4 p : SV_Position) {
                 uint2 at = uint2(p.xy);
@@ -159,9 +160,9 @@ Shader "ShaderEmu/gpu"
             #define GPU_STATE _State
             #include "src/gpu_draw.h"
 
-            // one triangle over the target
+            // the rows the list's vertices take (gpu_rows_vertex, six vertices): past them the draws read no texel
             float4 vert(uint id : SV_VertexID) : SV_Position {
-                return float4(id == 1 ? 3.0 : -1.0, id == 2 ? -3.0 : 1.0, 0.0, 1.0);
+                return gpu_rows_vertex(id, gpu_used_rows(), GPU_DRAW_IDS_H);
             }
             int2 frag(float4 p : SV_Position) : SV_Target {
                 uint2 at = uint2(p.xy);

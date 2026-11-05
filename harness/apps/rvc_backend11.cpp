@@ -832,12 +832,16 @@ private:
         ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         ID3D11ShaderResourceView* state = stateSrv();
         mat.bind(ctx, pass, gpu_);
+        // (its vertex stage reads the list too: the rows it takes, gpu_rows_vertex)
+        for (auto& t : pass.vsLayout.textures)
+            if (t.name == "_State") ctx->VSSetShaderResources(t.slot, 1, &state);
         for (auto& t : pass.psLayout.textures)
             if (t.name == "_State") ctx->PSSetShaderResources(t.slot, 1, &state);
         ctx->OMSetBlendState(gpuBlend_[0].Get(), nullptr, 0xffffffff);
         ctx->OMSetDepthStencilState(gpuDepthState_[2].Get(), 0);
-        ctx->Draw(3, 0);
+        ctx->Draw(6, 0);   // (gpu_rows_vertex: the rows the list takes)
         ID3D11ShaderResourceView* none = nullptr;
+        for (auto& t : pass.vsLayout.textures) ctx->VSSetShaderResources(t.slot, 1, &none);
         for (auto& t : pass.psLayout.textures) ctx->PSSetShaderResources(t.slot, 1, &none);
         ctx->OMSetRenderTargets(0, nullptr, nullptr);
     }
@@ -909,12 +913,16 @@ private:
         ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         ID3D11ShaderResourceView* state = stateSrv();
         mat.bind(ctx, pass, gpu_);
+        // (its vertex stage reads the list too: the rows it takes, gpu_rows_vertex)
+        for (auto& t : pass.vsLayout.textures)
+            if (t.name == "_State") ctx->VSSetShaderResources(t.slot, 1, &state);
         for (auto& t : pass.psLayout.textures)
             if (t.name == "_State") ctx->PSSetShaderResources(t.slot, 1, &state);
         ctx->OMSetBlendState(gpuBlend_[0].Get(), nullptr, 0xffffffff);
         ctx->OMSetDepthStencilState(gpuDepthState_[2].Get(), 0);
-        ctx->Draw(3, 0);
+        ctx->Draw(12, 0);   // (gpu_rows_vertex: the rows the list takes, and the frame row)
         ID3D11ShaderResourceView* none = nullptr;
+        for (auto& t : pass.vsLayout.textures) ctx->VSSetShaderResources(t.slot, 1, &none);
         for (auto& t : pass.psLayout.textures) ctx->PSSetShaderResources(t.slot, 1, &none);
         ctx->OMSetRenderTargets(0, nullptr, nullptr);
         static const char* names[kMade] = {"_GpuMadePos", "_GpuMadeColour", "_GpuMadeUv", "_GpuMadeEdge", "_GpuMadeTex", "_GpuMadeMore",

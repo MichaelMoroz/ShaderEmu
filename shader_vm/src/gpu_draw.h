@@ -252,6 +252,12 @@ uint2 gpu_draw_id(uint id) { return asuint(_GpuDrawIds.Load(int3(id % GPU_DRAW_I
 
 // The command whose vertex range holds mesh vertex `id`, whatever its pass: its first texel and
 // first word (op, a, b, first slot), and the vertices it claims.
+// The vertices the command at `base` claims.
+uint gpu_slots(uint base, uint4 head) {
+    uint op = head.r;
+    return op == CMD_CLEAR ? 3 : op == CMD_RECT ? 6 : op == CMD_DRAW ? head.b : op == CMD_TEXT ? 6 * ram(base + 1).b : op == CMD_SPRITES ? 6 * head.b
+         : op == CMD_UPLOAD || op == CMD_COPY ? 6 : 0;
+}
 bool gpu_owner(uint id, out uint base, out uint4 head, out uint slots) {
     base = 0;
     head = 0;
@@ -271,11 +277,29 @@ bool gpu_owner(uint id, out uint base, out uint4 head, out uint slots) {
     }
     base = list + 4 * lo;
     head = ram(base);
-    uint op = head.r;
-    slots = op == CMD_CLEAR ? 3 : op == CMD_RECT ? 6 : op == CMD_DRAW ? head.b : op == CMD_TEXT ? 6 * ram(base + 1).b : op == CMD_SPRITES ? 6 * head.b
-          : op == CMD_UPLOAD || op == CMD_COPY ? 6 : 0;
+    slots = gpu_slots(base, head);
     return id >= head.a && id < head.a + slots;
 }
+
+// The mesh vertices the submitted list claims, from 0: its last command's end (commands claim rising ranges, the uploads
+// last); 0 while none is submitted. The draw-ID pass and the front end draw those rows alone (gpu_rows_vertex).
+uint gpu_mesh_used() {
+    uint4 ctrl = ram(GPU_CTRL);
+    uint count = min(ctrl.b, GPU_MAX_COMMANDS);
+    if ((ctrl.r & SUBMIT_DRAW) == 0 || count == 0) return 0;
+    uint base = texel_of(ctrl.g) + 4 * (count - 1);
+    uint4 head = ram(base);
+    return min(head.a + gpu_slots(base, head), GPU_DRAW_IDS_W * GPU_DRAW_IDS_H);
+}
+// A pass over the first `rows` of a target `height` rows tall (vertices 0 to 5), and vertices 6 to 11 over the first eight
+// texels of its row `height - 1` (the front end's frame row; for the draw IDs, drawn with 6, none).
+float4 gpu_rows_vertex(uint id, uint rows, uint height) {
+    uint k = id % 6, corner = k < 3 ? k : (k == 3 ? 2 : (k == 4 ? 1 : 3));
+    float2 p = id < 6 ? float2((corner & 1) ? GPU_DRAW_IDS_W : 0, (corner & 2) ? rows : 0)
+                      : float2((corner & 1) ? 8 : 0, (corner & 2) ? height : height - 1);
+    return float4(p.x * 2.0 / GPU_DRAW_IDS_W - 1.0, 1.0 - p.y * 2.0 / height, 0.5, 1.0);
+}
+uint gpu_used_rows() { return (gpu_mesh_used() + GPU_DRAW_IDS_W - 1) / GPU_DRAW_IDS_W; }
 
 // The draw-ID pass's texel for mesh vertex `id`: its command's texel and the passes it is drawn in (`drawn` the passes the
 // host draws this frame, _GpuPasses). A list waiting for a
@@ -530,6 +554,10 @@ Texture2D<float4> _GpuMadePos, _GpuMadeColour, _GpuMadeUv, _GpuMadeEdge, _GpuMad
 Texture2D<int4> _GpuMadeTex, _GpuMadeMore;
 // The list's picture as the front end found it (its frame's texel 3, gpu_frame_texel): what a pass reads in place of RAM.
 float2 gpu_made_picture() { return max(_GpuMadeEye.Load(int3(3, GPU_DRAW_IDS_H, 0)).yz, 1.0); }
+// ...and the vertices the list submitted this frame claims (texel 4, 0 with none: nothing is drawn again), and the last
+// list's (texel 5, the holodeck's): the draw IDs and the front end's texels past them are an earlier list's.
+uint gpu_made_used() { return (uint)_GpuMadeEye.Load(int3(4, GPU_DRAW_IDS_H, 0)).x; }
+uint gpu_made_last() { return (uint)_GpuMadeEye.Load(int3(5, GPU_DRAW_IDS_H, 0)).x; }
 gpu_varyings gpu_vertex_made(uint id) {
     gpu_varyings o;
     int3 at = int3(gpu_made_at(id), 0);
@@ -549,7 +577,7 @@ gpu_varyings gpu_vertex_made(uint id) {
 // one command's: the draw IDs alone.
 bool gpu_drawn(uint id, uint span, uint p) {
     uint2 c = gpu_draw_id(id);
-    return ((c.g >> p) & 1) != 0 && (span < 2 || gpu_draw_id(id + span - 1).r == c.r);
+    return id + span <= gpu_made_used() && ((c.g >> p) & 1) != 0 && (span < 2 || gpu_draw_id(id + span - 1).r == c.r);
 }
 struct gpu_made {
     float4 pos : SV_Target0;
@@ -564,11 +592,13 @@ struct gpu_made {
 // The list's frame for the holodeck, the front end's row GPU_DRAW_IDS_H of its targets (`eye`): texels 0 to 2 the rows of
 // the turn of the list's first draw in perspective with a modelview (for a program that draws its world before what moves
 // in it, the view alone), w 1 if there is one; texel 3 which of the program's axes is up (1 x, 2 y, 3 z; 0 not said: the
-// volume words' size word, docs/world/volume.md), the picture's size, and the list's address.
+// volume words' size word, docs/world/volume.md), the picture's size, and the list's address; texels 4 and 5 the vertices
+// it claims (in a frame with no list submitted texel 4 is 0 and the rest stay the last list's).
 #define VOLUME_LIST DEV_T(0x100030u)   // the volume words: the last whole frame's list address, commands, frames, size
 float4 gpu_frame_texel(uint k) {
     uint4 ctrl = ram(GPU_CTRL);
     if (k == 3) return float4(ram(VOLUME_LIST).a >> 28, gpu_picture_size(), asfloat(ctrl.g));
+    if (k == 4 || k == 5) return float4(gpu_mesh_used(), 0, 0, 0);
     uint list = texel_of(ctrl.g), count = min(ctrl.b, 24u);
     [loop]
     for (uint i = 0; i < count; i++) {
@@ -590,7 +620,10 @@ gpu_made gpu_front_fragment(uint id) {
     m.colour = 0, m.uv = 0, m.edge = 0, m.tex = 0, m.more = 0, m.eye = 0, m.proj = 0;
     [branch]
     if (id >= GPU_DRAW_IDS_W * GPU_DRAW_IDS_H) {
-        if (id - GPU_DRAW_IDS_W * GPU_DRAW_IDS_H < 4) m.eye = gpu_frame_texel(id - GPU_DRAW_IDS_W * GPU_DRAW_IDS_H);
+        // (with no list submitted the last one's stay, for the holodeck; texel 4, what the passes draw, says none)
+        uint k = id - GPU_DRAW_IDS_W * GPU_DRAW_IDS_H;
+        if (k != 4 && gpu_mesh_used() == 0) discard;
+        if (k < 6) m.eye = gpu_frame_texel(k);
         return m;
     }
     uint2 c = gpu_draw_id(id);
@@ -871,7 +904,7 @@ bool volume_view(out float3 rx, out float3 ry, out float3 rz) {
 // pass `p` of the holodeck's four (VOLUME_BLENDING: passes 4 to 7, of no depth test, as the pass that blends alike).
 bool volume_triangle(uint v, float kind, uint p) {
     uint2 c = gpu_draw_id(v);
-    if ((c.g & 0x3fffu) == 0 || gpu_draw_id(v + 2).r != c.r) return false;
+    if (v + 3 > gpu_made_last() || (c.g & 0x3fffu) == 0 || gpu_draw_id(v + 2).r != c.r) return false;
     if (_GpuMadeEye.Load(int3(gpu_made_at(v), 0)).w != kind) return false;
     return VOLUME_BLENDING(firstbitlow(c.g & 0x3fffu)) == p;
 }

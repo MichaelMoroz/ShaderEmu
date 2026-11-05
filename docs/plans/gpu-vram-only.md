@@ -66,5 +66,18 @@ the VRAM (two loads, no RAM). `SPRITE_WORDS` (the last picture) is the picture's
   `programs/common/gpu.h` (`gpu_submit_as`). Quake III, Half-Life and Jedi Outcast take it through gles.c.
 - The device side compiles (30 stages on WARP), and with the old programs draws the six snapshots' pictures as before:
   Doom, Quake, Quake III, glxgears, Half-Life, the desktop, 0 pixels differ, 0 magenta.
-- Next: build and capture every program (nxweb, the desktop's programs, the games), ClassiCube's and Tiberian Dawn's own
-  submits, OpenTTD's sprites as above, then the holodeck, then Unity.
+- Every program rebuilt (gles.c's users, Nano-X, nxweb, ClassiCube, OpenTTD, the bare-metal ones): `test_all` 271 of 272
+  (cc-bytes moved by libgles.a, set to cf92a103), and every graphics program of the image captured under `--cpu` with
+  nothing magenta of the device's (32 of them, OpenTTD's title through its sprite uploads; nxpaint's palette and
+  demo-blit's text are magenta of their own). OpenTTD's sprites went per list after all, with the duplicates found by a
+  hash (a record's pixels, kind, size, remap, palette and tables): no persistent slots, so the sprite cache needs no hook.
+- The holodeck draws from the front end's targets (written, compiled in Unity's shaders by `tools/unity_fxc.py`, not run).
+- Code: `gpu_draw.h` 692 lines of code against the drawing's 1,391 of `gpu.h` at 1dff0e7d (2.01 times less), `#if` 3
+  against 73 there; `gpu.shader` 207 against 298, its `GPU_` defines and switches 14 against 53.
+- The card (RTX 5090, `RVC_PASS_PROF` "gpu draw" a round, gpubench, the mean of two 8 s runs each way), the RAM path
+  (1dff0e7d with `GPU_NO_STREAMS`, gpubench without uploads) against the VRAM alone: words smooth 0.308 to 0.207 ms, indexed
+  smooth 0.320 to 0.207, three bytes smooth 0.445 to 0.207, compact with a light map 0.532 to 0.214; but colour 0.181 to
+  0.209, words nearest 0.182 to 0.208, indexed nearest 0.175 to 0.207. A fixed 0.21 ms whatever the mode: the front end
+  and the draw IDs wrote all 196,608 texels every frame, now into eight targets of 16 bytes, for lists of 50 vertices.
+  Both now draw the rows the list's vertices take alone (`gpu_rows_vertex`, from the last command's end), and the frame row
+  says how many (texel 4 this frame's, 0 with no list; texel 5 the last list's, the holodeck's).
