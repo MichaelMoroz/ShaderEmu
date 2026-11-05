@@ -484,14 +484,14 @@ def classroom(b):
     for z in ROWS_Z:
         for x in TABLES_X:
             table(b, x, z)
-    b.obj("Chairs")
+    # the chairs: one mesh made once and its copies (lib.Builder.instance), each its own renderer
     import random
     third = random.Random(12)   # (the last row's chances are its own: the room's other chances stay what they were)
     for row, (z, behind) in enumerate(zip(ROWS_Z, CHAIRS_BACK)):
         rand = b.rand if row < 2 else third.uniform
         for x in PLACES_X:
             with b.at((x + rand(-0.05, 0.05), 0, z - behind + rand(-0.05, 0.05)), (0, rand(-25, 25), 0)):
-                office_chair(b)
+                b.instance("Office chair", office_chair)
     # The computers: world/bake_pc.py's shells (monitor and tower, their detail baked into their
     # pictures), and at each place its own glass, keyboard, mouse, leads and stickers. No two lie
     # alike: the set a little off and turned, the keyboard and the mouse as a hand left them.

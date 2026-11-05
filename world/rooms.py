@@ -369,10 +369,9 @@ def furnish(b, room, posters_left, rng):
     parts = desk(b, (desk_x, 0, desk_z), rng)
     solids.append([desk_x - DESK[0] / 2, desk_x + DESK[0] / 2, 0, TABLE_TOP, desk_z - DESK[1] / 2, desk_z + DESK[1] / 2])
     place = computer(b, number, (desk_x, desk_z), parts, rng)
-    b.obj("Room chairs")
     # (as the classroom's: its middle 0.45 before the desk's front edge, which is towards +z here, its seat facing the desk)
     with b.at((desk_x + 0.08 + rng.uniform(-0.05, 0.05), 0, desk_z + DESK[1] / 2 + 0.45 + rng.uniform(-0.05, 0.05)), (0, 180 + rng.uniform(-20, 20), 0)):
-        pc.office_chair(b)
+        b.instance("Office chair", pc.office_chair)   # (the classroom's mesh: lib.Builder.instance)
     # a lamp clamped to the desk's back edge at its right (the sitter's right is world -x: the place is turned
     # round), its arm over the keys. The file's own origin is 1 mm under the clamp's upper jaw, and the
     # screw's pad is 21 mm under it: at its own size it grips a top of DESK_TOP_T, 0.2 mm free either side.

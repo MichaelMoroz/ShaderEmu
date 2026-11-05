@@ -95,14 +95,32 @@ public static partial class ShaderEmuBuilder
         S("SciSeat", "Linen", 0.15f, 0.14f, 0.15f, 1f, true, true),
     };
 
+    // Pictures seen from afar or small, smaller and crunched (DXT with a lossy pass on top: smaller to download,
+    // as large in memory): the fetched atlases of posters, boxes and magazines (4096 each, five of them: 53 MB),
+    // the cans. Everything else 4096 at most and plainly compressed.
+    static readonly string[] Lesser = { "/Fetched/", "/CanCoke.", "/CanDiet." };
+    const int LesserSize = 2048, CanSize = 1024, LesserQuality = 50;
+
+    static int MostSize(string path)
+    {
+        if (path.Contains("/CanCoke.") || path.Contains("/CanDiet.")) return CanSize;
+        foreach (string l in Lesser) if (path.Contains(l)) return LesserSize;
+        return 4096;   // a baked picture may be that large (world/bake_pc.py)
+    }
+
     static Texture2D ImportedTexture(string path, bool colour, bool normal, int aniso)
     {
         TextureImporter importer = AssetImporter.GetAtPath(path) as TextureImporter;
         if (importer == null) throw new System.Exception(path + " is missing: run world/textures.py and world/fetch.py, and copy unity/ShaderEmu over");
         TextureImporterType type = normal ? TextureImporterType.NormalMap : TextureImporterType.Default;
-        if (importer.textureType != type || importer.anisoLevel != aniso || importer.alphaIsTransparency || importer.sRGBTexture != colour || importer.maxTextureSize < 4096)
+        int most = MostSize(path);
+        bool crunch = most < 4096;
+        if (importer.textureType != type || importer.anisoLevel != aniso || importer.alphaIsTransparency || importer.sRGBTexture != colour || importer.maxTextureSize != most
+            || importer.crunchedCompression != crunch || (crunch && importer.compressionQuality != LesserQuality))
         {
-            importer.maxTextureSize = 4096;   // a baked picture may be that large (world/bake_pc.py)
+            importer.maxTextureSize = most;
+            importer.crunchedCompression = crunch;
+            if (crunch) importer.compressionQuality = LesserQuality;
             importer.textureType = type;
             importer.sRGBTexture = colour;   // a packed map's numbers are not colours
             importer.anisoLevel = aniso;

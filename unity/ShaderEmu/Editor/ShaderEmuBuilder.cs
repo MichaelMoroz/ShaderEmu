@@ -159,8 +159,28 @@ public static partial class ShaderEmuBuilder
         if (s == null) throw new System.Exception("shader " + shader + " not found (does it compile?)");
         Material m = LoadOrCreate(Generated + "/" + name + ".mat", () => new Material(s));
         m.shader = s;
+        DropStaleTextures(m);
         EditorUtility.SetDirty(m);
         return m;
+    }
+
+    // A texture a material keeps under a name its shader no longer has still goes into the world's build:
+    // the ROM's and RAM's four lanes of old (_Data_MTD_*, _Data_RAM_*, _Data_DTB_*) were 330 MB of it.
+    public static int DropStaleTextures(Material m)
+    {
+        var names = new HashSet<string>();
+        for (int i = 0; i < m.shader.GetPropertyCount(); i++) names.Add(m.shader.GetPropertyName(i));
+        SerializedObject so = new SerializedObject(m);
+        SerializedProperty texs = so.FindProperty("m_SavedProperties.m_TexEnvs");
+        int dropped = 0;
+        for (int i = texs.arraySize - 1; i >= 0; i--)
+        {
+            if (names.Contains(texs.GetArrayElementAtIndex(i).FindPropertyRelative("first").stringValue)) continue;
+            texs.DeleteArrayElementAtIndex(i);
+            dropped++;
+        }
+        if (dropped > 0) so.ApplyModifiedPropertiesWithoutUndo();
+        return dropped;
     }
 
     static Material Lit(string name, Color colour, Texture2D texture = null, float tiling = 1f, float smooth = 0.15f)
@@ -1165,10 +1185,12 @@ public static partial class ShaderEmuBuilder
 
         List<Texture2D> textures = new List<Texture2D>();
         ShaderEmuImages.BootImage boot = ShaderEmuImages.Images[0];
-        // (one texture each: ShaderEmuTexelsImporter)
-        textures.Add(AssetDatabase.LoadAssetAtPath<Texture2D>(ShaderEmuImages.RamPath(boot.name)));
+        // (the ROM, one texture: ShaderEmuTexelsImporter; no image of RAM, the reset copies the kernel and
+        // its tree out of the ROM: AGENTS.md, 5 November 2026)
+        textures.Add(null);
         textures.Add(AssetDatabase.LoadAssetAtPath<Texture2D>(ShaderEmuImages.RomPath(boot.name)));
-        if (textures[0] == null) Debug.LogError("[ShaderEmu] no boot image: run ShaderEmu/Import boot images first");
+        if (textures[1] == null || !ShaderEmuImages.BootPieces(boot, out machine.bootKernel, out machine.bootTree))
+            Debug.LogError("[ShaderEmu] no boot image: run ShaderEmu/Import boot images first");
         machine.imageTextures = textures.ToArray();
 
         Transform beamRoot = new GameObject("Beams").transform;

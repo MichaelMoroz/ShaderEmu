@@ -51,6 +51,14 @@ in Blender by scripts in `world/`; furniture, plants and the main surfaces come 
   it fits, the build names those under it), cached by the mesh's shape in `build/unwrap`. Unity's
   charts of a mug were slivers. What follows (`b.chart`, `charted=True`) is written first and laid
   over by it; the files keep their names.
+- **A model made many times is one mesh** (6 November 2026, `b.instance(model, make)` in `world/lib.py`): made
+  once at the origin and linked into each copy, as Poly Haven's models are, so a part's FBX has it once and
+  Unity one mesh with a renderer for each copy, each its own place in the lightmap (`lightmapScaleOffset`).
+  The office chairs are: 12 in the classroom and 3 in the side rooms were 15 x 14,916 triangles, now one mesh a
+  part. Its weighted normals are put in the mesh (a modifier on each copy would make the copies apart in the
+  FBX); `make` draws no chances. The five parts no longer build in one run under a minute (the unwrap's
+  cache misses a dozen meshes at random, the tree before this too): `-- Room Computer Shell Furniture`, then
+  `WORLD_ADD=1 ... -- Annex`, which builds into the `world.blend` of before.
 - **A lightmap layout of its own.** Unity (and Bakery after it) lays out a model's place in the
   lightmap by cutting it wherever it bends, a chart a piece: a keyboard is a chart a key
   and more, each lit by its own few texels, and it shows as blotches and lines. An object made

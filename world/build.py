@@ -31,7 +31,13 @@ def main():
     args = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     wanted = args or list(PARTS)
     if bpy.app.background:
-        bpy.ops.wm.read_factory_settings(use_empty=True)
+        blend = os.path.abspath(os.path.join(HERE, "..", "build", "world.blend"))
+        if os.environ.get("WORLD_ADD") == "1" and os.path.exists(blend):
+            # the parts asked for built anew into the world.blend of before, the others kept: the five parts in two
+            # runs, each under a minute (the checks want them all in one file)
+            bpy.ops.wm.open_mainfile(filepath=blend)
+        else:
+            bpy.ops.wm.read_factory_settings(use_empty=True)
     os.makedirs(OUT, exist_ok=True)
     report = {}
     for name in wanted:

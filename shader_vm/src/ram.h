@@ -574,10 +574,26 @@ void ram_commit_amp_geom(point amp_d I[1], inout TriangleStream<ram_v2f> stream,
 }
 #endif
 
+#ifdef RAM_BOOT_FROM_ROM
+// The world keeps no image of RAM (AGENTS.md, 5 November 2026): at reset RAM is zeros but for
+// the kernel and its device tree, which a boot loader would put there, copied from the ROM's
+// texture past the root file system. Each is (its first texel of RAM from 0x80000000, its
+// texels, its first texel in the ROM's texture), set by EmuMachine.
+float4 _BootKernel, _BootTree;
+uint4 ram_boot_piece(uint lin, float4 piece) {
+    uint off = lin - (uint)piece.x, t = (uint)piece.z + off;
+    return off < (uint)piece.y ? asuint(_Data_ROM[uint2(t & 2047, t >> 11)]) : (uint4)0;
+}
+uint4 ram_init_texel(uint2 pos) {
+    uint lin = RAM_LIN(pos.x, pos.y - 64);
+    return ram_boot_piece(lin, _BootKernel) | ram_boot_piece(lin, _BootTree);
+}
+#else
 uint4 ram_init_texel(uint2 pos) {
     uint lin = RAM_LIN(pos.x, pos.y - 64);
     return asuint(_Data_RAM[uint2(lin & 2047, lin >> 11)]);   // (the start image as the ROM: a texel a pixel; past it, zeros)
 }
+#endif
 
 uint4 ram_commit_texel(ram_v2f i) {
     uint2 pos = (uint2)i.vertex.xy;

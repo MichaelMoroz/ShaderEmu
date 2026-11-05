@@ -153,7 +153,7 @@ def unwrap(objects):
             ob.data.uv_layers["UV2"].data.foreach_get("uv", uv)
             np.save(os.path.join(CACHE, keys[ob.data.name] + ".npy"), uv)
     print("UNWRAP %d meshes (%d from the cache), %d faces laid out: %d of them again by Smart UV Project"
-          % (len(meshes), len(meshes) - len(fresh), counts[0], counts[1]))
+          % (len(meshes), len(meshes) - len(fresh), counts[0], counts[1]) + (": new %s" % ", ".join(ob.data.name for ob in fresh) if fresh else ""))
 
 
 def _key(me):

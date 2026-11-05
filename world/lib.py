@@ -48,6 +48,9 @@ def plane_uv(points, normal):
     return [(Vector(p).dot(e1), Vector(p).dot(e2)) for p in points]
 
 
+_instances = {}   # model -> (its one mesh, its poses at the origin): Builder.instance
+
+
 class Builder:
     def __init__(self, seed=1):
         self.objects = {}      # name -> (bmesh, [material names])
@@ -58,6 +61,7 @@ class Builder:
         # apart, (object it joins, bmesh, [material names]), and boxes only the fall stands on (matrix, size)
         self.items, self.item, self.depth, self.walls = [], None, 0, []
         self.poses = []        # what things made here are and how they stand: see pose()
+        self.instances = []    # (model, matrix): copies of one mesh made once (see instance())
         self.random = random.Random(seed)
         # objects that bring their own place in the lightmap ("UV2"), a chart a surface: see chart()
         self.charted, self.chart_ids, self.chart_spec, self.fragment = set(), {}, None, 0
@@ -626,6 +630,51 @@ class Builder:
         self._emit(bm, mat, at, rot, normal)
 
     # ---- the scene
+    def instance(self, model, make, at=(0, 0, 0), rot=(0, 0, 0)):
+        """A copy of one mesh, made by make(builder) at the origin the first time `model` is asked for and
+        shared by every copy since (as Poly Haven's models are): one mesh in the FBX and in Unity, each copy a
+        renderer of its own with its own place in the lightmap. The model must come out the same every time:
+        make draws no chances, and what it says of its poses holds for each copy."""
+        if model not in _instances:
+            old = bpy.data.meshes.get(model)
+            if old is not None:   # (a world.blend of before's, WORLD_ADD in build.py: its copies keep it under another name)
+                old.name = model + " before"
+            sub = Builder()
+            sub.obj(model)
+            make(sub)
+            assert not sub.assets and not sub.items, model + ": an instance is made of the builder's own shapes"
+            bm, names = sub.objects[model]
+            for edge in bm.edges:   # (as finish smooths an object)
+                edge.smooth = len(edge.link_faces) != 2 or edge.calc_face_angle(0.0) < math.radians(38)
+            mesh = bpy.data.meshes.new(model)
+            bm.to_mesh(mesh)
+            bm.free()
+            for mat in names:
+                mesh.materials.append(blender_material(mat))
+            # its weighted normals put in the mesh once: a modifier on each copy would make the FBX's copies apart
+            temp = bpy.data.objects.new(model + " weighting", mesh)
+            bpy.context.scene.collection.objects.link(temp)
+            weighted = temp.modifiers.new("Weighted normals", 'WEIGHTED_NORMAL')
+            weighted.keep_sharp, weighted.weight = True, 100
+            graph = bpy.context.evaluated_depsgraph_get()
+            graph.update()   # (or the copy is read before the modifier has run: an empty mesh)
+            shared = bpy.data.meshes.new_from_object(temp.evaluated_get(graph), preserve_all_data_layers=True, depsgraph=graph)
+            assert len(shared.polygons) == len(mesh.polygons), model + ": the weighted copy lost faces"
+            shared.materials.clear()
+            for mat in names:   # (the copy's slots as the mesh's, which every object of it then has)
+                shared.materials.append(blender_material(mat))
+            index = [0] * len(mesh.polygons)   # (and each face's: clearing the slots set every face to the first)
+            mesh.polygons.foreach_get("material_index", index)
+            shared.polygons.foreach_set("material_index", index)
+            bpy.data.objects.remove(temp, do_unlink=True)
+            bpy.data.meshes.remove(mesh)
+            shared.name = model
+            _instances[model] = (shared, sub.poses)
+        world = self.stack[-1] @ place(at, rot)
+        self.instances.append((model, world))
+        for p in _instances[model][1]:
+            self.poses.append(dict(p, matrix=world @ p["matrix"]))
+
     def finish(self, collection_name):
         """Make Blender objects of everything built so far, in one collection."""
         collection = bpy.data.collections.new(collection_name)
@@ -647,11 +696,16 @@ class Builder:
                 spawned[-1]["spawned"] = [x for row in spawned[-1].matrix_world for x in row]
                 if loose:
                     falling.append(spawned[-1])
+        for index, (model, world) in enumerate(self.instances):
+            ob = bpy.data.objects.new("%s %s %d" % (model, collection_name, index), _instances[model][0])   # (the part's: two parts' copies lie in one world.blend)
+            ob.matrix_world = C @ world @ C.inverted()   # (the mesh was made in Unity's axes at the origin: C @ point)
+            collection.objects.link(ob)
+            made.append(ob)
         if self.items or falling:
             import settle
             for target, _, _ in self.items:
                 self.obj(target)
-            moves = settle.settle(collection_name, self.objects, self.items, [ob for ob in spawned if ob not in falling], falling, self.walls)
+            moves = settle.settle(collection_name, self.objects, self.items, [ob for ob in spawned if ob not in falling] + made, falling, self.walls)
             for (target, bm, names), move in zip(self.items, moves):
                 bmesh.ops.transform(bm, matrix=move, verts=bm.verts)
                 into, into_names = self.objects[target]
@@ -700,7 +754,7 @@ class Builder:
             made.append(ob)
             if hands:
                 made.extend(assets.spawn_hands(ob, asset, hands, collection))
-        self.objects, self.assets, self.items, self.walls, self.poses = {}, [], [], [], []
+        self.objects, self.assets, self.items, self.walls, self.poses, self.instances = {}, [], [], [], [], []
         self.was_charted, self.charted = self.charted, set()
         return made
 
