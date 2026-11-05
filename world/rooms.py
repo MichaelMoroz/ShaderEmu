@@ -541,18 +541,20 @@ def computer(b, number, at_xz, parts, rng):
     desk_boxes = [(tuple(here @ Vector(centre)), size, 180 - turn) for centre, size, _ in parts]
     wall_z = (here @ Vector((at[0], 0, Z0))).z                     # the far wall, behind the table, in the place's frame
     socket = (pc.TOWER_X + 0.14, 0.32 - TABLE_TOP, wall_z - 0.012)
+    def mains(x):
+        # a socket on the wall's own plane at place x (the place is turned off it a little: a plate in the place's frame stood 2 mm off the wall)
+        w = world @ Vector((x, socket[1], wall_z))
+        return tuple(here @ Vector((w.x, w.y, Z0))), (0, 180 - turn, 0)
     with b.at(at, (0, turn, 0)):
-        pc.station(b, "rest", lie, desk=desk_boxes, seed=index, stuck=random.Random(300 + index).randint(2, 4), lan=socket)
+        pc.station(b, "rest", lie, desk=desk_boxes, seed=index, stuck=random.Random(300 + index).randint(2, 4), lan=socket, mains=mains)
         # the network's socket in the wall: a white plate, its socket looking into the room
         b.obj("Room things")
         sx, sy, sz = socket
         b.box((sx, sy, wall_z - 0.006), (0.08, 0.08, 0.012), "TrimWhite", bevel=0.004, segs=2)
         with b.at((sx, sy, sz), (0, 180, 0)):
             pc.lan_socket(b, 0, 0, 0)
-        # and the mains socket beside it, where the strip's lead would reach from its floor box: a plain socket plate
-        # (on the wall's own plane: the place is turned off it a little, which put one edge of the plate 2 mm off the wall)
-        on_wall = here @ Vector(((world @ Vector((sx - 0.4, sy, wall_z))).x, (world @ Vector((sx - 0.4, sy, wall_z))).y, Z0))
-        with b.at(tuple(on_wall), (0, 180 - turn, 0)):
+        # and the mains socket the strip's lead is plugged into, left of the strip
+        with b.at(*pc.MAINS_AT[0]):
             wall_socket(b, 0, 0)
     pc.MODE = "full"
     return {"x": at[0], "z": at[2], "turn": turn, "keyboard": list(lie["keyboard"])}

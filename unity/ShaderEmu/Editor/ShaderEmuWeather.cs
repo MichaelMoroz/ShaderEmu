@@ -18,6 +18,18 @@ public static partial class ShaderEmuBuilder
     // windows and lamps, not lightning: City.shader, Sky.shader and Rain.shader keep those apart.
     const float Night = 1f / 3f;
 
+    // The fog over the city (HeightFog.cginc), one for the towers and the sky: thickest at the street
+    // (world/city.py: GROUND, 42 m under the window), thinning by e every 20 m up; its colour the
+    // haze's lit a little from below by the street lamps (a guess, by eye), and lightning's as the haze's.
+    static void HeightFog(Material m)
+    {
+        m.SetColor("_FogColour", new Color(0.24f, 0.17f, 0.14f) * Night);
+        m.SetColor("_FogFlash", new Color(0.040f, 0.036f, 0.048f));
+        m.SetFloat("_FogDensity", 0.025f);
+        m.SetFloat("_FogBase", WindowY - 42f);
+        m.SetFloat("_FogFalloff", 20f);
+    }
+
     // the window probe's picture as a flash of lightning of 1 lights the city (WindowProbe)
     const string LightningPath = Generated + "/Reflection probe window lightning.cubemap";
     // the room as the pane sees it, the panes put away: what a drop reflects (WindowProbe)
@@ -275,6 +287,7 @@ public static partial class ShaderEmuBuilder
         sky.SetFloat("_Exposure", 0.5f * Night);
         sky.SetFloat("_Cover", 0.8f);
         sky.SetFloat("_CityGlow", Night);   // (lightning in the clouds as it was)
+        HeightFog(sky);
         RenderSettings.skybox = sky;
 
         // ---- rain's sound at the window, thunder from over the city

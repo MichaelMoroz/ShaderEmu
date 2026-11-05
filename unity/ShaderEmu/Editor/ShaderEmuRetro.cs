@@ -717,6 +717,8 @@ public static partial class ShaderEmuBuilder
         return print;
     }
 
+    static readonly string[] ScopeSigns = { "MEMORY (writes glow)", "ROM (the disk)", "SOUND (left, right)", "VRAM (textures, frame buffer, draw IDs)" };
+
     static void TapeLook(Canvas canvas, TMP_FontAsset bold, HashSet<Object> changing)
     {
         Color tape = new Color(0.06f, 0.06f, 0.07f), raised = new Color(0.95f, 0.95f, 0.92f);
@@ -733,7 +735,11 @@ public static partial class ShaderEmuBuilder
             if (whole) continue;
             Image strip = Behind(label.rectTransform, "Tape of " + label.name, 0f, null, tape);
             RectTransform rect = strip.rectTransform;
-            float wide = Mathf.Min(label.rectTransform.sizeDelta.x, label.preferredWidth + 70f);
+            // the memory screen's sign is changed by the scope (EmuScope.Show): its tape is as long as the longest name
+            float text = label.preferredWidth;
+            if (label.name == "Memory")
+                foreach (string name in ScopeSigns) text = Mathf.Max(text, label.GetPreferredValues(name).x);
+            float wide = Mathf.Min(label.rectTransform.sizeDelta.x, text + 70f);
             rect.anchoredPosition += new Vector2((label.rectTransform.sizeDelta.x - wide) / 2f, 0);
             rect.sizeDelta = new Vector2(wide, label.rectTransform.sizeDelta.y);
             still.Add(strip);

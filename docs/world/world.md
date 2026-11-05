@@ -187,7 +187,7 @@ after a build of all five parts (one build call: each starts empty), each well u
 
 A thing's material is its kind's (`Plastic`, `Metal`, the scans), and what use has left on it
 is laid over that in Unity: `world/wear.py` makes layers (a grain of a VDI 3400 grade or a rolled
-finish, scratches, fingerprints, dust, mugs' rings), each in metres of the surface with its source
+finish, scratches, fingerprints, dust), each in metres of the surface with its source
 or "a guess" beside it, and mixes them by a recipe a material (`RECIPES`) into a detail set,
 `Wear<NAME>.png` (colour), `_r` (roughness), `_n` (normal), listed in `Wear.txt`. Unity
 (`ShaderEmuModels.cs`, `Detail`) puts a material's set in Mochie's detail slot, laid by where a
@@ -196,7 +196,8 @@ no coordinates of the model's. A thing that wants its own use has a material of 
 its recipe (the floppies' `FloppyShell` and `FloppyShutter`, the side rooms' desks' `DeskWalnut`),
 the same base as before. `python world/wear.py` (and `textures.py`, which calls it) writes them.
 What lies on a thing by its shape (worn edges, dust in corners) is not yet in it: that needs a
-mask a thing, baked from its shape.
+mask a thing, baked from its shape; so are mugs' rings, which a triplanar set put on a desk's
+edges and sides too (tried and given up, 5 November 2026).
 
 ## The shell
 
@@ -358,6 +359,11 @@ lightmap, which shows a line wherever two pieces of a wall meet and at every cor
 - Rain is sheets of scrolling streaks at four distances (`Rain` in `world/city.py`,
   `Rain.shader`), and haze that hides the far towers (a vertex's alpha, 480 m).
 - The sky is `Sky.shader`: the panorama under a layer of cloud that drifts.
+- Fog lies over the streets and thins with height (`HeightFog.cginc`, in `City.shader` and
+  `Sky.shader`; `HeightFog` in `ShaderEmuWeather.cs` sets both alike, 5 November 2026): a density
+  of 0.025 a metre at the street that falls by e every 20 m up, summed along the eye's ray in
+  closed form in each fragment, no depth texture; the sky is the ray's end at infinity, so the
+  horizon is all fog and the towers stand into it.
 - `EmuWeather` strikes lightning every 30 to 80 s: the global `_UdonWeatherFlash` lights the
   sky, the city and the rain, and thunder follows after the time its distance takes.
 - Sound is two sources by the window: the rain's loop, and thunder. Check them by

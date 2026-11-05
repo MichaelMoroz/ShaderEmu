@@ -341,6 +341,7 @@ public static partial class ShaderEmuBuilder
             m.SetFloat("_Dark", city == "CityStreet" ? 0.8f : 0.6f);
             m.SetFloat("_Night", Night);
             m.SetFloat("_Bright", city == "CityStreet" ? 3f : 5f);
+            HeightFog(m);
             made[city] = m;
         }
         AssetMaterials(made);
@@ -417,7 +418,8 @@ public static partial class ShaderEmuBuilder
     const float BakeTexels = 20f;   // Bakery's texels a metre (its settings' Texels per unit), before a renderer's scale
     const float TinyChart = 9f;     // texels: a chart under 3 x 3 holds no light of its own
     const float TinyShare = 0.3f;   // of a model's surface in such charts: lit by the volume instead
-    static readonly List<string> probeLitByCharts = new List<string>();
+    const float MostScale = 8f;     // the most a model's lightmap is made larger for its small charts
+    static readonly List<string> probeLitByCharts = new List<string>(), moreLightmap = new List<string>();
 
     // The share of a mesh's surface whose lightmap chart (the triangles joined by shared vertices
     // in its second coordinates, as Unity's unwrap and ours split them) is under TinyChart texels.
@@ -454,6 +456,7 @@ public static partial class ShaderEmuBuilder
     static void Remodel(Transform world)
     {
         probeLitByCharts.Clear();
+        moreLightmap.Clear();
         Dictionary<string, Material> materials = ModelMaterials();
         Transform room = world.Find("Room"), decor = world.Find("Decor"), computer = world.Find("Computer");
         Transform oldCity = decor.Find("City");
@@ -521,19 +524,27 @@ public static partial class ShaderEmuBuilder
                 // the bake, and throws its shadow, but is lit by the room's volume: its own
                 // lightmap came out specked.
                 bool plant = go.name.StartsWith("pachira") || go.name.StartsWith("potted_plant");
-                // What lies about (a die, a can, a tape, a magazine) is smaller than the bake's texel
-                // (20 a metre): its few texels took the dark under it or of a neighbour, a die's face
-                // half black. It throws its shadow into the bake and is lit by the volume, as a plant is.
-                if (go.name.EndsWith(" things") && go.name != "Wall things") plant = true;
-                // And so is a model whose lightmap is mostly charts too small to hold light: a share of
-                // its surface in charts under TinyChart texels (a lightmap's seams at every chart's edge, its
-                // texels the dark of what is under or beside them).
+                // A model whose lightmap is mostly charts too small to hold light (a die, a can, a tape: a share
+                // of its surface in charts under TinyChart texels, each chart's texels the dark of what is under or
+                // beside it) is given more lightmap, doubled up to MostScale times; only one that is still mostly
+                // such charts there is lit by the volume, whose light is coarser and casts no shadow of its own.
                 MeshFilter filter = go.GetComponent<MeshFilter>();
-                float tiny = filter != null ? TinyChartShare(filter.sharedMesh, go.transform, BakeTexels * renderer.scaleInLightmap) : 0f;
-                if (!plant && tiny > TinyShare)
+                if (!plant && filter != null)
                 {
-                    plant = true;
-                    probeLitByCharts.Add(go.name + string.Format(" ({0:0}% in charts under {1} texels)", tiny * 100f, TinyChart));
+                    float scale = renderer.scaleInLightmap, tiny = TinyChartShare(filter.sharedMesh, go.transform, BakeTexels * scale);
+                    while (tiny > TinyShare && scale < LightmapScale(go.name) * MostScale)
+                    {
+                        scale *= 2f;
+                        tiny = TinyChartShare(filter.sharedMesh, go.transform, BakeTexels * scale);
+                    }
+                    if (scale != renderer.scaleInLightmap)
+                        moreLightmap.Add(go.name + string.Format(" (x{0:0.#})", scale / renderer.scaleInLightmap));
+                    renderer.scaleInLightmap = scale;
+                    if (tiny > TinyShare)
+                    {
+                        plant = true;
+                        probeLitByCharts.Add(go.name + string.Format(" ({0:0}% in charts under {1} texels)", tiny * 100f, TinyChart));
+                    }
                 }
 #if BAKERY_INCLUDED
                 if (plant) renderer.receiveGI = ReceiveGI.LightProbes;   // Bakery lays out a lightmap of its own for the rest
@@ -543,6 +554,7 @@ public static partial class ShaderEmuBuilder
             }
         }
 
+        Debug.Log("[ShaderEmu] more lightmap for their small charts: " + (moreLightmap.Count == 0 ? "none" : string.Join(", ", moreLightmap)));
         Debug.Log("[ShaderEmu] lit by the volume for their tiny lightmap charts: " + (probeLitByCharts.Count == 0 ? "none" : string.Join(", ", probeLitByCharts)));
         if (decor.Find("Desk lamp light") == null)
             BakedLight(decor, "Desk lamp light", new Vector3(-3.3f, 1.25f, 5.1f), new Color(1f, 0.78f, 0.5f), 1f, 2.5f);
