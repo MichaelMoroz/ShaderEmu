@@ -365,8 +365,8 @@ public static partial class ShaderEmuBuilder
         gpuBlitMat.SetTexture("_AmpRank", machine.rankTexture);
         machine.vram = Vram();
         gpuBlitMat.SetTexture("_GpuVram", machine.vram);
-        machine.claims = Claims();
-        gpuBlitMat.SetTexture("_GpuClaims", machine.claims);
+        machine.drawIds = DrawIds();
+        gpuBlitMat.SetTexture("_GpuDrawIds", machine.drawIds);
         machine.gatherBlitMaterial = gatherBlitMat;
         machine.pointsBlitMaterial = pointsBlitMat;
         machine.gpuBlitMaterial = gpuBlitMat;
@@ -799,11 +799,11 @@ public static partial class ShaderEmuBuilder
         return rt;
     }
 
-    // The GPU's claims (docs/machine/gpu.md, "Claims"): a texel each of the mesh's 196,608 vertices, its command's texel and
+    // The GPU's draw IDs (docs/machine/gpu.md, "Draw IDs"): a texel each of the mesh's 196,608 vertices, its command's texel and
     // the passes it is drawn in, two 32-bit integers (signed in Unity, read by their bits), loaded by texel, no levels.
-    static RenderTexture Claims()
+    static RenderTexture DrawIds()
     {
-        RenderTexture rt = LoadOrCreate(Generated + "/GpuClaims.renderTexture",
+        RenderTexture rt = LoadOrCreate(Generated + "/GpuDrawIds.renderTexture",
             () => new RenderTexture(512, 384, 0, RenderTextureFormat.RGInt, RenderTextureReadWrite.Linear));
         rt.Release();
         rt.width = 512;

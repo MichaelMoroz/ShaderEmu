@@ -473,40 +473,40 @@ atlas's, in GPU memory, and its corridor's textures are near).
 | 6 from the VRAM, its light map too (8) | 0.062 |
 
 A texture from the VRAM costs what a colour does; what is left, 0.055 ms, is the vertex shader's: every pass runs all
-196,608 vertices, each finding its command by a binary search (until the claims, next).
+196,608 vertices, each finding its command by a binary search (until the draw IDs, next).
 
-## Claims
+## Draw IDs
 
 Every pass draws all 196,608 vertices of the mesh, and each had to find the command that claims it, a binary search of
 up to twelve loads of the list, and then that command's pass: 13 times a frame for every vertex (the upload pass and the
-12 passes), drawn or not. Now the host draws a pass of its own first, every frame a list is drawn (GPUClaims,
-`gpu_claims_fragment` in `shader_vm/src/gpu.h`): a fragment a vertex into a 512 x 384 texture of two words (R32G32_UINT,
-`_GpuClaims`), the texel of the vertex's command and the passes it is drawn in (bit p for pass p, bit 16 the upload pass;
+12 passes), drawn or not. Now the host draws a pass of its own first, every frame a list is drawn (GPUDrawIds,
+`gpu_draw_ids_fragment` in `shader_vm/src/gpu.h`): a fragment a vertex into a 512 x 384 texture of two words (R32G32_UINT,
+`_GpuDrawIds`), the texel of the vertex's command and the passes it is drawn in (bit p for pass p, bit 16 the upload pass;
 a sprite's by its kind, a shade in pass 2; nothing but its uploads for a list that waits, `SUBMIT_WAITS`). Every later
-pass reads its vertex's texel and goes on only where its pass's bit is set (`gpu_command` under `GPU_CLAIMS`); a
+pass reads its vertex's texel and goes on only where its pass's bit is set (`gpu_command` under `GPU_DRAW_IDS`); a
 triangle of the blits' geometry shader takes it whole when its first and last vertices name one command.
 
-`--define GPU_NO_CLAIMS` is the search of before (the D3D12 backend and Unity have it still). `--define GPU_CLAIMS_CHECK`
+`--define GPU_NO_DRAW_IDS` is the search of before (the D3D12 backend and Unity have it still). `--define GPU_DRAW_IDS_CHECK`
 answers each vertex both ways and makes one that they disagree on a corner of a magenta triangle over the whole target:
 0 magenta pixels on gpubench 9, three held frames of Quake's timedemo and OpenTTD's sprites scrolled 150 s; one triangle
 answered wrong on purpose covers the picture.
 
-The GPU's draw (`RVC_PASS_PROF=1`, "gpu draw", the claims pass in it), RTX 3090, 5 November 2026, the mean of two 8 s runs
+The GPU's draw (`RVC_PASS_PROF=1`, "gpu draw", the draw-ID pass in it), RTX 3090, 5 November 2026, the mean of two 8 s runs
 each way:
 
-| gpubench mode | the search | the claims |
+| gpubench mode | the search | the draw IDs |
 |---|---|---|
 | 3,600 rectangles, a command each, passes 0 to 2 (9) | 0.142 ms | 0.122 ms |
 | words, four texels (2) | 0.299 | 0.278 |
 | compact quads from the VRAM, a light map (8) | 0.170 | 0.149 |
 
 0.020 ms a frame whatever the list: the search was that much of every pass. What is left is not the vertices' search; a
-vertex the pass does not draw still costs its load of the claims and its invocation, 13 x 196,608 a frame.
+vertex the pass does not draw still costs its load of the draw IDs and its invocation, 13 x 196,608 a frame.
 
 ## Cost
 
 The graphics card rasterises, so cost follows covered pixels, not pixels times triangles. The vertex
-shader runs for all 196,608 mesh vertices in every pass, most of which exit after reading their texel of the claims. The
+shader runs for all 196,608 mesh vertices in every pass, most of which exit after reading their texel of the draw IDs. The
 devices' passes on the card are in the next section and in `tick-costs.md`, "What a pass is made of".
 
 In D3D12 the state texture must be in the non-pixel-shader-resource state as well as the

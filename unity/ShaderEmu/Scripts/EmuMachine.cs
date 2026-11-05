@@ -47,7 +47,7 @@ public class EmuMachine : UdonSharpBehaviour
     public Material pointsBlitMaterial;     // the same shader, its pass 1: the RAM commit into the state
     public Material gpuBlitMaterial;        // GpuDrawBlit.shader: the depth cleared (pass 8), then the GPU's 12 passes
     public RenderTexture vram;              // 4096 x 4096 RGBA8 with mip levels: textures the guest uploaded (GpuDrawBlit's pass 13)
-    public RenderTexture claims;            // 512 x 384 RGInt: each mesh vertex's command and passes (GpuDrawBlit's pass 14)
+    public RenderTexture drawIds;            // 512 x 384 RGInt: each mesh vertex's command and passes (GpuDrawBlit's pass 14)
     public Material orderMaterial;          // BlitOrder.shader
     public RenderTexture orderTexture;      // 81 x 81: its pass 0's
     public RenderTexture rankTexture;       // 81 x 1: each point's place, which the blits' calls go by (_AmpRank)
@@ -1341,8 +1341,8 @@ public class EmuMachine : UdonSharpBehaviour
         {
             RenderTexture target = gpuCamera.targetTexture;
             gpuBlitMaterial.SetTexture("_State", state);
-            // each vertex's command and passes, found once for the uploads and the 12 passes (docs/machine/gpu.md, "Claims")
-            if (claims != null) VRCGraphics.Blit(blackTexture, claims, gpuBlitMaterial, 14);
+            // each vertex's command and passes, found once for the uploads and the 12 passes (docs/machine/gpu.md, "Draw IDs")
+            if (drawIds != null) VRCGraphics.Blit(blackTexture, drawIds, gpuBlitMaterial, 14);
             if (vram != null)
             {
                 // the list's uploads into level 0, then its levels when asked (the list waits for them)

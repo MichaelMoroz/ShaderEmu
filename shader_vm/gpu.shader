@@ -51,8 +51,8 @@ Shader "ShaderEmu/gpu"
             #define GPU_EDGE   // the clear cut at the picture's edge (gpu_varyings; --define GPU_NO_EDGE: drawn past it)
             #endif
             #define GPU_VRAM   // textures uploaded into the VRAM (docs/machine/gpu.md, "VRAM")
-            #ifndef GPU_NO_CLAIMS
-            #define GPU_CLAIMS   // each vertex's command from the claims pass (docs/machine/gpu.md, "Claims")
+            #ifndef GPU_NO_DRAW_IDS
+            #define GPU_DRAW_IDS   // each vertex's command from the draw-ID pass (docs/machine/gpu.md, "Draw IDs")
             #endif
             #include "src/gpu.h"
 
@@ -83,8 +83,8 @@ Shader "ShaderEmu/gpu"
             #define GPU_ROM
             #define GPU_STATE _State
             #define GPU_UPLOAD_PASS
-            #ifndef GPU_NO_CLAIMS
-            #define GPU_CLAIMS
+            #ifndef GPU_NO_DRAW_IDS
+            #define GPU_DRAW_IDS
             #endif
             #include "src/gpu.h"
 
@@ -99,9 +99,9 @@ Shader "ShaderEmu/gpu"
 
         Pass
         {
-            // Each mesh vertex's command and passes (gpu_claims_fragment), a texel each of a GPU_CLAIMS_W x GPU_CLAIMS_H
+            // Each mesh vertex's command and passes (gpu_draw_ids_fragment), a texel each of a GPU_DRAW_IDS_W x GPU_DRAW_IDS_H
             // R32G32_UINT target, drawn first every frame a list is drawn: the upload pass and the GPUDraw passes read it.
-            Name "GPUClaims"
+            Name "GPUDrawIds"
             ZTest Off
             ZWrite Off
 
@@ -113,7 +113,7 @@ Shader "ShaderEmu/gpu"
             Texture2D<uint4> _State;
             uniform uint _GpuPasses;
             #define GPU_STATE _State
-            #define GPU_CLAIMS_PASS
+            #define GPU_DRAW_IDS_PASS
             #include "src/gpu.h"
 
             // one triangle over the target
@@ -122,7 +122,7 @@ Shader "ShaderEmu/gpu"
             }
             uint2 frag(float4 p : SV_Position) : SV_Target {
                 uint2 at = uint2(p.xy);
-                return gpu_claims_fragment(at.y * GPU_CLAIMS_W + at.x);
+                return gpu_draw_ids_fragment(at.y * GPU_DRAW_IDS_W + at.x);
             }
             ENDCG
         }

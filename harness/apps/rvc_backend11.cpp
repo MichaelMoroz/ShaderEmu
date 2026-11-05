@@ -124,7 +124,7 @@ public:
             if (d.first == "RAM_BUFFER") csBuffer_ = true;
         if (getenv("RVC11_COMPUTE") && !buildComputeTick(shader, bo, err)) return false;
         std::string gpuErr;
-        if (opt.gpuShader && (!buildPasses(gpu_, *opt.gpuShader, {"GPUDraw", "GPUControl", "GPUUpload", "GPUClaims"}, bo, gpuPasses_, gpuErr) ||
+        if (opt.gpuShader && (!buildPasses(gpu_, *opt.gpuShader, {"GPUDraw", "GPUControl", "GPUUpload", "GPUDrawIds"}, bo, gpuPasses_, gpuErr) ||
                               !createGpuTarget(gpuErr))) {
             fprintf(stderr, "[harness] GPU device disabled: %s\n", gpuErr.c_str());
             gpuPasses_.clear();
@@ -766,19 +766,19 @@ private:
             err = "VRAM: " + hrToString(hr);
             return false;
         }
-        // the claims (shader_vm/src/gpu.h, "claims"): a mesh vertex's command and passes, a texel each
+        // the draw IDs (shader_vm/src/gpu.h, "draw IDs"): a mesh vertex's command and passes, a texel each
         D3D11_TEXTURE2D_DESC cd{};
-        cd.Width = kClaimsW;
-        cd.Height = kClaimsH;
+        cd.Width = kDrawIdsW;
+        cd.Height = kDrawIdsH;
         cd.MipLevels = cd.ArraySize = 1;
         cd.Format = DXGI_FORMAT_R32G32_UINT;
         cd.SampleDesc.Count = 1;
         cd.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
-        hr = gpu_.device->CreateTexture2D(&cd, nullptr, &claims_);
-        if (SUCCEEDED(hr)) hr = gpu_.device->CreateRenderTargetView(claims_.Get(), nullptr, &claimsRtv_);
-        if (SUCCEEDED(hr)) hr = gpu_.device->CreateShaderResourceView(claims_.Get(), nullptr, &claimsSrv_);
+        hr = gpu_.device->CreateTexture2D(&cd, nullptr, &drawIds_);
+        if (SUCCEEDED(hr)) hr = gpu_.device->CreateRenderTargetView(drawIds_.Get(), nullptr, &drawIdsRtv_);
+        if (SUCCEEDED(hr)) hr = gpu_.device->CreateShaderResourceView(drawIds_.Get(), nullptr, &drawIdsSrv_);
         if (FAILED(hr)) {
-            err = "claims: " + hrToString(hr);
+            err = "draw IDs: " + hrToString(hr);
             return false;
         }
         const float black[4] = {0, 0, 0, 1}, none[4] = {0, 0, 0, 0};
@@ -789,12 +789,12 @@ private:
 
     // The list's uploads into the VRAM's level 0 (GPUUpload), every frame a list is drawn; its mip levels made anew with
     // `mips`, on a frame whose passes word has GPU_UPLOADED, which a list with SUBMIT_UPLOADS waits for.
-    // Each mesh vertex's command and passes (GPUClaims), from the state the passes after it draw from.
-    void gpuClaims(Material& mat) {
+    // Each mesh vertex's command and passes (GPUDrawIds), from the state the passes after it draw from.
+    void gpuDrawIds(Material& mat) {
         ID3D11DeviceContext* ctx = gpu_.ctx.Get();
         GpuPass& pass = gpuPasses_[3];
-        ctx->OMSetRenderTargets(1, claimsRtv_.GetAddressOf(), nullptr);
-        D3D11_VIEWPORT vp{0, 0, (float)kClaimsW, (float)kClaimsH, 0, 1};
+        ctx->OMSetRenderTargets(1, drawIdsRtv_.GetAddressOf(), nullptr);
+        D3D11_VIEWPORT vp{0, 0, (float)kDrawIdsW, (float)kDrawIdsH, 0, 1};
         ctx->RSSetViewports(1, &vp);
         ctx->RSSetState(gpu_.rasterNoCull.Get());
         ctx->IASetInputLayout(nullptr);
@@ -844,8 +844,8 @@ private:
         static const char* blitsOnly = getenv("RVC_BLITS");
         bool amp = !gpuAmp_.empty() && (!blitsOnly || strstr(blitsOnly, "gpu") != nullptr);
         if (gpuPasses_.size() > 3) {
-            gpuClaims(mat);
-            mat.setTexture("_GpuClaims", claimsSrv_.Get(), kClaimsW, kClaimsH);
+            gpuDrawIds(mat);
+            mat.setTexture("_GpuDrawIds", drawIdsSrv_.Get(), kDrawIdsW, kDrawIdsH);
         }
         if (gpuPasses_.size() > 2) gpuUpload(mat, (gpuPasses & 0x10000u) != 0);   // (the levels made on GPU_UPLOADED)
         mat.setTexture("_GpuVram", vramSrv_.Get(), kVramSide, kVramSide);
@@ -1473,10 +1473,10 @@ private:
     ComPtr<ID3D11Texture2D> vram_;
     ComPtr<ID3D11RenderTargetView> vramRtv_;
     ComPtr<ID3D11ShaderResourceView> vramSrv_;
-    static const UINT kClaimsW = 512, kClaimsH = 384;   // GPU_CLAIMS_W, GPU_CLAIMS_H
-    ComPtr<ID3D11Texture2D> claims_;
-    ComPtr<ID3D11RenderTargetView> claimsRtv_;
-    ComPtr<ID3D11ShaderResourceView> claimsSrv_;
+    static const UINT kDrawIdsW = 512, kDrawIdsH = 384;   // GPU_DRAW_IDS_W, GPU_DRAW_IDS_H
+    ComPtr<ID3D11Texture2D> drawIds_;
+    ComPtr<ID3D11RenderTargetView> drawIdsRtv_;
+    ComPtr<ID3D11ShaderResourceView> drawIdsSrv_;
     bool vramUsed_ = false;   // something was uploaded: a snapshot keeps the VRAM
     ComPtr<ID3D11DepthStencilState> gpuDepthState_[3];
     ComPtr<ID3D11BlendState> gpuBlend_[kGpuBlendings];

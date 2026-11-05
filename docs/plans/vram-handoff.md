@@ -46,25 +46,25 @@ how it was checked, and what is left, in the order it is worth doing.
 ## Left, in order
 
 1. **Unity**, still not run (no editor reachable from these sessions): run "Sync shader sources", rebuild the world
-   (`ShaderEmuBuilder`, which now makes `GpuClaims.renderTexture` too), compile every shader (`tools/unity_fxc.py` compiles
+   (`ShaderEmuBuilder`, which now makes `GpuDrawIds.renderTexture` too), compile every shader (`tools/unity_fxc.py` compiles
    the GPU's outside the editor), play Doom, Quake, Half-Life and ClassiCube in the Game view and compare with the harness.
    Check the holodeck and the volume display read `_GpuVram` (a seated Quake). Then the profile of every device in Unity
-   (`docs/machine/multicore.md`, "In Unity"): the ticks, commit, GPU passes, claims and upload passes, sound, room, by
+   (`docs/machine/multicore.md`, "In Unity"): the ticks, commit, GPU passes, draw IDs and upload passes, sound, room, by
    `totalInstructions` and the frame's GPU time.
-2. **The vertex cost.** Done in the harness (5 November 2026, `docs/machine/gpu.md`, "Claims"): a claims pass finds every
+2. **The vertex cost.** Done in the harness (5 November 2026, `docs/machine/gpu.md`, "Draw IDs"): a draw-ID pass finds every
    vertex's command and passes once a frame, and the upload pass and the 12 passes read one texel a vertex in place of the
-   search. Checked by `GPU_CLAIMS_CHECK` (Quake, OpenTTD, gpubench 9, the blits). On the RTX 3090 it is 0.020 ms a frame
+   search. Checked by `GPU_DRAW_IDS_CHECK` (Quake, OpenTTD, gpubench 9, the blits). On the RTX 3090 it is 0.020 ms a frame
    of the GPU's draw in every gpubench mode (9: 0.142 to 0.122 ms, 2: 0.299 to 0.278, 8: 0.170 to 0.149): not the 3x
    hoped for, as what is left is 13 x 196,608 vertex invocations a frame that each load their claim and stop. The next
    cut is fewer invocations: a draw of only the list's vertices (its last command's end), which the host does not know
    without a readback a frame late, or the passes' draws limited by an indirect count (not in VRChat). **Unity** is wired,
-   not run: `GpuDrawBlit.shader`'s pass 14 `GPUClaims` blitted by `EmuMachine.GpuDraw` into `claims`
-   (`GpuClaims.renderTexture`, 512 x 384 RGInt, `ShaderEmuBuilder.Claims()`) before the uploads, and `GPU_CLAIMS` with
-   `GPU_CLAIMS_TEXEL int2` in the blit passes (`GpuDrawPass.cginc`); the camera's mesh (`GpuDraw.shader`), the volume and
-   the holodeck's HUD keep the search. `python tools/unity_fxc.py GpuDrawBlit.shader GPUClaims GPUUpload GPU0` compiles
+   not run: `GpuDrawBlit.shader`'s pass 14 `GPUDrawIds` blitted by `EmuMachine.GpuDraw` into `drawIds`
+   (`GpuDrawIds.renderTexture`, 512 x 384 RGInt, `ShaderEmuBuilder.DrawIds()`) before the uploads, and `GPU_DRAW_IDS` with
+   `GPU_DRAW_IDS_TEXEL int2` in the blit passes (`GpuDrawPass.cginc`); the camera's mesh (`GpuDraw.shader`), the volume and
+   the holodeck's HUD keep the search. `python tools/unity_fxc.py GpuDrawBlit.shader GPUDrawIds GPUUpload GPU0` compiles
    them with the editor's fxc2 outside the editor: all of GpuDrawBlit's, GpuDraw's, GpuVolume's and GpuHolodeckHud's
    passes tried compile. Rebuild the world for the new texture. A float VRAM of transformed vertices
-   was the first plan; with the claims a vertex is transformed once a frame already (in its own pass), so it would save
+   was the first plan; with the draw IDs a vertex is transformed once a frame already (in its own pass), so it would save
    only the passes' few loads of a drawn vertex and cost 96 bytes a vertex written and read: not done.
 3. **Other games into the VRAM.** Done (5 November 2026; `docs/machine/gpu.md`, "VRAM", has the table): Quake's light
    maps (`QUAKE_VRAM_LIGHT=0`), Quake III (`QUAKE3_VRAM=0`), Half-Life and Jedi Outcast through the shim
@@ -110,8 +110,8 @@ how it was checked, and what is left, in the order it is worth doing.
 
 ## Merging
 
-- `shader_vm/src/gpu.h` here splits `gpu_command` into `gpu_owner`, `gpu_command_search` and the claims, and adds the
-  claims pass, the plain slot's key and `gpu_claim`. The Jedi Outcast session's uncommitted `VERTEX_ARRAYS` (0x100000,
+- `shader_vm/src/gpu.h` here splits `gpu_command` into `gpu_owner`, `gpu_command_search` and the draw IDs, and adds the
+  draw-ID pass, the plain slot's key and `gpu_claim`. The Jedi Outcast session's uncommitted `VERTEX_ARRAYS` (0x100000,
   `gpu_arrays_vertex`, a branch before `VERTEX_COMPACT` in `gpu_vertex_sized`) in the main checkout touches the vertex
-  stage beside it: when the two meet, a new vertex mode needs no change to the claims (a command's vertices and pass are
-  what the claims hold), but run `GPU_CLAIMS_CHECK` on a game that uses it.
+  stage beside it: when the two meet, a new vertex mode needs no change to the draw IDs (a command's vertices and pass are
+  what the draw IDs hold), but run `GPU_DRAW_IDS_CHECK` on a game that uses it.

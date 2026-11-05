@@ -1,7 +1,7 @@
 """Compile passes of the world's Unity shaders outside the editor, with the compiler the editor has (fxc2's
 d3dcompiler_47.dll), to see that a change to shader_vm/src or unity/ShaderEmu/Shaders compiles before the editor does.
 
-    python tools/unity_fxc.py SHADER PASS [PASS ...]      e.g. GpuDrawBlit.shader GPUClaims GPU0
+    python tools/unity_fxc.py SHADER PASS [PASS ...]      e.g. GpuDrawBlit.shader GPUDrawIds GPU0
 
 The shaders are copied into a scratch folder with src/*.cginc made from shader_vm/src/*.h as "ShaderEmu/Sync shader
 sources from the repository" makes them, and Unity's CGIncludes (the newest editor under Unity Hub, or UNITY_CGINCLUDES),
