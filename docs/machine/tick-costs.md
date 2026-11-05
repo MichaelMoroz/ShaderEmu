@@ -886,6 +886,15 @@ More on the tree with M first (Quake, Tiberian Dawn, shell, against a copy of it
 | The same for arithmetic's only (t4x) | +1.3%, +0.25% | -2.4%, -2.7% | +0.9%, +0.7% | the shell pays: not taken |
 | The same, the fetch's state moved on with it and the texel after read ahead | +0.8% | -1.3% | +1.5% | lost |
 
+**The four kept changes together** against `62c2cd86`'s tick, in one run (the tick alone swapped, the device's files the
+merged tree's for both):
+
+| Load | Before | After | |
+|---|---|---|---|
+| Tiberian Dawn | 1.4404 | 1.3495 | -6.3% a tick (6.7% more instructions a second) |
+| Shell loop | 1.6365 | 1.6267 | -0.6% |
+| Quake, e1m1 | 1.7582 | 1.7521 | -0.35% |
+
 **What was learnt.** Nothing of the fast loop's shape gave more than 1% on every load: f2 + fp1 (+ ffma) about 1%, at the
 noise's edge; the kept fusion 2% of Tiberian Dawn, a little of the shell, level on Quake. fp1 changes what fdiv makes (the card's quotient, which `rvc_cpu` does not make: a model of the card's
 division is owed first), and ffma's `mad` is fused where the general step rounds twice: neither is in the tree. The ways
