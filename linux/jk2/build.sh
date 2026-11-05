@@ -43,6 +43,21 @@ else
     LIBS="-lm ${JK2_LINK:-}"
     BUILD=$WORK/src/jk2-build
     OUT=${JK2_OUT:-$REPO/build/jk2/out}
+    # What a played walk ran, for the compiler (linux/userland/pgo/gcov.c; docs/games/tdawn.md, "What the compiler is
+    # told"; docs/games/jk2.md, "Played counts"): JK2_PROFILE=count builds the program that counts, in a folder of its own
+    # (its counts written to stderr at SIGUSR2 or the end); otherwise jk2.profile's counts, JK2_PROFILE=off without
+    if [ "${JK2_PROFILE:-}" = count ]; then
+        BUILD=$WORK/src/jk2-count-build
+        mkdir -p "$BUILD" "$WORK/src/nogcov" && "$CXXTC/bin/$T-ar" rc "$WORK/src/nogcov/libgcov.a"
+        $CC -O2 -D__thread= -DGCOV_ONCE -w -c "$REPO/linux/userland/pgo/gcov.c" -o "$BUILD/gcov.o"
+        OPT="$OPT -fprofile-generate -fprofile-update=single"
+        LIBS="$LIBS -L$WORK/src/nogcov $BUILD/gcov.o"
+    elif [ -f "$HERE/jk2.profile" ] && [ "${JK2_PROFILE:-}" != off ]; then
+        mkdir -p "$BUILD"
+        python3 "$REPO/linux/tdawn/profile.py" put "$HERE/jk2.profile" "$BUILD"
+        # (the counts' sum in the flags: make knows nothing of the .gcda files, and a part whose flags change is built again)
+        OPT="$OPT -fprofile-use -fprofile-partial-training -fprofile-correction -Wno-missing-profile -Wno-coverage-mismatch -DSE_COUNTS=$(sha1sum "$HERE/jk2.profile" | cut -c1-12)"
+    fi
 fi
 SRC=${JK2_SRC:-$WORK/src/openjk}
 mkdir -p "$WORK/src" "$BUILD"

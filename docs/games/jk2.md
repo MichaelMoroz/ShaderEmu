@@ -1368,6 +1368,16 @@ worker reaches the client game's effects (one module), and `RVC_RACES` had it ad
 (2 undone); an effect it plays is now made by core 0, the worker waiting (`jk2ServerOnCore0`), as its registrations are:
 `RVC_RACES` the inflate's 1 again.
 
+**Played counts** (`linux/jk2/jk2.profile`, the build's `-fprofile-use`; `JK2_PROFILE=off` without, `JK2_PROFILE=count` the
+counting program in `jk2-count-build`): the counts of a played march and walk (frames 1,250 to 1,700, `JK2_SPLIT=worker`, on
+`rvc_cpu`), made by the counting program run in the foreground with its stderr to a file: `JK2_COUNTS_AT_MARK=1` raises
+SIGUSR2 at the mark's end (the game's quit ends the program without its exit's handlers), then the file is packed and
+carried over the console in base64, and `python3 linux/tdawn/profile.py make linux/jk2/jk2.profile FILE`. `gcov.c` lists
+the files it was given in a table: the game's module is made fresh at each load and gave its infos again with their links
+reset. On one game (the same sums) the walk 192.38 to 184.16 passes a frame, the march 314.07 to 294.46. A function not
+public is known by a sum with its source's path in it: the counts were made in a private home (`~/agents/jk2s`), so a build
+in another folder keeps the counts of the public functions only.
+
 ### What bounds it
 
 After both rounds (3 November 2026, calibrated, `game_par.py`): the walk 655 passes a frame (1.1 frames a second), the
