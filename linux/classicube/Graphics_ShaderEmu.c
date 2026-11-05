@@ -15,6 +15,7 @@
 #include <sched.h>
 #include <pthread.h>
 #include "mcwx.h"
+#include "gpu_uploads.h"
 
 /* from Window_ShaderEmu.c: GPU memory from 0x81000000, and where the window's pixels are */
 uint8_t* SE_Gpu(void);
@@ -1497,8 +1498,15 @@ void Gfx_EndFrame(void) {
 		frame_number = hold_frame;
 		hold_late    = false;
 	} else if (commands && SE_Surface(&address, &width, &height, &row)) {
-		/* the uploads waiting, at the list's end (of no levels: nothing waits for them) */
+		/* what the list names in RAM copied into the VRAM by the list (programs/common/gpu_uploads.h: the GPU draws from
+		 * there alone), then the uploads waiting, at the list's end (of no levels: nothing waits for them) */
+		static gpu_up_state ups;
+		gpu_uploads_list l = { gpu, GPU_PHYS, GPU_END, draw.set, GPU_PHYS + set_at, (uint32_t)commands, MAX_COMMANDS,
+				       mesh_vertices, MAX_MESH, 0, 0, 0 };
 		int u;
+
+		gpu_list_uploads(&l, 0, &ups);
+		commands = l.count, mesh_vertices = l.mesh;
 		for (u = 0; u < vram_upload_count && commands < MAX_COMMANDS && mesh_vertices + 6 <= MAX_MESH; u++) {
 			uint32_t* c = draw.set + 16 * commands++;
 			c[0] = CMD_UPLOAD, c[1] = GPU_PHYS + vram_uploads[u].at, c[2] = FRAGMENT_TEXTURE, c[3] = mesh_vertices;

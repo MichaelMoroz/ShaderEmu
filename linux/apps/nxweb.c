@@ -27,6 +27,7 @@
 #include "web_net.h"
 #include "mcw.h"
 #include "media.h"
+#include "../../programs/common/gpu_uploads.h"
 
 #define MENU_H 20
 #define BAR 26
@@ -1411,7 +1412,19 @@ strip_job(uint32_t k, uint32_t s)
 			l.full = 1;
 		}
 	}
-	return l.full ? 0 : (uint32_t)(l.c - memory) / 16 | (uint32_t)l.blended << 16;
+	if (l.full)
+		return 0;
+	{
+		/* its pictures and glyphs copied into the VRAM by the list itself: the GPU draws from there alone
+		 * (programs/common/gpu_uploads.h); the characters' slots after its strings */
+		static gpu_up_state ups[SLOTS_MOST];
+		gpu_uploads_list u = { (uint8_t *)memory, list_phys + s * STRIP_BYTES, STRIP_BYTES, memory,
+				       list_phys + s * STRIP_BYTES, (uint32_t)(l.c - memory) / 16, STRIP_COMMANDS, l.mesh, 196608,
+				       l.word, l.phys_words + 4 * (uint32_t)(l.word - l.words), (uint32_t)(l.words_end - l.word) };
+
+		gpu_list_uploads(&u, 0, &ups[s]);
+		return u.count | (uint32_t)l.blended << 16;
+	}
 }
 
 /* Whether strip k may be a list: nothing in it that only the window system draws. */

@@ -20,6 +20,7 @@
 #include "fb.h"
 #include "mc.h"
 #include "sef.h"
+#include "gpu_uploads.h"
 
 /* /dev/gpu maps GPU memory from GPU_PHYS; offsets below are from there */
 #define GPU_PHYS	0x80000000u
@@ -527,6 +528,18 @@ flush_last(void)
 	if (commands == 0)
 		return;
 	drawn();
+	{
+		/* every texture the list names in RAM or the ROM copied into the VRAM first: the GPU draws from there alone
+		 * (programs/common/gpu_uploads.h); the characters' slots after the list's textures */
+		gpu_uploads_list l = {gpu, GPU_PHYS, GPU_SIZE, (uint32_t *)(gpu + LIST_OFFSET), GPU_PHYS + LIST_OFFSET,
+				      (uint32_t)commands, MAX_COMMANDS, mesh_top, MAX_MESH, (uint32_t *)(gpu + data_top),
+				      GPU_PHYS + data_top, (DATA_END - data_top) / 4};
+		static gpu_up_state ups;
+
+		gpu_list_uploads(&l, 0, &ups);
+		commands = (int)l.count;
+		mesh_top = l.mesh;
+	}
 	/* (bit 8 + n of the submit word: the list has commands of pass n) */
 	landed = submit(commands, GPU_PHYS + target->at, target->w, target->h, blended ? 1u << 13 : 0);
 	blended = 0;
