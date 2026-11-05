@@ -1344,6 +1344,42 @@ sixteen products and sums written out with their ring indices in the same order:
 test_all jk2 jk2-sums 9 of 9; the march 161.72 passes a frame (the walk of that build 177.98, core 0 830 thousand a frame:
 another state).
 
+**The floor over the sky portal blinking** (reported from the world, 5 November 2026): the floor of the first level showed the
+sky portal's scene through it in some frames and black in others. Two causes. **The GPU's one depth buffer**: the shim
+clears no depth (`gl_shaderemu.c`'s glClear keeps the colour's bit; the device has one depth buffer a frame, its passes not
+in the list's order), so the sky portal's scene, drawn first from a camera in a small box, was nearer than the main scene's
+floor wherever its geometry was. Now in a level with a sky portal its view takes the far half of the depth range and every
+other view the near half (`tr_main.cpp`'s `R_SetupProjection`; `JK2_SKY_SLICE=0` not): what the depth clear between the two
+scenes gave. **The sky portal's flag** (`drawskyboxportal`, set by each scene and read by the back end): the drawing a frame
+behind read the next frame's; it is kept with the frame's commands now (`backEndData->se_drawsky`, the back end's
+`se_drawsky`). Three captures (frames 600, 601, 605) with each of `JK2_HALF=0`, `JK2_KEPT=0`, `JK2_FRONT=core` and
+`JK2_RENDER=core` blinked alike before: it was not the workers'. The front end's worker's lists hold no portal surface
+(`jk2front: ... views on the worker, 0 with a portal surface`, printed every 100 views). `JK2_SOUND=client` keeps the card
+but runs the mix by the client's clock: the same game in every build, for comparing two builds' frames. test_all jk2 jk2-sums
+9 of 9.
+
+**The compiler's level**: the machine's build is `-O3` (`linux/jk2/build.sh`'s OPT; the build computer's stays `-O2`). On one
+game (`JK2_SOUND=client`: `JK2_SUM=100` gave the same sums frame by frame from both builds) the walk went from 216.44 to
+192.54 passes a frame and the march from 332.33 to 313.94; all cores' instructions a frame of the walk 7,655 to 6,776
+thousand. On the card's pace each build plays another game (the walk 201.87 against about 160, core 0 979 against about
+760 thousand a frame: a heavier stretch, not a slower program), the march 157.69. test_all jk2 jk2-sums 9 of 9.
+**Effects from the game's frame** (`FxScheduler.cpp`'s `PlayEffect`, `FxUtil.cpp`'s `FX_AddPrimitive`): the game's frame on its
+worker reaches the client game's effects (one module), and `RVC_RACES` had it adding a primitive beside core 0's `FX_Add`
+(2 undone); an effect it plays is now made by core 0, the worker waiting (`jk2ServerOnCore0`), as its registrations are:
+`RVC_RACES` the inflate's 1 again.
+
+**Played counts** (`linux/jk2/jk2.profile`, the build's `-fprofile-use`; `JK2_PROFILE=off` without, `JK2_PROFILE=count` the
+counting program in `jk2-count-build`): the counts of a played march and walk (frames 1,250 to 1,700, `JK2_SPLIT=worker`, on
+`rvc_cpu`), made by the counting program run in the foreground with its stderr to a file: `JK2_COUNTS_AT_MARK=1` raises
+SIGUSR2 at the mark's end (the game's quit ends the program without its exit's handlers), then the file is packed and
+carried over the console in base64, and `python3 linux/tdawn/profile.py make linux/jk2/jk2.profile FILE`. `gcov.c` lists
+the files it was given in a table: the game's module is made fresh at each load and gave its infos again with their links
+reset. On one game (the same sums) the walk 192.38 to 184.16 passes a frame, the march 314.07 to 294.46. A function not
+public is known by a sum with its source's path in it: every compile now runs from `$WORK/src` with that folder's paths
+relative (`$WORK/bin/jk2-relative`, as Tiberian Dawn's), and the counts were made again so: they hold in any home. A build
+in `~/nm` with them: the walk 183.82 passes a frame on one game (the counts of the public functions alone had given 184.16),
+the march on the card's pace 151.54, 5.0 frames a second.
+
 ### What bounds it
 
 After both rounds (3 November 2026, calibrated, `game_par.py`): the walk 655 passes a frame (1.1 frames a second), the

@@ -26,8 +26,10 @@ struct penc {
 	uint32_t row_bytes;
 	struct seg seg[SEG_MOST];
 	int segs;
-	uint8_t *per_core;		/* each core's work and rows, core_bytes apart (core 0 first) */
-	uint32_t core_bytes, per_core_bytes;
+	/* a piece's work and rows (piece from / grain of m_for_grain), each mapped apart: by core it was one map of
+	 * some 150 KB for every open worker (40 MB in one piece with 255, refused once memory was in pieces) */
+	uint8_t *area[ENC_WORKERS + 1];
+	uint32_t core_bytes, grain, areas;
 };
 
 /* ---------------------------------------------------------------- checks */
@@ -552,7 +554,7 @@ static void
 segment_job(void *ctx, uint32_t from, uint32_t to)
 {
 	struct penc *e = ctx;
-	struct work *w = (struct work *)(e->per_core + (uint32_t)mcw_self() * e->core_bytes);
+	struct work *w = (struct work *)e->area[from / e->grain];
 	uint32_t line = e->row_bytes + 1, k;
 
 	for (k = from; k < to; k++) {
@@ -574,6 +576,16 @@ segment_job(void *ctx, uint32_t from, uint32_t to)
 		s->bytes = o.p >= o.end ? 0 : (uint32_t)(o.p - s->out);
 		s->crc = crc_update(0, s->out, s->bytes);
 	}
+}
+
+static void
+areas_free(struct penc *e)
+{
+	uint32_t k;
+
+	for (k = 0; k < e->areas; k++)
+		if (e->area[k])
+			m_unmap(e->area[k], e->core_bytes), e->area[k] = NULL;
 }
 
 uint8_t *
@@ -617,14 +629,17 @@ media_png_encode(const struct media_image *image, int level, uint32_t *size, int
 		e->core_bytes += WINDOW * 4;
 	e->core_bytes += ((uint32_t)rows_a_seg * (e->row_bytes + 1) + 15) & ~15u;
 	e->core_bytes += 2 * ((e->row_bytes + 15) & ~15u);
-	e->per_core_bytes = e->core_bytes * (uint32_t)(mcw_count() + 1);
-	if (!(e->per_core = m_map(e->per_core_bytes))) {
-		m_workers_end();
-		goto failed;
-	}
-	for (k = 0; k <= mcw_count(); k++) {
-		uint8_t *at = e->per_core + (uint32_t)k * e->core_bytes;
-		struct work *w = (struct work *)at;
+	e->grain = m_grain((uint32_t)e->segs, got);
+	e->areas = ((uint32_t)e->segs + e->grain - 1) / e->grain;
+	for (k = 0; k < (int)e->areas; k++) {
+		uint8_t *at;
+		struct work *w;
+
+		if (!(e->area[k] = m_map(e->core_bytes))) {
+			m_workers_end();
+			goto failed;
+		}
+		at = e->area[k], w = (struct work *)at;
 
 		at += ((uint32_t)sizeof(struct work) + 15) & ~15u;
 		w->prev = NULL;
@@ -634,10 +649,9 @@ media_png_encode(const struct media_image *image, int level, uint32_t *size, int
 		w->prev_row = at, at += (e->row_bytes + 15) & ~15u;
 		w->cur = at;
 	}
-	m_for((uint32_t)e->segs, segment_job, e, 0, got);
+	m_for_grain((uint32_t)e->segs, segment_job, e, e->grain, got);
 	m_workers_end();
-	m_unmap(e->per_core, e->per_core_bytes);
-	e->per_core = NULL;
+	areas_free(e);
 	/* the file: signature, IHDR, mdPR, an IDAT a segment, IEND */
 	at = 8 + 25 + 12 + 4 + 4 * (uint32_t)e->segs + 12;
 	for (k = 0; k < e->segs; k++) {
@@ -695,6 +709,7 @@ media_png_encode(const struct media_image *image, int level, uint32_t *size, int
 		m_unmap(e->seg[i].out, e->seg[i].room);
 	return f;
 failed:
+	areas_free(e);
 	for (k = 0; k < SEG_MOST; k++)
 		if (e->seg[k].out)
 			m_unmap(e->seg[k].out, e->seg[k].room);
@@ -710,15 +725,15 @@ struct gzenc {
 	uint32_t n, pieces;
 	int chain;
 	struct seg seg[SEG_MOST];	/* row0: where the piece starts, rows: its bytes; crc: the input's */
-	uint8_t *per_core;
-	uint32_t core_bytes;
+	uint8_t *area[ENC_WORKERS + 1];	/* a piece's work (from / grain), each mapped apart: as media_png_encode's */
+	uint32_t core_bytes, grain, areas;
 };
 
 static void
 gzip_job(void *ctx, uint32_t from, uint32_t to)
 {
 	struct gzenc *g = ctx;
-	struct work *w = (struct work *)(g->per_core + (uint32_t)mcw_self() * g->core_bytes);
+	struct work *w = (struct work *)g->area[from / g->grain];
 	uint32_t k;
 
 	for (k = from; k < to; k++) {
@@ -730,6 +745,16 @@ gzip_job(void *ctx, uint32_t from, uint32_t to)
 		s->bytes = o.p >= o.end ? 0 : (uint32_t)(o.p - s->out);
 		s->crc = crc_update(0, g->in + s->row0, s->rows);
 	}
+}
+
+static void
+gz_areas_free(struct gzenc *g)
+{
+	uint32_t k;
+
+	for (k = 0; k < g->areas; k++)
+		if (g->area[k])
+			m_unmap(g->area[k], g->core_bytes), g->area[k] = NULL;
 }
 
 uint8_t *
@@ -763,19 +788,21 @@ media_gzip(const void *bytes, uint32_t n, int level, uint32_t *size, int workers
 	g->core_bytes = ((uint32_t)sizeof(struct work) + 15) & ~15u;
 	if (g->chain > 1)
 		g->core_bytes += WINDOW * 4;
-	if (!(g->per_core = m_map(g->core_bytes * (uint32_t)(mcw_count() + 1)))) {
-		m_workers_end();
-		goto failed;
-	}
-	for (k = 0; k <= (uint32_t)mcw_count(); k++) {
-		struct work *w = (struct work *)(g->per_core + k * g->core_bytes);
+	g->grain = m_grain(g->pieces, got);
+	g->areas = (g->pieces + g->grain - 1) / g->grain;
+	for (k = 0; k < g->areas; k++) {
+		struct work *w;
 
+		if (!(g->area[k] = m_map(g->core_bytes))) {
+			m_workers_end();
+			goto failed;
+		}
+		w = (struct work *)g->area[k];
 		w->prev = g->chain > 1 ? (int32_t *)((uint8_t *)w + (((uint32_t)sizeof(struct work) + 15) & ~15u)) : NULL;
 	}
-	m_for(g->pieces, gzip_job, g, 0, got);
+	m_for_grain(g->pieces, gzip_job, g, g->grain, got);
 	m_workers_end();
-	m_unmap(g->per_core, g->core_bytes * (uint32_t)(mcw_count() + 1));
-	g->per_core = NULL;
+	gz_areas_free(g);
 	at = 10 + 8;
 	for (k = 0; k < g->pieces; k++) {
 		if (!g->seg[k].bytes)
@@ -793,6 +820,7 @@ media_gzip(const void *bytes, uint32_t n, int level, uint32_t *size, int workers
 	p[0] = (uint8_t)crc, p[1] = (uint8_t)(crc >> 8), p[2] = (uint8_t)(crc >> 16), p[3] = (uint8_t)(crc >> 24);
 	p[4] = (uint8_t)n, p[5] = (uint8_t)(n >> 8), p[6] = (uint8_t)(n >> 16), p[7] = (uint8_t)(n >> 24);
 failed:
+	gz_areas_free(g);
 	for (k = 0; k < SEG_MOST; k++)
 		if (g->seg[k].out)
 			m_unmap(g->seg[k].out, g->seg[k].room);

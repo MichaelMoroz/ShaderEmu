@@ -24,6 +24,12 @@ struct gcov_info {
 };
 struct gcov_kvp { long long value, count; struct gcov_kvp *next; };
 static struct gcov_info *gcov_list;
+/* (the files registered, in a table: a program that makes a module's data fresh at each load (Jedi Outcast's game,
+   linux/jk2/sys_shaderemu.cpp) registers the same infos again with their next links reset, which broke the list or made a
+   cycle; each is listed once here, its next link not used) */
+#define GCOV_FILES 4096
+static struct gcov_info *gcov_files[GCOV_FILES];
+static unsigned int gcov_nfiles;
 __thread struct { void *callee; long long *counters; } __gcov_indirect_call;
 long long __gcov_time_profiler_counter;
 
@@ -48,6 +54,13 @@ __gcov_init(struct gcov_info *info)
 		signal(SIGUSR2, gcov_signal);
 	}
 	info->next = gcov_list, gcov_list = info;
+	{
+		unsigned int k;
+
+		for (k = 0; k < gcov_nfiles && gcov_files[k] != info; k++) {}
+		if (k == gcov_nfiles && gcov_nfiles < GCOV_FILES)
+			gcov_files[gcov_nfiles++] = info;
+	}
 }
 
 void __gcov_merge_add(long long *counters, unsigned int count) { (void)counters, (void)count; }
@@ -143,7 +156,8 @@ __gcov_exit(void)
 	dumped = 1;
 #endif
 
-	for (i = gcov_list; i; i = i->next) {
+	for (unsigned int at = 0; at < gcov_nfiles; at++) {
+		i = gcov_files[at];
 		for (kinds = 0, kind = 0; kind < 8; kind++)
 			kinds |= (i->merge[kind] != NULL) << kind;
 		put("GC F %s %x %x %x %x\n", i->filename, i->version, i->stamp, i->checksum, kinds);

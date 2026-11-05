@@ -474,7 +474,19 @@ of the GPU's, drawn from the ROM. The Windows 7 look's are 1 x 22 strips from to
 (`caption7-on.ppm`, `caption7-off.ppm`; `bar7.ppm`, 1 x 26, is the bar's), and its caption
 buttons and Start button are cells of 24 pixels of `look7.ppm` with an `.rgba` twin (`LOOK7` in
 `make_icons.py`: minimise, maximise, restore, close, the same four for a window without the
-keyboard, the Start button and the same pressed).
+keyboard, the Start button and the same pressed; then the Start button in each windows' colour, and from
+cell 28, `LOOK7_HOT`, the four lit under the pointer).
+
+**Lit under the pointer** (5 November 2026). What can be pressed lights while the pointer is on it, and is
+told by its colour, not by its grey: under Graphite (80, 88, 96), the new image's default, a pale mix of the
+windows' colour was 2 to 3% from an unlit face and could not be seen. A program's buttons (`ui.h`, `ui_hot_*`)
+keep Windows 7's light blue when the windows' colour is a grey (`ui_lit_accent`). The window manager lights a
+caption's box from the press's own test (`wm_caption_hot`, `win.hot`, painted through `nx_caption_hot`): the
+Windows 7 look's lit cells, a pale blue face in the classic look. The quiet rectangle leaves a frame's boxes
+out, and there is none while a box is lit, so the move off it is heard. The bar lights its part under the
+pointer (`bar_hover`: Start's orb glows, a window's button, a pinned program, the volume and the clock as a
+brighter glass, a desktop's cell, the strip at the right end), drawn again only when that part changes.
+`test_all.py` `ui-hover`, `bar-hover` (`NXBAR_PRINT`), `wm-caption-hover` (`NXWM_HOT_PRINT`, the host's pointer).
 
 ## Looks
 
