@@ -2824,7 +2824,7 @@ index a918cd26..63ac25ce 100644
  	{
  	case EXEC_NOW:
 diff --git a/code/qcommon/common.cpp b/code/qcommon/common.cpp
-index aeaff246..b788bb78 100644
+index aeaff246..1e2e1394 100644
 --- a/code/qcommon/common.cpp
 +++ b/code/qcommon/common.cpp
 @@ -135,14 +135,26 @@ to the apropriate place.
@@ -2854,7 +2854,14 @@ index aeaff246..b788bb78 100644
  
  	if ( rd_buffer ) {
  		if ((strlen (msg) + strlen(rd_buffer)) > (unsigned)(rd_buffersize - 1)) {
-@@ -286,6 +298,16 @@ void NORETURN QDECL Com_Error( int code, const char *fmt, ... ) {
+@@ -280,12 +292,23 @@ void SG_Shutdown();
+ #ifdef JK2_MODE
+ extern void SCR_UnprecacheScreenshot();
+ #endif
++extern "C" int SE_OnFirstCore( void );
+ void NORETURN QDECL Com_Error( int code, const char *fmt, ... ) {
+ 	va_list		argptr;
+ 	static int	lastErrorTime;
  	static int	errorCount;
  	int			currentTime;
  
@@ -2871,7 +2878,22 @@ index aeaff246..b788bb78 100644
  	if ( com_errorEntered ) {
  		Sys_Error( "recursive error after: %s", com_errorMessage );
  	}
-@@ -1133,7 +1155,14 @@ void Com_Init( char *commandLine ) {
+@@ -323,6 +346,14 @@ void NORETURN QDECL Com_Error( int code, const char *fmt, ... ) {
+ 
+ 	SG_Shutdown();	// close any file pointers
+ 	if ( code == ERR_DISCONNECT || code == ERR_DROP ) {
++#ifdef SHADEREMU
++		// (only the first core catches it: off it, a worker's or the drawing's stack, the program ends with no word of why;
++		// said here first)
++		if ( !SE_OnFirstCore() ) {
++			fprintf( stderr, "jk2: an error off the first core (%d): %s\n", code, com_errorMessage );
++			fflush( stderr );
++		}
++#endif
+ 		throw code;
+ 	} else {
+ 		SV_Shutdown (va("Server fatal crashed: %s\n", com_errorMessage));
+@@ -1133,7 +1164,14 @@ void Com_Init( char *commandLine ) {
  		com_speedslog = Cvar_Get ("speedslog", "0", CVAR_TEMP );
  
  		com_timescale = Cvar_Get ("timescale", "1", CVAR_CHEAT );
@@ -2886,7 +2908,7 @@ index aeaff246..b788bb78 100644
  		com_showtrace = Cvar_Get ("com_showtrace", "0", CVAR_CHEAT);
  		com_speeds = Cvar_Get ("com_speeds", "0", 0);
  
-@@ -1298,6 +1327,9 @@ Com_ModifyMsec
+@@ -1298,6 +1336,9 @@ Com_ModifyMsec
  */
  
  
@@ -2896,7 +2918,7 @@ index aeaff246..b788bb78 100644
  int Com_ModifyMsec( int msec, float &fraction )
  {
  	int		clampTime;
-@@ -1383,6 +1415,9 @@ void G2Time_ResetTimers(void);
+@@ -1383,6 +1424,9 @@ void G2Time_ResetTimers(void);
  void G2Time_ReportTimers(void);
  #endif
  
@@ -2906,7 +2928,7 @@ index aeaff246..b788bb78 100644
  void Com_Frame( void ) {
  	try
  	{
-@@ -1449,7 +1484,25 @@ void Com_Frame( void ) {
+@@ -1449,7 +1493,25 @@ void Com_Frame( void ) {
  			timeBeforeServer = Sys_Milliseconds ();
  		}
  
@@ -2932,7 +2954,7 @@ index aeaff246..b788bb78 100644
  
  
  		//
-@@ -1478,6 +1531,27 @@ void Com_Frame( void ) {
+@@ -1478,6 +1540,27 @@ void Com_Frame( void ) {
  			}
  
  			CL_Frame (msec, fractionMsec);

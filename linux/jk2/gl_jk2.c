@@ -665,15 +665,21 @@ static unsigned rooms_given, rooms_refused, rooms_uncut;
 static int rooms_frame;   // (JK2_ROOMS_LOG=N: a line every N frames)
 static int rooms_log = -1;
 void gpuUsedLast(unsigned* u);
+unsigned int seglFrameLeft(void);
+static unsigned rooms_least_left = 0xffffffffu;   // (the least of the frame's memory left seen)
 static void rooms_count(void) {
     if (rooms_log < 0) rooms_log = getenv("JK2_ROOMS_LOG") ? atoi(getenv("JK2_ROOMS_LOG")) : 0;
+    if (rooms_log > 0) {
+        const unsigned left = seglFrameLeft();
+        if (left < rooms_least_left) rooms_least_left = left;
+    }
     if (rooms_log > 0 && gl_frames != rooms_frame) {
         unsigned used[4];
         gpuUsedLast(used);
         if (gl_frames % rooms_log == 0)
-            printf("jk2rooms%s: frame %d, %u rooms, %u refused, %u not cut; blocks refused %u, at the last merge %u blocks, %u KB, %u commands\n",
-                   rw0.mode ? "" : "-b", gl_frames, rooms_given, rooms_refused, rooms_uncut, used[0], used[1], used[2], used[3]),
-                rooms_given = rooms_refused = rooms_uncut = 0;
+            printf("jk2rooms%s: frame %d, %u rooms, %u refused, %u not cut; least left %u KB; blocks refused %u, at the last merge %u blocks, %u KB, %u commands\n",
+                   rw0.mode ? "" : "-b", gl_frames, rooms_given, rooms_refused, rooms_uncut, rooms_least_left >> 10, used[0], used[1], used[2], used[3]),
+                rooms_given = rooms_refused = rooms_uncut = 0, rooms_least_left = 0xffffffffu;
         rooms_frame = gl_frames;
     }
 }

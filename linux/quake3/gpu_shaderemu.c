@@ -4,7 +4,13 @@
 // to say, and a draw may be lit by a light map (docs/machine/gpu.md).
 
 // A frame of this game is more vertices than the library's default has room for.
+#ifdef SE_HALVES
+// (Jedi Outcast: its frames used nearly all of 288 KB of vertices, refusing what came last, and a list built in two parts
+// leaves some of each part's unused: 800 KB, the textures' memory 1 MB less; docs/games/jk2.md)
+#define SET_SIZE 0x00100000u
+#else
 #define SET_SIZE 0x00080000u
+#endif
 #define UNIFORMS_IN 0x00030000u
 #define VERTICES_IN 0x00038000u
 #define MAX_COMMANDS 3072
