@@ -448,21 +448,24 @@ bar_strip(int x, int width)
 }
 
 /* Windows 7's button on the bar: a lighter glass box with rounded corners; brighter for the
- * window in front, none for one put away. In the windows' colour when one is chosen. */
+ * window in front (how 1), brighter still under the pointer (2), none for one put away (-1). In the
+ * windows' colour when one is chosen. */
 static void
 glass(int x, int y, int width, int height, int how)
 {
-	static const GR_COLOR top[] = { MWRGB(86, 106, 136), MWRGB(118, 150, 192) },
-		bottom[] = { MWRGB(60, 78, 106), MWRGB(82, 112, 156) }, edge[] = { MWRGB(118, 138, 166), MWRGB(170, 198, 236) };
+	static const GR_COLOR top[] = { MWRGB(86, 106, 136), MWRGB(118, 150, 192), MWRGB(156, 188, 230) },
+		bottom[] = { MWRGB(60, 78, 106), MWRGB(82, 112, 156), MWRGB(108, 146, 198) },
+		edge[] = { MWRGB(118, 138, 166), MWRGB(170, 198, 236), MWRGB(222, 238, 255) };
+	static const signed char tint_top[] = { -4, 2, 6 }, tint_bottom[] = { -7, -2, 2 }, tint_edge[] = { 1, 7, 11 };
 
 	if (how < 0)
 		return;
 	if (bar_tint) {
-		GrSetGCForeground(gc, tint_mix(how ? 2 : -4));
+		GrSetGCForeground(gc, tint_mix(tint_top[how]));
 		GrFillRect(bar, gc, x + 1, y + 1, width - 2, height / 2 - 1);
-		GrSetGCForeground(gc, tint_mix(how ? -2 : -7));
+		GrSetGCForeground(gc, tint_mix(tint_bottom[how]));
 		GrFillRect(bar, gc, x + 1, y + height / 2, width - 2, height - height / 2 - 1);
-		GrSetGCForeground(gc, tint_mix(how ? 7 : 1));
+		GrSetGCForeground(gc, tint_mix(tint_edge[how]));
 		GrLine(bar, gc, x + 1, y, x + width - 2, y);
 		GrLine(bar, gc, x + 1, y + height - 1, x + width - 2, y + height - 1);
 		GrLine(bar, gc, x, y + 1, x, y + height - 2);
@@ -513,6 +516,23 @@ name_width(void)
 
 #define PAGER_W (GR_WM_DESKTOPS * PAGER_CELL)
 #define PAGER_X (NAME_X - 4 - PAGER_W)
+
+/* The part of the bar under the pointer, lit (-1: none, or the pointer is off the bar). */
+enum { HOT_START = 0, HOT_PIN = 100, HOT_TASK = 200, HOT_PAGER = 300, HOT_VOLUME = 400, HOT_CLOCK, HOT_DESK };
+static int bar_hot = -1;
+
+/* A classic part under the pointer: a ring inside it in the windows' colour, or the classic blue when that is a
+ * grey or none is chosen (a grey ring on the grey face was not seen). */
+static void
+hot_ring(int x, int y, int width, int height)
+{
+	int r = bar_tint >> 16 & 255, g = bar_tint >> 8 & 255, b = bar_tint & 255;
+	int hi = r > g ? (r > b ? r : b) : (g > b ? g : b), lo = r < g ? (r < b ? r : b) : (g < b ? g : b);
+
+	GrSetGCForeground(gc, bar_tint && hi - lo >= 40 ? tint_mix(-4) : MWRGB(0, 84, 227));
+	GrRect(bar, gc, x + 2, y + 2, width - 4, height - 4);
+	GrRect(bar, gc, x + 3, y + 3, width - 6, height - 6);
+}
 
 /* What a test reads. */
 static void
@@ -705,19 +725,29 @@ draw_bar(void)
 	width = task_width();
 	bar_strip(0, screen.cols);
 	if (ui_seven) {
-		GrDrawImageFromFile(bar, gc, 3, 1, 24, 24, LOOK7_SHEET_BAR, GR_IMAGE_CELL(24, start_cell(open)));
+		/* (the orb glows under the pointer as while its menu is open, as Windows 7's) */
+		GrDrawImageFromFile(bar, gc, 3, 1, 24, 24, LOOK7_SHEET_BAR, GR_IMAGE_CELL(24, start_cell(open || bar_hot == HOT_START)));
 	} else {
 		GrSetGCForeground(gc, WHITE);
 		GrLine(bar, gc, 0, 0, screen.cols - 1, 0);
 		bevel(bar, 3, 3, START_WIDTH, BAR_HEIGHT - 6, open);
+		if (bar_hot == HOT_START && !open)
+			hot_ring(3, 3, START_WIDTH, BAR_HEIGHT - 6);
 		ui_icon(bar, gc, 8, 5, ui_icon_of("start"), 16);
 		GrSetGCForeground(gc, BLACK);
 		GrText(bar, gc, 28, TEXT_Y, (void *)"Start", 5, GR_TFASCII | GR_TFTOP);
 		GrText(bar, gc, 29, TEXT_Y, (void *)"Start", 5, GR_TFASCII | GR_TFTOP);	/* twice: bold */
 	}
 	/* the pinned programs, an icon each, and a line after them */
-	for (i = 0; i < pinned_count; i++)
+	for (i = 0; i < pinned_count; i++) {
+		if (bar_hot == HOT_PIN + i) {	/* under the pointer: a button round it (raised, classic) */
+			if (ui_seven)
+				glass(quick_x(i), 2, QUICK_W, BAR_HEIGHT - 4, 2);
+			else
+				bevel(bar, quick_x(i), 3, QUICK_W, BAR_HEIGHT - 6, 0);
+		}
 		ui_icon_draw(bar, gc, quick_x(i) + (QUICK_W - 16) / 2, 5, &pinned[i].icon, 16);
+	}
 	if (pinned_count) {
 		GrSetGCForeground(gc, ui_seven ? (bar_tint ? tint_mix(-12) : MWRGB(20, 28, 40)) : SHADOW);
 		GrLine(bar, gc, quick_x(pinned_count) + 2, 4, quick_x(pinned_count) + 2, BAR_HEIGHT - 5);
@@ -734,13 +764,15 @@ draw_bar(void)
 		while (count > 0 && ui_width(&ui_menu_widths, ui_menu_font, title, count) > room)
 			count--;
 		if (ui_seven)
-			glass(task_x(i), 2, width, BAR_HEIGHT - 4, start >= 0 ? 0 : buttons[i].hidden ? -1 : on);
+			glass(task_x(i), 2, width, BAR_HEIGHT - 4, bar_hot == HOT_TASK + i ? 2 : start >= 0 ? 0 : buttons[i].hidden ? -1 : on);
 		else {
 			if (on) {	/* the window in front: its button stays pressed */
 				GrSetGCForeground(gc, MWRGB(224, 224, 224));
 				GrFillRect(bar, gc, task_x(i) + 1, 4, width - 2, BAR_HEIGHT - 8);
 			}
 			bevel(bar, task_x(i), 3, width, BAR_HEIGHT - 6, on);
+			if (bar_hot == HOT_TASK + i)
+				hot_ring(task_x(i), 3, width, BAR_HEIGHT - 6);
 		}
 		if (width >= 28)
 			ui_icon_draw(bar, gc, task_x(i) + 4 + (on && !ui_seven), 5 + (on && !ui_seven), icon, 16);
@@ -762,8 +794,12 @@ draw_bar(void)
 
 		for (j = 0; j < task_count; j++)
 			some |= tasks[j].desk == i;
-		GrSetGCForeground(gc, i == desktop ? (ui_seven ? (bar_tint ? tint_mix(4) : MWRGB(118, 150, 192)) : WHITE) :
-			(ui_seven ? (bar_tint ? tint_mix(-9) : MWRGB(44, 58, 80)) : bar_tint ? tint_mix(11) : FACE));
+		if (bar_hot == HOT_PAGER + i)	/* under the pointer: lighter, the shown one too */
+			GrSetGCForeground(gc, ui_seven ? (bar_tint ? tint_mix(i == desktop ? 9 : 3) : i == desktop ? MWRGB(168, 196, 232) :
+				MWRGB(96, 122, 160)) : MWRGB(166, 202, 240));
+		else
+			GrSetGCForeground(gc, i == desktop ? (ui_seven ? (bar_tint ? tint_mix(4) : MWRGB(118, 150, 192)) : WHITE) :
+				(ui_seven ? (bar_tint ? tint_mix(-9) : MWRGB(44, 58, 80)) : bar_tint ? tint_mix(11) : FACE));
 		GrFillRect(bar, gc, x, 5, PAGER_CELL - 1, BAR_HEIGHT - 10);
 		GrSetGCForeground(gc, ui_seven ? MWRGB(20, 28, 40) : SHADOW);
 		GrRect(bar, gc, x, 5, PAGER_CELL - 1, BAR_HEIGHT - 10);
@@ -776,9 +812,19 @@ draw_bar(void)
 		}
 	}
 	/* the volume's button: its icon, muted when the card is silent */
+	if (bar_hot == HOT_VOLUME) {
+		if (ui_seven)
+			glass(VOLUME_X, 2, VOLUME_W, BAR_HEIGHT - 4, 2);
+		else
+			bevel(bar, VOLUME_X, 3, VOLUME_W, BAR_HEIGHT - 6, 0);
+	}
 	ui_icon(bar, gc, VOLUME_X + (VOLUME_W - 16) / 2, 5, ui_icon_of(volume_silent ? "volume-muted" : "volume"), 16);
+	if (bar_hot == HOT_CLOCK && ui_seven)
+		glass(CLOCK_X, 2, CLOCK_WIDTH, BAR_HEIGHT - 4, 2);
 	if (!ui_seven)
 		bevel(bar, CLOCK_X, 3, CLOCK_WIDTH, BAR_HEIGHT - 6, 1);
+	if (bar_hot == HOT_CLOCK && !ui_seven)
+		hot_ring(CLOCK_X, 3, CLOCK_WIDTH, BAR_HEIGHT - 6);
 	snprintf(text, sizeof(text), "%02d:%02d", tm->tm_hour, tm->tm_min);
 	GrSetGCForeground(gc, INK);
 	GrText(bar, gc, CLOCK_X + (CLOCK_WIDTH - ui_width(&ui_menu_widths, ui_menu_font, text, strlen(text))) / 2, TEXT_Y,
@@ -801,8 +847,59 @@ draw_bar(void)
 		GrLine(bar, gc, DESK_X, 0, DESK_X, BAR_HEIGHT - 1);
 		GrSetGCForeground(gc, bar_tint ? tint_mix(-2) : MWRGB(104, 124, 152));
 		GrLine(bar, gc, DESK_X + 1, 0, DESK_X + 1, BAR_HEIGHT - 1);
-	} else
+		if (bar_hot == HOT_DESK) {	/* under the pointer: the strip lit, as Windows 7's */
+			GrSetGCForeground(gc, bar_tint ? tint_mix(6) : MWRGB(156, 188, 230));
+			GrFillRect(bar, gc, DESK_X + 2, 1, DESK_W - 2, BAR_HEIGHT - 2);
+		}
+	} else {
 		bevel(bar, DESK_X, 3, DESK_W - 2, BAR_HEIGHT - 6, desk_hidden_count > 0);
+		if (bar_hot == HOT_DESK) {
+			GrSetGCForeground(gc, MWRGB(166, 202, 240));
+			GrFillRect(bar, gc, DESK_X + 2, 5, DESK_W - 6, BAR_HEIGHT - 10);
+		}
+	}
+}
+
+/* The part of the bar at x (bar_pressed's places), or -1. */
+static int
+hot_at(int x)
+{
+	int i;
+
+	if (x < 0)
+		return -1;
+	if (x < 3 + START_WIDTH + 3)
+		return HOT_START;
+	for (i = 0; i < pinned_count; i++)
+		if (x >= quick_x(i) && x < quick_x(i) + QUICK_W)
+			return HOT_PIN + i;
+	for (i = 0; i < button_count; i++)
+		if (x >= task_x(i) && x < task_x(i) + task_width())
+			return HOT_TASK + i;
+	if (x >= PAGER_X && x < PAGER_X + PAGER_W)
+		return HOT_PAGER + (x - PAGER_X) / PAGER_CELL;
+	if (x >= VOLUME_X && x < VOLUME_X + VOLUME_W)
+		return HOT_VOLUME;
+	if (x >= CLOCK_X && x < CLOCK_X + CLOCK_WIDTH)
+		return HOT_CLOCK;
+	if (x >= DESK_X)
+		return HOT_DESK;
+	return -1;
+}
+
+/* The pointer at x of the bar (-1: off it): the part under it lit, the bar drawn again when that is another. */
+static void
+bar_hover(int x)
+{
+	int hot = hot_at(x);
+	char name[16];
+
+	if (hot == bar_hot)
+		return;
+	bar_hot = hot;
+	snprintf(name, sizeof name, "%d", hot);
+	say("nxbar: hot %s\n", name);	/* (for a test: tools/test_all.py's bar-hover) */
+	draw_bar();
 }
 
 /* The icon of the program a window is of: its file's own, or its name's in the sheets. It is
@@ -2476,7 +2573,9 @@ main(int argc, char **argv)
 
 	bar = GrNewWindowEx(GR_WM_PROPS_NODECORATE | GR_WM_PROPS_NOMOVE | GR_WM_PROPS_NOAUTOMOVE | GR_WM_PROPS_NOFOCUS,
 		"nxbar", GR_ROOT_WINDOW_ID, 0, screen.rows - BAR_HEIGHT, screen.cols, BAR_HEIGHT, FACE);
-	GrSelectEvents(bar, GR_EVENT_MASK_EXPOSURE | GR_EVENT_MASK_BUTTON_DOWN | GR_EVENT_MASK_KEY_DOWN);
+	/* (the pointer's latest place while it is over the bar, and its leaving: the part under it is lit) */
+	GrSelectEvents(bar, GR_EVENT_MASK_EXPOSURE | GR_EVENT_MASK_BUTTON_DOWN | GR_EVENT_MASK_KEY_DOWN |
+		GR_EVENT_MASK_MOUSE_POSITION | GR_EVENT_MASK_MOUSE_EXIT);
 	GrMapWindow(bar);
 	/* told when a window comes, goes or is put away: the buttons are looked for again then */
 	GrSelectEvents(GR_ROOT_WINDOW_ID, GR_EVENT_MASK_CHLD_UPDATE);
@@ -2536,6 +2635,14 @@ main(int argc, char **argv)
 		case GR_EVENT_TYPE_BUTTON_DOWN:
 			if (event.button.wid == bar)
 				bar_pressed(&event.button, closed_at);
+			break;
+		case GR_EVENT_TYPE_MOUSE_POSITION:
+			if (event.mouse.wid == bar)
+				bar_hover(event.mouse.x);
+			break;
+		case GR_EVENT_TYPE_MOUSE_EXIT:
+			if (event.general.wid == bar)
+				bar_hover(-1);
 			break;
 		case GR_EVENT_TYPE_CHLD_UPDATE:
 			if (event.update.utype == GR_UPDATE_MOVE || event.update.utype == GR_UPDATE_SIZE)
