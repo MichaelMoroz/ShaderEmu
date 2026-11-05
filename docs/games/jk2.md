@@ -1333,6 +1333,17 @@ them: 0 of 1,201 views wrong, and the frame-600 capture has the buildings and th
 A blinking picture is found by such counts over many views, not by one held frame; the capture only confirms it.
 Every view to the worker (`JK2_FRONT_VIEWS=all`, tried on the way) is not the default.
 
+**Where core 0 waits now** (profiled after the fix, the walk's frames 1,500 to 1,600, 162.6 passes a frame): at a frame's
+start for the mix (up to 46 passes while a character speaks: the mix's worker paints the plain channels, then waits about 17
+passes for the helper that decodes and paints the voices, then transfers), for the drawing, and for the game's frame. Tried
+and not kept: the mix given before the frame's end (`JK2_SOUND_EARLY=1`: the walk 158.97 against 160.43, the march 173.50
+against 169.13, and 4 undone), the voices decoded two frames ahead (`JK2_VOICE_AHEAD_FRAMES=2`: 162.49 against 159.25 on
+one build), the mix on a worker no other job reaches (`JK2_MIX_WORKER=32`: 159.29 against 160.86, the march level).
+**The voices' decoder** (`mp3code/cwin.c`'s `window16`, two thirds of the voices' decoding): unrolled, each sample's
+sixteen products and sums written out with their ring indices in the same order: 2,482 to 2,125 instructions a call.
+test_all jk2 jk2-sums 9 of 9; the march 161.72 passes a frame (the walk of that build 177.98, core 0 830 thousand a frame:
+another state).
+
 ### What bounds it
 
 After both rounds (3 November 2026, calibrated, `game_par.py`): the walk 655 passes a frame (1.1 frames a second), the
