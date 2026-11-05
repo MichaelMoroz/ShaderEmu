@@ -37,7 +37,9 @@ else
     CC=ottd-cc; CXX=ottd-c++; T=riscv32-linux-musl
     LD=$CXXTC/bin/$T-ld; OBJCOPY=$CXXTC/bin/$T-objcopy; NM=$CXXTC/bin/$T-nm; ARCH=riscv32
     # Quake's flags (linux/quake/build.sh): floats only, a variable a section of its own on 16 bytes
-    OPT="-O2 -fno-strict-aliasing -fno-math-errno -fsingle-precision-constant -fno-common -fdata-sections ${JK2_CFLAGS:-}"
+    # (-O3: on one game, JK2_SOUND=client, the walk 216.44 to 192.54 passes a frame and the march 332.33 to 313.94 against -O2,
+    # the same sums; docs/games/jk2.md, "The compiler's level")
+    OPT="-O3 -fno-strict-aliasing -fno-math-errno -fsingle-precision-constant -fno-common -fdata-sections ${JK2_CFLAGS:-}"
     LIBS="-lm ${JK2_LINK:-}"
     BUILD=$WORK/src/jk2-build
     OUT=${JK2_OUT:-$REPO/build/jk2/out}

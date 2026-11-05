@@ -1358,6 +1358,16 @@ behind read the next frame's; it is kept with the frame's commands now (`backEnd
 but runs the mix by the client's clock: the same game in every build, for comparing two builds' frames. test_all jk2 jk2-sums
 9 of 9.
 
+**The compiler's level**: the machine's build is `-O3` (`linux/jk2/build.sh`'s OPT; the build computer's stays `-O2`). On one
+game (`JK2_SOUND=client`: `JK2_SUM=100` gave the same sums frame by frame from both builds) the walk went from 216.44 to
+192.54 passes a frame and the march from 332.33 to 313.94; all cores' instructions a frame of the walk 7,655 to 6,776
+thousand. On the card's pace each build plays another game (the walk 201.87 against about 160, core 0 979 against about
+760 thousand a frame: a heavier stretch, not a slower program), the march 157.69. test_all jk2 jk2-sums 9 of 9.
+**Effects from the game's frame** (`FxScheduler.cpp`'s `PlayEffect`, `FxUtil.cpp`'s `FX_AddPrimitive`): the game's frame on its
+worker reaches the client game's effects (one module), and `RVC_RACES` had it adding a primitive beside core 0's `FX_Add`
+(2 undone); an effect it plays is now made by core 0, the worker waiting (`jk2ServerOnCore0`), as its registrations are:
+`RVC_RACES` the inflate's 1 again.
+
 ### What bounds it
 
 After both rounds (3 November 2026, calibrated, `game_par.py`): the walk 655 passes a frame (1.1 frames a second), the
