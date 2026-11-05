@@ -1,3 +1,4 @@
+#include <algorithm>
 #include "shader_compiler.h"
 
 #include <chrono>
@@ -147,6 +148,7 @@ StageResult compileStage(const std::string& source, const std::string& sourceNam
                 memcpy(r.bytecode->GetBufferPointer(), bytes.data(), bytes.size());
                 r.ok = true;
                 r.fromCache = true;
+                compiledCode().push_back(fnv1a64(bytes.data(), bytes.size()));
                 r.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
                 return r;
             }
@@ -166,7 +168,24 @@ StageResult compileStage(const std::string& source, const std::string& sourceNam
         return r;
     }
     r.ok = true;
+    compiledCode().push_back(fnv1a64(r.bytecode->GetBufferPointer(), r.bytecode->GetBufferSize()));
     if (!cachePath.empty())
         writeFileBinary(cachePath, r.bytecode->GetBufferPointer(), r.bytecode->GetBufferSize());
     return r;
+}
+
+std::vector<uint64_t>& compiledCode() {
+    static std::vector<uint64_t> hashes;
+    return hashes;
+}
+
+std::string codeStamp() {
+    std::vector<uint64_t> sorted = compiledCode();
+    std::sort(sorted.begin(), sorted.end());
+    sorted.erase(std::unique(sorted.begin(), sorted.end()), sorted.end());
+    uint64_t h = 0xcbf29ce484222325ull;
+    for (uint64_t v : sorted) h = fnv1a64(&v, sizeof v, h);
+    char s[24];
+    snprintf(s, sizeof s, "c%016llx", (unsigned long long)h);
+    return s;
 }

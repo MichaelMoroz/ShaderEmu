@@ -32,11 +32,11 @@ Limits: VRChat, D3D11 DXBC, no UAVs in the fragment shader, no texture arrays. f
 
 ## 4. Check it runs, then stamp it
 
-The card refuses a tick it has not seen in software: `rvc_harness` says so and exits 3 unless `warp_ok` in the processor's folder holds its sources' hash.
+The card refuses a tick it has not seen in software: `rvc_harness` says so and exits 3 unless `warp_ok` in the processor's folder holds its sources' hash (`--stamp`) or its code's, every pass's compiled bytecode hashed (`--code-stamp`). It guards the card against a shader that would hang it, nothing more: the tick runs and the devices run.
 
     python tools\warp_stamp.py
 
-About 42 s: three snapshots of a busy machine (mctest's workers, glxgears' draws) made on the processor at random moments, each run 6 s on WARP; all going on with no fault writes the stamp (`bin\rvc_harness.exe --rvc shader_vm --stamp` prints the hash). Whole cases on WARP (`python tools\test_card.py mctest-3 --warp --parts --max-wall 240 --mark-ok`, WARP being about 300 thousand instructions a second) are for what a case must print, not for the stamp. The stamp is of the sources: a `--define` is the same tick checked. Commit `warp_ok`'s change with its own message (`WARP stamp for ...: tools/warp_stamp.py, 3 snapshots`).
+Under a second when the code is stamped already (a rename, a comment, a trim compile to the same bytes: nothing runs); else about 13 s: one snapshot of a busy machine (mctest's workers, glxgears' draws), made once on the processor for the image and kept (`build\warp_stamp\stored.snap`), run 3 s on WARP; going on with no fault writes both stamps. A WARP run is on the processor's side of the harness lock, so `rvc_cpu` runs do not hold it off. `--fresh --count 3` is moments at random. Whole cases on WARP (`python tools\test_card.py mctest-3 --warp --parts --max-wall 240 --mark-ok`, WARP being about 300 thousand instructions a second) are for what a case must print, not for the stamp. A `--define` changes the code's stamp, not the sources'. Commit `warp_ok`'s change with its own message (`WARP stamp for ...: tools/warp_stamp.py`).
 
 Then on the card: `python tools\test_card.py mctest-3 fptest` and a same-state check: a cold boot of the same frames under `--fixed-dt` under each build, same instructions and console.
 
