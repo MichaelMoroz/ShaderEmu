@@ -23,6 +23,8 @@ git -C "$MW" apply "$HERE/microwindows.patch"
 cp "$HERE"/*_shaderemu.c "$MW/src/drivers/"
 # (the worker cores' mailboxes, for the pointer's worker: scr_shaderemu.c)
 cp "$REPO/programs/mc/mc.h" "$MW/src/drivers/"
+# (every texture a list names copied into the VRAM by the list: scr_shaderemu.c, programs/common/gpu_uploads.h)
+cp "$REPO/programs/common/gpu_uploads.h" "$MW/src/drivers/"
 # (a font file of the ROM, for the screen driver and for programs that measure text: docs/system/fonts.md)
 cp "$HERE/sef.h" "$MW/src/drivers/"
 # (where a program's window was last put is the registry's: wmclients.c)

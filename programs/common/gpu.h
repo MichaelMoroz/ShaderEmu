@@ -6,6 +6,7 @@
 #pragma once
 
 #include "platform.h"
+#include "gpu_uploads.h"
 
 #define GPU_SUBMIT (*(volatile uint32_t*)0x81000010)   // what to do with the list (below); the GPU clears it
 #define GPU_SUBMIT_DRAW 1        // draw it
@@ -217,6 +218,12 @@ static inline void gpu_upload(const void* pixels, uint32_t kind, uint32_t w, uin
 // optionally with GPU_SUBMIT_WRITEBACK.
 static inline void gpu_submit_as(uint32_t how) {
     uint32_t before = GPU_FRAMES;
+    // (every texture the list names in RAM or the ROM copied into the VRAM first: the GPU draws from there alone)
+    gpu_uploads_list l = {0, 0, 0, (uint32_t*)GPU_COMMANDS, GPU_COMMANDS, gpu_commands, GPU_MAX_COMMANDS, gpu_vertices,
+                          GPU_MAX_VERTICES, 0, 0, 0};
+    static gpu_up_state ups;
+    gpu_list_uploads(&l, 0, &ups);
+    gpu_commands = l.count, gpu_vertices = l.mesh, gpu_next = (volatile uint32_t*)GPU_COMMANDS + 16 * gpu_commands;
     GPU_LIST = GPU_COMMANDS;
     GPU_COUNT = gpu_commands;
     GPU_SUBMIT = how | (gpu_passes << 8) | gpu_uploads;   // drawn once the host draws every pass used

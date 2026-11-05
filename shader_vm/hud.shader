@@ -34,7 +34,7 @@ Shader "ShaderEmu/hud"
             #define GPU_STATE _State
             #define GPU_VOLUME
             #define GPU_VOLUME_PASS _VolumePass
-            #include "src/gpu.h"
+            #include "src/gpu_draw.h"
 
             // A triangle of the volume's list when it is a flat draw of this pass (volume_flat_command, as the HUD's
             // geometry shader asks), else a point nothing covers.

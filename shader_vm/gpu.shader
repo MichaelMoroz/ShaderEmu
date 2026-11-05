@@ -39,33 +39,15 @@ Shader "ShaderEmu/gpu"
             #pragma fragment frag
 
             Texture2D<uint4> _State;
-            // The ROM, for textures that are files in it (FRAGMENT_RGB24).
-            Texture2D<float4> _Data_ROM;   // the ROM: a 16-byte texel a pixel, read by its bits (asuint)
-            #define GPU_ROM
             // The pass this draw is (see FRAGMENT_PASS in gpu.h) and the passes drawn this frame,
             // one bit each. A host that only ever draws pass 0 leaves both at their defaults.
             uniform uint _GpuPass, _GpuPasses;
             #define GPU_STATE _State
-            #define GPU_PASS_UNIFORMS
-            #ifndef GPU_NO_EDGE
-            #define GPU_EDGE   // the clear cut at the picture's edge (gpu_varyings; --define GPU_NO_EDGE: drawn past it)
-            #endif
-            #define GPU_VRAM   // textures uploaded into the VRAM (docs/machine/gpu.md, "VRAM")
-            #ifndef GPU_NO_DRAW_IDS
-            #define GPU_DRAW_IDS   // each vertex's command from the draw-ID pass (docs/machine/gpu.md, "Draw IDs")
-            #ifndef GPU_NO_FRONT
-            #define GPU_FRONT      // each vertex made by the front end (GPUVertices): no RAM read for it here
-            #ifndef GPU_NO_STREAMS
-            #define GPU_STREAMS    // what a draw would read from RAM, in the VRAM's band (GPUStream; docs/machine/gpu.md, "Streams")
-            #define GPU_VRAM_ONLY  // and so no path of the fragment reads RAM: this pass reads the VRAM alone
-            #endif
-            #endif
-            #endif
-            #include "src/gpu.h"
+            #include "src/gpu_draw.h"
 
             // In Unity the mesh carries its vertex number; here SV_VertexID is the same thing.
             gpu_varyings vert(uint id : SV_VertexID) {
-                return gpu_vertex(id);
+                return gpu_vertex(id, _GpuPass);
             }
             float4 frag(gpu_varyings i) : SV_Target {
                 return gpu_fragment(i);
@@ -89,17 +71,11 @@ Shader "ShaderEmu/gpu"
             Texture2D<float4> _Data_ROM;
             #define GPU_ROM
             #define GPU_STATE _State
-            #define GPU_UPLOAD_PASS
-            #ifndef GPU_NO_DRAW_IDS
-            #define GPU_DRAW_IDS
-            #ifndef GPU_NO_FRONT
-            #define GPU_FRONT
-            #endif
-            #endif
-            #include "src/gpu.h"
+            #define _GpuPass 16u   // (the uploads' bit of the draw IDs)
+            #include "src/gpu_draw.h"
 
             gpu_varyings vert(uint id : SV_VertexID) {
-                return gpu_vertex(id);
+                return gpu_vertex(id, _GpuPass);
             }
             float4 frag(gpu_varyings i) : SV_Target {
                 return gpu_upload_fragment(i);
@@ -122,17 +98,11 @@ Shader "ShaderEmu/gpu"
 
             Texture2D<uint4> _State;
             #define GPU_STATE _State
-            #define GPU_COPY_PASS
-            #ifndef GPU_NO_DRAW_IDS
-            #define GPU_DRAW_IDS
-            #ifndef GPU_NO_FRONT
-            #define GPU_FRONT
-            #endif
-            #endif
-            #include "src/gpu.h"
+            #define _GpuPass 17u   // (the copies' bit of the draw IDs)
+            #include "src/gpu_draw.h"
 
             gpu_varyings vert(uint id : SV_VertexID) {
-                return gpu_vertex(id);
+                return gpu_vertex(id, _GpuPass);
             }
             float4 frag(gpu_varyings i) : SV_Target {
                 return gpu_copy_fragment(i);
@@ -158,16 +128,8 @@ Shader "ShaderEmu/gpu"
             Texture2D<float4> _Data_ROM;   // (packed vertices may be a file's bytes where it lies in the ROM)
             #define GPU_ROM
             #define GPU_STATE _State
-            #define GPU_DRAW_IDS
-            #define GPU_FRONT_PASS
-            #ifndef GPU_NO_STREAMS
-            #define GPU_STREAMS   // (a vertex's texture, light map, glyph or sprite where the stream pass puts it)
-            #endif
-            #define _GpuPass 0u   // (no pass of its own: gpu_command, which it does not call, names one)
-            #ifndef GPU_NO_EDGE
-            #define GPU_EDGE
-            #endif
-            #include "src/gpu.h"
+            #define _GpuPass 0u
+            #include "src/gpu_draw.h"
 
             float4 vert(uint id : SV_VertexID) : SV_Position {
                 return float4(id == 1 ? 3.0 : -1.0, id == 2 ? -3.0 : 1.0, 0.0, 1.0);
@@ -175,72 +137,6 @@ Shader "ShaderEmu/gpu"
             gpu_made frag(float4 p : SV_Position) {
                 uint2 at = uint2(p.xy);
                 return gpu_front_fragment(at.y * GPU_DRAW_IDS_W + at.x);
-            }
-            ENDCG
-        }
-
-        Pass
-        {
-            // The streams' sums (docs/machine/gpu.md, "Streams"), drawn six times after the draw IDs, _GpuStreamStep 0 to 5:
-            // each triangle's stream's size, sixteen of a row's summed, each row's sum, sixteen rows' summed, where each row
-            // starts, each triangle's first texel in the band.
-            Name "GPUStreamSums"
-            ZTest Off
-            ZWrite Off
-
-            CGPROGRAM
-            #pragma target 5.0
-            #pragma vertex vert
-            #pragma fragment frag
-
-            Texture2D<uint4> _State;
-            Texture2D<float4> _Data_ROM;   // (a glyph's table may be a font's file where it lies in the ROM)
-            #define GPU_ROM
-            uniform uint _GpuStreamStep;
-            #define GPU_STATE _State
-            #define GPU_DRAW_IDS
-            #define GPU_STREAMS
-            #define GPU_STREAM_SUMS_PASS
-            #define _GpuPass 0u
-            #include "src/gpu.h"
-
-            float4 vert(uint id : SV_VertexID) : SV_Position {
-                return float4(id == 1 ? 3.0 : -1.0, id == 2 ? -3.0 : 1.0, 0.0, 1.0);
-            }
-            uint2 frag(float4 p : SV_Position) : SV_Target {
-                return gpu_stream_sums_fragment(uint2(p.xy), _GpuStreamStep);
-            }
-            ENDCG
-        }
-
-        Pass
-        {
-            // The streams' texels (gpu_stream_fragment): what the list's draws would read from RAM, converted into the VRAM's
-            // band, after the sums and the front end and before the uploads.
-            Name "GPUStream"
-            ZTest Off
-            ZWrite Off
-
-            CGPROGRAM
-            #pragma target 5.0
-            #pragma vertex vert
-            #pragma fragment frag
-
-            Texture2D<uint4> _State;
-            Texture2D<float4> _Data_ROM;
-            #define GPU_ROM
-            #define GPU_STATE _State
-            #define GPU_DRAW_IDS
-            #define GPU_STREAMS
-            #define GPU_STREAM_PASS
-            #define _GpuPass 0u
-            #include "src/gpu.h"
-
-            float4 vert(uint id : SV_VertexID) : SV_Position {
-                return gpu_stream_vertex(id);
-            }
-            float4 frag(float4 p : SV_Position) : SV_Target {
-                return gpu_stream_fragment(p);
             }
             ENDCG
         }
@@ -262,15 +158,15 @@ Shader "ShaderEmu/gpu"
             uniform uint _GpuPasses;
             #define GPU_STATE _State
             #define GPU_DRAW_IDS_PASS
-            #include "src/gpu.h"
+            #include "src/gpu_draw.h"
 
             // one triangle over the target
             float4 vert(uint id : SV_VertexID) : SV_Position {
                 return float4(id == 1 ? 3.0 : -1.0, id == 2 ? -3.0 : 1.0, 0.0, 1.0);
             }
-            uint2 frag(float4 p : SV_Position) : SV_Target {
+            int2 frag(float4 p : SV_Position) : SV_Target {
                 uint2 at = uint2(p.xy);
-                return gpu_draw_ids_fragment(at.y * GPU_DRAW_IDS_W + at.x);
+                return asint(gpu_draw_ids_fragment(at.y * GPU_DRAW_IDS_W + at.x));
             }
             ENDCG
         }
@@ -357,7 +253,7 @@ Shader "ShaderEmu/gpu"
 
             Texture2D<uint4> _State;
             #define GPU_STATE _State
-            #include "src/gpu.h"
+            #include "src/gpu_draw.h"
 
             float4 vert(uint id : SV_VertexID) : SV_Position {
                 uint k = id % 6;
