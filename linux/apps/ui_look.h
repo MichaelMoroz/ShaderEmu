@@ -24,6 +24,7 @@
 /* The windows' colour: the registry's "RRGGBB" (hex) or "default", and the next word of the page,
  * 0x01RRGGBB or 0 for the look's own (the window manager's frames: nx_tint in nxpaintnc.c). */
 #define UI_TINT		"desktop.color"
+#define UI_TINT_DEFAULT	"505860"	/* Graphite, a new image's */
 #define UI_TINT_SET	0x01000000u
 
 enum { UI_STYLE_CLASSIC, UI_STYLE_SEVEN };
@@ -149,6 +150,6 @@ ui_look_from_registry(void)
 {
 	ui_look_set(strcmp(reg_get(UI_LOOK_STYLE, "seven"), "classic") ? UI_STYLE_SEVEN : UI_STYLE_CLASSIC,
 		strcmp(reg_get(UI_LOOK_TEXT, "smooth"), "classic") != 0);
-	ui_tint_set(ui_tint_parse(reg_get(UI_TINT, "default")));
+	ui_tint_set(ui_tint_parse(reg_get(UI_TINT, UI_TINT_DEFAULT)));
 }
 #endif

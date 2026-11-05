@@ -9,7 +9,7 @@
 #include "ui_icons.h"
 #include "ui_menu.h"
 #include "ui_ask.h"
-#include "nxedit_syntax.h"
+#include "syntax.h"	/* (the IDE's lexer: C, JavaScript, Python, HLSL) */
 #include "nxedit_dialog.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -48,7 +48,7 @@ struct doc {
 	int ax, ay, marked;	/* where a selection began, when there is one: it ends at the cursor */
 	int want;		/* the column Up and Down keep to, or -1 */
 	int top, sub, left;	/* the first line shown, its first row (wrapped), the first column (not) */
-	int named, crlf, final_newline, readonly, c_code;
+	int named, crlf, final_newline, readonly, lang;	/* lang: syntax.h's SX_C..., -1 for text */
 	char path[512];
 	struct change *undo, *redo;
 	int undo_count, undo_room, redo_count, redo_room, saved_group;
@@ -691,19 +691,6 @@ titled(void)
 		GrSetWindowTitle(window, title);
 }
 
-static int
-c_like(const char *path)
-{
-	static const char *const endings[] = { ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh", ".ino", NULL };
-	const char *dot = strrchr(leaf(path), '.');
-	int i;
-
-	for (i = 0; dot && endings[i]; i++)
-		if (!strcasecmp(dot, endings[i]))
-			return 1;
-	return 0;
-}
-
 static int read_wanted;		/* nxedit --read: every .md file opened is read, not edited */
 
 /* Whether a file opened is shown read: Markdown in the image's documentation (/usr/share/doc), or
@@ -815,7 +802,7 @@ load(const char *file)
 	snprintf(d->path, sizeof d->path, "%s", file);
 	d->named = 1;
 	d->final_newline = 1;
-	d->c_code = c_like(file);
+	d->lang = sx_lang_of(file);
 	d->reading = read_first(file);
 	if (fd < 0) {
 		if (why == ENOENT)
@@ -889,8 +876,8 @@ load(const char *file)
 	if (d->crlf && mixed_endings > !d->final_newline)
 		snprintf(notice, sizeof notice, "mixed line endings: %d lines with no CR will get one when saved", mixed_endings);
 	mixed_endings = 0;
-	if (d->c_code && info.st_size > COLOUR_MOST) {
-		d->c_code = 0;
+	if (d->lang >= 0 && info.st_size > COLOUR_MOST) {
+		d->lang = -1;
 		say("a large file: shown without colours");
 	}
 	recent_add(file);
@@ -948,8 +935,8 @@ write_to(const char *to)
 	d->named = 1, d->readonly = 0;
 	d->saved_group = d->undo_count ? d->undo[d->undo_count - 1].group : 0;
 	seal();
-	if (d->c_code != c_like(to))
-		d->c_code = c_like(to), dirty_all = 1;
+	if (d->lang != sx_lang_of(to))
+		d->lang = sx_lang_of(to), d->carry_known = 0, dirty_all = 1;
 	recent_add(d->path);
 	snprintf(notice, sizeof notice, "saved as %.150s", d->path);
 	status_dirty = tabs_dirty = 1;
@@ -970,8 +957,9 @@ static int brace_x, brace_y = -1, match_x, match_y = -1;
 #define LIT_LINE MWRGB(232, 242, 254)
 #define BRACE_GROUND MWRGB(190, 230, 190)
 #define FAINT MWRGB(175, 175, 175)
-static const GR_COLOR kind_colour[ES_KINDS] = { BLACK, MWRGB(0, 0, 230), MWRGB(128, 0, 160), MWRGB(150, 75, 0),
-	MWRGB(163, 21, 21), MWRGB(210, 105, 0), MWRGB(0, 128, 0) };
+/* (syntax.h's kinds: plain, keyword, type, directive, string, number, comment, a call's name) */
+static const GR_COLOR kind_colour[SX_KINDS] = { BLACK, MWRGB(0, 0, 230), MWRGB(128, 0, 160), MWRGB(150, 75, 0),
+	MWRGB(163, 21, 21), MWRGB(210, 105, 0), MWRGB(0, 128, 0), MWRGB(110, 60, 0) };
 
 static unsigned char kinds[LEX_MOST + 2];
 static char lex_text[LEX_MOST + 2];
@@ -979,7 +967,8 @@ static struct doc *lexed_doc;
 static int lexed_y = -1;
 static unsigned lexed_gen;
 
-/* Whether line y begins inside a comment: worked out from the last line known. */
+/* What line y begins inside (syntax.h's SX_IN_...: a comment, a template, a string of three quotes): worked out from the
+ * last line known. */
 static int
 carry_at(int y)
 {
@@ -989,7 +978,8 @@ carry_at(int y)
 	while (d->carry_known < y) {
 		const struct line *l = &d->lines[d->carry_known];
 
-		d->carry[d->carry_known + 1] = (unsigned char)es_carry(l->text, l->length, d->carry[d->carry_known]);
+		sx_lang = d->lang;
+		d->carry[d->carry_known + 1] = (unsigned char)sx_carry(l->text, l->length, d->carry[d->carry_known]);
 		d->carry_known++;
 	}
 	return d->carry[y];
@@ -1001,13 +991,14 @@ lex(int y)
 {
 	const struct line *l = &d->lines[y];
 
-	if (!colour || !d->c_code || l->length > LEX_MOST)
+	if (!colour || d->lang < 0 || l->length > LEX_MOST)
 		return NULL;
 	if (lexed_doc == d && lexed_y == y && lexed_gen == lex_gen)
 		return kinds;
 	memcpy(lex_text, l->text, l->length);
 	lex_text[l->length] = lex_text[l->length + 1] = 0;
-	es_line(lex_text, l->length, carry_at(y), kinds);
+	sx_lang = d->lang;
+	sx_line(lex_text, carry_at(y), kinds);
 	lexed_doc = d, lexed_y = y, lexed_gen = lex_gen;
 	return kinds;
 }
@@ -1041,20 +1032,20 @@ draw_row(int r, int y, int s, int e, int first, int last)
 	static unsigned char kind_at[WIDEST + 1];
 	const struct line *l;
 	const unsigned char *kind;
-	int py = text_top + MARGIN + r * ui_fh, tx = gutter + MARGIN, right = width - UI_SCROLL_W;
+	int py = text_top + MARGIN + r * UI_ZH, tx = gutter + MARGIN, right = width - UI_SCROLL_W;
 	int x0, y0, x1, y1, sb = 0, se = 0, i, j, col = 0, n = 0, from;
 	GR_COLOR ground = line_lit && y == d->cy ? LIT_LINE : WHITE, ink;
 
 	if (gutter) {
-		ui_fill(window, 0, py, gutter, ui_fh, UI_FACE);
+		ui_fill(window, 0, py, gutter, UI_ZH, UI_FACE);
 		if (first && y < d->count) {
 			char number[12];
 			int length = (int)(put_number(number, y + 1) - number);
 
-			ui_text(window, gutter - 4 - length * ui_fw, py, number, length, ui_seven ? MWRGB(43, 145, 175) : MWRGB(110, 110, 110), 1);
+			ui_ztext(window, gutter - 4 - length * UI_ZW, py, number, length, ui_seven ? MWRGB(43, 145, 175) : MWRGB(110, 110, 110));
 		}
 	}
-	ui_fill(window, gutter, py, right - gutter, ui_fh, y < d->count ? ground : WHITE);
+	ui_fill(window, gutter, py, right - gutter, UI_ZH, y < d->count ? ground : WHITE);
 	if (y >= d->count)
 		return;
 	l = &d->lines[y];
@@ -1071,7 +1062,7 @@ draw_row(int r, int y, int s, int e, int first, int last)
 			if (col < d->left)
 				continue;
 			glyphs[n] = (char)(j ? ' ' : c == '\t' && whitespace ? '>' : shown);
-			kind_at[n] = whitespace && (c == ' ' || c == '\t') ? ES_KINDS : kind ? kind[i] : ES_PLAIN;
+			kind_at[n] = whitespace && (c == ' ' || c == '\t') ? SX_KINDS : kind ? kind[i] : SX_PLAIN;
 			look[n] = i >= sb && i < se ? 1 : y == brace_y && i == brace_x && match_y >= 0 ? 2 :
 				y == match_y && i == match_x ? 2 : 0;
 			n++;
@@ -1084,27 +1075,27 @@ draw_row(int r, int y, int s, int e, int first, int last)
 		for (j = i + 1; j < n && look[j] == look[i]; j++)
 			continue;
 		if (look[i])
-			ui_fill(window, tx + i * ui_fw, py, (j - i) * ui_fw, ui_fh, look[i] == 1 ? UI_SELECTED : BRACE_GROUND);
+			ui_fill(window, tx + i * UI_ZW, py, (j - i) * UI_ZW, UI_ZH, look[i] == 1 ? UI_SELECTED : BRACE_GROUND);
 	}
 	/* the text, a run of one colour a request; spaces at a run's ends are not sent */
 	for (i = 0; i < n; i = j) {
-		ink = look[i] == 1 ? WHITE : kind_at[i] == ES_KINDS ? FAINT : kind_colour[kind_at[i]];
-		for (j = i + 1; j < n && (look[j] == 1 ? WHITE : kind_at[j] == ES_KINDS ? FAINT : kind_colour[kind_at[j]]) == ink; j++)
+		ink = look[i] == 1 ? WHITE : kind_at[i] == SX_KINDS ? FAINT : kind_colour[kind_at[i]];
+		for (j = i + 1; j < n && (look[j] == 1 ? WHITE : kind_at[j] == SX_KINDS ? FAINT : kind_colour[kind_at[j]]) == ink; j++)
 			continue;
 		for (from = i; from < j && glyphs[from] == ' '; from++)
 			continue;
 		for (col = j; col > from && glyphs[col - 1] == ' '; col--)
 			continue;
 		if (col > from)
-			ui_text(window, tx + from * ui_fw, py, glyphs + from, col - from, ink, 1);
+			ui_ztext(window, tx + from * UI_ZW, py, glyphs + from, col - from, ink);
 	}
 	if (y == d->cy && d->cx >= s && (d->cx < e || last)) {
 		col = columns_between(y, s, d->cx) - d->left;
 		if (col >= 0 && col <= columns) {
 			if (overwrite)
-				ui_fill(window, tx + col * ui_fw, py + ui_fh - 2, ui_fw, 2, BLACK);
+				ui_fill(window, tx + col * UI_ZW, py + UI_ZH - 2, UI_ZW, 2, BLACK);
 			else
-				ui_fill(window, tx + col * ui_fw, py, 2, ui_fh, BLACK);
+				ui_fill(window, tx + col * UI_ZW, py, 2, UI_ZH, BLACK);
 		}
 	}
 }
@@ -1266,10 +1257,10 @@ layout(void)
 		digits++;
 	if (digits < 3)
 		digits = 3;
-	gutter = numbers ? (digits + 1) * ui_fw + 4 : 0;
+	gutter = numbers ? (digits + 1) * UI_ZW + 4 : 0;
 	text_top = MENU_H + (doc_count > 1 ? TABS_H : 0);
-	rows = (height - text_top - STATUS - MARGIN) / ui_fh;
-	columns = (width - gutter - 2 * MARGIN - UI_SCROLL_W) / ui_fw;
+	rows = (height - text_top - STATUS - MARGIN) / UI_ZH;
+	columns = (width - gutter - 2 * MARGIN - UI_SCROLL_W) / UI_ZW;
 	rows = rows < 1 ? 1 : rows;
 	columns = columns < 1 ? 1 : columns > WIDEST ? WIDEST : columns;
 	drawn_layout = gutter * 7 + text_top * 131 + rows * 1009 + columns * 50021 + wrap * 3 + tab_width * 17;
@@ -1315,8 +1306,8 @@ flush(void)
 			/* the rows that stay in view are copied to their new places, the others drawn */
 			int stay = rows - abs(by), ty = text_top + MARGIN;
 
-			GrCopyArea(window, ui_gc, 0, ty + (by < 0 ? -by * ui_fh : 0), width - UI_SCROLL_W, stay * ui_fh, window, 0,
-				   ty + (by > 0 ? by * ui_fh : 0), MWROP_COPY);
+			GrCopyArea(window, ui_gc, 0, ty + (by < 0 ? -by * UI_ZH : 0), width - UI_SCROLL_W, stay * UI_ZH, window, 0,
+				   ty + (by > 0 ? by * UI_ZH : 0), MWROP_COPY);
 			dirty(by > 0 ? d->top + stay : d->top, by > 0 ? d->top + rows - 1 : d->top - by - 1);
 		} else if (moved) {
 			dirty(d->top, FAR);
@@ -1840,7 +1831,7 @@ enum { C_NEW = 1, C_OPEN, C_RELOAD, C_SAVE, C_SAVE_AS, C_SAVE_ALL, C_CLOSE, C_CL
 	C_UNDO, C_REDO, C_CUT, C_COPY, C_PASTE, C_DELETE, C_ALL,
 	C_DUPLICATE, C_DELETE_LINE, C_LINE_UP, C_LINE_DOWN, C_SORT, C_TRIM, C_INDENT, C_OUTDENT, C_UPPER, C_LOWER, C_LF, C_CRLF,
 	C_OVERWRITE, C_FIND, C_NEXT, C_PREVIOUS, C_REPLACE, C_FIND_WORD, C_LINE, C_BRACE,
-	C_WRAP, C_NUMBERS, C_WHITESPACE, C_LIT, C_COLOUR, C_TAB2, C_TAB4, C_TAB8, C_NEXT_TAB, C_PREVIOUS_TAB, C_READ, C_BACK,
+	C_WRAP, C_NUMBERS, C_WHITESPACE, C_LIT, C_COLOUR, C_TAB2, C_TAB4, C_TAB8, C_NEXT_TAB, C_PREVIOUS_TAB, C_READ, C_BACK, C_ZOOM_IN, C_ZOOM_OUT, C_ZOOM_RESET,
 	C_RECENT = 100 };
 
 static struct ui_menu_item recent_items[RECENT];
@@ -1879,7 +1870,8 @@ static struct ui_menu_item tab_items[] = {
 };
 static struct ui_menu_item view_items[] = {
 	{ "Read (Markdown)   Ctrl+R", -1, C_READ }, { "Word wrap", -1, C_WRAP, NULL, 0, UI_MENU_LINE }, { "Line numbers", -1, C_NUMBERS }, { "Spaces and tabs", -1, C_WHITESPACE },
-	{ "The cursor's line lit", -1, C_LIT }, { "Colours for C", -1, C_COLOUR }, { "Tab width", -1, 0, tab_items, 3 },
+	{ "The cursor's line lit", -1, C_LIT }, { "Colours for code", -1, C_COLOUR }, { "Tab width", -1, 0, tab_items, 3 },
+	{ "Larger text   Ctrl++", -1, C_ZOOM_IN, NULL, 0, UI_MENU_LINE }, { "Smaller text   Ctrl+-", -1, C_ZOOM_OUT }, { "Normal size   Ctrl+0", -1, C_ZOOM_RESET },
 	{ "Next tab   Ctrl+PgDn", -1, C_NEXT_TAB, NULL, 0, UI_MENU_LINE }, { "Previous tab   Ctrl+PgUp", -1, C_PREVIOUS_TAB },
 };
 static struct ui_menu_item pointer_items[] = {
@@ -1891,7 +1883,7 @@ static struct ui_menu_item read_items[] = {
 	{ "Back   Backspace", -1, C_BACK }, { "Edit the text   Ctrl+R", -1, C_READ, NULL, 0, UI_MENU_LINE },
 };
 static const struct { struct ui_menu_item *items; int count; } bar_menus[4] = {
-	{ file_items, 10 }, { edit_items, 11 }, { search_items, 7 }, { view_items, 9 },
+	{ file_items, 10 }, { edit_items, 11 }, { search_items, 7 }, { view_items, 12 },
 };
 
 static void
@@ -1935,14 +1927,16 @@ menu_flags(void)
 	flag(ending_items, 2, C_LF, UI_MENU_CHECK, !d->crlf);
 	flag(ending_items, 2, C_CRLF, UI_MENU_CHECK, d->crlf);
 	flag(edit_items, 11, C_OVERWRITE, UI_MENU_CHECK, overwrite);
-	flag(view_items, 9, C_WRAP, UI_MENU_CHECK, wrap);
-	flag(view_items, 9, C_NUMBERS, UI_MENU_CHECK, numbers);
-	flag(view_items, 9, C_WHITESPACE, UI_MENU_CHECK, whitespace);
-	flag(view_items, 9, C_LIT, UI_MENU_CHECK, line_lit);
-	flag(view_items, 9, C_COLOUR, UI_MENU_CHECK, colour);
-	flag(view_items, 9, C_NEXT_TAB, UI_MENU_GREY, doc_count < 2);
-	flag(view_items, 9, C_PREVIOUS_TAB, UI_MENU_GREY, doc_count < 2);
-	flag(view_items, 9, C_READ, UI_MENU_CHECK, d->reading);
+	flag(view_items, 12, C_WRAP, UI_MENU_CHECK, wrap);
+	flag(view_items, 12, C_NUMBERS, UI_MENU_CHECK, numbers);
+	flag(view_items, 12, C_WHITESPACE, UI_MENU_CHECK, whitespace);
+	flag(view_items, 12, C_LIT, UI_MENU_CHECK, line_lit);
+	flag(view_items, 12, C_COLOUR, UI_MENU_CHECK, colour);
+	flag(view_items, 12, C_NEXT_TAB, UI_MENU_GREY, doc_count < 2);
+	flag(view_items, 12, C_PREVIOUS_TAB, UI_MENU_GREY, doc_count < 2);
+	flag(view_items, 12, C_READ, UI_MENU_CHECK, d->reading);
+	flag(view_items, 12, C_ZOOM_IN, UI_MENU_GREY, ui_zoom == UI_ZOOM_MAX);
+	flag(view_items, 12, C_ZOOM_OUT, UI_MENU_GREY, ui_zoom == 0);
 	flag(read_items, 2, C_BACK, UI_MENU_GREY, !d->back_count);
 	flag(tab_items, 3, C_TAB2, UI_MENU_CHECK, tab_width == 2);
 	flag(tab_items, 3, C_TAB4, UI_MENU_CHECK, tab_width == 4);
@@ -2234,6 +2228,18 @@ setting(const char *key, int *value, int to)
 
 static void command(int id);
 
+/* The text a step larger or smaller (Ctrl +, Ctrl -, Ctrl and the wheel; Ctrl 0 the first size), kept. */
+static void
+zoom_to(int step)
+{
+	if (!ui_zoom_set(step))
+		return;
+	reg_set_int("nxedit.zoom", ui_zoom);
+	layout();
+	dirty_all = 1;
+	status_dirty = 1;
+}
+
 static void
 command(int id)
 {
@@ -2373,6 +2379,9 @@ command(int id)
 	case C_WHITESPACE: setting("nxedit.whitespace", &whitespace, !whitespace); break;
 	case C_LIT: setting("nxedit.lit", &line_lit, !line_lit); break;
 	case C_COLOUR: setting("nxedit.colour", &colour, !colour); break;
+	case C_ZOOM_IN: zoom_to(ui_zoom + 1); break;
+	case C_ZOOM_OUT: zoom_to(ui_zoom - 1); break;
+	case C_ZOOM_RESET: zoom_to(0); break;
 	case C_TAB2: setting("nxedit.tabs", &tab_width, 2); break;
 	case C_TAB4: setting("nxedit.tabs", &tab_width, 4); break;
 	case C_TAB8: setting("nxedit.tabs", &tab_width, 8); break;
@@ -2585,6 +2594,10 @@ key(const GR_EVENT_KEYSTROKE *k)
 		letter = 'a' + ch - 1;
 	else if (ctrl && ch < 128 && isalpha(ch))
 		letter = tolower(ch);
+	if ((i = ui_zoom_key(ch, k->modifiers)) != 2) {
+		zoom_to(i ? ui_zoom + i : 0);
+		return;
+	}
 	if (letter) {
 		if ((i = command_of(letter, shift)) != 0)
 			command(i);
@@ -2706,7 +2719,7 @@ key(const GR_EVENT_KEYSTROKE *k)
 static void
 place(int px, int py, int *x, int *y)
 {
-	int r = (py - text_top - MARGIN) / ui_fh, yy = d->top, k = d->sub, n, col;
+	int r = (py - text_top - MARGIN) / UI_ZH, yy = d->top, k = d->sub, n, col;
 
 	if (py < text_top + MARGIN)
 		r = 0;
@@ -2715,7 +2728,7 @@ place(int px, int py, int *x, int *y)
 	while (r > 0 && row_next(&yy, &k))
 		r--;
 	n = segments(yy);
-	col = (px - gutter - MARGIN + ui_fw / 2) / ui_fw + d->left;
+	col = (px - gutter - MARGIN + UI_ZW / 2) / UI_ZW + d->left;
 	*x = byte_at(yy, seg[k], seg[k + 1], col < 0 ? 0 : col);
 	if (k < n - 1 && *x == seg[k + 1])
 		*x = prev_x(yy, *x);
@@ -2829,7 +2842,9 @@ main_event(GR_EVENT *event)
 		break;
 	case GR_EVENT_TYPE_BUTTON_DOWN:
 		if ((i = ui_wheel(event)) != 0) {
-			if (d->reading)
+			if (event->button.modifiers & MWKMOD_CTRL)
+				zoom_to(ui_zoom - ui_wheel_sum(event));
+			else if (d->reading)
 				read_scroll(2 * READ_LINE * ui_wheel_sum(event));
 			else
 				scroll_rows(3 * ui_wheel_sum(event));
@@ -2931,6 +2946,7 @@ main(int argc, char **argv)
 	scroll_drawn = getenv("NXEDIT_SCROLL") && !strcmp(getenv("NXEDIT_SCROLL"), "draw");
 	wrap = reg_int("nxedit.wrap", 0);
 	numbers = reg_int("nxedit.numbers", 1);
+	ui_zoom_set(reg_int("nxedit.zoom", 0));
 	whitespace = reg_int("nxedit.whitespace", 0);
 	line_lit = reg_int("nxedit.lit", 1);
 	colour = reg_int("nxedit.colour", 1);

@@ -1,0 +1,69 @@
+# What world/check_overlap.py lets cross on purpose: KIND | WORD | WORD  # why
+# A rule takes a pair of parts when one part's object name has the first word and the other's the
+# second (in either order). Only crossings are allowed here: two faces that fight are always a fault.
+# A crossing is a seam, not a flicker: these are joins hidden inside a made thing, or a thing
+# sunk into a soft one. Before adding a rule, look at the place the check prints.
+
+# joins inside one made thing: a part let into the next, the join hidden in both
+CROSS | Chairs | Chairs                  # the office chairs: spokes into the hub, the lift into the seat, the arms' bars into the pads
+CROSS | Chair | Chair                    # the desk's office chair, the same model
+CROSS | Holo seats | Holo seats          # the command chairs: the pan, sides, arms and back sunk into each other
+CROSS | Holo consoles | Holo consoles    # the consoles: the stem into the base and the head, the hinge's barrel through its cheeks
+CROSS | Radiator | Radiator              # fins through the den radiator's back plate and top bar
+CROSS | Corridor radiator | Corridor radiator   # the same under the corridor's window
+CROSS | Ceiling lamps | Ceiling lamps    # the lamps' tubes into their housings
+CROSS | Floor lamp | Floor lamp          # the shade's three wires into the stem and the shade
+CROSS | Rack | Rack                      # the rack's machines and rails let into its posts
+CROSS | Tables | Tables                  # the classroom tables' panel ends into their tops and feet
+CROSS | Desk | Desk                      # the main desk's ends into its top
+CROSS | Door | Door                      # the hinges' pins through the leaf's edge, the handle's spindle into the stile
+CROSS | Corridor doors | Corridor doors  # the same, on the neighbours' doors
+CROSS | Window | Window                  # the den window's mullion into its sash frame
+CROSS | Corridor window | Corridor window   # the same, in the corridor
+CROSS | Board | Board                    # the board's plate under its moulded frame
+CROSS | Posters | Posters                # each poster's backing board under its frame's moulding
+CROSS | Screen housings | Screen housings   # the housings' lips into their bodies
+CROSS | Consoles | Consoles              # the den's consoles' keys and bodies
+CROSS | Shelf | Shelf                    # the shelf's divider into the shelves over and under it
+CROSS | Desk things | Desk things        # a floppy's label under the next one in the fan, the pens in the mug, the speakers' lamps in their fronts
+CROSS | Table things | Table things      # the mug's handle into its wall
+CROSS | Station | Station                # a place's keyboard caps in its well, the mouse's sleeve, its leads into their plugs
+CROSS | Station | pc_station             # a place's leads into the sockets of its computer's shell
+CROSS | Network | Network                # the network's leads into their plugs, and leads laid together on the floor
+CROSS | Hubs | Network                   # the leads' plugs into the hubs' sockets
+CROSS | Network | Station                # the leads' plugs into the places' sockets
+CROSS | Network | Rack                   # the network's lead into the rack
+CROSS | Cables | Cables                  # the desk's leads into their plugs and grommets
+CROSS | Cables | Screen wall             # leads that go into the boards behind the screens
+CROSS | Cables | Rack                    # leads into the rack's machines
+CROSS | Cushions | Cushions              # the cushions' buttons sewn through them
+CROSS | Cushions | sofa_02               # the cushions sit into the sofa's soft seat and back
+CROSS | Pots | pachira                   # a plant's stems in its pot's soil
+CROSS | Pots | Pots                      # a pot standing in its saucer's water line
+CROSS | potted_plant_02 | potted_plant_02   # the plant's leaves through its pot's rim
+CROSS | Rugs | sofa_02                   # the sofa's feet in the rug's pile
+CROSS | Rugs | modern_coffee_table       # the table's feet in the rug's pile
+CROSS | Floor | Rack                     # the rack's feet levelled into the floor
+CROSS | cardboard_box_01 | television_02    # the television on the box's flaps, which give
+CROSS | cardboard_box_01 | cardboard_box_01 # the upper box on the lower one's flaps
+CROSS | side_table_tall_01 | wicker_basket  # the basket's weave on the table's top
+CROSS | Desk | desk_lamp_arm               # the lamp's clamp round the desk's edge
+
+# a made thing let into the room's shell: the wall or the board behind it hides the join
+CROSS | Walls | Window                   # the den window's frame let into its reveal
+CROSS | Corridor walls | Corridor window # the same, in the corridor
+CROSS | Window | Window glass            # the glass in its sash's groove
+CROSS | Corridor window | Window glass   # the same
+CROSS | Panelling | Window               # the sill over the panelling's cap
+CROSS | Door | Walls                     # the hinges into the frame
+CROSS | Screen housings | Screen wall    # the screens' housings let into the boards
+CROSS | Desk | Screen wall               # the desk's top under the ledge before the boards
+CROSS | Rack | Screen wall               # the rack's side into the end of the boards
+CROSS | Panelling | Rack                 # the rack in the corner, into the panelling's cap
+CROSS | Corridor walls | industrial_wall_sconce   # the sconces' plates into the wall
+CROSS | Walls | cardboard_box_01         # the box on the shelf's top, its flaps against the wall
+CROSS | Corridor walls | pachira         # leaves of the plant by the window that touch the wall
+CROSS | Corridor trim | pachira          # and the panelling
+
+# the city, seen from 42 m up: its towers stand in each other's roofs and crowns; nothing fights there
+CROSS | City | City                      # towers through roofs, crowns round towers, masts through roofs

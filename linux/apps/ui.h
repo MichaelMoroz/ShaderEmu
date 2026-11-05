@@ -36,7 +36,7 @@
 #define UI_ACCENT (ui_seven ? ui_accent(MWRGB(51, 153, 255), 0) : ui_accent(BLACK, -96))
 #define UI_KEPT "/persistence/desktop"	/* the desktop's own files that the host keeps (docs/system/persist.md) */
 #define UI_WALLPAPER_CHOICE "desktop.wallpaper"	/* the registry's key for what the desktop shows: a picture's path, or #RRGGBB */
-#define UI_WALLPAPER_DEFAULT "/usr/share/wallpaper-fox.jpg"
+#define UI_WALLPAPER_DEFAULT "/usr/share/wallpaper-photo-1544627836.jpg"
 #define UI_WALLPAPER_TURN "desktop.wallpaper.turn"	/* "N:PATH": that picture shown N quarter turns to the right */
 
 static GR_GC_ID ui_gc;
@@ -53,7 +53,7 @@ static struct ui_widths ui_var_widths;	/* the other font's: ui_width(&ui_var_wid
  * did not ask for are taken here and never reach it (the wrappers below, by the Gr names: a program
  * includes ui.h before its calls). A fill or a clear that covers a kept button forgets it. */
 #define UI_HOT_MAX 64
-static struct ui_hot { GR_WINDOW_ID w; short x, y, width, height; unsigned char pressed, seven; } ui_hots[UI_HOT_MAX];
+static struct ui_hot { GR_WINDOW_ID w; short x, y, width, height; unsigned char pressed, seven, labelled; char label[40]; } ui_hots[UI_HOT_MAX];
 static int ui_hot_count;
 /* the button lit now (w 0: none); gone: a fill covered it, so its edge is not put back unless it is drawn again */
 static struct ui_hot ui_lit;
@@ -104,7 +104,11 @@ ui_select_events(GR_WINDOW_ID w, GR_EVENT_MASK mask)
 	ui_hot_select(m);
 }
 
-/* A button's edge: lit (the accent's, under the pointer) or its own, pressed or not. Windows 7's: the dark
+static void ui_seven_face(GR_DRAW_ID w, int x, int y, int width, int height, int state);
+static void ui_text(GR_DRAW_ID w, int x, int y, const char *text, int count, GR_COLOR colour, int fixed);
+
+/* A button's edge: lit (the accent's, under the pointer) or its own, pressed or not. A Windows 7 button with a
+ * label ui_button drew is drawn again whole: Windows 7's lit face (in the accent), and the label. Windows 7's: the dark
  * line round it and the two rings inside; classic: the ring inside the bevel. */
 static void
 ui_hot_edge(const struct ui_hot *b, int lit)
@@ -114,6 +118,11 @@ ui_hot_edge(const struct ui_hot *b, int lit)
 
 	if (width < 6 || height < 6)
 		return;
+	if (b->seven && b->labelled) {
+		ui_seven_face(b->w, x, y, width, height, lit ? 2 : b->pressed);
+		ui_text(b->w, x + 6, y + (height - 12) / 2, b->label, -1, BLACK, 0);
+		return;
+	}
 	if (!b->seven) {
 		GrSetGCForeground(ui_gc, lit ? UI_ACCENT : (ui_seven ? MWRGB(240, 240, 240) : MWRGB(192, 192, 192)));
 		GrRect(b->w, ui_gc, x + 1, y + 1, width - 2, height - 2);
@@ -181,9 +190,61 @@ ui_hot_forget(GR_WINDOW_ID w, int x, int y, int width, int height)
 	ui_hot_count = j;
 }
 
+/* The button at x, y of window w lit (none: x < 0), the one lit before put back. */
+static void
+ui_hot_light(GR_WINDOW_ID w, int x, int y)
+{
+	int i, at = -1;
+
+	for (i = ui_hot_count - 1; x >= 0 && i >= 0; i--)	/* (the last drawn is on top) */
+		if (ui_hots[i].w == w && x >= ui_hots[i].x && y >= ui_hots[i].y && x < ui_hots[i].x + ui_hots[i].width &&
+		    y < ui_hots[i].y + ui_hots[i].height) {
+			at = i;
+			break;
+		}
+	if (at < 0 ? ui_lit.w == 0 : ui_lit.w != 0 && !ui_lit_gone && ui_hot_same(&ui_hots[at], &ui_lit))
+		return;
+	if (ui_lit.w && !ui_lit_gone)
+		ui_hot_edge(&ui_lit, 0);
+	memset(&ui_lit, 0, sizeof ui_lit);
+	ui_lit_gone = 0;
+	if (at >= 0)
+		ui_lit = ui_hots[at], ui_hot_edge(&ui_lit, 1);
+	if (getenv("UI_HOVER_PRINT")) {	/* (for a test: tools/test_all.py's ui-hover) */
+		if (at >= 0)
+			printf("ui: lit %d,%d %dx%d\n", ui_lit.x, ui_lit.y, ui_lit.width, ui_lit.height);
+		else
+			printf("ui: unlit\n");
+		fflush(stdout);
+	}
+}
+
+/* Where the pointer is, asked (a round trip): for a window it may be over already, or has just come over. */
+static void
+ui_hot_pointer(struct ui_hot_mask *m)
+{
+	GR_WINDOW_ID under = 0;
+	GR_COORD px = 0, py = 0;
+	GR_BUTTON held = 0;
+	GR_WINDOW_INFO info;
+	GR_WINDOW_ID at;
+	int ox = 0, oy = 0;
+
+	GrQueryPointer(&under, &px, &py, &held);
+	if (under != m->w)
+		return;
+	if (ui_hot_in != m->w)
+		ui_hot_in = m->w, ui_hot_select(m);
+	for (at = m->w; at && at != GR_ROOT_WINDOW_ID; at = info.parent) {	/* (its place on the screen, asked now) */
+		GrGetWindowInfo(at, &info);
+		ox += info.x, oy += info.y;
+	}
+	ui_hot_light(m->w, px - ox, py - oy);
+}
+
 /* A button drawn: kept, and lit again if the pointer is on it. */
 static void
-ui_hot_drawn(GR_WINDOW_ID w, int x, int y, int width, int height, int pressed, int seven)
+ui_hot_drawn(GR_WINDOW_ID w, int x, int y, int width, int height, int pressed, int seven, const char *label)
 {
 	struct ui_hot_mask *m;
 	int i;
@@ -205,7 +266,9 @@ ui_hot_drawn(GR_WINDOW_ID w, int x, int y, int width, int height, int pressed, i
 		ui_hot_count++;
 	}
 	ui_hots[i] = (struct ui_hot){ w, (short)x, (short)y, (short)width, (short)height, (unsigned char)(pressed != 0),
-		(unsigned char)seven };
+		(unsigned char)seven, (unsigned char)(label != NULL), "" };
+	if (label)
+		snprintf(ui_hots[i].label, sizeof ui_hots[i].label, "%s", label);
 	if (ui_lit.w == w && ui_lit.x == x && ui_lit.y == y && ui_lit.width == width && ui_lit.height == height) {
 		ui_lit = ui_hots[i], ui_lit_gone = 0;
 		ui_hot_edge(&ui_lit, 1);
@@ -219,6 +282,7 @@ ui_hot_drawn(GR_WINDOW_ID w, int x, int y, int width, int height, int pressed, i
 		}
 		m->hot = 1;
 		ui_hot_select(m);
+		ui_hot_pointer(m);	/* (the pointer may be over the window already: no coming is told then) */
 	}
 }
 
@@ -229,7 +293,6 @@ ui_hot_event(const GR_EVENT *ep)
 	struct ui_hot_mask *m;
 	GR_WINDOW_ID w;
 	GR_EVENT_MASK bit;
-	int x, y, i, at = -1;
 
 	if (ep->type == GR_EVENT_TYPE_MOUSE_ENTER || ep->type == GR_EVENT_TYPE_MOUSE_EXIT)
 		w = ep->general.wid, bit = GR_EVENTMASK(ep->type);
@@ -239,34 +302,14 @@ ui_hot_event(const GR_EVENT *ep)
 		return 0;
 	if (!(m = ui_hot_mask_of(w, 0)) || !m->hot)
 		return 0;
-	if (ep->type == GR_EVENT_TYPE_MOUSE_ENTER && ui_hot_in != w)
-		ui_hot_in = w, ui_hot_select(m);
-	else if (ep->type == GR_EVENT_TYPE_MOUSE_EXIT && ui_hot_in == w)
-		ui_hot_in = 0, ui_hot_select(m);
-	if (ep->type == GR_EVENT_TYPE_MOUSE_POSITION || ep->type == GR_EVENT_TYPE_MOUSE_MOTION) {
-		x = ep->mouse.x, y = ep->mouse.y;
-		for (i = ui_hot_count - 1; i >= 0; i--)	/* (the last drawn is on top) */
-			if (ui_hots[i].w == w && x >= ui_hots[i].x && y >= ui_hots[i].y && x < ui_hots[i].x + ui_hots[i].width &&
-			    y < ui_hots[i].y + ui_hots[i].height) {
-				at = i;
-				break;
-			}
-	}
-	if (at < 0 ? ui_lit.w != 0 : ui_lit.w == 0 || ui_lit_gone || !ui_hot_same(&ui_hots[at], &ui_lit)) {
-		if (ui_lit.w && !ui_lit_gone)
-			ui_hot_edge(&ui_lit, 0);
-		memset(&ui_lit, 0, sizeof ui_lit);
-		ui_lit_gone = 0;
-		if (at >= 0)
-			ui_lit = ui_hots[at], ui_hot_edge(&ui_lit, 1);
-		if (getenv("UI_HOVER_PRINT")) {	/* (for a test: tools/test_all.py's ui-hover) */
-			if (at >= 0)
-				printf("ui: lit %d,%d %dx%d\n", ui_lit.x, ui_lit.y, ui_lit.width, ui_lit.height);
-			else
-				printf("ui: unlit\n");
-			fflush(stdout);
-		}
-	}
+	if (ep->type == GR_EVENT_TYPE_MOUSE_ENTER)
+		ui_hot_pointer(m);	/* (where it came: the place of a move made before the places were asked for) */
+	else if (ep->type == GR_EVENT_TYPE_MOUSE_EXIT) {
+		if (ui_hot_in == w)
+			ui_hot_in = 0, ui_hot_select(m);
+		ui_hot_light(w, -1, -1);
+	} else
+		ui_hot_light(w, ep->mouse.x, ep->mouse.y);
 	return !(m->asked & bit);
 }
 
@@ -453,6 +496,72 @@ ui_text(GR_DRAW_ID w, int x, int y, const char *text, int count, GR_COLOR colour
 	       GR_TFASCII | GR_TFTOP);
 }
 
+/* The fixed font a few steps larger (Ctrl + and Ctrl -, Ctrl and the wheel in the editors): step 0 is
+ * ui_fixed, each step above it the ROM's next size of Liberation Mono. UI_ZW and UI_ZH are the step's
+ * cell; ui_ztext draws in it. (A size the ROM does not have leaves the step where it was.) */
+static const unsigned char ui_zoom_sizes[] = { 10, 11, 13, 15, 17, 20, 24, 28, 32 };
+#define UI_ZOOM_MAX	((int)sizeof ui_zoom_sizes - 1)
+static GR_FONT_ID ui_zfont;
+static int ui_zoom, ui_zw, ui_zh;
+#define UI_ZW	(ui_zoom ? ui_zw : ui_fw)
+#define UI_ZH	(ui_zoom ? ui_zh : ui_fh)
+#define UI_ZFONT	(ui_zoom ? ui_zfont : ui_fixed)
+#define UI_ZDY	(ui_zoom ? 1 : ui_fixed_dy)
+
+static int
+ui_zoom_set(int step)
+{
+	GR_FONT_INFO info;
+	GR_FONT_ID font;
+	char path[48];
+
+	step = step < 0 ? 0 : step > UI_ZOOM_MAX ? UI_ZOOM_MAX : step;
+	if (step == ui_zoom)
+		return 0;
+	if (step) {
+		snprintf(path, sizeof path, "/usr/share/font-mono-%d.sef", ui_zoom_sizes[step]);
+		font = GrCreateFontEx(path, 0, 0, NULL);
+		GrGetFontInfo(font, &info);
+		if (info.lastchar != 0xffff || info.maxwidth <= 0) {
+			GrDestroyFont(font);
+			return 0;
+		}
+		if (ui_zfont)
+			GrDestroyFont(ui_zfont);
+		ui_zfont = font, ui_zw = info.maxwidth, ui_zh = info.height + 2;
+	} else if (ui_zfont)
+		GrDestroyFont(ui_zfont), ui_zfont = 0;
+	ui_zoom = step;
+	return 1;
+}
+
+static void
+ui_ztext(GR_DRAW_ID w, int x, int y, const char *text, int count, GR_COLOR colour)
+{
+	if (!ui_zoom) {
+		ui_text(w, x, y, text, count, colour, 1);
+		return;
+	}
+	GrSetGCFont(ui_gc, ui_zfont);
+	GrSetGCForeground(ui_gc, colour);
+	GrText(w, ui_gc, x, y + UI_ZDY, (void *)text, count < 0 ? (int)strlen(text) : count, GR_TFASCII | GR_TFTOP);
+}
+
+/* A key or the wheel's zoom: +1, -1, or 0 for the first size (Ctrl 0); 2 when it is none. Ctrl with
+ * = or + is larger, with - smaller (as a browser's). */
+static int
+ui_zoom_key(int ch, int modifiers)
+{
+	if (!(modifiers & MWKMOD_CTRL) || (modifiers & MWKMOD_ALT))
+		return 2;
+	switch (ch) {
+	case '=': case '+': case MWKEY_KP_PLUS: return 1;
+	case '-': case '_': case MWKEY_KP_MINUS: return -1;
+	case '0': case MWKEY_KP0: return 0;
+	}
+	return 2;
+}
+
 /* The four sides of a rectangle, in two colours: top and left, bottom and right. */
 static void
 ui_edges(GR_DRAW_ID w, int x, int y, int width, int height, GR_COLOR lit, GR_COLOR shaded)
@@ -478,35 +587,52 @@ ui_bevel(GR_DRAW_ID w, int x, int y, int width, int height, int pressed)
 
 /* Windows 7's button: two halves of a pale gradient in a dark edge with its corners cut, blue
  * while pressed (or chosen, as a tab). */
+/* Windows 7's button face: state 0 as it is, 1 pressed (or a chosen tab), 2 under the pointer; the last two in
+ * the accent: pressed, pale halves in a dark line; lit, paler halves (a chosen button stays told from a lit one). */
 static void
-ui_button_seven(GR_DRAW_ID w, int x, int y, int width, int height, int pressed)
+ui_seven_face(GR_DRAW_ID w, int x, int y, int width, int height, int state)
 {
-	int half = height / 2;
+	static const struct { unsigned long top, bottom, lit, shade, line; int k[5]; } faces[3] = {
+		{ MWRGB(242, 242, 242), MWRGB(221, 221, 221), MWRGB(255, 255, 255), MWRGB(205, 205, 205), MWRGB(112, 112, 112), { 0 } },
+		{ MWRGB(229, 244, 252), MWRGB(196, 229, 246), MWRGB(240, 250, 255), MWRGB(158, 202, 228), MWRGB(44, 98, 139),
+		  { 232, 184, 244, 140, -64 } },
+		{ MWRGB(240, 249, 254), MWRGB(214, 238, 252), MWRGB(252, 254, 255), MWRGB(150, 205, 240), MWRGB(60, 127, 177),
+		  { 244, 216, 250, 120, -16 } },
+	};
+	int half = height / 2, s = state < 0 || state > 2 ? 0 : state;
+	GR_COLOR top = s ? ui_accent(faces[s].top, faces[s].k[0]) : faces[0].top;
+	GR_COLOR bottom = s ? ui_accent(faces[s].bottom, faces[s].k[1]) : faces[0].bottom;
 
-	/* (pressed: the accent's pale halves and dark line, ui_hot_edge's colours too) */
-	ui_fill(w, x + 1, y + 1, width - 2, half - 1, pressed ? ui_accent(MWRGB(229, 244, 252), 232) : MWRGB(242, 242, 242));
-	ui_fill(w, x + 1, y + half, width - 2, height - half - 1, pressed ? ui_accent(MWRGB(196, 229, 246), 184) : MWRGB(221, 221, 221));
-	ui_edges(w, x + 1, y + 1, width - 2, height - 2, pressed ? ui_accent(MWRGB(240, 250, 255), 244) : WHITE,
-		pressed ? ui_accent(MWRGB(158, 202, 228), 140) : MWRGB(205, 205, 205));
-	GrSetGCForeground(ui_gc, pressed ? ui_accent(MWRGB(44, 98, 139), -64) : MWRGB(112, 112, 112));
+	ui_fill(w, x + 1, y + 1, width - 2, half - 1, top);
+	ui_fill(w, x + 1, y + half, width - 2, height - half - 1, bottom);
+	ui_edges(w, x + 1, y + 1, width - 2, height - 2, s ? ui_accent(faces[s].lit, faces[s].k[2]) : faces[0].lit,
+		s ? ui_accent(faces[s].shade, faces[s].k[3]) : faces[0].shade);
+	GrSetGCForeground(ui_gc, s ? ui_accent(faces[s].line, faces[s].k[4]) : faces[0].line);
 	GrLine(w, ui_gc, x + 1, y, x + width - 2, y);
 	GrLine(w, ui_gc, x + 1, y + height - 1, x + width - 2, y + height - 1);
 	GrLine(w, ui_gc, x, y + 1, x, y + height - 2);
 	GrLine(w, ui_gc, x + width - 1, y + 1, x + width - 1, y + height - 2);
-	ui_hot_drawn(w, x, y, width, height, pressed, 1);
+}
+
+static void
+ui_button_seven(GR_DRAW_ID w, int x, int y, int width, int height, int pressed)
+{
+	ui_seven_face(w, x, y, width, height, pressed != 0);
+	ui_hot_drawn(w, x, y, width, height, pressed, 1, NULL);	/* (what is in it is the program's: lit by its edge) */
 }
 
 static void
 ui_button(GR_DRAW_ID w, int x, int y, int width, int height, const char *label, int pressed)
 {
 	if (ui_seven)
-		ui_button_seven(w, x, y, width, height, pressed);
+		ui_seven_face(w, x, y, width, height, pressed != 0);
 	else {
 		ui_fill(w, x, y, width, height, UI_FACE);
 		ui_bevel(w, x, y, width, height, pressed);
-		ui_hot_drawn(w, x, y, width, height, pressed, 0);
 	}
 	ui_text(w, x + 6, y + (height - 12) / 2, label, -1, BLACK, 0);
+	/* (a label of its own: lit, Windows 7's button is drawn again whole; one with none has the program's drawing in it) */
+	ui_hot_drawn(w, x, y, width, height, pressed, ui_seven, label && label[0] ? label : NULL);
 }
 
 /* A line round the control the keyboard works now, just outside the rectangle given. */

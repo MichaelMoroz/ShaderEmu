@@ -91,14 +91,25 @@ def build(b):
 
     def clutter(cx, cz, half, top):
         dark = (0.07, 0.07, 0.08)
+        taken = []   # what stands on the roof, apart: two plant rooms in one another fought face to face
+
+        def free(x0, x1, z0, z1):
+            return all(x1 + 0.2 < a or b + 0.2 < x0 or z1 + 0.2 < c or d + 0.2 < z0 for a, b, c, d in taken)
         for _ in range(rng.randint(1, 3)):
             w, d, h = rng.uniform(1.2, 3.0), rng.uniform(1.2, 3.0), rng.uniform(1.0, 2.6)
             x, z = cx + rng.uniform(-half + 1.5, half - 1.5), cz + rng.uniform(-half + 1.5, half - 1.5)
-            box(glow, x - w / 2, x + w / 2, top, top + h, z - d / 2, z + d / 2, dark)
-        for dx, dz, wx, wz in ((0, -half, half, 0.15), (0, half, half, 0.15), (-half, 0, 0.15, half), (half, 0, 0.15, half)):
+            x = min(max(x, cx - half + 0.4 + w / 2), cx + half - 0.4 - w / 2)   # inside the parapet
+            z = min(max(z, cz - half + 0.4 + d / 2), cz + half - 0.4 - d / 2)
+            if free(x - w / 2, x + w / 2, z - d / 2, z + d / 2):
+                taken.append((x - w / 2, x + w / 2, z - d / 2, z + d / 2))
+                box(glow, x - w / 2, x + w / 2, top, top + h, z - d / 2, z + d / 2, dark)
+        # the parapet: the sides along x whole, those along z between them
+        for dx, dz, wx, wz in ((0, -half, half, 0.15), (0, half, half, 0.15), (-half, 0, 0.15, half - 0.15), (half, 0, 0.15, half - 0.15)):
             box(glow, cx + dx - wx, cx + dx + wx, top, top + 0.7, cz + dz - wz, cz + dz + wz, dark)
         if rng.random() < 0.4:   # a lamp over the roof's door, and its pool of light
             x, z = cx + rng.uniform(-half + 2, half - 2), cz + rng.uniform(-half + 2, half - 2)
+            if not free(x - 1.6, x + 1.6, z - 1.6, z + 1.6):
+                return
             pool = [(0.30, 0.22, 0.12)] * 4
             glow.flat(x - 1.6, x + 1.6, z - 1.6, z + 1.6, top + 0.06, pool)
             box(glow, x - 0.15, x + 0.15, top + 2.0, top + 2.3, z - 0.15, z + 0.15, (1.0, 0.8, 0.5), every=True)
@@ -197,7 +208,7 @@ def build(b):
         lamp = (1.0, 0.66, 0.30)
         dim = tuple(c * 0.5 for c in lamp)
         glow.flat(river_x0 - 2.2, river_x0 - 0.4, z - 0.9, z + 0.9, GROUND + 0.3, lamp)
-        glow.flat(river_x0, river_x0 + 20, z - 0.7, z + 0.7, WATER_Y + 0.3, [dim, WATER, WATER, dim])
+        glow.flat(river_x0, river_x0 + 20, z - 0.7, z + 0.7, WATER_Y + 0.45, [dim, WATER, WATER, dim])   # (over the far bank's light)
         glow.flat(river_x1 + 0.4, river_x1 + 2.2, z + 3.1, z + 4.9, GROUND + 0.3, lamp)
         glow.flat(river_x1 - 20, river_x1, z + 3.3, z + 4.7, WATER_Y + 0.6, [WATER, dim, dim, WATER])
         z += 9.0
