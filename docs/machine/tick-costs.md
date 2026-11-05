@@ -836,6 +836,17 @@ On the kept tree (a copy of it in each run):
 | The fused branch tested before the fused arithmetic (t2ord) | +1.4% | +1.5% | +0.3% | lost |
 | The fused word reading its registers after the write (t2nf); `LOAD_UP` as before (t2lu0); no fast fmadd (t2ffma0); fb1 on the kept tree | +0.4%; -0.3%; +0.5%; +0.2% | 0.0%; -0.1%; -0.2%; +0.4% | -0.5%; -0.45%; -0.35%; +0.15% | level: the kept parts are worth what the whole is, not each alone |
 
+The two kept changes together against the tree of `62c2cd86`, in one run (a copy of the new tree beside it):
+
+| Load | Before | After | |
+|---|---|---|---|
+| Tiberian Dawn | 1.4185 | 1.3570 | -4.3% a tick (4.5% more instructions a second) |
+| Quake, e1m1 | 1.6944 | 1.6815 | -0.8% |
+| Shell loop | 1.5905 | 1.5855 | -0.3% |
+
+A jal as the fused second word after arithmetic (its target's bit 21 in the test, so a pass never commits half a pair):
+Quake +1.2%, Tiberian Dawn +2.0%, the shell +0.6%: lost.
+
 **What was learnt.** Nothing of the fast loop's shape gave more than 1% on every load: f2 + fp1 (+ ffma) about 1%, at the
 noise's edge; the kept fusion 2% of Tiberian Dawn, a little of the shell, level on Quake. fp1 changes what fdiv makes (the card's quotient, which `rvc_cpu` does not make: a model of the card's
 division is owed first), and ffma's `mad` is fused where the general step rounds twice: neither is in the tree. The ways
