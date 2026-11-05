@@ -929,6 +929,11 @@ arithmetic, a branch after a load), mul as that word, M before the atomics, the 
 difference. Against `62c2cd86`'s tick with the first four, in two runs: Tiberian Dawn -6.3% a tick (6.7% more instructions a
 second), the shell loop -0.6 to -0.85%, Quake -0.35 to -1.4%; the fifth gave Tiberian Dawn a further 1 to 2% and the shell 0.7%.
 
+**The round end to end:** `62c2cd86`'s tick at 8,192 a pass against the tree with the five changes at 12,288, from the same
+snapshots, one run each way, alternating twice (the pass's length differs, so not in one run): the shell loop 4.51 and 4.46
+million instructions a second to 4.75 and 4.71 (+5.4%), Tiberian Dawn 4.90 and 4.91 to 5.54 and 5.55 (+13.0%), Quake at e1m1
+2,140 and 2,165 frames in 30 s to 2,315 and 2,335 (+8.0%).
+
 **What was learnt.** Nothing of the fast loop's shape gave more than 1% on every load: f2 + fp1 (+ ffma) about 1%, at the
 noise's edge. What was kept is worth 7 to 8% of Tiberian Dawn, whose instructions are arithmetic pairs and products, and about
 1% of the shell and Quake. fp1 changes what fdiv makes (the card's quotient, which `rvc_cpu` does not make: a model of the card's
