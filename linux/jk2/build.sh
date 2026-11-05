@@ -240,16 +240,19 @@ if [ "${JK2_HOST:-}" != 1 ]; then
         "$(lines window "$CC -O2 -fno-common -fdata-sections -w -I$PROGRAMS/mc" "$PROGRAMS/mc/mcw.c" "$PROGRAMS/mc/mcwx.c")"
     # The drawing's second copy of the GL and the list's builder (gl_jk2.c, "The drawing on two workers"): every name of
     # theirs b_ (the renderer's second copy calls them so: below), the textures and their pool the first's (SE_DRAW_B)
-    compile drawb \
-        "$(lines drawb "$CC $WF $GPUF -DSE_DRAW_B" "$REPO/linux/quake3/gpu_shaderemu.c")" \
-        "$(lines drawb "$CC $WF -DSE_DRAW_B -I$REPO/linux/quake3 -I$PROGRAMS/mc" "$HERE/gl_jk2.c")"
-    for o in "$BUILD"/drawb/*.o; do
+    # (and a third, c_: the drawing in three parts, gl_jk2.c's JK2_DRAW_PARTS)
+    for x in b c; do
+    compile draw$x \
+        "$(lines draw$x "$CC $WF $GPUF -DSE_DRAW_B" "$REPO/linux/quake3/gpu_shaderemu.c")" \
+        "$(lines draw$x "$CC $WF -DSE_DRAW_B -I$REPO/linux/quake3 -I$PROGRAMS/mc" "$HERE/gl_jk2.c")"
+    for o in "$BUILD"/draw$x/*.o; do
         $OBJCOPY --set-section-alignment '.data*=16' --set-section-alignment '.sdata*=16' --set-section-alignment '.bss*=16' \
             --set-section-alignment '.sbss*=16' "$o"
     done
-    $LD -r -o "$BUILD/drawb_shim.all.o" "$BUILD"/drawb/*.o
-    $NM -g --defined-only "$BUILD/drawb_shim.all.o" | awk '{print $3, "b_" $3}' > "$BUILD/drawb_shim.syms"
-    $OBJCOPY --redefine-syms "$BUILD/drawb_shim.syms" "$BUILD/drawb_shim.all.o" "$BUILD/drawb_shim.o"
+    $LD -r -o "$BUILD/draw${x}_shim.all.o" "$BUILD"/draw$x/*.o
+    $NM -g --defined-only "$BUILD/draw${x}_shim.all.o" | awk -v x=$x '{print $3, x "_" $3}' > "$BUILD/draw${x}_shim.syms"
+    $OBJCOPY --redefine-syms "$BUILD/draw${x}_shim.syms" "$BUILD/draw${x}_shim.all.o" "$BUILD/draw${x}_shim.o"
+    done
     # libmedia (docs/system/media.md): the music decoded on the worker cores (sys_shaderemu.cpp, "Music on the card")
     MEDIA=${MEDIA_LIB:-$WORK/src/libmedia/libmedia.a}
     [ -f "$MEDIA" ] || { echo "run linux/libmedia/build.sh first"; exit 1; }
@@ -258,7 +261,7 @@ if [ "${JK2_HOST:-}" != 1 ]; then
             --set-section-alignment '.sbss*=16' "$o"
     done
     # (every strtod and atof through sys_shaderemu.cpp's __wrap_strtod and __wrap_atof: musl's parses in software long doubles)
-    MACHINE="$BUILD/window/*.o $BUILD/drawb_shim.o $MW/src/lib/libnano-X.a $MEDIA -Wl,--wrap=strtod -Wl,--wrap=atof $SE_WRAP"
+    MACHINE="$BUILD/window/*.o $BUILD/drawb_shim.o $BUILD/drawc_shim.o $MW/src/lib/libnano-X.a $MEDIA -Wl,--wrap=strtod -Wl,--wrap=atof $SE_WRAP"
 fi
 
 # The back end's second copy (gl_jk2.c, "The drawing on two workers"; tr_backend.cpp's SE_DrawHalfB): its files linked
@@ -267,11 +270,6 @@ fi
 RENDERER_B=
 if [ "${JK2_HOST:-}" != 1 ]; then
     RSET="tr_shade tr_shade_calc tr_surface tr_backend tr_sky tr_shadows tr_surfacesprites tr_quicksprite tr_ghoul2"
-    $LD -r --force-group-allocation -o "$BUILD/drawb_r.all.o" $(for f in $RSET; do echo "$BUILD/renderer/rd-vanilla_$f.o"; done)
-    $OBJCOPY $($NM -u "$BUILD/drawb_r.all.o" | awk -v f="$BUILD/drawb_shim.syms" '
-        BEGIN { while ((getline l < f) > 0) { split(l, w, " "); have[w[1]] = 1 } }
-        $2 ~ /^gl[A-Z]/ && (("jk2_" $2) in have) {print "--redefine-sym " $2 "=jk2_" $2}') \
-        --redefine-sym glState=se_glState_b "$BUILD/drawb_r.all.o" "$BUILD/drawb_r.1.o"
     OWN="tess backEnd rb_surfaceTable se_kept_stats se_kf_n se_kf_ok se_kf_indices se_mesh_frame se_mesh_ni se_mesh_nv se_mesh_surface lightOrigin
         tr_stencilled g_bRenderGlowingObjects g_uiCurrentPixelShaderType SQuickSprite se_glState_b se_half_b SSAdditiveTransparency
         SSUsingFog SSVertAlpha SSVertWindDir SSVertWindForce curWeatherAmount curWindBlowVect curWindGrassDir curWindGust
@@ -279,13 +277,20 @@ if [ "${JK2_HOST:-}" != 1 ]; then
         randominterval rangescalefactor rightvectorcount ssLastEntityDrawn ssViewOrigin ssViewRight ssViewUp ssfwdvector
         ssrightvectors sssurfaces standardfovinitialized standardfovx standardscalex targetWindBlowVect targetWindGrassDir
         totalsurfsprites"
-    { cut -d' ' -f1 "$BUILD/drawb_shim.syms" | awk '{print $1, "b_" $1}'
-      $NM --defined-only "$BUILD/drawb_r.1.o" | awk '$2 ~ /^[TW]$/ {print $3, "b_" $3}'
-      for v in $OWN; do echo "$v b_$v"; done; } | sort -u > "$BUILD/drawb_r.syms"
-    $OBJCOPY --redefine-syms "$BUILD/drawb_r.syms" "$BUILD/drawb_r.1.o" "$BUILD/drawb_r.2.o"
-    $OBJCOPY --weaken "$BUILD/drawb_r.2.o" "$BUILD/drawb_r.o"
-    RENDERER_B="$BUILD/drawb_r.o"
-    module renderer GetRefAPI b_SE_DrawHalfB
+    for x in b c; do
+    $LD -r --force-group-allocation -o "$BUILD/draw${x}_r.all.o" $(for f in $RSET; do echo "$BUILD/renderer/rd-vanilla_$f.o"; done)
+    $OBJCOPY $($NM -u "$BUILD/draw${x}_r.all.o" | awk -v f="$BUILD/draw${x}_shim.syms" '
+        BEGIN { while ((getline l < f) > 0) { split(l, w, " "); have[w[1]] = 1 } }
+        $2 ~ /^gl[A-Z]/ && (("jk2_" $2) in have) {print "--redefine-sym " $2 "=jk2_" $2}') \
+        --redefine-sym glState=se_glState_b "$BUILD/draw${x}_r.all.o" "$BUILD/draw${x}_r.1.o"
+    { cut -d' ' -f1 "$BUILD/draw${x}_shim.syms" | awk -v x=$x '{print $1, x "_" $1}'
+      $NM --defined-only "$BUILD/draw${x}_r.1.o" | awk -v x=$x '$2 ~ /^[TW]$/ {print $3, x "_" $3}'
+      for v in $OWN; do echo "$v ${x}_$v"; done; } | sort -u > "$BUILD/draw${x}_r.syms"
+    $OBJCOPY --redefine-syms "$BUILD/draw${x}_r.syms" "$BUILD/draw${x}_r.1.o" "$BUILD/draw${x}_r.2.o"
+    $OBJCOPY --weaken "$BUILD/draw${x}_r.2.o" "$BUILD/draw${x}_r.o"
+    done
+    RENDERER_B="$BUILD/drawb_r.o $BUILD/drawc_r.o"
+    module renderer GetRefAPI b_SE_DrawHalfB c_SE_DrawHalfB
 else
     module renderer GetRefAPI
 fi

@@ -342,30 +342,36 @@ int gpuIdle(void) { return gpu && ((volatile uint32_t*)gpu)[REG_SUBMIT / 4] == 0
 typedef struct {
     uint8_t* gpu;
     uint32_t set_at, cmd_from, cmd_to, blocks_from, blocks_to, vertex_from, vertex_to, mesh_from, mesh_to, passes;
+    uint32_t was_vertex, was_commands, was_blocks, was_mesh;   // (the first part's ends before the split: its merge puts them back)
     GR_WINDOW_INFO window_info;
 } gpu_half;
 _Static_assert(sizeof(gpu_half) <= 256, "gpu_half: a caller keeps 256 bytes");
-// (the first's: what the second part may take; 0 when too little is left to split)
-int gpuHalfSplit(void* hp) {
+// (the first's: what the other part may take, its share of what is left in 256ths from the top; 0 when too little is left
+// to split. A third part is split from the first's room after the second's: Jedi Outcast's drawing in three parts)
+int gpuHalfSplitAt(void* hp, unsigned share) {
     gpu_half* h = hp;
-    if (!gpu || half_vertex_end) return 0;
-    const uint32_t end = set_at + SET_SIZE;
-    if (end - vertex_top < 64 * 1024 || MAX_COMMANDS - commands < 256 || MAX_BLOCKS - blocks < 32) return 0;
+    if (!gpu) return 0;
+    const uint32_t end = half_vertex_end ? half_vertex_end : set_at + SET_SIZE;
+    const uint32_t cmd_end = half_commands_end, blk_end = half_blocks_end, mesh_end = half_mesh_end;
+    if (end - vertex_top < 64 * 1024 || cmd_end - commands < 256 || blk_end - blocks < 32) return 0;
     h->gpu = gpu, h->set_at = set_at, h->window_info = window_info;
-    h->cmd_from = commands + (MAX_COMMANDS - commands) / 2;
-    h->blocks_from = blocks + (MAX_BLOCKS - blocks) / 2;
-    h->vertex_from = (vertex_top + (end - vertex_top) / 2) & ~15u;
-    h->mesh_from = mesh_vertices + (MAX_MESH - mesh_vertices) / 2;
+    h->was_vertex = half_vertex_end, h->was_commands = cmd_end, h->was_blocks = blk_end, h->was_mesh = mesh_end;
+    h->cmd_from = commands + (uint32_t)((uint64_t)(cmd_end - commands) * share >> 8);
+    h->blocks_from = blocks + (uint32_t)((uint64_t)(blk_end - blocks) * share >> 8);
+    h->vertex_from = (vertex_top + (uint32_t)((uint64_t)(end - vertex_top) * share >> 8)) & ~15u;
+    h->mesh_from = mesh_vertices + (uint32_t)((uint64_t)(mesh_end - mesh_vertices) * share >> 8);
     h->cmd_to = h->cmd_from, h->blocks_to = h->blocks_from, h->vertex_to = h->vertex_from, h->mesh_to = h->mesh_from, h->passes = 0;
     half_commands_end = h->cmd_from, half_blocks_end = h->blocks_from, half_vertex_end = h->vertex_from, half_mesh_end = h->mesh_from;
     return 1;
 }
+int gpuHalfSplit(void* hp) { return gpuHalfSplitAt(hp, 128); }
 // (the second's, on its own worker: its part begins where the first left it room)
 void gpuHalfBegin(const void* hp) {
     const gpu_half* h = hp;
     gpu = h->gpu, set_at = h->set_at, window_info = h->window_info;
     commands = h->cmd_from, blocks = h->blocks_from, vertex_top = h->vertex_from, mesh_vertices = h->mesh_from;
-    half_commands_end = MAX_COMMANDS, half_blocks_end = MAX_BLOCKS, half_vertex_end = 0, half_mesh_end = MAX_MESH;
+    // (its room ends where the first part's did before the split: the list's end, or a second part's start for a third)
+    half_commands_end = h->was_commands, half_blocks_end = h->was_blocks, half_vertex_end = h->was_vertex, half_mesh_end = h->was_mesh;
     kept = 0, kept_mesh = 0, passes_used = 0, last_draw = 0, joined_command = 0, matrices_dirty = 1, frame_last = 0xffffffffu;
 }
 // (the second's, when its part is done: how far it went)
@@ -387,7 +393,7 @@ void gpuHalfMerge(const void* hp) {
     if (h->blocks_to > blocks) blocks = h->blocks_to;
     if (h->vertex_to > vertex_top) vertex_top = h->vertex_to;
     mesh_vertices += h->mesh_to - h->mesh_from;
-    half_commands_end = MAX_COMMANDS, half_blocks_end = MAX_BLOCKS, half_vertex_end = 0, half_mesh_end = MAX_MESH;
+    half_commands_end = h->was_commands, half_blocks_end = h->was_blocks, half_vertex_end = h->was_vertex, half_mesh_end = h->was_mesh;
     last_draw = 0, joined_command = 0, matrices_dirty = 1, frame_last = 0xffffffffu;
     used_last[1] = blocks, used_last[2] = (vertex_top - set_at - VERTICES_IN) >> 10, used_last[3] = commands;
 }
