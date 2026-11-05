@@ -35,6 +35,9 @@ public static partial class ShaderEmuBuilder
         ram.SetInt("_Strips", 3);
         Mat("MemHeat", "ShaderEmu/MemHeat").SetInt("_Strips", 3);   // the heat's strips must be the view's
         Material cpu = ScopeMaterial("ScopeCpu", 1), rom = ScopeMaterial("ScopeRom", 2), wave = ScopeMaterial("ScopeSound", 3);
+        Material vram = ScopeMaterial("ScopeVram", 4);
+        vram.SetTexture("_GpuVram", Vram());   // the GPU's (MachineCameras gives the machine the same one)
+        vram.SetFloat("_Aspect", screen.localScale.x / screen.localScale.y);
         RenderTexture mix = AssetDatabase.LoadAssetAtPath<RenderTexture>(Generated + "/SoundMix.renderTexture");
         if (mix != null) wave.SetTexture("_Mix", mix);
 
@@ -78,7 +81,7 @@ public static partial class ShaderEmuBuilder
         EmuScope scope = Udon<EmuScope>(new GameObject("Scope"));
         scope.transform.SetParent(world, false);
         scope.screen = renderer;
-        scope.views = new[] { ram, rom, wave };
+        scope.views = new[] { ram, rom, wave, vram };
         scope.legend = legend.gameObject;
         GameObject signs = GameObject.Find("Signs");
         if (signs != null && signs.transform.Find("Memory") != null) scope.sign = signs.transform.Find("Memory").GetComponent<TextMeshProUGUI>();
@@ -89,17 +92,17 @@ public static partial class ShaderEmuBuilder
         Color dim = new Color(0.62f, 0.68f, 0.76f);
         const float bx = 1060;
         Label(panel, "Scope title", "The memory screen shows", bx, 584, 600, 30, 22, TextAnchor.MiddleLeft, dim);
-        string[] texts = { "RAM", "ROM", "Sound" }, methods = { "ShowRam", "ShowRom", "ShowSound" };
-        Button[] buttons = new Button[3];
-        scope.plates = new Image[3];
+        string[] texts = { "RAM", "ROM", "Sound", "VRAM" }, methods = { "ShowRam", "ShowRom", "ShowSound", "ShowVram" };
+        Button[] buttons = new Button[4];
+        scope.plates = new Image[4];
         TextMeshProUGUI unused;
-        for (int i = 0; i < 3; i++)
+        for (int i = 0; i < 4; i++)
         {
-            buttons[i] = MakeButton(panel, "Scope " + texts[i], texts[i], bx + i * 205, 618, 190, 60, 24, out unused);
+            buttons[i] = MakeButton(panel, "Scope " + texts[i], texts[i], bx + i * 153, 618, 142, 60, 24, out unused);
             scope.plates[i] = buttons[i].GetComponent<Image>();
         }
         Apply(scope);
-        for (int i = 0; i < 3; i++) OnClick(buttons[i], scope, methods[i]);
+        for (int i = 0; i < 4; i++) OnClick(buttons[i], scope, methods[i]);
         // the danger zone's laser burns only while this shows RAM (EmuDanger.LaserOn): the old
         // Scope is gone, and a danger zone that still named it had no laser at all
         foreach (EmuDanger danger in Object.FindObjectsOfType<EmuDanger>(true))

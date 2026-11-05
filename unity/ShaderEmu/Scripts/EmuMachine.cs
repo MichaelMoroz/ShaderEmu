@@ -96,9 +96,9 @@ public class EmuMachine : UdonSharpBehaviour
     public Image powerPlate;           // that button: red while off, green while running
     public TextMeshProUGUI powerSays;
     public TextMeshProUGUI pauseLabel;
-    public Slider speedSlider;         // whole steps: 2,048 instructions a frame, doubled per step
+    public Slider speedSlider;         // whole steps 1 to 16: ticks a frame (fixed), or millions of instructions a second (steady)
     public TextMeshProUGUI modeLabel;  // on the button that picks how the slider is read
-    public Slider tickSlider;          // instructions a tick (a round's pass): 1,024 doubled per step
+    public Slider tickSlider;          // instructions a tick (a round's pass): 1 to 32 steps of 1,024
     public TextMeshProUGUI tickLabel;  // and how much of it core 0 really runs, lately
     public float minFrameRate = 45f;   // "steady" gives up instructions before frames come slower than this
     public bool powerOnAtStart;        // off until someone presses Power
@@ -153,7 +153,10 @@ public class EmuMachine : UdonSharpBehaviour
     private const int KindFile = 3;     // a request for whatever an address holds, as a file
     private const int UartBurst = 4;
     private const int InitFrames = 2;
-    private const int TicksPerRound = 8192;   // instructions a pass, as the harness's
+    // Instructions a pass by default, 12 of the tick slider's steps of 1,024 (the harness's is 8,192; tick-costs.md, sixth
+    // round: a longer pass is worth more in the world, where a round's devices' list is under 1% of a frame, than there).
+    private const int TicksPerRound = 12288;
+    private const int TickStep = 1024, MaxFixedRounds = 16, SteadyStep = 1000000;
     private const int MaxRounds = 32;
     private const int PassCommit = 0, PassControl = 1, PassUnpack = 2, PassWindowBack = 3;
     private const int FieldPoints = 2 * 3968;   // the lanes' field's buckets (FIELD_MAX in lean/tick.hlsl)
@@ -173,13 +176,12 @@ public class EmuMachine : UdonSharpBehaviour
     private float gpuBusyUntil;        // lists have come lately: the GPU's camera draws every round
 
     private bool powered, paused;
-    private int budget = 32768;        // instructions a frame
-    private int rounds = 4, ticks = TicksPerRound;
+    private int rounds = 3, ticks = TicksPerRound;   // 3 ticks a frame by default (the speed slider's step 3)
     private int tickSize = TicksPerRound;   // the tick slider's: a round's pass at most
     private float reached = 1f;             // of a pass's instructions, what core 0 ran, lately
     // Steady: so many instructions a second, however long a frame is, as far as the frame rate allows.
     private bool steady;
-    private float targetIps = 2000000f;
+    private float targetIps = 3f * SteadyStep;
     private int roundCap = MaxRounds, guardWait, steadyRounds = 1;
     private float smoothDt = 0.011f, carry;
     private float perRound = TicksPerRound;   // instructions a round really ran, lately: many end early
@@ -258,8 +260,8 @@ public class EmuMachine : UdonSharpBehaviour
         for (int i = 0; i < 4; i++) wanted[i] = "";
         linksPanel.SetActive(false);
         linksButton.SetActive(false);
-        if (tickSlider != null) tickSize = 1024 << (int)tickSlider.value;
-        if (speedSlider != null) SetBudget(2048 << (int)speedSlider.value);
+        if (tickSlider != null) tickSize = TickOf(tickSlider.value);
+        if (speedSlider != null) SetRounds(RoundsOf(speedSlider.value));
         ShowLabels();
         if (powerOnAtStart) PowerOn();
         if (fetchTest && fetchTestUrl != null) SendCustomEventDelayedSeconds(nameof(FetchTestRun), 8f);
@@ -307,15 +309,15 @@ public class EmuMachine : UdonSharpBehaviour
 
     public void SpeedChanged()
     {
-        // the same eight steps: instructions a frame from 2,048, or a second from 125,000
-        if (steady) targetIps = 125000f * (1 << (int)speedSlider.value);
-        else SetBudget(2048 << (int)speedSlider.value);
+        // the same sixteen steps: ticks a frame, or millions of instructions a second
+        if (steady) targetIps = (float)SteadyStep * RoundsOf(speedSlider.value);
+        else SetRounds(RoundsOf(speedSlider.value));
         ShowLabels();
     }
 
-    // The speed slider's step (2,048 instructions a frame doubled per step), and setting it from
-    // elsewhere (a classroom tower's slider): the slider's own event applies it.
-    public int SpeedStep() { return speedSlider != null ? Mathf.RoundToInt(speedSlider.value) : 4; }
+    // The speed slider's step (1 to 16 ticks a frame), and setting it from elsewhere (a classroom
+    // tower's slider, the same steps): the slider's own event applies it.
+    public int SpeedStep() { return speedSlider != null ? Mathf.RoundToInt(speedSlider.value) : 3; }
     public void SetSpeedStep(int step)
     {
         if (speedSlider != null) speedSlider.value = Mathf.Clamp(step, (int)speedSlider.minValue, (int)speedSlider.maxValue);
@@ -323,7 +325,7 @@ public class EmuMachine : UdonSharpBehaviour
 
     public void TickChanged()
     {
-        tickSize = 1024 << (int)tickSlider.value;
+        tickSize = TickOf(tickSlider.value);
         perRound = tickSize;
         carry = 0f;
         SpeedChanged();
@@ -375,11 +377,13 @@ public class EmuMachine : UdonSharpBehaviour
                        + (powered && !paused ? ": " + (reached * 100f).ToString("F0") + "% reached" : "");
     }
 
-    private void SetBudget(int instructionsPerFrame)
+    private int TickOf(float step) { return TickStep * Mathf.Clamp(Mathf.RoundToInt(step), 1, 32); }
+    private int RoundsOf(float step) { return Mathf.Clamp(Mathf.RoundToInt(step), 1, MaxFixedRounds); }
+
+    private void SetRounds(int n)
     {
-        budget = instructionsPerFrame;
-        ticks = Mathf.Min(budget, tickSize);
-        rounds = Mathf.Clamp(budget / tickSize, 1, MaxRounds);
+        ticks = tickSize;
+        rounds = n;
         tickMaterial.SetInt("_Ticks", ticks);
     }
 
@@ -387,7 +391,7 @@ public class EmuMachine : UdonSharpBehaviour
     {
         if (speedLabel != null)
             speedLabel.text = steady ? targetIps.ToString("N0") + " a second, while frames keep to " + minFrameRate.ToString("F0") + " a second"
-                                     : "up to " + (rounds * ticks).ToString("N0") + " instructions a frame";
+                                     : (rounds * ticks).ToString("N0") + " IPF: " + rounds + (rounds == 1 ? " tick" : " ticks") + " a frame";
         if (modeLabel != null) modeLabel.text = steady ? "Steady: per second" : "Fixed: per frame";
         ShowTick();
         if (powerLabel != null) powerLabel.text = powered ? "Power off" : "Power on";

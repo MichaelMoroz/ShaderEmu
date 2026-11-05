@@ -624,7 +624,7 @@ the workers stopped from the mark, on a written bit and core 0's faults on one: 
 
 The VRChat machine is the one without an MMU (`NO_PAGING`, `docs/system/nommu.md`) with the harness's
 256 cores, the guest's geometry, the tick in eight targets, the commit as points, the shader's
-own write cache (336 texels: 64 + 32 + 16 buckets of three) and passes of 8,192 (the control panel's `tickSlider` sets 1,024 to 32,768)
+own write cache (336 texels: 64 + 32 + 16 buckets of three) and passes of 12,288 by default (5 November 2026; the harness's are 8,192: a round's devices' list is 7% of a pass there and under 1% of a world's frame, `tick-costs.md`, sixth round; the control panel's `tickSlider` sets 1,024 to 32,768 in steps of 1,024, and its speed slider 1 to 16 ticks a frame, shown as IPF, 3 by default; in its steady mode the same steps are 1 to 16 million instructions a second)
 (`CORES`, `L1_TABLE_BITS` and the sizes in `MachineBlit.cginc`). Its tick is the lean one (`MachineTickLean.shader`,
 `lean/tick.hlsl`, a verbatim copy of `shader_vm/tick.hlsl`), the only tick.
 

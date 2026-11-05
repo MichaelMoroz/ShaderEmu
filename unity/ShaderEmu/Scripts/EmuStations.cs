@@ -356,7 +356,7 @@ public class EmuStations : UdonSharpBehaviour
             }
             if (speedSliders != null && s < speedSliders.Length && speedSliders[s] != null)
             {
-                int shownStep = owner[s] == myId ? step : owner[s] > 0 ? SpeedOf(owner[s]) : 4;
+                int shownStep = owner[s] == myId ? step : owner[s] > 0 ? SpeedOf(owner[s]) : 3;
                 Slider slider = speedSliders[s];
                 if (shownStep != speedShown[s] || Mathf.RoundToInt(slider.value) != shownStep)
                 {
@@ -435,7 +435,7 @@ public class EmuStations : UdonSharpBehaviour
             EmuShare share = hub.ShareAt(i);
             if (share.ownerId == id) return share.speed;
         }
-        return 4;
+        return 3;   // (EmuShare.speed's default)
     }
 
     private int NetOf(int id)

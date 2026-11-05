@@ -1208,10 +1208,12 @@ public static partial class ShaderEmuBuilder
         Label(panel, "Speed title", "Speed", bx, 196, 600, 36, 26, TextAnchor.MiddleLeft, dim);
         machine.speedLabel = Label(panel, "Speed", "", bx, 294, 600, 40, 26, TextAnchor.MiddleLeft, Color.white);
 
-        Slider slider = PanelSlider(panel, bx, 238, 48, 7, 4);   // 32,768 instructions a frame
+        Slider slider = PanelSlider(panel, bx, 238, 48, 16, 3);   // 3 ticks a frame (EmuMachine.RoundsOf: 1 to 16)
+        slider.minValue = 1;
         machine.speedSlider = slider;
         machine.tickLabel = Label(panel, "Tick", "", bx, 344, 600, 34, 24, TextAnchor.MiddleLeft, dim);
-        machine.tickSlider = PanelSlider(panel, bx, 380, 40, 5, 3);   // 1,024 to 32,768 a tick, 8,192
+        machine.tickSlider = PanelSlider(panel, bx, 380, 40, 32, 12);   // steps of 1,024 (EmuMachine.TickOf): 12,288 a tick
+        machine.tickSlider.minValue = 1;
 
         // an address of the visitor's own for the guest's browser: VRChat only loads what is
         // typed into a field of this kind
