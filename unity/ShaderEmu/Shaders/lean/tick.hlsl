@@ -464,8 +464,10 @@ uint fast(uint room) {
                 // A second word in the same turn (docs/machine/tick-costs.md, "Sixth round"): the texel's next word, when
                 // it is arithmetic or a branch, its registers taken from this result where it names this one's. No test of
                 // the budget: a pass may run one instruction past it, which ends it all the same (2% of Tiberian Dawn's tick)
-                uint w2 = cur.y;
-                [branch] if ((w2 & 0x5f) == 0x13 && ((w2 & 0xfe00007f) != 0x02000033 || (w2 & 0x7000) == 0) && (pc & 12) != 12) {   // (mul too: a product here costs a lone arithmetic word nothing)
+                bool cross = (pc & 12) == 12;   // (the next word in the next texel: the one read ahead, while fw1 is that texel; 1.2% of Tiberian Dawn)
+                uint w2 = cross ? fw1.x : cur.y;
+                bool okx = !cross || fw_t == ((pc & 0x7fffffff) >> 4);
+                [branch] if ((w2 & 0x5f) == 0x13 && ((w2 & 0xfe00007f) != 0x02000033 || (w2 & 0x7000) == 0) && okx) {   // (mul too: a product here costs a lone arithmetic word nothing)
                     uint g3 = (w2 >> 12) & 7, d2 = (w2 >> 7) & 31, s1 = (w2 >> 15) & 31, s2 = (w2 >> 20) & 31;
                     uint a2 = xr[s1], b2 = xr[s2];
                     a2 = s1 == dst ? v : a2; b2 = s2 == dst ? v : b2;
@@ -476,8 +478,8 @@ uint fast(uint room) {
                     uint q45 = (g3 & 1) ? (alt2 ? asuint(asint(a2) >> y2) : a2 >> y2) : a2 ^ y2, q67 = (g3 & 1) ? a2 & y2 : a2 | y2;
                     v = (g3 & 4) ? ((g3 & 2) ? q67 : q45) : ((g3 & 2) ? q23 : q01);
                     dst = d2 == 0 ? 64 : d2;
-                    cur = cur.yzwx; pc += 4; next = pc + 4; n++;
-                } else [branch] if ((w2 & 0x17f) == 0x63 && (pc & 12) != 12) {
+                    cur = cross ? fw1 : cur.yzwx; pc += 4; next = pc + 4; n++;
+                } else [branch] if ((w2 & 0x17f) == 0x63 && okx) {
                     // (a branch: its offset on a word, told by the word, as the loop's own branch tells it)
                     uint g3 = (w2 >> 12) & 7, s1 = (w2 >> 15) & 31, s2 = (w2 >> 20) & 31;
                     uint a2 = xr[s1], b2 = xr[s2];
@@ -487,7 +489,7 @@ uint fast(uint room) {
                     bool lt2 = (a2 ^ tb2) < (b2 ^ tb2);
                     pc += 4;
                     next = (((g3 & 4) ? lt2 : a2 == b2) != ((g3 & 1) != 0)) ? pc + imm_b(w2) : pc + 4;
-                    dst = 64; cur = cur.yzwx; n++;
+                    dst = 64; cur = cross ? fw1 : cur.yzwx; n++;
                 }
             } else {
                 // lb lh lw lbu lhu, within one word of RAM: lwu is lw, and ld and funct3 7 fail the size test (no test of
@@ -506,8 +508,9 @@ uint fast(uint room) {
 #endif
                 v = (f3 & 4) ? x >> up : asuint(asint(x) >> up);
                 // (a branch after the load, the texel's next word, in the same turn: its registers taken from the load's word)
-                uint w2 = cur.y;
-                [branch] if (ok && (w2 & 0x17f) == 0x63 && (pc & 12) != 12) {
+                bool cross = (pc & 12) == 12;
+                uint w2 = cross ? fw1.x : cur.y;
+                [branch] if (ok && (w2 & 0x17f) == 0x63 && (!cross || fw_t == ((pc & 0x7fffffff) >> 4))) {
                     uint g3 = (w2 >> 12) & 7, s1 = (w2 >> 15) & 31, s2 = (w2 >> 20) & 31;
                     uint a2 = xr[s1], b2 = xr[s2];
                     a2 = s1 == dst ? v : a2; b2 = s2 == dst ? v : b2;
@@ -516,7 +519,7 @@ uint fast(uint room) {
                     bool lt2 = (a2 ^ tb2) < (b2 ^ tb2);
                     pc += 4;
                     next = (((g3 & 4) ? lt2 : a2 == b2) != ((g3 & 1) != 0)) ? pc + imm_b(w2) : pc + 4;
-                    dst = 64; cur = cur.yzwx; n++;
+                    dst = 64; cur = cross ? fw1 : cur.yzwx; n++;
                 }
             }
         } else [branch] if (opc == 0x23 || (w & 0x5f) == 0x07 || opc == 0x53) {

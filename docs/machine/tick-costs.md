@@ -880,6 +880,12 @@ More on the tree with M first (Quake, Tiberian Dawn, shell, against a copy of it
 | The fused branch forwarding only its first register; a load's check by alignment alone; `imm_b` from the word's sign; flw before 0x53 | -1.1%; +1.1%; +0.5%; -0.4% | +1.3%; +2.2%; +1.3%; +1.8% | +0.45%; +1.0%; +0.5%; +1.1% | lost |
 | The fused word's sub by one mask; its rd 0 by an or; a branch's less-than by two compares; arithmetic's M test by funct7; the fused word from the texel, not the turned window; the same for the load's; shifts by `y & 31`; slt by two compares; the write before the forwarding selects | +0.4%; +1.9%; +2.0%; +1.4%; +7.6%; +7.3%; +2.0%; +1.8%; +0.4% | +0.7%; +0.2%; +0.5%; +0.4%; +3.5%; +1.2%; +0.3%; +0.4%; -0.3% | +0.9%; +1.0%; +1.2%; +0.3%; +7.7%; +6.5%; +0.6%; +0.6%; +0.3% | lost: the kept text's form is what it gains by |
 
+| What | Quake | Tiberian Dawn | Shell | Verdict |
+|---|---|---|---|---|
+| **The fused second word from the next texel** (the one read ahead, `fw1`, while `fw_t` is this texel), for arithmetic's and the load's fused words; the window becomes that texel (t4x3) | -0.1%, -0.2% | -1.1%, -1.4% | +0.15%, +0.3% | **kept**: stamp `c405174991cbf98e`, `test_card.py mctest-3 fptest lanetest tdawn-300` pass |
+| The same for arithmetic's only (t4x) | +1.3%, +0.25% | -2.4%, -2.7% | +0.9%, +0.7% | the shell pays: not taken |
+| The same, the fetch's state moved on with it and the texel after read ahead | +0.8% | -1.3% | +1.5% | lost |
+
 **What was learnt.** Nothing of the fast loop's shape gave more than 1% on every load: f2 + fp1 (+ ffma) about 1%, at the
 noise's edge; the kept fusion 2% of Tiberian Dawn, a little of the shell, level on Quake. fp1 changes what fdiv makes (the card's quotient, which `rvc_cpu` does not make: a model of the card's
 division is owed first), and ffma's `mad` is fused where the general step rounds twice: neither is in the tree. The ways
