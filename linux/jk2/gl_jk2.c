@@ -321,11 +321,15 @@ uint32_t jk2ServerOnCore0(uint32_t (*fn)(void*), void* args) {
     while (sv_answer.seq != sv_ask.seq) mc_end_pass();
     return sv_answer.result;
 }
-// What the worker asks made now, if it asks (and its stop at a page or a system call served): wherever this core waits
+// What the worker asks made now, if it asks (and its stop at a page or a system call served): wherever this core waits.
+// Not again inside an ask being made: an ask may be a call of the client game's, which polls (cl_cgame.cpp)
+static int sv_serving;   // this core's
 void jk2ServerServe(void) {
     if (!sw0.out) return;
-    if (sv_ask.seq != sv_answer.seq) {
+    if (sv_ask.seq != sv_answer.seq && !sv_serving) {
+        sv_serving = 1;
         sv_answer.result = sv_ask.fn(sv_ask.args);
+        sv_serving = 0;
         sv_answer.seq = sv_ask.seq;
         sw0.asks++;
     }
@@ -334,8 +338,10 @@ void jk2ServerServe(void) {
 // (an ask of the game's frame's worker answered now, if there is one: this core polls at the client game's calls into the
 // engine, cl_cgame.cpp, so the game's frame does not wait for this core's settle at its frame's end)
 void jk2ServerPoll(void) {
-    if (sw0.out && sv_ask.seq != sv_answer.seq && !mcw_on_worker()) {   // (not a slot's job: this core's alone)
+    if (sw0.out && sv_ask.seq != sv_answer.seq && !sv_serving && !mcw_on_worker()) {   // (not a slot's job: this core's alone)
+        sv_serving = 1;
         sv_answer.result = sv_ask.fn(sv_ask.args);
+        sv_serving = 0;
         sv_answer.seq = sv_ask.seq;
         sw0.asks++;
     }
@@ -448,6 +454,17 @@ int jk2MixPartPost(uint32_t (*fn)(uint32_t, uint32_t), uint32_t a0, uint32_t a1)
 void jk2MixPartJoin(void) {
     for (int i = 0; i < mixpart_count; i++) mcw_join(mixpart_jobs[i]);
     mixpart_count = 0;
+}
+// The voices decoded ahead (snd_dma.cpp's SE_VoiceAheadGive): one job a frame on any free worker, joined before
+// anything else decodes
+static mcw_handle voice_job;
+int jk2VoicePost(uint32_t (*fn)(uint32_t, uint32_t), uint32_t a0, uint32_t a1) {
+    if (voice_job || !rw0.mode) return 0;
+    voice_job = mcw_try_call(fn, a0, a1);
+    return voice_job != 0;
+}
+void jk2VoiceJoin(void) {
+    if (voice_job) mcw_join(voice_job), voice_job = 0;
 }
 void jk2Touch(void* memory, unsigned bytes) { mcw_touch(memory, bytes); }
 void jk2WaitPass(void) { mc_end_pass(); }

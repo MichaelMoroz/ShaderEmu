@@ -90,6 +90,8 @@ void jk2ServerPoll(void) {}
 int jk2MixOut(void) { return 0; }
 int jk2MixPartPost(unsigned (*fn)(unsigned, unsigned), unsigned a0, unsigned a1) { (void)fn, (void)a0, (void)a1; return 0; }
 void jk2MixPartJoin(void) {}
+int jk2VoicePost(unsigned (*fn)(unsigned, unsigned), unsigned a0, unsigned a1) { (void)fn, (void)a0, (void)a1; return 0; }
+void jk2VoiceJoin(void) {}
 int jk2HandPost(unsigned (*fn)(unsigned, unsigned), unsigned a0, unsigned a1) { (void)fn, (void)a0, (void)a1; return 0; }
 void jk2HandJoin(void) {}
 void jk2FrontSettle(void) {}
