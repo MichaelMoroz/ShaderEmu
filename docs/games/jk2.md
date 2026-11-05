@@ -1344,6 +1344,20 @@ sixteen products and sums written out with their ring indices in the same order:
 test_all jk2 jk2-sums 9 of 9; the march 161.72 passes a frame (the walk of that build 177.98, core 0 830 thousand a frame:
 another state).
 
+**The floor over the sky portal blinking** (reported from the world, 5 November 2026): the floor of the first level showed the
+sky portal's scene through it in some frames and black in others. Two causes. **The GPU's one depth buffer**: the shim
+clears no depth (`gl_shaderemu.c`'s glClear keeps the colour's bit; the device has one depth buffer a frame, its passes not
+in the list's order), so the sky portal's scene, drawn first from a camera in a small box, was nearer than the main scene's
+floor wherever its geometry was. Now in a level with a sky portal its view takes the far half of the depth range and every
+other view the near half (`tr_main.cpp`'s `R_SetupProjection`; `JK2_SKY_SLICE=0` not): what the depth clear between the two
+scenes gave. **The sky portal's flag** (`drawskyboxportal`, set by each scene and read by the back end): the drawing a frame
+behind read the next frame's; it is kept with the frame's commands now (`backEndData->se_drawsky`, the back end's
+`se_drawsky`). Three captures (frames 600, 601, 605) with each of `JK2_HALF=0`, `JK2_KEPT=0`, `JK2_FRONT=core` and
+`JK2_RENDER=core` blinked alike before: it was not the workers'. The front end's worker's lists hold no portal surface
+(`jk2front: ... views on the worker, 0 with a portal surface`, printed every 100 views). `JK2_SOUND=client` keeps the card
+but runs the mix by the client's clock: the same game in every build, for comparing two builds' frames. test_all jk2 jk2-sums
+9 of 9.
+
 ### What bounds it
 
 After both rounds (3 November 2026, calibrated, `game_par.py`): the walk 655 passes a frame (1.1 frames a second), the

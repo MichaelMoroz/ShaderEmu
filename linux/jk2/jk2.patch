@@ -6536,7 +6536,7 @@ index 5464b70b..a1f3c8cd 100644
  	{
  		return;
 diff --git a/code/rd-vanilla/tr_backend.cpp b/code/rd-vanilla/tr_backend.cpp
-index 741bb95b..70001a46 100644
+index 741bb95b..7dea5c4e 100644
 --- a/code/rd-vanilla/tr_backend.cpp
 +++ b/code/rd-vanilla/tr_backend.cpp
 @@ -27,6 +27,10 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
@@ -7160,12 +7160,19 @@ index 741bb95b..70001a46 100644
  	{
  		RB_EndSurface();
  	}
-@@ -1604,7 +2013,16 @@ RB_ExecuteRenderCommands
+@@ -1604,7 +2013,23 @@ RB_ExecuteRenderCommands
  void RB_ExecuteRenderCommands( const void *data ) {
  	int		t1, t2;
  
 +#ifdef SHADEREMU
 +	const int here = jk2RenderWorkerHere();	// (on the worker: no system call for the time)
++	{
++		extern backEndData_t *se_backEndData[2];
++		extern int drawskyboxportal;
++		const backEndData_t *bd = se_backEndData[1] && (const byte *)data >= (const byte *)se_backEndData[1] &&
++			(const byte *)data < (const byte *)( se_backEndData[1] + 1 ) ? se_backEndData[1] : se_backEndData[0];
++		backEnd.se_drawsky = se_backEndData[0] ? bd->se_drawsky : drawskyboxportal;
++	}
 +	t1 = here ? 0 : ri.Milliseconds ();
 +	memset( &backEnd.pc, 0, sizeof( backEnd.pc ) );	// (its counters its own: core 0 no longer clears them, tr_cmds.cpp)
 +	if ( here ) {
@@ -7177,7 +7184,7 @@ index 741bb95b..70001a46 100644
  
  	while ( 1 ) {
  		data = PADP(data, sizeof(void *));
-@@ -1628,6 +2046,13 @@ void RB_ExecuteRenderCommands( const void *data ) {
+@@ -1628,6 +2053,13 @@ void RB_ExecuteRenderCommands( const void *data ) {
  		case RC_DRAW_SURFS:
  			data = RB_DrawSurfs( data );
  			break;
@@ -7191,7 +7198,7 @@ index 741bb95b..70001a46 100644
  		case RC_DRAW_BUFFER:
  			data = RB_DrawBuffer( data );
  			break;
-@@ -1640,7 +2065,11 @@ void RB_ExecuteRenderCommands( const void *data ) {
+@@ -1640,7 +2072,11 @@ void RB_ExecuteRenderCommands( const void *data ) {
  		case RC_END_OF_LIST:
  		default:
  			// stop rendering
@@ -7330,7 +7337,7 @@ index afbbb175..5fec07ac 100644
  	else
  	{
 diff --git a/code/rd-vanilla/tr_cmds.cpp b/code/rd-vanilla/tr_cmds.cpp
-index 04ad9bdb..9594bd39 100644
+index 04ad9bdb..1f5c9115 100644
 --- a/code/rd-vanilla/tr_cmds.cpp
 +++ b/code/rd-vanilla/tr_cmds.cpp
 @@ -35,30 +35,37 @@ R_PerformanceCounters
@@ -7413,13 +7420,18 @@ index 04ad9bdb..9594bd39 100644
  void R_IssueRenderCommands( qboolean runPerformanceCounters ) {
  	renderCommandList_t	*cmdList;
  
-@@ -101,6 +129,31 @@ void R_IssueRenderCommands( qboolean runPerformanceCounters ) {
+@@ -101,6 +129,36 @@ void R_IssueRenderCommands( qboolean runPerformanceCounters ) {
  	// clear it out, in case this is a sync and not a buffer flip
  	cmdList->used = 0;
  
 +#ifdef SHADEREMU
 +	void R_SE_G2Wait( void );
 +	R_SE_G2Wait();	// (the Ghoul2 surfaces the front end's worker makes of this frame: tr_main.cpp)
++	// (docs/games/jk2.md, "The sky portal's flag": tr_scene.cpp sets drawskyboxportal at each scene and the back end reads
++	// it; a back end at the frame's end read the frame's last scene's, the drawing a frame behind read the next frame's,
++	// and the floor over the sky portal's scene blinked between it and black. Kept with the frame's commands)
++	extern int drawskyboxportal;
++	backEndData->se_drawsky = drawskyboxportal;
 +	unsigned se_from = SE_RSFrom();
 +	// (the frame's bones given to the slots first, then the frame before waited for, done and shown (not this frame's
 +	// front end, which the drawing waits for), then the bones: the two waits at once)
@@ -7445,7 +7457,7 @@ index 04ad9bdb..9594bd39 100644
  	// at this point, the back end thread is idle, so it is ok
  	// to look at it's performance counters
  	if ( runPerformanceCounters ) {
-@@ -166,6 +219,9 @@ make sure there is enough command space
+@@ -166,6 +224,9 @@ make sure there is enough command space
  static void *R_GetCommandBuffer( int bytes ) {
  	return R_GetCommandBufferReserved( bytes, PAD( sizeof( swapBuffersCommand_t ), sizeof(void *) ) );
  }
@@ -7455,7 +7467,7 @@ index 04ad9bdb..9594bd39 100644
  
  
  /*
-@@ -309,6 +365,9 @@ void RE_RotatePic2 ( float x, float y, float w, float h,
+@@ -309,6 +370,9 @@ void RE_RotatePic2 ( float x, float y, float w, float h,
  
  void RE_LAGoggles( void )
  {
@@ -7465,7 +7477,7 @@ index 04ad9bdb..9594bd39 100644
  	tr.refdef.rdflags |= (RDF_doLAGoggles|RDF_doFullbright);
  	tr.refdef.doLAGoggles = qtrue;
  
-@@ -322,6 +381,9 @@ void RE_LAGoggles( void )
+@@ -322,6 +386,9 @@ void RE_LAGoggles( void )
  	fog->tcScale = 2.0f / ( fog->parms.depthForOpaque * (1.0f + cos( tr.refdef.floatTime) * 0.1f));
  }
  
@@ -7475,7 +7487,7 @@ index 04ad9bdb..9594bd39 100644
  void RE_RenderWorldEffects(void)
  {
  	setModeCommand_t	*cmd;
-@@ -329,6 +391,9 @@ void RE_RenderWorldEffects(void)
+@@ -329,6 +396,9 @@ void RE_RenderWorldEffects(void)
  	if (!tr.registered) {
  		return;
  	}
@@ -7485,7 +7497,7 @@ index 04ad9bdb..9594bd39 100644
  
  	cmd = (setModeCommand_t *)R_GetCommandBuffer( sizeof( *cmd ) );
  	if ( !cmd ) {
-@@ -369,12 +434,26 @@ If running in stereo, RE_BeginFrame will be called twice
+@@ -369,12 +439,26 @@ If running in stereo, RE_BeginFrame will be called twice
  for each RE_EndFrame
  ====================
  */
@@ -7512,7 +7524,7 @@ index 04ad9bdb..9594bd39 100644
  	glState.finishCalled = qfalse;
  
  	tr.frameCount++;
-@@ -509,7 +588,9 @@ void RE_EndFrame( int *frontEndMsec, int *backEndMsec ) {
+@@ -509,7 +593,9 @@ void RE_EndFrame( int *frontEndMsec, int *backEndMsec ) {
  	if ( backEndMsec ) {
  		*backEndMsec = backEnd.pc.msec;
  	}
@@ -8854,7 +8866,7 @@ index d176af56..0ded1bff 100644
  	}
  }
 diff --git a/code/rd-vanilla/tr_local.h b/code/rd-vanilla/tr_local.h
-index c9e745aa..d9f6bac9 100644
+index c9e745aa..cc736446 100644
 --- a/code/rd-vanilla/tr_local.h
 +++ b/code/rd-vanilla/tr_local.h
 @@ -618,7 +618,7 @@ typedef struct srfGridMesh_s {
@@ -8909,7 +8921,17 @@ index c9e745aa..d9f6bac9 100644
  
  #define	FOG_TABLE_SIZE		256
  #define FUNCTABLE_SIZE		1024
-@@ -1075,6 +1088,25 @@ void	 R_Images_DeleteImage(image_t *pImage);
+@@ -942,6 +955,9 @@ typedef struct {
+ 	byte		color2D[4];
+ 	qboolean	vertexes2D;		// shader needs to be finished
+ 	trRefEntity_t	entity2D;	// currentEntity will point at this when doing 2D rendering
++#ifdef SHADEREMU
++	int		se_drawsky;	// (drawskyboxportal as the frame drawn left it: tr_cmds.cpp)
++#endif
+ } backEndState_t;
+ 
+ /*
+@@ -1075,6 +1091,25 @@ void	 R_Images_DeleteImage(image_t *pImage);
  
  extern backEndState_t	backEnd;
  extern trGlobals_t	tr;
@@ -8935,7 +8957,7 @@ index c9e745aa..d9f6bac9 100644
  extern glconfig_t	glConfig;		// outside of TR since it shouldn't be cleared during ref re-init
  extern glstate_t	glState;		// outside of TR since it shouldn't be cleared during ref re-init
  extern window_t		window;
-@@ -1397,10 +1429,20 @@ TESSELATOR/SHADER DECLARATIONS
+@@ -1397,10 +1432,20 @@ TESSELATOR/SHADER DECLARATIONS
  */
  typedef byte color4ub_t[4];
  
@@ -8956,7 +8978,7 @@ index c9e745aa..d9f6bac9 100644
  } stageVars_t;
  
  #define	NUM_TEX_COORDS		(MAXLIGHTMAPS+1)
-@@ -1408,7 +1450,11 @@ typedef struct stageVars
+@@ -1408,7 +1453,11 @@ typedef struct stageVars
  struct shaderCommands_s
  {
  	glIndex_t	indexes[SHADER_MAX_INDEXES] QALIGN(16);
@@ -8968,7 +8990,7 @@ index c9e745aa..d9f6bac9 100644
  	vec4_t		normal[SHADER_MAX_VERTEXES] QALIGN(16);
  	vec2_t		texCoords[SHADER_MAX_VERTEXES][NUM_TEX_COORDS] QALIGN(16);
  	color4ub_t	vertexColors[SHADER_MAX_VERTEXES] QALIGN(16);
-@@ -1445,6 +1491,15 @@ typedef shaderCommands_s	shaderCommands_t;
+@@ -1445,6 +1494,15 @@ typedef shaderCommands_s	shaderCommands_t;
  #endif
  
  extern	shaderCommands_t	tess;
@@ -8984,7 +9006,7 @@ index c9e745aa..d9f6bac9 100644
  
  extern	color4ub_t	styleColors[MAX_LIGHT_STYLES];
  extern	bool		styleUpdated[MAX_LIGHT_STYLES];
-@@ -1587,6 +1642,12 @@ public:
+@@ -1587,6 +1645,12 @@ public:
  #endif
   	CBoneCache 		*boneCache;		// pointer to transformed bone list for this surf
  	mdxmSurface_t	*surfaceData;	// pointer to surface data loaded into file - only used by client renderer DO NOT USE IN GAME SIDE - if there is a vid restart this will be out of wack on the game
@@ -8997,7 +9019,7 @@ index c9e745aa..d9f6bac9 100644
  #ifdef _G2_GORE
  	float			*alternateTex;		// alternate texture coordinates.
  	void			*goreChain;
-@@ -1604,6 +1665,10 @@ public:
+@@ -1604,6 +1668,10 @@ public:
  		surfaceData = src.surfaceData;
  		alternateTex = src.alternateTex;
  		goreChain = src.goreChain;
@@ -9008,7 +9030,7 @@ index c9e745aa..d9f6bac9 100644
  
  		return *this;
  	}
-@@ -1625,6 +1690,10 @@ CRenderableSurface():
+@@ -1625,6 +1693,10 @@ CRenderableSurface():
  	{
  		boneCache=0;
  		surfaceData=0;
@@ -9019,7 +9041,7 @@ index c9e745aa..d9f6bac9 100644
  #ifdef _G2_GORE
  		ident = SF_MDX;
  		alternateTex=0;
-@@ -1778,6 +1847,9 @@ typedef enum {
+@@ -1778,6 +1850,9 @@ typedef enum {
  	RC_DRAW_BUFFER,
  	RC_SWAP_BUFFERS,
  	RC_WORLD_EFFECTS,
@@ -9029,8 +9051,18 @@ index c9e745aa..d9f6bac9 100644
  } renderCommand_t;
  
  
+@@ -1796,6 +1871,9 @@ typedef struct {
+ 	srfPoly_t	polys[MAX_POLYS];
+ 	polyVert_t	polyVerts[MAX_POLYVERTS];
+ 	renderCommandList_t	commands;
++#ifdef SHADEREMU
++	int		se_drawsky;	// (drawskyboxportal at this frame's end, for its back end a frame later)
++#endif
+ } backEndData_t;
+ 
+ extern	backEndData_t	*backEndData;
 diff --git a/code/rd-vanilla/tr_main.cpp b/code/rd-vanilla/tr_main.cpp
-index da619736..b57714b4 100644
+index da619736..8296f511 100644
 --- a/code/rd-vanilla/tr_main.cpp
 +++ b/code/rd-vanilla/tr_main.cpp
 @@ -205,7 +205,15 @@ void R_LocalPointToWorld (const vec3_t local, vec3_t world) {
@@ -9049,7 +9081,34 @@ index da619736..b57714b4 100644
  
  void R_InvertMatrix(float *sourcemat, float *destmat)
  {
-@@ -1139,6 +1147,38 @@ Radix sort with 4 byte size buckets
+@@ -565,6 +573,26 @@ void R_SetupProjection( void ) {
+ 	tr.viewParms.projectionMatrix[7] = 0;
+ 	tr.viewParms.projectionMatrix[11] = -1;
+ 	tr.viewParms.projectionMatrix[15] = 0;
++#ifdef SHADEREMU
++	// (docs/games/jk2.md, "The sky portal's depth": the GPU has one depth buffer a frame and no depth clear between two
++	// scenes (gl_shaderemu.c's glClear keeps the colour's bit only), so the sky portal's scene, drawn first from a camera in
++	// a small box, was nearer than the main scene's floor wherever its geometry was, and the floor blinked between itself
++	// and the sky. In a level with a sky portal its view takes the far half of the depth range and every other view the
++	// near half: what the depth clear between them gave. z' = z / 2 + w (+-1/2), the view's own terms unchanged.
++	// JK2_SKY_SLICE=0: not)
++	extern int skyboxportal;
++	static int se_slice = -1;
++	if ( se_slice < 0 ) {
++		const char *e = getenv( "JK2_SKY_SLICE" );
++		se_slice = !( e && !strcmp( e, "0" ) );
++	}
++	if ( se_slice && skyboxportal ) {
++		const float t = ( tr.refdef.rdflags & RDF_SKYBOXPORTAL ) ? 0.5f : -0.5f;
++		float *m = tr.viewParms.projectionMatrix;
++		for ( int c = 0 ; c < 4 ; c++ )
++			m[4 * c + 2] = 0.5f * m[4 * c + 2] + t * m[4 * c + 3];
++	}
++#endif
+ }
+ 
+ /*
+@@ -1139,6 +1167,38 @@ Radix sort with 4 byte size buckets
  static void R_RadixSort( drawSurf_t *source, int size )
  {
    static drawSurf_t scratch[ MAX_DRAWSURFS ];
@@ -9088,7 +9147,7 @@ index da619736..b57714b4 100644
  #ifdef Q3_LITTLE_ENDIAN
    R_Radix( 0, size, source, scratch );
    R_Radix( 1, size, scratch, source );
-@@ -1203,6 +1243,74 @@ void R_DecomposeSort( unsigned sort, int *entityNum, shader_t **shader,
+@@ -1203,6 +1263,74 @@ void R_DecomposeSort( unsigned sort, int *entityNum, shader_t **shader,
  R_SortDrawSurfs
  =================
  */
@@ -9163,7 +9222,7 @@ index da619736..b57714b4 100644
  void R_SortDrawSurfs( drawSurf_t *drawSurfs, int numDrawSurfs ) {
  	shader_t		*shader;
  	int				fogNum;
-@@ -1225,6 +1333,9 @@ void R_SortDrawSurfs( drawSurf_t *drawSurfs, int numDrawSurfs ) {
+@@ -1225,6 +1353,9 @@ void R_SortDrawSurfs( drawSurf_t *drawSurfs, int numDrawSurfs ) {
  
  	// sort the drawsurfs by sort type, then orientation, then shader
  	R_RadixSort( drawSurfs, numDrawSurfs );
@@ -9173,7 +9232,7 @@ index da619736..b57714b4 100644
  
  	// check for any pass through drawing, which
  	// may cause another view to be rendered first
-@@ -1258,6 +1369,21 @@ void R_SortDrawSurfs( drawSurf_t *drawSurfs, int numDrawSurfs ) {
+@@ -1258,6 +1389,21 @@ void R_SortDrawSurfs( drawSurf_t *drawSurfs, int numDrawSurfs ) {
  R_AddEntitySurfaces
  =============
  */
@@ -9195,7 +9254,7 @@ index da619736..b57714b4 100644
  void R_AddEntitySurfaces (void) {
  	trRefEntity_t	*ent;
  	shader_t		*shader;
-@@ -1270,6 +1396,10 @@ void R_AddEntitySurfaces (void) {
+@@ -1270,6 +1416,10 @@ void R_AddEntitySurfaces (void) {
  	      tr.currentEntityNum < tr.refdef.num_entities;
  		  tr.currentEntityNum++ ) {
  		ent = tr.currentEntity = &tr.refdef.entities[tr.currentEntityNum];
@@ -9206,7 +9265,7 @@ index da619736..b57714b4 100644
  
  		ent->needDlights = qfalse;
  
-@@ -1550,4 +1680,339 @@ void R_RenderView (viewParms_t *parms) {
+@@ -1550,4 +1700,357 @@ void R_RenderView (viewParms_t *parms) {
  
  	// draw main system development information (surface outlines, etc)
  	R_DebugGraphics();
@@ -9309,7 +9368,10 @@ index da619736..b57714b4 100644
 +	return h;
 +}
 +static struct { unsigned views, wrong, unused[2], world, whole_world, polys, whole_polys; } __attribute__(( aligned( 16 ) )) se_front_check;	// (the worker's)
-+static unsigned se_check_world, se_check_polys;	// (this core's: JK2_FRONT=check's whole view, its world's surfaces and polygons')
++static unsigned se_check_world, se_check_polys;
++// (every view the front end's worker made, and those whose list had a portal or mirror surface, which that worker does not
++// make the portal's view of: the floor drawn without its reflection. Printed by the first core every 100 views)
++static struct { unsigned views, portals, unused[2]; } __attribute__(( aligned( 16 ) )) se_front_portals;	// (the worker's)	// (this core's: JK2_FRONT=check's whole view, its world's surfaces and polygons')
 +static int SE_FrontNot( int why )	// (JK2_FRONT_LOG=1: why a view is made here, the first 8 times)
 +{
 +	static int log = -1, logged;
@@ -9460,6 +9522,16 @@ index da619736..b57714b4 100644
 +	if ( n > 0 )
 +		R_RadixSort( out, n );
 +	SE_ViewSumNote( out, n, 1 );
++	{
++		int has = 0;
++		for ( int i = 0 ; i < n && !has ; i++ ) {
++			int en, fog, dl;
++			shader_t *sh;
++			R_DecomposeSort( out[i].sort, &en, &sh, &fog, &dl );
++			has = sh->sort <= SS_PORTAL;
++		}
++		se_front_portals.views++, se_front_portals.portals += has;
++	}
 +	if ( SE_FrontOn() == 2 ) {
 +		se_front_check.views++;
 +		if ( (unsigned)n != cmd->checkCount || ( n > 0 && SE_FrontSum( out, n ) != cmd->check ) )
@@ -9517,6 +9589,11 @@ index da619736..b57714b4 100644
 +int se_world_checked, se_world_wrong;	// (JK2_WORLD_HALF=check: tr_world.cpp)
 +void R_SE_FrontWait( void )
 +{
++	{
++		static unsigned printed;
++		if ( se_front_portals.views >= printed + 100 )
++			printed = se_front_portals.views, ri.Printf( PRINT_ALL, "jk2front: %u views on the worker, %u with a portal surface in their list\n", se_front_portals.views, se_front_portals.portals );
++	}
 +	{	// (JK2_FRONT=check's counts: here, before the returns of a frame whose views the front end's worker made)
 +		static unsigned printed;
 +		if ( SE_FrontOn() == 2 && se_front_check.views >= printed + 100 )
@@ -9880,7 +9957,7 @@ index d0b6b549..8e7112d5 100644
  
  	// the next scene rendered in this frame will tack on after this one
 diff --git a/code/rd-vanilla/tr_shade.cpp b/code/rd-vanilla/tr_shade.cpp
-index 48f3ed13..acef44d8 100644
+index 48f3ed13..cbca02dd 100644
 --- a/code/rd-vanilla/tr_shade.cpp
 +++ b/code/rd-vanilla/tr_shade.cpp
 @@ -234,7 +234,7 @@ void R_BindAnimatedImage( const textureBundle_t *bundle) {
@@ -10366,7 +10443,19 @@ index 48f3ed13..acef44d8 100644
  		Com_Error (ERR_DROP, "RB_EndSurface() - SHADER_MAX_VERTEXES hit");
  	}
  
-@@ -2269,6 +2644,9 @@ void RB_EndSurface( void ) {
+@@ -2236,7 +2611,11 @@ void RB_EndSurface( void ) {
+ 		// portal sky
+ 		else
+ 		{
++#ifdef SHADEREMU
++			if(!backEnd.se_drawsky)	// (the frame's own: tr_cmds.cpp)
++#else
+ 			if(!drawskyboxportal)
++#endif
+ 			{
+ 				if( !(tess.currentStageIteratorFunc == RB_StageIteratorSky))
+ 				{	// /only/ process sky tris
+@@ -2269,6 +2648,9 @@ void RB_EndSurface( void ) {
  	// call off to shader specific tess end function
  	//
  	tess.currentStageIteratorFunc();
@@ -10376,7 +10465,7 @@ index 48f3ed13..acef44d8 100644
  
  	//
  	// draw debugging stuff
-@@ -2284,6 +2662,9 @@ void RB_EndSurface( void ) {
+@@ -2284,6 +2666,9 @@ void RB_EndSurface( void ) {
  
  	// clear shader so we can tell we don't have any unclosed surfaces
  	tess.numIndexes = 0;
