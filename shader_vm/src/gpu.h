@@ -938,8 +938,12 @@ gpu_varyings volume_vertex(uint id, uint base, uint4 head, out float3 eye, out f
     float4 pos, normal = 0;
     uint corner = 0;
     if (how.r & VERTEX_POINTS) { corner = k % 3; k = k / 3; }
+    // (the same kinds of vertex as gpu_vertex: without the skinned kind Jedi Outcast's Ghoul2 models were
+    // read as plain vertices, torn triangles from the seat)
     [branch]
-    if (how.r & VERTEX_COMPACT) {
+    if (how.r & VERTEX_BONES) {
+        gpu_bones_vertex(head, more, ram(base + 3), k, pos, o.uv, o.colour);
+    } else if (how.r & VERTEX_COMPACT) {
         gpu_compact_vertex(base, head, how, more, k, pos, o.uv, o.colour);
     } else {
         uint v = texel_of(head.g) + 4 * k;
