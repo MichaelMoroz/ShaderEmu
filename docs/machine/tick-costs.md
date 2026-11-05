@@ -847,6 +847,18 @@ The two kept changes together against the tree of `62c2cd86`, in one run (a copy
 A jal as the fused second word after arithmetic (its target's bit 21 in the test, so a pass never commits half a pair):
 Quake +1.2%, Tiberian Dawn +2.0%, the shell +0.6%: lost.
 
+On the tree with both (each copy of the tree made again from the merged `shader_vm` after the GPU device changed: a copy
+with the old `gpu.shader` serves no list under the new harness, and a game waiting for one runs a few instructions a
+frame):
+
+| What | Quake | Tiberian Dawn | Shell | Verdict |
+|---|---|---|---|---|
+| **M before the atomics** (round two found it level on the shell and Quake: Tiberian Dawn has 4.5% of mul) | -0.4%, +0.1% | -1.2%, -1.2% | -0.4%, -0.45% | **kept**: stamp `40eaa083dd0828bc`, `test_card.py mctest-3 fptest lanetest tdawn-300` pass |
+| M before the jumps | +1.0% | -1.1% | +0.4% | lost on Quake |
+| mulhi; fdiv inline as the card's (fp1); fcmpn; pfp; fp3; la1; br1 | -0.4%, +0.3%, +0.5%, -0.1%, +0.8%, +0.7%, +1.0% | +0.4%, +0.2%, +0.6%, -0.1%, +0.2%, -0.8%, -0.9% | 0.0%, +0.35%, +0.15%, -0.1%, +0.3%, +0.7%, - | level or lost |
+| Each kept part out alone: the fused arithmetic only for op-imm; no fused branch after arithmetic; no branch after a load | +1.4%; -0.75%; +0.2% | +4.3%; +0.2%; +0.8% | +0.1%; +0.2%; 0.0% | the parts are kept together |
+| lui or auipc as the fused second word; the second word's fields read before the first's result | +1.2%; +0.9% | +2.1%; +0.9% | +1.9%; +0.5% | lost |
+
 **What was learnt.** Nothing of the fast loop's shape gave more than 1% on every load: f2 + fp1 (+ ffma) about 1%, at the
 noise's edge; the kept fusion 2% of Tiberian Dawn, a little of the shell, level on Quake. fp1 changes what fdiv makes (the card's quotient, which `rvc_cpu` does not make: a model of the card's
 division is owed first), and ffma's `mad` is fused where the general step rounds twice: neither is in the tree. The ways

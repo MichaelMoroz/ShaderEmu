@@ -590,6 +590,8 @@ uint fast(uint room) {
             v = jump ? pc + 4 : (w & 0xfffff000) + (opc == 0x17 ? pc : 0);
             next = opc == 0x6f ? pc + imm_j(w) : opc == 0x67 ? a + imm_i(w) : next;
             ok = (next & 3) == 0;
+        } else [branch] if (opc == 0x33 && (w >> 25) == 1) {   // (M before the atomics: Tiberian Dawn has 4.5% of mul, the atomics next to none)
+            v = op_m(f3, a, b);
         } else [branch] if ((w & 0x707f) == 0x202f) {
             // amoadd amoswap lr sc amoxor amoor amoand on a word of RAM (min and max are the general step's); a funct5 under
             // 16 that is none of these is amoswap, and lr's rs2 is not looked at
@@ -607,8 +609,6 @@ uint fast(uint room) {
                 res_addr = lr ? a : res_addr;
                 v = sc ? (sc_ok ? 0 : 1) : old;
             }
-        } else [branch] if (opc == 0x33 && (w >> 25) == 1) {
-            v = op_m(f3, a, b);
         } else [branch] if (opc == 0x73 && (f3 & 3) != 0) {
             // csrrw, csrrs, csrrc and their immediates on a CSR nothing else looks at (sscratch, sepc, scause,
             // stval, stvec, scounteren, the float flags, time, the hart): the kernel's trap entry and exit are
