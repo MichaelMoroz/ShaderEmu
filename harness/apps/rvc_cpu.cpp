@@ -2496,6 +2496,28 @@ static void control_pass() {
         static FILE* vlog = fopen(opt.volumeLog.c_str(), "w");
         static u32 seen = ~0u;
         u32 frames = word(CTRL + 0x308);
+        // (the named frame's commands summed: one that changes while still named is drawn half made over, and a holodeck blinks)
+        static std::vector<u32> named;
+        static u32 changed_at = ~0u, named_list = 0;
+        std::vector<u32> now;
+        {
+            u32 list = word(CTRL + 0x300), n = std::min<u32>(word(CTRL + 0x304), 4096);
+            for (u32 i = 0; list && i < 16 * n; i++) {
+                u32 at = list + 4 * i;
+                if (at < 0x80000000u || at + 4 > RAM_BASE + RAM_SIZE) break;
+                now.push_back(word(at));
+            }
+        }
+        if (vlog && frames == seen && word(CTRL + 0x300) == named_list && now != named && changed_at != frames) {
+            changed_at = frames;
+            size_t k = 0;
+            while (k < now.size() && k < named.size() && now[k] == named[k]) k++;
+            fprintf(vlog, "%.3f frame %u list %08x changed while named: command %u word %u, %08x to %08x (command %08x)\n", guest_seconds, frames,
+                    word(CTRL + 0x300), (unsigned)(k / 16), (unsigned)(k % 16), k < named.size() ? named[k] : 0u, k < now.size() ? now[k] : 0u,
+                    k / 16 * 16 < now.size() ? now[k / 16 * 16] : 0u);
+            fflush(vlog);
+        }
+        named.swap(now), named_list = word(CTRL + 0x300);
         if (vlog && frames != seen) {
             seen = frames;
             u32 list = word(CTRL + 0x300), n = std::min<u32>(word(CTRL + 0x304), 4096), size = word(CTRL + 0x30c);

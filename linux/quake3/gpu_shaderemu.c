@@ -280,6 +280,16 @@ void gpuEnd(unsigned* e) {
     uint32_t levels = commands ? uploads_put() : 0;
     uploads_done();
     e[0] = set_at, e[1] = commands, e[2] = passes_used | (levels ? 1u : 0u);
+    // the frame is whole: the volume display shows it from now (docs/world/volume.md). Named here by the core that drew
+    // it, not by gpuShow: the next frame is built in the other set, which the words named until then, and a holodeck
+    // showed that frame half made over (Quake III from the seat blinked)
+    if (gpu && commands && window_info.realized && window_info.surface_address) {
+        volatile uint32_t* regs = (volatile uint32_t*)gpu;
+        regs[REG_VOLUME / 4 + 1] = commands;
+        regs[REG_VOLUME / 4 + 3] = window_info.width | window_info.height << 16 | world_up << 28 | world_flat;
+        regs[REG_VOLUME / 4] = GPU_PHYS + set_at;
+        regs[REG_VOLUME / 4 + 2]++;
+    }
     set_at = set_at == SETS_AT ? SETS_AT + SET_SIZE : SETS_AT;
     commands = kept;
     mesh_vertices = kept_mesh;
@@ -316,10 +326,7 @@ void gpuShow(const unsigned* e) {
     __atomic_store_n(&regs[REG_LOCK / 4], 0, __ATOMIC_RELEASE);
     unsettled = 1;
     unsettled_set = e[0];
-    regs[REG_VOLUME / 4 + 1] = e[1];
-    regs[REG_VOLUME / 4 + 3] = window_info.width | window_info.height << 16 | world_up << 28 | world_flat;
-    regs[REG_VOLUME / 4] = GPU_PHYS + e[0];
-    regs[REG_VOLUME / 4 + 2]++;
+    // (the volume words were gpuEnd's)
     fps_caption(&window_info, regs[0x34 / 4]);
 }
 

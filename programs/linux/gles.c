@@ -340,10 +340,7 @@ static int hand_submit(int wait) {
         __atomic_store_n(&regs[REG_LOCK / 4], 0, __ATOMIC_RELEASE);
         unsettled = 1;
         unsettled_set = set;
-        regs[REG_VOLUME / 4 + 1] = count;
-        regs[REG_VOLUME / 4 + 3] = size;
-        regs[REG_VOLUME / 4] = GPU_PHYS + set;
-        regs[REG_VOLUME / 4 + 2]++;
+        // (the volume words were the worker's, when it handed the frame: seglSwapHand)
         if (!not_a_frame) fps_caption(&hand_info, regs[0x34 / 4]);
         not_a_frame = 0;
     }
@@ -456,6 +453,13 @@ void seglSwapHand(void) {
         hand[1] = commands | passes_used << 16 | (uploading ? 1u << 16 : 0);   // (bit 16: uploads; passes are 1-15)
         uploads_done();
         hand[2] = (uint32_t)window_info.width | (uint32_t)window_info.height << 16 | world_up << 28 | world_flat;
+        // the frame is whole: the volume display shows it from now (docs/world/volume.md). Named here, not when the first
+        // core takes it: the next frame is built in the other set, which the words named until then, and a holodeck showed
+        // that frame half made over (Quake from the seat blinked)
+        regs[REG_VOLUME / 4 + 1] = commands;
+        regs[REG_VOLUME / 4 + 3] = hand[2];
+        regs[REG_VOLUME / 4] = GPU_PHYS + set_at;
+        regs[REG_VOLUME / 4 + 2]++;
         __atomic_store_n(&hand[3], n + 1, __ATOMIC_RELEASE);
         set_at = set_at == SETS_AT ? SETS_AT + SET_SIZE : SETS_AT;
     }

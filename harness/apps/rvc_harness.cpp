@@ -1352,6 +1352,7 @@ int main(int argc, char** argv) {
     }
     bool netDelivered = false;
     int gpuPassLife[16] = {};     // frames each of the GPU's passes 1-15 is still drawn for
+    uint32_t gpuPictureW = 0, gpuPictureH = 0;   // the last submitted list's picture (GPU_INTO), for --gpu-capture's line
     bool gpuUploadDue = false;    // a readback saw a list with uploads submitted: the next frame draws them (GPU_UPLOADED)
     // The sound card (docs/machine/sound.md). While the guest has it enabled the host mixes: it names a
     // cursor, the device draws the samples from there on and moves its voices up to it.
@@ -1441,6 +1442,10 @@ int main(int argc, char** argv) {
         if (raw.size() >= (64 + 0x33) * 16 && texel(64 + 0x32, 0) != 0) backend.countsAdded = true;
         // passes a submitted list asks for: drawn from now on, and for a while after the last use
         if (raw.size() >= (64 + 2) * 16 && texel(64 + 1, 0) != 0) backend.listDue = 4;   // (RVC_LIST_LAZY)
+        // the picture the last list drew (GPU_INTO's width and height, which stay after the device took it): what of the
+        // target --gpu-capture's picture is
+        if (raw.size() >= (64 + 6) * 16 && texel(64 + 5, 1) && texel(64 + 5, 2))
+            gpuPictureW = texel(64 + 5, 1), gpuPictureH = texel(64 + 5, 2);
         if (raw.size() >= (64 + 2) * 16)
             for (int p = 1; p < 16; ++p)
                 if ((texel(64 + 1, 0) >> (8 + p)) & 1) gpuPassLife[p] = 600;
@@ -2490,7 +2495,8 @@ int main(int argc, char** argv) {
         fprintf(stderr, "\n[harness] sound (%u mixes) %s %s\n", soundMixes, soundCapture.write(opt.soundCapture) ? "written to" : "capture FAILED:",
                 opt.soundCapture.c_str());
     if (!opt.gpuCapture.empty() && exitCode != 1)
-        fprintf(stderr, "\n[harness] GPU target %s %s\n", backend.gpuCapture(opt.gpuCapture) ? "written to" : "capture FAILED:", opt.gpuCapture.c_str());
+        fprintf(stderr, "\n[harness] GPU target %s %s; the picture %ux%u at its top left\n", backend.gpuCapture(opt.gpuCapture) ? "written to" : "capture FAILED:",
+                opt.gpuCapture.c_str(), gpuPictureW, gpuPictureH);
     if (!opt.hudCapture.empty() && exitCode != 1)
         fprintf(stderr, "\n[harness] the HUD layer %s %s\n", backend.hudCapture(mat, opt.hudCapture) ? "written to" : "capture FAILED:", opt.hudCapture.c_str());
     if (!opt.vizCapture.empty() && backend.viewOpen() && exitCode != 1) {

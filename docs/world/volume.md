@@ -22,6 +22,11 @@ Nothing new is drawn by the guest. A program's last whole frame is a command lis
   stays whole until the frame after it is complete. `gles.c` has two sets of list, matrix
   blocks and vertices (`SET_SIZE`, 384 KB each by default: 3,072 commands and 10,240 compact
   vertices; a program may build it with its own split, as Quake does).
+- A frame made on a worker core is named by that core when it ends it (`seglSwapHand` in `gles.c`, `gpuEnd` in
+  `linux/quake3/gpu_shaderemu.c`), not when the first core submits it: the worker goes on into the other set at once, which
+  the words named until the first core's submit, and a holodeck showed that frame being written over (Quake and Quake III
+  from the seat blinked, 5 November 2026). `rvc_cpu --volume-log` writes a line `changed while named` for each frame whose
+  commands changed while the words named it: it must have none.
 - The kernel clears the words when `/dev/gpu` is closed, so a program that ends leaves nothing.
 
 ## What the host draws
