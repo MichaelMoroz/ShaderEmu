@@ -27,8 +27,9 @@ HC_Z0, HC_Z1 = HOLO_Z - HC_WIDE / 2, HOLO_Z + HC_WIDE / 2
 HOLO_LAMPS = [HC_X1 - 1.2 - i * (HC_LONG - 2.4) / 3 for i in range(4)]
 # what stands in the holodecks' corridor and stops a visitor: x0, x1, z0, z1 and the height of its top
 # (as Blender measured the models standing there: the table's top is 0.761, the bench's seat 0.651)
-FURNITURE = {"table": [HC_X1 - 1.05, HC_X1 - 0.65, HC_Z0 + 0.02, HC_Z0 + 0.42, 0.761],
-             "bench": [HC_X0 + 0.02, HC_X0 + 0.52, HOLO_Z - 0.59, HOLO_Z + 0.59, 0.651]}
+# (both clear of the panelling, whose cap stands 51 mm out)
+FURNITURE = {"table": [HC_X1 - 1.05, HC_X1 - 0.65, HC_Z0 + 0.05, HC_Z0 + 0.45, 0.761],
+             "bench": [HC_X0 + 0.055, HC_X0 + 0.555, HOLO_Z - 0.59, HOLO_Z + 0.59, 0.651]}
 # in a room's frame: the seat, the screen before it (its middle, wide, high), and the stand at
 # the seat's right hand with the room's controls and the two controllers
 SEAT_Z = 0.9
@@ -157,50 +158,129 @@ def holo_room(b, k):
             console(b)
 
 
+def feet():
+    """What stands on a room's floor, as outlines in its frame (x, z): the seat's round foot and
+    the console's base. The floor's lines stop short of them (grid_bars), not under them."""
+    import lib
+    from mathutils import Vector
+    chair = [(0.245 * math.cos(a), SEAT_Z + 0.245 * math.sin(a)) for a in (i * math.pi / 24 for i in range(48))]
+    frame = lib.place((STAND[0], 0, STAND[1]), (0, CONSOLE_TURN, 0)) @ lib.place((0, 0, 0), (-90, 0, 0))
+    base = [frame @ Vector((x, y, 0)) for x, y in pc.rrect(0.30, 0.36, 0.07, 0, -0.09)]
+    return [chair, [(p.x, p.z) for p in base]]
+
+
+def cut_line(along, across, half, a0, a1, outlines, gap=0.003):
+    """The pieces of a line at `across` (of half width `half`) from a0 to a1 along `along` (0 x,
+    1 z) that are clear of every outline by `gap`."""
+    pieces = [(a0, a1)]
+    for outline in outlines:
+        inside = []
+        for p, q in zip(outline, outline[1:] + outline[:1]):   # the outline's edges, finely
+            for k in range(20):
+                point = [p[i] + (q[i] - p[i]) * k / 20 for i in (0, 1)]
+                if abs(point[1 - along] - across) <= half + gap:
+                    inside.append(point[along])
+        if not inside:
+            continue
+        low, high = min(inside) - gap, max(inside) + gap
+        pieces = [piece for a, c in pieces for piece in ((a, min(c, low)), (max(a, high), c)) if piece[1] - piece[0] > 0.002]
+    return pieces
+
+
+def less(a0, a1, cuts):
+    """What is left of a0 to a1 without the intervals `cuts`."""
+    pieces = [(a0, a1)]
+    for lo, hi in cuts:
+        pieces = [piece for a, e in pieces for piece in ((a, min(e, lo)), (max(a, hi), e)) if piece[1] - piece[0] > 0.002]
+    return pieces
+
+
 def grid_bars(b):
     """The grid's lines in a room's frame: a lit bar along every line between two panels of the
-    shell (world/shell.py's holo_room), and a heavier one along each of the room's twelve edges,
-    so that no panel ends at a corner unframed. The walls' bars stand 8 mm proud (those across
-    7, so that no two faces of a crossing lie in one plane), the floor's 3 and 2, the corners'
-    15: the mask that lets the program's world through is in front of all of them (MASK_IN)."""
+    shell (world/shell.py's holo_room), and a heavier one in each of the room's twelve edges, so
+    that no panel ends at a corner unframed. No two bars go into each other or share a face's
+    plane where they meet: an edge's bar lies in the corner, against both faces, the upright ones
+    the room's height and the level ones between them; a line ends against the bar it meets (the
+    walls' level lines between the upright ones, the floor's and the ceiling's across between those
+    along), and the floor's stop short of the seat's foot and the console's base. The walls' bars
+    stand 8 mm proud (those across 7), the floor's 3 and 2, the ceiling's 8 and 7, the corners' 15:
+    the mask that lets the program's world through is in front of all of them (MASK_IN)."""
     s, t, g = ROOM, ROOM_HIGH, GRID
     n, m = round(s / g), round(t / g)
     dw, dh = round(ROOM_DOOR_WIDE / g), round(ROOM_DOOR_HIGH / g)
     d0 = (n - dw) // 2
     bar, mat = 0.022, "HoloLine"
+    hw = bar / 2
+    c = 0.015      # an edge's bar: a square this deep into the room from each of its two faces
+    floor_proud, floor_across = 0.003, 0.002
     walls = [((s / 2, 0.0), (-1, 0), (0, 1)), ((-s / 2, 0.0), (0, 1), (1, 0)), ((-s / 2, s), (1, 0), (0, -1)), ((s / 2, s), (0, -1), (-1, 0))]
+
+    def block(lo, hi, bevel=0.002):
+        b.box(tuple((p + q) / 2 for p, q in zip(lo, hi)), tuple(q - p for p, q in zip(lo, hi)), mat, bevel=bevel, segs=1)
 
     def run(p, q, inward, proud, wide=bar):
         """A bar from p to q (a line on a face), standing `proud` off it towards `inward`."""
-        mid = [(a + c) / 2 + i * proud / 2 for a, c, i in zip(p, q, inward)]
-        size = [abs(c - a) + (wide if abs(c - a) < 1e-6 else 0) for a, c in zip(p, q)]
-        size = [proud if abs(i) > 0.5 else v for v, i in zip(size, inward)]
-        b.box(tuple(mid), tuple(size), mat, bevel=0.002, segs=1)
+        lo, hi = [], []
+        for a, e, i in zip(p, q, inward):
+            if abs(i) > 0.5:
+                lo.append(min(a, a + i * proud))
+                hi.append(max(a, a + i * proud))
+            elif abs(e - a) < 1e-9:
+                lo.append(a - wide / 2)
+                hi.append(a + wide / 2)
+            else:
+                lo.append(min(a, e))
+                hi.append(max(a, e))
+        block(lo, hi)
+    # the twelve edges
+    for x0 in (-s / 2, s / 2):
+        for z0 in (0.0, s):
+            ix, iz = (1 if x0 < 0 else -1), (1 if z0 == 0 else -1)
+            block((min(x0, x0 + ix * c), 0.0, min(z0, z0 + iz * c)), (max(x0, x0 + ix * c), t, max(z0, z0 + iz * c)), 0.003)
+    door_half = dw * g / 2
+    for y0, y1 in ((0.0, c), (t - c, t)):
+        for x0 in (-s / 2, s / 2):   # along z, between the upright ones
+            block((min(x0, x0 + (c if x0 < 0 else -c)), y0, c), (max(x0, x0 + (c if x0 < 0 else -c)), y1, s - c), 0.003)
+        block((-s / 2 + c, y0, s - c), (s / 2 - c, y1, s), 0.003)   # the far wall's
+        if y0 > 0:
+            block((-s / 2 + c, y0, 0.0), (s / 2 - c, y1, c), 0.003)   # the door wall's, under the ceiling
+        else:   # either side of the doorway, to the floor's line at its jamb
+            for k in (-1, 1):
+                a, e = sorted((k * (s / 2 - c), k * (door_half + hw)))
+                block((a, y0, 0.0), (e, y1, c), 0.003)
+    # the walls' lines: the upright ones whole, the level ones between them
     for w, ((sx, sz), (ax, az), (ix, iz)) in enumerate(walls):
         at = lambda a, y: (sx + ax * a, y, sz + az * a)
-        for i in range(1, n):   # upright lines
-            low = dh * g if w == 0 and d0 < i < d0 + dw else 0.0
-            run(at(i * g, low), at(i * g, t), (ix, 0, iz), 0.008)
-        for j in range(1, m):   # level lines
-            spans = [(0.0, s)] if w != 0 or j >= dh else [(0.0, d0 * g), ((d0 + dw) * g, s)]
-            for a, c in spans:
-                run(at(a, j * g), at(c, j * g), (ix, 0, iz), 0.007)
-    for i in range(1, n):   # the floor's lines, and the ceiling's
-        for y, up, proud in ((0.0, 1, 0.003), (t, -1, 0.008)):
-            run((-s / 2 + i * g, y, 0.0), (-s / 2 + i * g, y, s), (0, up, 0), proud)
-            run((-s / 2, y, i * g), (s / 2, y, i * g), (0, up, 0), proud - 0.001)
-    # the twelve edges: a square bar along each, half on either face (the door wall's floor edge either side of the doorway)
-    edge = 0.03
-    for (x0, z0) in ((-s / 2, 0.0), (s / 2, 0.0), (-s / 2, s), (s / 2, s)):
-        b.box((x0, t / 2, z0), (edge, t, edge), mat, bevel=0.003, segs=1)
-    for y in (0.0, t):
-        b.box((-s / 2, y, s / 2), (edge, edge, s), mat, bevel=0.003, segs=1)
-        b.box((s / 2, y, s / 2), (edge, edge, s), mat, bevel=0.003, segs=1)
-        b.box((0.0, y, s), (s, edge, edge), mat, bevel=0.003, segs=1)
-    b.box((0.0, t, 0.0), (s, edge, edge), mat, bevel=0.003, segs=1)
-    side = (s - dw * g) / 2
-    for k in (-1, 1):
-        b.box((k * (s / 2 - side / 2), 0.0, 0.0), (side, edge, edge), mat, bevel=0.003, segs=1)
+        uprights = []
+        for i in range(1, n):
+            low = c
+            if w == 0 and i in (d0, d0 + dw):
+                low = floor_proud          # a jamb's: on the floor's line along the doorway's side
+            elif w == 0 and d0 < i < d0 + dw:
+                low = dh * g - hw          # over the doorway: from the head's line
+            uprights.append((i * g, low))
+            run(at(i * g, low), at(i * g, t - c), (ix, 0, iz), 0.008)
+        for j in range(1, m):
+            y = j * g
+            spans = [(c, s - c)] if w != 0 or j >= dh else [(c, d0 * g), ((d0 + dw) * g, s - c)]
+            for a0, a1 in spans:
+                for a, e in less(a0, a1, [(a - hw, a + hw) for a, low in uprights if low <= y - hw + 1e-6]):
+                    run(at(a, y), at(e, y), (ix, 0, iz), 0.007)
+    # the floor's lines and the ceiling's: along z whole (but where something stands), across between them
+    for y, up, proud, across, outlines in ((0.0, 1, floor_proud, floor_across, feet()), (t, -1, 0.008, 0.007, [])):
+        laid = {}
+        for i in range(1, n):
+            x = -s / 2 + i * g
+            z0 = 0.0 if up > 0 and abs(x) <= door_half + 1e-6 else c
+            laid[x] = cut_line(1, x, hw, z0, s - c, outlines)
+            for a, e in laid[x]:
+                run((x, y, a), (x, y, e), (0, up, 0), proud)
+        for j in range(1, n):
+            z = j * g
+            crossing = [(x - hw, x + hw) for x, pieces in laid.items() if any(a - hw <= z <= e + hw for a, e in pieces)]
+            for a0, a1 in less(-s / 2 + c, s / 2 - c, crossing):
+                for a, e in cut_line(0, z, hw, a0, a1, outlines):
+                    run((a, y, z), (e, y, z), (0, up, 0), across)
 
 
 def corridor_fittings(b):
@@ -218,10 +298,10 @@ def corridor_fittings(b):
             for i in range(0, len(edges), 2):
                 wainscot(b, edges[i], edges[i + 1])
     with b.at((HC_X0, 0, HOLO_Z), (0, -90, 0)):   # the far end
-        wainscot(b, -wide / 2, wide / 2)
+        wainscot(b, -wide / 2, wide / 2, (True, True))   # (against the side walls' in the corners)
     with b.at((HC_X1, 0, HOLO_Z), (0, 90, 0)):    # the den's wall from behind: its doorway in a casing
-        wainscot(b, -wide / 2, -HOLO_WIDE / 2 - 0.09)
-        wainscot(b, HOLO_WIDE / 2 + 0.09, wide / 2)
+        wainscot(b, -wide / 2, -HOLO_WIDE / 2 - 0.09, (True, False))
+        wainscot(b, HOLO_WIDE / 2 + 0.09, wide / 2, (False, True))
         door_casing(b, HOLO_WIDE, HOLO_HIGH)
     cove = [(0, 0), (0.05, 0), (0.05, -0.01), (0.03, -0.016), (0.014, -0.034), (0.01, -0.055), (0, -0.055)]
     b.sweep(cove, [(HC_X0, high, HC_Z1), (HC_X1, high, HC_Z1), (HC_X1, high, HC_Z0), (HC_X0, high, HC_Z0)], "TrimWhite", closed=True)
@@ -241,10 +321,13 @@ def corridor_fittings(b):
     table = b.asset("side_table_tall_01", ((tx0 + tx1) / 2, 0, (tz0 + tz1) / 2), rot=(0, 0, 0))
     bench = b.asset("painted_wooden_bench", ((bx0 + bx1) / 2, 0, (bz0 + bz1) / 2), rot=(0, 90, 0))
     import furniture
-    furniture.pile(b, ["computer_gaming_world_issue_148", "bytevolume20number12", "pc_computing_1998_05"],
-                   ((tx0 + tx1) / 2 - 0.02, FURNITURE["table"][4], (tz0 + tz1) / 2 + 0.01), (-8, 5, 21))
-    furniture.pile(b, ["computer_gaming_world_issue_116"], ((bx0 + bx1) / 2 + 0.05, FURNITURE["bench"][4], (bz0 + bz1) / 2 - 0.35), (82,))
-    furniture.pile(b, ["linuxjournalissue58", "bytevol21no11"], ((bx0 + bx1) / 2 - 0.02, FURNITURE["bench"][4], (bz0 + bz1) / 2 + 0.3), (95, 70))
+    # (a magazine's top towards the wall: away from whoever stands before it; a game lying on them)
+    furniture.pile(b, ["computer_gaming_world_issue_148", "bytevolume20number12", "pc_computing_1998_05", "earthworm_jim"],
+                   ((tx0 + tx1) / 2, FURNITURE["table"][4] + 0.001, (tz0 + tz1) / 2), [furniture.TOP_AWAY + 180 + t for t in (-8, 5, 11, -4)])
+    # on the bench at the far end, their tops towards its wall (turned so, they had read upside down from the corridor)
+    furniture.pile(b, ["computer_gaming_world_issue_116"], ((bx0 + bx1) / 2 + 0.075, FURNITURE["bench"][4] + 0.001, (bz0 + bz1) / 2 - 0.35), (furniture.TOP_AWAY + 262,))
+    furniture.pile(b, ["linuxjournalissue58", "bytevol21no11"], ((bx0 + bx1) / 2 + 0.075, FURNITURE["bench"][4] + 0.001, (bz0 + bz1) / 2 + 0.3),
+                   (furniture.TOP_AWAY + 275, furniture.TOP_AWAY + 263))   # (clear of its back, which leans over the seat's far edge)
 
 
 def holodecks(b):
@@ -269,8 +352,8 @@ def command_chair(b):
     arms that end in small consoles."""
     # a low foot and a slender column, with a small plate under the seat's pan
     b.lathe((0, 0, 0), [(0, 0), (0.24, 0), (0.245, 0.008), (0.21, 0.022), (0.08, 0.038), (0.055, 0.06), (0, 0.06)], "SciTrim", segs=40)
-    b.cyl((0, 0.064, 0), 0.06, 0.008, "MetalSteel", segs=28, bevel=0.002)
-    b.lathe((0, 0.06, 0), [(0.04, 0), (0.036, 0.1), (0.036, 0.24), (0.05, 0.29), (0.13, 0.31), (0.13, 0.33), (0, 0.33)], "RackSteel", segs=28)
+    b.cyl((0, 0.064, 0), 0.06, 0.008, "MetalSteel", segs=28, bevel=0.002)   # on the foot; the column on it, up to the pan's plate
+    b.lathe((0, 0.068, 0), [(0.04, 0), (0.036, 0.1), (0.036, 0.222), (0.05, 0.262), (0.13, 0.272), (0.13, 0.292), (0, 0.292)], "RackSteel", segs=28)
     # the pan and the shell: a base under the seat, sides up to the arms, a back that leans
     b.box((0, 0.41, 0.0), (0.60, 0.06, 0.56), "SciPanel", bevel=0.025, segs=4)
     b.box((0, 0.375, 0.0), (0.5, 0.03, 0.46), "SciTrim", bevel=0.012, segs=2)
@@ -312,14 +395,15 @@ def corridor_door(b, x, name=None):
     with b.at((x, 0, 0)):
         door_casing(b)
         door_leaf(b)
-        b.box((0, 1.62, -0.05), (0.09, 0.06, 0.004), "Brass", bevel=0.002, segs=1)   # its number
+        b.box((0, 1.62, -0.054), (0.09, 0.06, 0.004), "Brass", bevel=0.002, segs=1)   # its number, on the middle stile
         b.quad((0, 0.008, -0.38), (0.7, 0.42), "RoundRug", rot=(90, 0, 0), uvrect=(0.3, 0.3, 0.7, 0.54))   # a mat
 
 
-def on(b, asset, x, y, deep, **more):
+def on(b, asset, x, y, deep, off=0.0, **more):
     """One of Poly Haven's models against a wall in the wall's own space: its back to the wall,
-    its foot at y; deep is how far it stands out."""
-    b.asset(asset, (x, y, -deep / 2), rot=(0, 180, 0), **more)
+    its foot at y; deep is how far it stands out. off: how far its back is from the wall (clear
+    of the panelling, whose skirting stands 32 mm out)."""
+    return b.asset(asset, (x, y, -deep / 2 - off), rot=(0, 180, 0), **more)
 
 
 def corridor(b):
@@ -350,12 +434,14 @@ def corridor(b):
         for i in range(0, len(edges), 2):
             wainscot(b, edges[i], edges[i + 1])
     with b.at((COR_X1, 0, COR_MID_Z), (0, 90, 0)):
-        wainscot(b, -COR_WIDE / 2, COR_WIDE / 2)
+        wainscot(b, -COR_WIDE / 2, COR_WIDE / 2, (True, True))   # (against the side walls' in the corners)
+        b.obj("Corridor radiator")
         with b.at((0, 0.44, -0.075)):   # a radiator under the window
             b.box((0, 0, 0.03), (1.2, 0.54, 0.012), "TrimWhite", bevel=0.004)
             for i in range(20):
                 b.box((-0.57 + i * 0.06, 0, 0), (0.034, 0.56, 0.05), "TrimWhite", bevel=0.012, grain=1)
             b.box((0, 0.285, 0.005), (1.2, 0.02, 0.07), "TrimWhite", bevel=0.006)
+        b.obj("Corridor trim")
     cove = [(0, 0), (0.05, 0), (0.05, -0.01), (0.03, -0.016), (0.014, -0.034), (0.01, -0.055), (0, -0.055)]
     b.sweep(cove, [(COR_X0, COR_HIGH, COR_Z1), (COR_X1, COR_HIGH, COR_Z1), (COR_X1, COR_HIGH, COR_Z0), (COR_X0, COR_HIGH, COR_Z0)],
             "TrimWhite", closed=True)
@@ -374,10 +460,11 @@ def corridor(b):
     # the lift, at the west end: where a visitor steps out
     b.obj("Lift")
     with b.at((COR_X0, 0, COR_MID_Z), (0, -90, 0)):
-        b.box((0, 1.08, -0.01), (1.36, 2.16, 0.02), "RackSteel")
+        # the back between the jambs, the jambs under the head, the doors on the back
+        b.box((0, 1.07, -0.01), (1.24, 2.14, 0.02), "RackSteel")
         for k in (-1, 1):
             b.box((k * 0.3, 1.04, -0.026), (0.59, 2.06, 0.012), "MetalSteel", bevel=0.003, segs=1, grain=1)
-            b.box((k * 0.67, 1.08, -0.04), (0.1, 2.16, 0.08), "MetalSteel", bevel=0.008, grain=1)
+            b.box((k * 0.67, 1.07, -0.04), (0.1, 2.14, 0.08), "MetalSteel", bevel=0.008, grain=1)
         b.box((0, 2.2, -0.04), (1.44, 0.12, 0.08), "MetalSteel", bevel=0.008, grain=0)
         b.box((0, 2.36, -0.012), (0.36, 0.1, 0.024), "PlasticDark", bevel=0.004, segs=1)
         b.box((0, 2.36, -0.026), (0.2, 0.05, 0.004), "Amber")                      # the floor it is at
@@ -387,12 +474,12 @@ def corridor(b):
 
     b.obj("Corridor things")
     with b.at((COR_MID_X, 0, COR_Z1)):   # the den's wall
-        on(b, "painted_wooden_bench", -1.2, 0, 0.5)
-        on(b, "rubber_boots", -0.3, 0, 0.3, parts=("rubber_boots_l", "rubber_boots_r"))
-        on(b, "korean_fire_extinguisher_01", door_at - 1.0, 0, 0.38)
+        on(b, "painted_wooden_bench", -1.2, 0, 0.5, off=0.052)   # (its back clear of the panelling's cap)
+        on(b, "rubber_boots", -0.3, 0, 0.3, off=0.035, parts=("rubber_boots_l", "rubber_boots_r"))
+        on(b, "korean_fire_extinguisher_01", door_at - 1.0, 0, 0.38, off=0.035)
         on(b, "fire_alarm", door_at - 1.0, 1.35, 0.03)
         on(b, "korean_public_payphone_01", -3.2, 1.0, 0.3)
-        on(b, "vintage_suitcase", -4.3, 0, 0.26, parts=("vintage_suitcase_01",))
+        on(b, "vintage_suitcase", -4.3, 0, 0.26, off=0.035, parts=("vintage_suitcase_01",))
         on(b, "hanging_picture_frame_02", 1.45, 1.45, 0.04)
         # a notice board over the bench
         with b.at((-1.2, 1.65, 0)):
@@ -403,12 +490,12 @@ def corridor(b):
                 b.quad((x, y, -0.018), (0.12, 0.12), "Details", rot=(0, 0, turn), decal="note_%d" % (i % 3))
             b.quad((0.28, 0.2, -0.0175), (0.21, 0.26), "Paper", rot=(0, 0, -2))
     with b.at((COR_MID_X, 0, COR_Z0), (0, 180, 0)):   # the neighbours' wall
-        on(b, "hanging_picture_frame_01", -1.6, 0.9, 0.02)
-        on(b, "side_table_tall_01", 2.15, 0, 0.38)
-        on(b, "wicker_basket_01", 2.15, 0.76, 0.34)
+        on(b, "hanging_picture_frame_01", -1.6, 0.93, 0.02)   # (over the panelling's cap)
+        table = on(b, "side_table_tall_01", 2.15, 0, 0.38, off=0.05)
+        on(b, "wicker_basket_01", 2.15, 0.76, 0.34, off=0.05, on=table)
         on(b, "ornate_mirror_01", 2.15, 1.1, 0.03)
     b.obj("Pots")
-    spot = (COR_X1 - 0.5, 0, COR_Z0 + 0.42)   # by the window
+    spot = (COR_X1 - 0.5, 0, COR_Z0 + 0.5)   # by the window, clear of the panelling
     pot(b, spot, 0.19)
     b.asset("pachira_aquatica_01", (spot[0], 0.33, spot[2]), rot=(0, 110, 0), parts=("_c",))
     low = b.asset("cardboard_box_01", (COR_X0 + 0.5, 0, COR_Z0 + 0.4), rot=(0, 12, 0), size=(0.5, 0.42, 0.5), limit=5000)

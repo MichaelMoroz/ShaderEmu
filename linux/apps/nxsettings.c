@@ -801,7 +801,7 @@ static const struct { const char *name, *value; } tints[] = {
 static int
 tint_chosen(void)
 {
-	const char *now = reg_get(UI_TINT, "default");
+	const char *now = reg_get(UI_TINT, UI_TINT_DEFAULT);
 	int i;
 
 	for (i = 0; i < TINTS; i++)
@@ -816,8 +816,10 @@ set_tint(const char *value)
 {
 	reg_set(UI_TINT, value);
 	ui_tint_set(ui_tint_parse(value));
-	if (window)
+	if (window) {
+		ui_restyle();	/* (this program's own buttons in the new colour too: ui_tint) */
 		frames_again();
+	}
 }
 
 static void

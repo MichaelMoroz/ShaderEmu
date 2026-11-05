@@ -53,20 +53,35 @@ def reveal(b, x0, x1, top, mat, deep=WALL_THICK, sill=None):
     b.quad(((x0 + x1) / 2, 0, deep / 2), (x1 - x0, deep), sill or mat, rot=(90, 0, 0))
 
 
-def wainscot(b, x0, x1):
-    """Frame-and-panel oak to 0.92 m along a wall, from x0 to x1 in the wall's space."""
-    length, mid = x1 - x0, (x0 + x1) / 2
-    b.quad((mid, 0.45, -0.006), (length, 0.9), "WoodDark")
-    b.box((mid, 0.055, -0.019), (length, 0.11, 0.026), "WoodDark", bevel=0.006, grain=0)
-    b.box((mid, 0.83, -0.017), (length, 0.10, 0.022), "WoodDark", bevel=0.003, grain=0)
-    b.box((mid, 0.9, -0.026), (length, 0.03, 0.05), "WoodDark", bevel=0.008, grain=0)
+def wainscot(b, x0, x1, butt=(False, False)):
+    """Frame-and-panel oak to 0.92 m along a wall, from x0 to x1 in the wall's space: a skirting,
+    stiles and a rail on a flat panel, a field between each two stiles, a cap over the top. What
+    stands proud stands on the panel or on the wall, never through either. butt: whether an end
+    (x0, x1) meets another wall's panelling in an inside corner, which runs on to the corner:
+    this one's pieces then end against that one's, each as far out as it stands."""
+    SKIRT, STILE, CAP = 0.032, 0.028, 0.051   # how far each stands off the wall
+    PANEL = 0.006
+
+    def span(proud):
+        return x0 + (proud if butt[0] else 0.0), x1 - (proud if butt[1] else 0.0)
+
+    def run(y, high, proud, back, mat="WoodDark", bevel=0.003):
+        a, e = span(proud)
+        b.box(((a + e) / 2, y, -(back + proud) / 2), (e - a, high, proud - back), mat, bevel=bevel, grain=0)
+    a, e = span(STILE)
+    b.quad(((a + e) / 2, 0.4975, -PANEL), (e - a, 0.775), "WoodDark")   # between the skirting and the cap
+    run(0.055, 0.11, SKIRT, PANEL, bevel=0.006)
+    run(0.8325, 0.105, STILE, PANEL)
+    run(0.9, 0.03, CAP, 0.001, bevel=0.008)
+    length = e - a
     bays = max(1, round(length / 0.78))
     bay = length / bays
-    for i in range(bays + 1):
-        x = min(max(x0 + i * bay, x0 + 0.045), x1 - 0.045)
-        b.box((x, 0.445, -0.017), (0.09, 0.67, 0.022), "WoodDark", bevel=0.003, grain=1)
-    for i in range(bays):
-        b.box((x0 + (i + 0.5) * bay, 0.445, -0.013), (bay - 0.17, 0.59, 0.014), "WoodDark", bevel=0.006, segs=1, grain=1)
+    stiles = [min(max(a + i * bay, a + 0.045), e - 0.045) for i in range(bays + 1)]
+    for x in stiles:
+        b.box((x, 0.445, -(STILE + PANEL) / 2), (0.09, 0.67, STILE - PANEL), "WoodDark", bevel=0.003, grain=1)
+    for left, right in zip(stiles, stiles[1:]):   # a field between two stiles, clear of both
+        f0, f1 = left + 0.045 + 0.04, right - 0.045 - 0.04
+        b.box(((f0 + f1) / 2, 0.445, -(PANEL + 0.020) / 2), (f1 - f0, 0.59, 0.020 - PANEL), "WoodDark", bevel=0.006, segs=1, grain=1)
 
 
 def shell(b):
@@ -75,30 +90,49 @@ def shell(b):
     with on_wall(b, "front"):   # not behind the screens' wall of boards
         wainscot(b, -HALF_W, -3.87)
         wainscot(b, 3.87, HALF_W)
+    # (the side walls' panelling ends against the front's and the back's in the corners)
     with on_wall(b, "left"):    # nor behind the bookshelf, which is at -3.6 to -1.6 along this wall
-        wainscot(b, -HALF_D, -3.63)
+        wainscot(b, -HALF_D, -3.63, (True, False))
         wainscot(b, -1.57, HOLO_Z - HOLO_WIDE / 2 - 0.09)
-        wainscot(b, HOLO_Z + HOLO_WIDE / 2 + 0.09, HALF_D)
+        wainscot(b, HOLO_Z + HOLO_WIDE / 2 + 0.09, HALF_D, (False, True))
     with on_wall(b, "right"):
-        wainscot(b, -HALF_D, HALF_D)
+        wainscot(b, -HALF_D, HALF_D, (True, True))
     with on_wall(b, "back"):
         wainscot(b, -HALF_W, -DOOR_X - DOOR_WIDE / 2 - 0.09)
         wainscot(b, -DOOR_X + DOOR_WIDE / 2 + 0.09, HALF_W)
 
     b.obj("Mouldings")
+    # the cove under the ceiling and a picture rail, round the room but where a beam and its brackets
+    # meet the side walls: there each stops against the beam's (or the bracket's) face, not through it
     cove = [(0, 0), (0.07, 0), (0.07, -0.012), (0.045, -0.02), (0.022, -0.045), (0.014, -0.075), (0, -0.075)]
-    loop = [(-HALF_W, HEIGHT, HALF_D), (HALF_W, HEIGHT, HALF_D), (HALF_W, HEIGHT, -HALF_D), (-HALF_W, HEIGHT, -HALF_D)]
-    b.sweep(cove, loop, "TrimWhite", closed=True)
-    # a picture rail where paint meets the panelling's cap would crowd it: one higher up instead
     rail = [(0, 0), (0.018, 0.004), (0.018, 0.03), (0, 0.036)]
-    b.sweep(rail, [(x, 2.84, z) for x, _, z in loop], "TrimWhite", closed=True)
+    for profile, y, half in ((cove, HEIGHT, BEAM_THICK / 2), (rail, 2.84, BRACKET_THICK / 2)):
+        for path in round_room(y, half):
+            b.sweep(profile, path, "TrimWhite")
 
     b.obj("Beams")
-    for z in (-4.3, 0.0, 4.3):
-        b.box((0, HEIGHT - 0.09, z), (HALF_W * 2, 0.18, 0.22), "WoodDark", bevel=0.01, grain=0)
-        for x in (-HALF_W + 0.06, HALF_W - 0.06):   # a bracket where it meets the wall
+    for z in BEAMS_Z:
+        b.box((0, HEIGHT - 0.09, z), (HALF_W * 2, 0.18, BEAM_THICK), "WoodDark", bevel=0.01, grain=0)
+        for x in (-HALF_W + 0.08, HALF_W - 0.08):   # a bracket where it meets the wall, against the wall
             b.prism((x, HEIGHT - 0.27, z), [(-0.08, 0.09), (0.08, 0.09), (0.08, 0.05), (-0.08, -0.09)] if x < 0 else
-                    [(-0.08, 0.09), (0.08, 0.09), (0.08, -0.09), (-0.08, 0.05)], 0.12, "WoodDark", plane='xy', bevel=0.006, grain=1)
+                    [(-0.08, 0.09), (0.08, 0.09), (0.08, -0.09), (-0.08, 0.05)], BRACKET_THICK, "WoodDark", plane='xy', bevel=0.006, grain=1)
+
+
+BEAMS_Z, BEAM_THICK, BRACKET_THICK = (-4.3, 0.0, 4.3), 0.22, 0.12
+
+
+def round_room(y, half):
+    """Paths round the den at height y, the way the walls go (front, right, back, left), broken
+    where each beam meets the side walls (`half` either side of its middle)."""
+    W, D = HALF_W, HALF_D
+    cuts = sorted(BEAMS_Z)
+    right = [D] + [v for z in reversed(cuts) for v in (z + half, z - half)] + [-D]    # along the right wall, z falling
+    left = [-D] + [v for z in cuts for v in (z - half, z + half)] + [D]              # along the left wall, z rising
+    paths = [[(-W, y, left[-2]), (-W, y, D), (W, y, D), (W, y, right[1])],              # the front, round both corners
+             [(W, y, right[-2]), (W, y, -D), (-W, y, -D), (-W, y, left[1])]]            # the back
+    paths += [[(W, y, right[i]), (W, y, right[i + 1])] for i in range(2, len(right) - 2, 2)]
+    paths += [[(-W, y, left[i]), (-W, y, left[i + 1])] for i in range(2, len(left) - 2, 2)]
+    return paths
 
 
 def lamps(b):
@@ -151,7 +185,7 @@ def window(b):
             b.box((0, 0.285, 0.005), (1.8, 0.02, 0.07), "TrimWhite", bevel=0.006)
             for k in (-1, 1):
                 b.tube([(k * 0.84, -0.26, 0), (k * 0.84, -0.44, 0)], 0.011, "MetalSteel")
-                b.box((k * 0.6, 0.15, 0.05), (0.03, 0.05, 0.04), "TrimWhite")
+                b.box((k * 0.6, 0.15, 0.038), (0.03, 0.05, 0.016), "TrimWhite")   # a bracket, to the panelling's face
             b.cyl((0.92, -0.2, 0), 0.022, 0.05, "TrimWhite", segs=12, bevel=0.004, rot=(0, 0, 90))
             b.tube([(0.84, -0.2, 0), (0.9, -0.2, 0)], 0.009, "MetalSteel")
 
@@ -160,20 +194,23 @@ def door_leaf(b, w=DOOR_WIDE, h=DOOR_HIGH, both=False):
     """A six-panel door in a wall's space, its hinges at -w/2, its face a little before the wall.
     both: panelled behind too, for a door that stands open."""
     b.box((0, h / 2, -0.02), (w, h, 0.04), "WoodDark", grain=1)
+    stiles = [(-w / 2 + 0.06, 0.12), (0.0, 0.10), (w / 2 - 0.06, 0.12)]
     for side in ((-1, 1) if both else (-1,)):
-        z = -0.02 + side * 0.024
-        # stiles and rails standing proud of six panels
-        for x in (-w / 2 + 0.06, 0, w / 2 - 0.06):
-            b.box((x, h / 2, z), (0.12 if x else 0.10, h, 0.012), "WoodDark", bevel=0.003, segs=1, grain=1)
+        face = -0.02 + side * 0.02   # the leaf's face this side: what stands on it starts there
+        # stiles, rails between them and six panels between those, each on the face and less proud than the last
+        for x, wide in stiles:
+            b.box((x, h / 2, face + side * 0.006), (wide, h, 0.012), "WoodDark", bevel=0.003, segs=1, grain=1)
         for y, t in ((0.11, 0.22), (0.86, 0.14), (1.42, 0.12), (h - 0.07, 0.14)):
-            b.box((0, y, z - side * 0.0005), (w, t, 0.011), "WoodDark", bevel=0.003, segs=1, grain=0)   # a hair under the stiles
+            for (x0, w0), (x1, w1) in zip(stiles, stiles[1:]):
+                a, e = x0 + w0 / 2, x1 - w1 / 2
+                b.box(((a + e) / 2, y, face + side * 0.0055), (e - a, t, 0.011), "WoodDark", bevel=0.003, segs=1, grain=0)
         for x in (-0.2175, 0.2175):
             for y, t in ((0.505, 0.57), (1.14, 0.42), (1.72, 0.48)):
-                b.box((x, y, z - side * 0.003), (0.255, t - 0.06, 0.01), "WoodDark", bevel=0.008, segs=1, grain=1)
-        with b.at((0.37, 1.0, -0.02 + side * 0.03), (0, 0 if side < 0 else 180, 0)):   # the handle's side
+                b.box((x, y, face + side * 0.005), (0.255, t - 0.06, 0.01), "WoodDark", bevel=0.008, segs=1, grain=1)
+        with b.at((0.37, 1.0, face + side * 0.012), (0, 0 if side < 0 else 180, 0)):   # the handle's side, on the stile
             b.lathe((0, 0, 0), [(0.026, 0), (0.026, 0.004), (0.012, 0.008), (0.009, 0.03), (0.02, 0.04), (0.03, 0.055),
                                 (0.028, 0.07), (0.012, 0.078), (0, 0.08)], "Brass", segs=16, rot=(-90, 0, 0))
-            b.box((0, -0.09, 0.002), (0.03, 0.05, 0.004), "Brass", bevel=0.002, segs=1)
+            b.box((0, -0.09, -0.002), (0.03, 0.05, 0.004), "Brass", bevel=0.002, segs=1)
     for y in (0.25, 1.05, 1.85):
         b.cyl((-w / 2 - 0.004, y, -0.046), 0.007, 0.09, "Brass", segs=8)
 
