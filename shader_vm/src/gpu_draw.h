@@ -277,17 +277,17 @@ bool gpu_owner(uint id, out uint base, out uint4 head, out uint slots) {
     return id >= head.a && id < head.a + slots;
 }
 
-#ifdef GPU_DRAW_IDS_PASS
-// The draw-ID pass's texel for mesh vertex `id`: its command's texel and the passes it is drawn in. A list waiting for a
+// The draw-ID pass's texel for mesh vertex `id`: its command's texel and the passes it is drawn in (`drawn` the passes the
+// host draws this frame, _GpuPasses). A list waiting for a
 // pass or for its levels (SUBMIT_WAITS) has only its uploads drawn. A sprite's is the passes of its kind: a shade in
 // pass 2, the rest in the command's others (gpu_vertex_sized collapses it elsewhere).
-uint2 gpu_draw_ids_fragment(uint id) {
+uint2 gpu_draw_ids_fragment(uint id, uint drawn) {
     uint base, slots;
     uint4 head;
     if (!gpu_owner(id, base, head, slots)) return 0;
     uint op = head.r, passes;
     if (op == CMD_UPLOAD) return uint2(base, GPU_DRAW_ID_UPLOAD);
-    if (SUBMIT_WAITS(ram(GPU_CTRL).r, _GpuPasses)) return 0;
+    if (SUBMIT_WAITS(ram(GPU_CTRL).r, drawn)) return 0;
     if (op == CMD_COPY) return uint2(base, GPU_DRAW_ID_COPY);   // (with its list: not while that waits)
     if (op == CMD_SPRITES) {
         uint kind = (ram(texel_of(head.g) + (id - head.a) / 6).a >> 22) & 15;
@@ -297,7 +297,6 @@ uint2 gpu_draw_ids_fragment(uint id) {
     }
     return uint2(base, passes & 0xffff);
 }
-#endif
 
 // (text, FRAGMENT_MSDF) how much steeper than a box filter's the coverage rises across an edge:
 // fitted to the hinted bitmaps at 11 to 17 pixels (docs/system/fonts.md, "Distance fields")
@@ -311,14 +310,8 @@ uint2 gpu_draw_ids_fragment(uint id) {
 #define VOLUME_FLAT 2.0
 gpu_varyings gpu_vertex_sized(uint id, uint base, uint4 head, float2 size, out float4 eye, out float4 proj) {
     eye = 0, proj = 0;
-    gpu_varyings o;
+    gpu_varyings o = (gpu_varyings)0;
     o.position = float4(2, 2, 2, 1);
-    o.colour = 0;
-    o.uv = 0;
-    o.texture_info = 0;
-    o.key = 0;
-    o.light_uv = 0;
-    o.light_info = 0;
     o.edge = 1.0;
     {
         uint op = head.r;
@@ -632,9 +625,7 @@ gpu_varyings gpu_vertex(uint id, uint p) {
 // 1,024 a geometry shader may write, and 5,184 calls are 67,392 triangles. The includer defines _GpuPass (a
 // number or a uniform) and GPU_AMP_Z(o) if the target's depth runs the other way (Unity's reversed Z).
 #include "amp.h"
-#ifndef GPU_TRIANGLES
 #define GPU_TRIANGLES 65536u
-#endif
 #ifndef GPU_AMP_Z
 #define GPU_AMP_Z(o)
 #endif
@@ -865,11 +856,9 @@ float4 gpu_fragment(gpu_varyings i) {
     return saturate(c * t);
 }
 
-#ifdef GPU_VOLUME
 // The holodeck (docs/world/holodeck.md, docs/world/volume.md): the device's last list as the front end made it, seen from a
 // visitor's eyes. It reads no RAM: a vertex's place in its program's camera, its kind and its projection are the front end's
-// (gpu_vertex_sized), the frame's camera its row past the mesh's (gpu_frame_texel). The includer defines GPU_VOLUME_PASS,
-// the pass being drawn (0 to 3, VOLUME_BLENDING).
+// (gpu_vertex_sized), the frame's camera its row past the mesh's (gpu_frame_texel).
 float4 volume_frame(uint k) { return _GpuMadeEye.Load(int3(k, GPU_DRAW_IDS_H, 0)); }
 uint volume_up() { return (uint)volume_frame(3).x; }
 float2 volume_picture() { return gpu_made_picture(); }
@@ -879,12 +868,12 @@ bool volume_view(out float3 rx, out float3 ry, out float3 rz) {
     return volume_frame(0).w != 0.0;
 }
 // Whether mesh vertices v to v + 2 are one command's of this kind (VOLUME_WORLD or VOLUME_FLAT) in a pass that blends as
-// the pass being drawn (passes 4 to 7, of no depth test, as the pass that blends alike).
-bool volume_triangle(uint v, float kind) {
+// pass `p` of the holodeck's four (VOLUME_BLENDING: passes 4 to 7, of no depth test, as the pass that blends alike).
+bool volume_triangle(uint v, float kind, uint p) {
     uint2 c = gpu_draw_id(v);
     if ((c.g & 0x3fffu) == 0 || gpu_draw_id(v + 2).r != c.r) return false;
     if (_GpuMadeEye.Load(int3(gpu_made_at(v), 0)).w != kind) return false;
-    return VOLUME_BLENDING(firstbitlow(c.g & 0x3fffu)) == GPU_VOLUME_PASS;
+    return VOLUME_BLENDING(firstbitlow(c.g & 0x3fffu)) == p;
 }
 // Mesh vertex `id`: as the device draws it, and its place in its program's camera, the projection's near and far planes
 // and its x and y scales (the picture's edges are at x = +-z / focal.x and y = +-z / focal.y).
@@ -894,6 +883,5 @@ gpu_varyings volume_vertex(uint id, out float3 eye, out float2 planes, out float
     eye = _GpuMadeEye.Load(at).xyz, planes = p.xy, focal = p.zw;
     return gpu_vertex_made(id);
 }
-#endif
 
 #endif

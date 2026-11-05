@@ -29,8 +29,6 @@ Shader "ShaderEmu/hud"
             Texture2D<uint4> _State;
             uniform uint _VolumePass;   // which of the four blendings this draw is (FRAGMENT_PASS & 3)
             #define GPU_STATE _State
-            #define GPU_VOLUME
-            #define GPU_VOLUME_PASS _VolumePass
             #include "src/gpu_draw.h"
 
             // A triangle of the device's last list when it is a flat draw of this pass (volume_triangle, as the HUD's
@@ -38,7 +36,7 @@ Shader "ShaderEmu/hud"
             gpu_varyings vert(uint id : SV_VertexID) {
                 gpu_varyings o = (gpu_varyings)0;
                 o.position = float4(-2.0, -2.0, 0.0, 1.0);
-                if (volume_triangle(id - id % 3, VOLUME_FLAT)) o = gpu_vertex_made(id);
+                if (volume_triangle(id - id % 3, VOLUME_FLAT, _VolumePass)) o = gpu_vertex_made(id);
                 return o;
             }
             float4 frag(gpu_varyings i) : SV_Target {

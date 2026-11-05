@@ -8,8 +8,6 @@ Texture2D<uint4> _State;
 float _HudFlip;                // 1: the picture's top is the quad's top (-1 turns it over, if a platform's clip space differs)
 // (the device's last list as its front end made it, the VRAM, the draw IDs: no RAM is read here)
 #define GPU_STATE _State
-#define GPU_VOLUME
-#define GPU_VOLUME_PASS _VolumePass
 #define GPU_TARGET_W 1280.0
 #define GPU_TARGET_H 720.0
 #include "src/gpu_draw.cginc"
@@ -40,7 +38,7 @@ hud_point vert(mesh_point v) {
 void geom(point hud_point i[1], inout TriangleStream<hud_out> stream) {
     UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(i[0]);
     uint first = i[0].triangle_id * 3;
-    if (!volume_triangle(first, VOLUME_FLAT)) return;
+    if (!volume_triangle(first, VOLUME_FLAT, _VolumePass)) return;
     float2 size = volume_picture();
     for (uint k = 0; k < 3; k++) {
         hud_out o;

@@ -157,7 +157,6 @@ Shader "ShaderEmu/gpu"
             Texture2D<uint4> _State;
             uniform uint _GpuPasses;
             #define GPU_STATE _State
-            #define GPU_DRAW_IDS_PASS
             #include "src/gpu_draw.h"
 
             // one triangle over the target
@@ -166,7 +165,7 @@ Shader "ShaderEmu/gpu"
             }
             int2 frag(float4 p : SV_Position) : SV_Target {
                 uint2 at = uint2(p.xy);
-                return asint(gpu_draw_ids_fragment(at.y * GPU_DRAW_IDS_W + at.x));
+                return asint(gpu_draw_ids_fragment(at.y * GPU_DRAW_IDS_W + at.x, _GpuPasses));
             }
             ENDCG
         }

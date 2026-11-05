@@ -19,8 +19,6 @@ Shader "ShaderEmu/HolodeckMask"
         float4 _Back;
         Texture2D<uint4> _State;
         #define GPU_STATE _State
-        #define GPU_VOLUME
-        #define GPU_VOLUME_PASS 0
         #include "src/gpu_draw.cginc"
 
         struct v2f {

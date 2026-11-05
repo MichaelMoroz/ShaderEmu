@@ -11,8 +11,6 @@ float4 _RoomMin, _RoomMax;   // the holodeck in use, in the world
 #endif
 // (the device's last list as its front end made it, the VRAM, the draw IDs: no RAM is read here)
 #define GPU_STATE _State
-#define GPU_VOLUME
-#define GPU_VOLUME_PASS _VolumePass
 #define GPU_TARGET_W 1280.0
 #define GPU_TARGET_H 720.0
 #include "src/gpu_draw.cginc"
@@ -47,7 +45,7 @@ volume_point vert(mesh_point v) {
 void geom(point volume_point i[1], inout TriangleStream<volume_out> stream) {
     UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(i[0]);
     uint first = i[0].triangle_id * 3;
-    if (!volume_triangle(first, VOLUME_WORLD)) return;
+    if (!volume_triangle(first, VOLUME_WORLD, _VolumePass)) return;
 #ifdef HOLODECK
     // The program's camera stands at this object (the seat's eye point) and the horizon is the
     // room's: of the camera's turn only what is about the world's up is followed, so whoever

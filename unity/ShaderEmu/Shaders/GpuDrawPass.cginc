@@ -35,7 +35,7 @@ float4 vert(float4 v : POSITION) : SV_Position {
 
 int2 frag(float4 p : SV_Position) : SV_Target {
     uint2 at = uint2(p.xy);
-    return asint(gpu_draw_ids_fragment(at.y * GPU_DRAW_IDS_W + at.x));
+    return asint(gpu_draw_ids_fragment(at.y * GPU_DRAW_IDS_W + at.x, _GpuPasses));
 }
 #elif defined(GPU_CLEAR_NEAR)
 // GpuDrawBlit.shader's pass 15, blitted before pass 8: the whole target's depth at the near plane, so that past the
