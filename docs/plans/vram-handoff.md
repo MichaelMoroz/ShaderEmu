@@ -45,7 +45,11 @@ how it was checked, and what is left, in the order it is worth doing.
 
 ## Left, in order
 
-1. **Unity**, still not run (no editor reachable from these sessions): run "Sync shader sources", rebuild the world
+1. **Unity is the port, after the GPU's work, not part of it** (the developer, 5 November 2026: the GPU is rewritten and
+   checked in the harness, then brought to Unity). One editor run was made: the branch's scripts compiled, all 1,641
+   passes of the world's materials compiled with 0 errors, the draw IDs' texture was made and wired (GpuDrawIds, 512 x 384
+   RGInt) and the world booted the branch's image and drew its desktop; no game was measured there. When it is ported:
+   run "Sync shader sources", rebuild the world
    (`ShaderEmuBuilder`, which now makes `GpuDrawIds.renderTexture` too), compile every shader (`tools/unity_fxc.py` compiles
    the GPU's outside the editor), play Doom, Quake, Half-Life and ClassiCube in the Game view and compare with the harness.
    Check the holodeck and the volume display read `_GpuVram` (a seated Quake). Then the profile of every device in Unity
