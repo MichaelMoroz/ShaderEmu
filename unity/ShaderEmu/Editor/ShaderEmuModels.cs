@@ -52,11 +52,14 @@ public static partial class ShaderEmuBuilder
         S("Brass", "Metal", 0.80f, 0.62f, 0.30f, 1f, true, false, 1f),
         S("RackSteel", "Metal", 0.21f, 0.22f, 0.24f, 1f),   // painted, not bare: its shading shows
         S("FabricCushion", "Velvet", 0.72f, 0.60f, 0.62f, 1f, true, true),
-        S("FabricChair", "Linen", 0.45f, 0.45f, 0.50f, 1f, true, true),
+        S("FabricChair", "ChairWeave", 0.66f, 0.70f, 0.82f, 1f, true, true),   // the chairs' wool herringbone (world/fetch.py)
         S("Cardboard", "Cardboard", 1f, 1f, 1f, 1f, true, true),
         S("Terracotta", "Plaster", 0.70f, 0.40f, 0.28f, 1f, true, true),
         S("Ceramic", null, 0.90f, 0.90f, 0.88f, 0.25f),
         S("Paper", null, 0.93f, 0.91f, 0.84f, 0.95f, false, true),
+        S("LabelYellow", null, 0.92f, 0.78f, 0.25f, 0.95f, false, true),   // a floppy's coloured labels (world/toys.py): paper
+        S("LabelRed", null, 0.78f, 0.16f, 0.12f, 0.95f, false, true),
+        S("LabelBlue", null, 0.22f, 0.38f, 0.72f, 0.95f, false, true),
         S("Rubber", null, 0.10f, 0.10f, 0.10f, 0.8f),
         S("CableBlue", null, 0.08f, 0.20f, 0.50f, 0.55f),
         S("CableYellow", null, 0.78f, 0.60f, 0.08f, 0.55f),
@@ -70,7 +73,20 @@ public static partial class ShaderEmuBuilder
         S("RoundRug", "RoundRug", 1f, 1f, 1f, 1f, false, true),
         S("Carpet", "Carpet", 1f, 1f, 1f, 1f, true, true),
         S("RedPaint", null, 0.62f, 0.05f, 0.04f, 0.35f),
+        S("ToyGreen", "Plastic", 0.08f, 0.55f, 0.20f, 1f),   // world/toys.py: the cube puzzle's tiles
+        S("ToyOrange", "Plastic", 0.95f, 0.42f, 0.05f, 1f),
+        S("Posters", "Fetched/Posters", 1f, 1f, 1f, 1f, false),   // world/posters.py: fetched when the world is made
+        S("RoomSigns", "RoomSigns", 1f, 1f, 1f, 1f, false),     // the side rooms' number plates
         S("PlasticCase", "Plastic", 0.74f, 0.71f, 0.62f, 1f),
+        S("PlasticWhite", "Plastic", 0.86f, 0.85f, 0.80f, 1f),   // wall switches and sockets (world/room.py)
+        S("CanCoke", "CanCoke", 1f, 1f, 1f, 1f, false, false, 0.75f),   // printed aluminium (world/textures.py's soda_cans)
+        S("CanDiet", "CanDiet", 1f, 1f, 1f, 1f, false, false, 0.85f),
+        S("CanMetal", "Metal", 0.80f, 0.81f, 0.83f, 1f, true, false, 0.9f),
+        // a thing's own material with its use laid over it (world/wear.py's recipes)
+        S("FloppyShell", "Plastic", 0.17f, 0.17f, 0.18f, 1f),
+        S("FloppyShutter", "Metal", 0.55f, 0.56f, 0.58f, 1f, true, false, 0.85f),
+        S("DeskWalnut", "Walnut", 0.62f, 0.55f, 0.50f, 1f),
+        S("DeskWalnutSides", "Walnut", 0.62f, 0.55f, 0.50f, 1f),   // its upright faces: no rings, no dust
         // the holodecks' corridor and seats
         S("HoloPanel", "HoloPanel", 1f, 1f, 1f, 1f, false),   // a holodeck's panels; the bars between them are HoloLine
         S("SciPanel", "Plastic", 0.70f, 0.68f, 0.63f, 1f),
@@ -190,13 +206,30 @@ public static partial class ShaderEmuBuilder
     // `mask`: white where the surface is plastic (none: all of it).
     const float PlasticDetailTile = 0.2f;   // metres a repeat: the grain's bumps come out a millimetre apart
     const float PlasticGrainStrength = 1f;   // the scan as it is
-    static void PlasticDetail(Material m, Texture mask = null)
+    static void PlasticDetail(Material m, Texture mask = null) { Detail(m, "PlasticDetail", PlasticDetailTile, mask); }
+
+    // A thing's use laid over its material (world/wear.py: its recipes, Wear.txt): the same detail
+    // slot, a set of its own, so many repeats a metre as its recipe says.
+    static Dictionary<string, KeyValuePair<string, float>> WearSets()
     {
-        Texture colour = WorldTexture("PlasticDetail", false, false);
+        var sets = new Dictionary<string, KeyValuePair<string, float>>();
+        string listing = WorldTextures + "/Wear.txt";
+        if (!File.Exists(listing)) return sets;
+        foreach (string line in File.ReadAllLines(listing))
+        {
+            string[] f = line.Split('\t');
+            if (f.Length >= 3) sets[f[0]] = new KeyValuePair<string, float>(f[1], float.Parse(f[2], System.Globalization.CultureInfo.InvariantCulture));
+        }
+        return sets;
+    }
+
+    static void Detail(Material m, string set, float tile, Texture mask = null)
+    {
+        Texture colour = WorldTexture(set, false, false);
         m.SetTexture("_DetailMainTex", colour);
-        m.SetTextureScale("_DetailMainTex", Vector2.one / PlasticDetailTile);
-        m.SetTexture("_DetailNormalMap", WorldTexture("PlasticDetail_n", true));
-        m.SetTexture("_DetailRoughnessMap", WorldTexture("PlasticDetail_r", false, false));
+        m.SetTextureScale("_DetailMainTex", Vector2.one / tile);
+        m.SetTexture("_DetailNormalMap", WorldTexture(set + "_n", true));
+        m.SetTexture("_DetailRoughnessMap", WorldTexture(set + "_r", false, false));
         m.SetTexture("_DefaultDetailSampler", colour);   // (its wrap and filter are the detail's)
         m.SetTexture("_DetailMask", mask);
         m.SetInt("_DetailWorkflow", 0);
@@ -261,13 +294,15 @@ public static partial class ShaderEmuBuilder
     static Dictionary<string, Material> ModelMaterials()
     {
         Dictionary<string, Material> made = new Dictionary<string, Material>();
+        var wear = WearSets();
         foreach (Surface s in Surfaces)
         {
             Texture albedo = s.texture != null ? WorldTexture(s.texture) : null;
             Texture normal = s.texture != null && s.normal ? WorldTexture(s.texture + "_n", true) : null;
             Texture packed = s.texture != null ? WorldTexture(s.texture + "_p", false, false) : null;
             made[s.name] = Surfaced(s.name, s.tint, albedo, normal, packed, s.metallic, s.rough, s.matte);
-            if (s.texture == "Plastic") PlasticDetail(made[s.name]);
+            if (wear.ContainsKey(s.name)) Detail(made[s.name], wear[s.name].Key, wear[s.name].Value);   // (its own grain is in its set)
+            else if (s.texture == "Plastic") PlasticDetail(made[s.name]);
         }
         // the small printed things: their LEDs and read-outs are lamps
         made["Details"] = Surfaced("Details", Color.white, WorldTexture("Details"), null, WorldTexture("Details_p", false, false), 0f, 0.7f, false,
@@ -399,7 +434,8 @@ public static partial class ShaderEmuBuilder
         Transform models = new GameObject("Models").transform;
         models.SetParent(world, false);
         // (FurnitureCharted: what of the furniture brings its own place in the lightmap, the classroom's keyboards, mice and leads)
-        foreach (string name in new[] { "Room", "Shell", "Computer", "Furniture", "FurnitureCharted", "Annex", "City" })
+        // (AnnexCharted: the side rooms' keyboards, mice and leads, world/rooms.py)
+        foreach (string name in new[] { "Room", "Shell", "Computer", "Furniture", "FurnitureCharted", "Annex", "AnnexCharted", "City" })
         {
             bool city = name == "City";
             GameObject instance = (GameObject)PrefabUtility.InstantiatePrefab(ImportModel(name, materials, !city && name != "Shell" && !name.EndsWith("Charted")));

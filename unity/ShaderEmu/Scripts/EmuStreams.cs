@@ -25,7 +25,7 @@ public class EmuStreams : UdonSharpBehaviour
     public bool dropTest;              // every tenth packet is treated as lost
     public bool log;                   // a line a minute in the output log
 
-    public const int Surfaces = 28;    // 0: the wall; 1 to 12: the classroom; 13 to 20: the holodecks
+    public const int Surfaces = 28;    // 0: the wall; 1 to 12: the classroom; 13 to 20: the holodecks; 21 to 23: the side rooms
     public const int HeaderBytes = 19;
     public const int StatusFixed = 130;   // a status's activity bits, pc and x1 to x31; its text follows
 

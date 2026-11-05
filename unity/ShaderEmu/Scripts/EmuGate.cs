@@ -3,13 +3,15 @@ using UnityEngine;
 using VRC.SDKBase;
 
 // The world's parts (scripts, stations, screens) are off in a build (ShaderEmuGate.cs) until the
-// visitor leaves the corridor they arrive in: a join then has nothing of ours to set up while
+// visitor leaves the corridor they arrive in, into the den or into one of the side rooms: a join then has nothing of ours to set up while
 // VRChat is still bringing in the others' avatars and state.
 [UdonBehaviourSyncMode(BehaviourSyncMode.None)]
 public class EmuGate : UdonSharpBehaviour
 {
     public GameObject[] parts;
-    public Vector3 corridorMin = new Vector3(-6.2f, -1f, -8.3f), corridorMax = new Vector3(4.6f, 4f, -5.6f);
+    // the corridor by the lift alone: its south wall's face is z -8.1, and through its three doorways
+    // are the side rooms (world/rooms.py), which are out of it as the den is
+    public Vector3 corridorMin = new Vector3(-6.2f, -1f, -8.12f), corridorMax = new Vector3(4.6f, 4f, -5.6f);
     public bool testOpen;   // a test client, which never walks: the parts come on 5 s after it arrives
     private bool arrived;   // seen in the corridor: before the spawn the position is the origin
     private float arrivedAt;

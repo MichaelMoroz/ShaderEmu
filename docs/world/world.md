@@ -75,6 +75,98 @@ After a build, `blender -b build/world.blend --python world/check_shell.py` must
 that lie in one plane, face one way and overlap: those flicker. Most of what it lists is pressed
 against a wall and never seen; a pair in the open is a fault.
 
+## Things as they would stand
+
+Every thing in the rooms must stand as it would: in nothing, held by something, closed, and the
+right way round where it belongs, and drawn as it would look: no two faces flickering in one
+plane, no picture stretched. Six tests say it (5 November 2026), each on `build/world.blend`
+after a build of all five parts (one build call: each starts empty), each well under a minute:
+
+    blender -b build/world.blend --python world/check_intersect.py    # INTERSECT pairs: 0
+    blender -b build/world.blend --python world/check_float.py        # FLOAT groups: 0
+    blender -b build/world.blend --python world/check_closed.py       # CLOSED ... 0, ... 0
+    blender -b build/world.blend --python world/check_placement.py -- --unposed   # PLACE wrong: 0, no "unposed"
+    blender -b build/world.blend --python world/check_zfight.py       # ZFIGHT pairs: 0
+    blender -b build/world.blend --python world/check_uv.py           # UV stretched pieces: 0
+
+- **Things fall into place** (`world/settle.py`). What lies about (a magazine, a toy, a cushion,
+  a game's box: whatever is made in `Builder.loose()` or placed with `loose=True`) is dropped by
+  Blender's rigid bodies onto what is under it when its part is finished, and then let down the
+  last of the bodies' margins to 0.2 mm over what holds it. The rests are kept in
+  `build/settle/PART.json` by the geometry; `SETTLE_AGAIN=1` drops them. The build says
+  `SETTLE starts in` for a thing that began inside another (lifted out first) and `SETTLE far`
+  for one that moved more than 50 mm or turned more than 20 degrees: a place asked badly (a
+  cassette player stood on its end fell over; a cushion dropped on a sofa may move that far).
+- `check_intersect.py`: no piece of one object more than 6 mm in another (`KNOWN` pairs are
+  meant: a plant in its pot, a lead in its plug).
+- `check_float.py`: every group of touching pieces reaches the floor, a wall or a ceiling (a
+  shelf's knob on its drawer, a shade on its lamp, a lid on its box): what floats is listed with
+  `--near`, what it is nearest to and how far.
+- `check_closed.py`: every piece is watertight (each edge between two faces), wound one way and
+  turned out. A sheet (a poster's paper, a decal) is let be open; a seam's line laid on a body is
+  made with `mesh(..., sheet=True)`. Poly Haven's models are their makers' (`--assets` shows them).
+- `check_placement.py`: each thing has a pose, its front, its top and how it is mounted
+  (`world/poses.py`'s `KINDS`: on the floor, against a wall, hung, from the ceiling, clamped to
+  an edge, lying, a desk with its seat, a seat facing its desk, a doorway). Poly Haven's models
+  have theirs by name in `POSES` (front +z of their own frame, or `axis` when not); ours say it
+  where they are made, `b.pose(kind, size, at, rot)` with the front +z of that frame. Rays
+  test it against walls, neighbours and doorways: a television's screen not to a wall, a desk's
+  drawers and knees to its chair, a clamp lamp's jaw round an edge, a picture's back on its wall,
+  nothing in the 0.8 m before a door's casing. A new model needs a line in `POSES` (the test
+  says so); a new thing of ours a `b.pose` (`--unposed` lists the large pieces in no pose).
+  `--shots` draws each wrong one from its front and from above into `build/placement/`, to
+  look at when the rays cannot tell (which side of a model is its front).
+- `check_zfight.py`: no two faces facing the same way within 0.3 mm of one plane (`DEPTH`: what a
+  depth buffer cannot tell apart a few metres off) overlapping where an eye can see, at any slope
+  and of any size. A point of an overlap is hidden when a face lies on it looking back (a foot on
+  the floor), something stands within 4 mm before it, or it is inside a solid (out along its
+  normal more faces are left than entered: a stile's back in its door's leaf). A pair is listed
+  when what is seen of it comes to 10 mm2 (`SHOWS`); a sliver along an edge two faces share is
+  rounding. `--why` gives a few overlaps of each pair, where they face and both triangles'
+  extents. What it found and how such things are made instead: a decal or a label at least
+  0.4 mm off its face (a rack's plates, a hub's front, a floppy's label, shutter and window, a
+  cassette's label and window); boards that meet are scribed, not run into each other (the
+  panelling's skirting, rail and cap: `wainscot(..., scribe=)`, the long walls' run into the
+  corners; a bookcase's sides under its top; a lift's jambs under its header; a holodeck's
+  edge bars butt in its corners); parts that end flush with another's face end a millimetre
+  short (a door's stiles and rails, the screen wall's uprights); a mesh's closing cap is not
+  laid in another face's plane (a keyboard's tray under its well).
+- `check_uv.py`: the picture is laid evenly on every continuous chunk of a surface (faces of one
+  material joined by an edge whose two ends have the same coordinates on both faces): each
+  face's area in the room over its area in the picture within 1.5 times along a side of its
+  chunk's median, no face stretched more than 1.5 times one way than the other (sheared or
+  squeezed, in the picture's pixels: the same area, a weave drawn out), and no face with a
+  picture of no area (a smear). Chunks cut apart by a seam may have scales of their own (a decal,
+  an atlas's charts). A material with no picture (a plain colour) and a triangle narrower than
+  0.2 mm (no texel) are not looked at. So: a lathe's band is unrolled flat (a cone's a piece of a
+  ring round its apex, a cylinder's a rectangle), and outside a can's print onto a bare spot of
+  it; `loft` lays its faces in panels, each along the axis its normal is nearest (`pc.panel_uv`;
+  `ringwise=True` the way round and along, which sheared the chair's weave 40 times); a box's
+  face more than 46 degrees off every axis is laid in its own plane and a twisted quad is two
+  triangles; `sweep` lays each run along its own direction, a seam at each mitre; `tube` measures
+  each line along its own track, starting again with a seam every 0.25 radians of turn, drops
+  points nearer than half its radius and rounds a kink, and `bend=` rounds its corners in arcs
+  (a pipe's elbow, a rail); a cushion's panel is flattened by springs as cloth; a decal is
+  drawn at its face's own shape (the rack's units at their EIA-310 heights); and a keyboard's
+  caps' sides are unrolled into two bands under the layout in `Keyboard.png`
+  (`pc_faces.cap_side_uvs`; Unity's caps read their legends from the layout's rectangle,
+  `Plate.shader`'s `_Canvas`). Poly Haven's models are their makers' (`--assets`).
+
+### What use leaves on a thing
+
+A thing's material is its kind's (`Plastic`, `Metal`, the scans), and what use has left on it
+is laid over that in Unity: `world/wear.py` makes layers (a grain of a VDI 3400 grade or a rolled
+finish, scratches, fingerprints, dust, mugs' rings), each in metres of the surface with its source
+or "a guess" beside it, and mixes them by a recipe a material (`RECIPES`) into a detail set,
+`Wear<NAME>.png` (colour), `_r` (roughness), `_n` (normal), listed in `Wear.txt`. Unity
+(`ShaderEmuModels.cs`, `Detail`) puts a material's set in Mochie's detail slot, laid by where a
+place is in the room (triplanar), as the plastics' scan (`PlasticDetail`) is for the rest: one shader,
+no coordinates of the model's. A thing that wants its own use has a material of its own named as
+its recipe (the floppies' `FloppyShell` and `FloppyShutter`, the side rooms' desks' `DeskWalnut`),
+the same base as before. `python world/wear.py` (and `textures.py`, which calls it) writes them.
+What lies on a thing by its shape (worn edges, dust in corners) is not yet in it: that needs a
+mask a thing, baked from its shape.
+
 ## The shell
 
 Floors, ceilings and walls of every room are a model of their own, `Shell.fbx`

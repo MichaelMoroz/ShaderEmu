@@ -26,6 +26,22 @@
   copy of the tree and stops at a failed make: before, the old `Image` was copied on. A flat program's relocations and the
   words they name are in the machine's order (flag `0x40000000`, `elf2bflt.py`, `elf2flt.c`); a ROM directory of 32 entries
   or more has a table of its names (`slim.py`, `patch_romfs.py`): what writes the ROM after `slim.py` keeps it.
+- The world's things stand as they would (5 November 2026; `docs/world/world.md`, "Things as they would stand"): what lies
+  about falls into place (`world/settle.py`: made in `b.loose()` or placed with `loose=True`, never put at a height by hand), and
+  after a change to the world, on a build of all five parts, `check_intersect.py` (0 pairs), `check_float.py` (0 groups: nothing
+  levitates, no part of a model off its body), `check_closed.py` (0: every mesh watertight and turned out) and `check_placement.py
+  -- --unposed` (0 wrong, nothing unposed: each thing's front, top and mounting in `world/poses.py` or a `b.pose` where it is made,
+  checked by rays against walls, neighbours and doorways; `--shots` when the rays cannot tell), `check_zfight.py` (0 pairs: no two
+  faces facing one way within 0.3 mm of one plane overlapping where an eye can see; a decal 0.4 mm off its face, boards that meet
+  scribed or a millimetre short, `--why` says which faces) and `check_uv.py` (0: the picture's scale even over every continuous chunk
+  of a surface, within 1.5 times along a side and one way against the other, no smear; chunks apart may differ) must pass. A new `KNOWN` pair, a
+  `BUILDING` word or a pose's distance changed to make a test pass says why beside it.
+- Every object the world's scripts model or texture follows a specification found online (5 November 2026, the developer's
+  rule): its dimensions from a maker's sheet, a standard or a measured photo (a can's 211 x 413 body and 202 lid, a socket's
+  CEE 7/3 plate and well, a chair's spec sheet), and its picture from the real thing of the decade (its print, its colours, its
+  text, its logo where the room shows real things: the posters, the game boxes and the magazines are real), never a made-up
+  design or a guessed size. The sources (addresses) are written beside the model in a comment, with what was taken from each;
+  what no source gives is said there as a guess. `world/specs.py` flags each model True or False (5 November 2026): a new one is False until its sources are written, and `python world/specs.py` lists those to model again. A model of Poly Haven's is kept only where its own shape is right.
 - Linux with the MMU is no longer supported or developed for (21 October 2026): build, test, measure and document the
   no-MMU machine only (`linux/nommu`, `build/images/nommu`). Do not fix, rebuild, test or keep in step anything that only
   the MMU image uses, and do not add MMU paths to new work.

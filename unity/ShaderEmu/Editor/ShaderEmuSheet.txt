@@ -4,7 +4,8 @@
 # NAME | TEXT: a line whose text wraps under itself, NAME padded to the column's widest.
 # Any other line is printed as it is, wrapped; an empty line is an empty line.
 # ASCII only: the panels' fonts have nothing else.
-# What is installed was read from the machine itself (ls of its bin folders, 29 October 2026).
+# What is installed was read from the machine itself (ls of its bin folders, 29 October 2026); the games
+# and programs added since, from the Start menu's lists (nxapps.*, 5 November 2026).
 title: THIS MACHINE: ITS PROGRAMS, AND WHAT OPENS WHAT
 
 column
@@ -13,6 +14,8 @@ Doom | (doom) the shareware episode; a network game with other players
 Quake | (quake) the shareware episode; host or join over the network
 Quake III | (quake3) the demo's The Longest Yard, against bots; host or join over the network
 Half-Life | (halflife) the Uplink demo
+Jedi Outcast | (jk2) the 2002 demo; its licence is shown at the first start
+Age of Empires | (aoe) the 1997 trial; its licence is shown at the first start
 Tiberian Dawn | (tdawn) Command & Conquer (1995), the demo's missions
 Red Alert | (ralert) the 1996 demo: a Soviet and an Allied mission, skirmish
 ClassiCube | (classicube) Minecraft Classic: dig and build
@@ -20,7 +23,9 @@ Micropolis | (nxmicropolis) the city simulator of 1989: build a city; eight scen
 OpenTTD | (openttd) Transport Tycoon's open remake: railways, roads, ships and planes, with music; host or join over the network; saved games kept in /persistence
 NES | (nes FILE.nes) Thwaite, Nova the Squirrel, any cartridge of mappers 0 1 2 3 4 5 7 8 9 11 15 16 18 19 21-25 32-34 40 64-66 70 75 78 79 85 94 99 231; arrows, X, Z, Enter, Tab
 Pinball | (nxpinball) a table after Windows' 3D Pinball, flat; the best score is kept
-Tetris, Mines | (nxtetris, nxmine)
+Chess | (nxchess) against the machine, which thinks on every core
+Cards, puzzles | (nxsolitaire, nxtetris, nxmine, nx2048, nxlife)
+Network games | Start menu, Games, Network: Quake, Quake III, OpenTTD, ClassiCube, Doom
 
 head: DESKTOP PROGRAMS
 Files | (nxfiles) folders, the desktop; opens any file
@@ -33,6 +38,7 @@ Music player | (nxplay) WAV FLAC MP3 Ogg Vorbis MOD
 Video player | (nxvideo) MPEG-1, Motion JPEG AVI, Westwood VQA, GIF
 Network | (nxnet) the other players' machines and their shared folders
 Monitor | (nxmon) speed, cores, memory, programs
+Benchmark | (nxperf) the processor, memory, the workers and the GPU measured
 Settings | (nxsettings) wallpaper, screen size, volume, storage
 Terminal | (nxterm) a shell in a window
 Calculator, Clock | (nxcalc, nxclock)
@@ -85,4 +91,4 @@ Memory | 256 MB, kept in textures, as is its disk
 System | Linux 5.17, BusyBox, musl; Nano-X windows; its own GPU (OpenGL ES) and sound card; a network between the players' machines; /persistence kept between visits (SAVE on the sign by the power button)
 
 head: HOW TO START
-POWER on the tower right of the desk (or the control panel); then the desktop's icons, the Start menu (Win key), or the console's shell. The holodecks through the left wall's doorway: sit, and a 3D game is around you. Every player runs a machine of their own; Reset starts it over.
+POWER on the tower right of the desk (or the control panel); then the desktop's icons, the Start menu (Win key), or the console's shell. The holodecks through the left wall's doorway: sit, and a 3D game is around you. Three side rooms off the corridor by the lift have a computer each (N13 to N15). Every player runs a machine of their own; Reset starts it over.
