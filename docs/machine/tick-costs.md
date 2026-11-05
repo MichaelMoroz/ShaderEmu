@@ -813,8 +813,21 @@ and the tick's own fixed part, not the harness's 4 to 6%.
 | lu1 alone (on k3c); mh1 (mulh by `mulhi`); id1 (a texel's word by masks) | -0.8%, -0.05%; -0.1%; +0.2% | -0.5%, -0.4%; +0.3%; +0.6% | -0.2%, -0.1%; +0.4%; +0.8% | level |
 | aui1: an addi of lui's or auipc's register fused into the jumps' block | +1.2% | +0.3% | +1.2% | lost |
 
+**Kept** (`shader_vm/tick.hlsl` and Unity's copy, stamp `0a78efe277ddf37f`; `test_card.py mctest-3 fptest lanetest` pass on
+the card): k4lb, no result changed. The texel's next word in the same turn when it is arithmetic or a branch after
+arithmetic, or a branch after a load (its registers taken from the first word's result where it names it), with no test of
+the budget (a pass may run one instruction past it: `pre_valid` reads false, the outer loop ends, a lane's `lane_left`
+floors at 0); fmadd, fmsub, fnmsub and fnmadd in the fast loop as the general step makes them (a product and a sum, each
+rounded: `rvc_cpu`'s `fmaf` rounds once, as before); `LOAD_UP` by selects. Against a copy of the tree in each of three runs:
+
+| | Quake | Tiberian Dawn | Shell |
+|---|---|---|---|
+| k4lb | -0.5%, +0.6%, -0.2% | -2.2%, -2.2%, -1.9% | -0.3%, -0.25%, -0.35% |
+| k6 (the same with `n + 1 < budget` on every fused word) | +0.9% | -0.7% | +0.8% |
+| k5la, k5fb, k5x (k4lb and arithmetic after a load; a branch after a float comparison; both) | +1.9%, +0.3%, +1.5% | -1.9%, -2.2%, -2.2% | -0.3%, -0.25%, -0.25% |
+
 **What was learnt.** Nothing of the fast loop's shape gave more than 1% on every load: f2 + fp1 (+ ffma) about 1%, at the
-noise's edge. fp1 changes what fdiv makes (the card's quotient, which `rvc_cpu` does not make: a model of the card's
+noise's edge; the kept fusion 2% of Tiberian Dawn, a little of the shell, level on Quake. fp1 changes what fdiv makes (the card's quotient, which `rvc_cpu` does not make: a model of the card's
 division is owed first), and ffma's `mad` is fused where the general step rounds twice: neither is in the tree. The ways
 to more are outside the loop's text: the pass's length (with the write cache, which caps it at about 12k of Tiberian Dawn's
 code), a larger write cache, and fewer instructions (Zba and fmadd in the programs: `docs/plans/riscv-isa.md`).

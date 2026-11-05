@@ -224,6 +224,10 @@
   `card_nan` in rvc_cpu): a program must not test a NaN's bits; `op_m` relies on D3D's division by zero
   (divu all ones) and INT_MIN / -1. A guest that wants such an encoding trapped, or RISC-V's NaN from
   them, changes the tick first.
+- The fast loop takes a second word of the texel in the same turn (`docs/machine/tick-costs.md`, "Sixth round", kept):
+  arithmetic or a branch after arithmetic, a branch after a load, each a copy of that kind's decode with its registers
+  taken from the first word's result. A change to what arithmetic or a branch makes (Zba, a funct7 test, an `ok`) is made
+  in those copies too, or the second word runs the old one; they have no test of the budget (a pass may run one past it).
 - `FAST` (`--define FAST` on the harness, `rvc_cpu --fast` or `RVC_TICK_FAST=1`; off by default, never
   the default): a load or store in RAM not on its size takes its word's bytes, fdiv is the card's `a / b`,
   an sc always succeeds, an opcode of no group is no instruction. 0.2 to 0.8% of a tick, and it breaks Red
