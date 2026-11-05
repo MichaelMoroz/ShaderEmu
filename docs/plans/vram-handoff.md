@@ -54,8 +54,14 @@ how it was checked, and what is left, in the order it is worth doing.
    the GPU's outside the editor), play Doom, Quake, Half-Life and ClassiCube in the Game view and compare with the harness.
    Check the holodeck and the volume display read `_GpuVram` (a seated Quake). Then the profile of every device in Unity
    (`docs/machine/multicore.md`, "In Unity"): the ticks, commit, GPU passes, draw IDs and upload passes, sound, room, by
-   `totalInstructions` and the frame's GPU time.
-2. **The vertex cost.** Done in the harness (5 November 2026, `docs/machine/gpu.md`, "Draw IDs"): a draw-ID pass finds every
+   `totalInstructions` and the frame's GPU time. The port now also has the passes GPUVertices (six 512 x 384 targets,
+   `_GpuMade*`) and GPUCopy (the GPU's target read, the VRAM written after the list's passes) to wire, which Unity's
+   host does not draw yet (`docs/machine/gpu.md`, "The vertex front end", "Copies").
+2. **What still reads RAM** (`docs/machine/gpu.md`, "Streams"; `--define GPU_VRAM_ONLY` shows it magenta): `gles.c`'s draws
+   stream their textures, but Quake's, Quake III's own commands, ClassiCube's, OpenTTD's sprites, `programs/linux/gl.c`,
+   the bare library, the window server's pointer and every text's atlas read RAM. Each is a stream or an upload of its
+   own, or the band given to them; then `GPU_VRAM_ONLY` can compile the fragment's RAM paths out.
+3. **The vertex cost.** Done in the harness (5 November 2026, `docs/machine/gpu.md`, "Draw IDs"): a draw-ID pass finds every
    vertex's command and passes once a frame, and the upload pass and the 12 passes read one texel a vertex in place of the
    search. Checked by `GPU_DRAW_IDS_CHECK` (Quake, OpenTTD, gpubench 9, the blits). On the RTX 3090 it is 0.020 ms a frame
    of the GPU's draw in every gpubench mode (9: 0.142 to 0.122 ms, 2: 0.299 to 0.278, 8: 0.170 to 0.149): not the 3x
@@ -70,7 +76,7 @@ how it was checked, and what is left, in the order it is worth doing.
    passes tried compile. Rebuild the world for the new texture. A float VRAM of transformed vertices
    was the first plan; with the draw IDs a vertex is transformed once a frame already (in its own pass), so it would save
    only the passes' few loads of a drawn vertex and cost 96 bytes a vertex written and read: not done.
-3. **Other games into the VRAM.** Done (5 November 2026; `docs/machine/gpu.md`, "VRAM", has the table): Quake's light
+4. **Other games into the VRAM.** Done (5 November 2026; `docs/machine/gpu.md`, "VRAM", has the table): Quake's light
    maps (`QUAKE_VRAM_LIGHT=0`), Quake III (`QUAKE3_VRAM=0`), Half-Life and Jedi Outcast through the shim
    (`HLGL_VRAM=0`), ClassiCube (`CLASSICUBE_VRAM=0`), with `gles.c`'s VRAM by slot (`seglVramTake`, `seglVramUpload`,
    `seglVramGive`) for textures that are not the library's, the uploads in `gpuEnd`'s worker frames, and a keyed draw of a
@@ -84,16 +90,16 @@ how it was checked, and what is left, in the order it is worth doing.
    draw of the same texture is not). Jedi Outcast does not build from this tree alone: `jk2.patch` includes
    `shared/qcommon/se_server.h` and does not add it (62c2cd86, another session's work in progress); the test build took
    that session's copy of the file.
-4. **The hand path's uploads.** Checked: `gles.c`'s uploads are the drawing core's, and the first core only submits a hand
+5. **The hand path's uploads.** Checked: `gles.c`'s uploads are the drawing core's, and the first core only submits a hand
    (`hand_submit` touches no upload). The one race was Quake's own light uploads made by the first core while the scene
    was on a worker, fixed (`light_gen`): `test_all.py --races` on Quake with 426 frames drawn by a worker, 0 undone.
-5. **Tools.** Done: `tools/gpu_reference.py` skips uploads and draws a slot's texture from the VRAM beside the snapshot
+6. **Tools.** Done: `tools/gpu_reference.py` skips uploads and draws a slot's texture from the VRAM beside the snapshot
    (`SNAPSHOT.vram`, `--vram FILE`), level 0 only (gpubench 8 on the card: 90.6% of the picture within 2 levels, what
    differs the card's levels). The D3D12 backend needs no VRAM: it is `--dxc`'s, which `shader_vm` refuses.
-6. **The shared math library.** Done: `programs/linux/semath.h` (`docs/system/semath.md`), checked by `tools/semath_test.c`
+7. **The shared math library.** Done: `programs/linux/semath.h` (`docs/system/semath.md`), checked by `tools/semath_test.c`
    on the host and compiled by `cc` in the machine. No program uses it yet: `gles.c`'s matrices and the games' own
    maths are theirs, and moving one is a change of its bytes and sums to make on purpose.
-7. **`shader_vm/src` trim.** What nothing named went: fourteen of `l1_local.h`'s write-cache macros for functions the
+8. **`shader_vm/src` trim.** What nothing named went: fourteen of `l1_local.h`'s write-cache macros for functions the
    tick's rewrite took away, `zap_bands` and `gpu_copy_bands` (the bands' commit's; the zap is the RAM commit's first
    point, drawn whatever the bands). Every pass compiles to the same bytes as before it: the harness's 46 blobs on WARP, with and without `--blits`, the same 46 hashes. Left as they are:
    constants nothing in the shaders reads but the docs and the host name (`CMD_END`, `SPRITE_COPY`, the stall codes,
@@ -101,7 +107,8 @@ how it was checked, and what is left, in the order it is worth doing.
 
 ## How to check
 
-- The harness: `build.bat`, then `python tools/warp_stamp.py --count 2 --secs 8` after any change to `shader_vm`.
+- The harness: `build.bat`, then `python tools/warp_stamp.py` after any change to `shader_vm` (nothing runs when the compiled
+  bytes are stamped; otherwise one stored snapshot 3 s on WARP).
 - A game: build it (`wsl -- bash linux/nommu/build.sh nanox/doom.sh`), make it flat into a copy of the root, make a
   private image (`linux/nommu/image.py NAME ROOT build/nommu/Image`, about 70 s), capture with
   `tools\gpu_queue.ps1 bin\rvc_harness.exe --cpu --warp --d3d11 --rvc shader_vm --define NO_PAGING --image build\images\NAME

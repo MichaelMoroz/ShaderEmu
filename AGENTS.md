@@ -443,3 +443,8 @@
   out or on the drawing core. A sum of a list counts a slot as what it was uploaded from (`gpuListSum`). The vertices find
   their commands in the draw-ID pass: a change to which vertices a command claims or to its pass changes
   `gpu_draw_ids_fragment` with `gpu_command_search`, and `--define GPU_DRAW_IDS_CHECK` must leave no magenta.
+  Each vertex is made once a frame by GPUVertices (`gpu_front_fragment`, "The vertex front end"): a change to how a vertex is
+  made is a change there, and `--define GPU_FRONT_CHECK` must leave no magenta. A copy (command 7, `glCopyTexSubImage2D`,
+  framebuffer objects; "Copies") is made after the whole list: a draw after it in its list is a mistake `SEGL_DEBUG=1`
+  reports. A texture a `gles.c` draw names by its address is streamed into the VRAM's rows from 3072 on by every list
+  ("Streams"; `SEGL_STREAM=0`): `--define GPU_VRAM_ONLY` shows what still reads RAM in magenta.

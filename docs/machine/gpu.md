@@ -430,8 +430,8 @@ The VRAM belongs to the program that draws with the GPU's memory (`/dev/gpu`'s D
 (`seglVram(L)`, `seglTextureChanged()`, `seglVramLevels(L)` for the bound texture's own L, `seglVramPalette()` in
 `programs/linux/include/GLES/segl.h`), on shelves of whole 16 texels, and a texture deleted leaves its block to the next of
 its size. A program whose textures are not the library's takes slots by themselves: `seglVramTake(w, h, L, flags)` (1
-clamped, 2 keyed), `seglVramUpload(slot, address, w, h, kind, key, palette)` (words, bytes through a palette, three bytes;
-from GPU memory, RAM or the ROM) and `seglVramGive`. The library's uploads are the swapping core's: a program whose frame
+clamped, 2 keyed), `seglVramUpload(slot, address, w, h, kind, key, palette)` (any kind a draw reads, from GPU memory, RAM or
+the ROM) and `seglVramGive`. The library's uploads are the swapping core's: a program whose frame
 is drawn on a worker takes and uploads only where no frame is out, or by the drawing core (Quake's light maps,
 `light_gen` in `world_shaderemu.c`). It is off by default, for a 2D program's pictures to stay those of GPU memory to the
 pixel, and on, each with its way before, in:
@@ -447,8 +447,15 @@ pixel, and on, each with its way before, in:
 A keyed texture is premultiplied in its slot (`VRAM_PREMULTIPLIED`: the key's texels 0, the colours times alpha, divided
 back at the sample and dropped under a half), which suits a texture only ever drawn keyed. A keyed draw of a slot uploaded
 plain drops a nearest texel of no alpha, which is a texture of words' key (ClassiCube's atlas, translucent water and
-leaves' holes in one picture). A texture whose memory the program writes as it runs (a screen, a film's frame) stays where
-it is unless the program says it changed. A sum of a list that should not go by where a texture lies counts a slot as what
+leaves' holes in one picture). A texture whose memory the program writes as it runs (a screen, a film's frame) is not given
+a slot unless the program says it changed: it is streamed (below).
+
+An upload converts every kind a fragment reads from RAM into colours (`gpu_upload_fragment`): words, bytes through a
+palette, three bytes, a glyph's distance fields (three bytes), a mask (white, the bit its alpha), coverage (white, its
+alpha), a layer of tiles through its cells, tiles and banks (the key a hole) and a film's frame from its three planes. A
+slot drawn as a mask drops a texel under half alpha, as coverage takes its alpha, as distance fields takes the median of
+four samples at level 0. `gpubench` 11 draws each of the five 64 x 64, twice as large, from RAM and from its slot: under
+`--cpu` the halves are the same bytes, but for 9 of the distance fields' 16,384 pixels, 1 off (the sampler's weights). A sum of a list that should not go by where a texture lies counts a slot as what
 it was uploaded from (Quake III's `gpuListSum`).
 
 The GPU's draw (`RVC_PASS_PROF=1`, "gpu draw") of a game's frame from a snapshot of it, RTX 3090, 5 November 2026, the mean
@@ -502,6 +509,60 @@ each way:
 
 0.020 ms a frame whatever the list: the search was that much of every pass. What is left is not the vertices' search; a
 vertex the pass does not draw still costs its load of the draw IDs and its invocation, 13 x 196,608 a frame.
+
+## The vertex front end
+
+A vertex was made by every pass that drew it, from the list in RAM: 13 passes a frame, each reading the command, its
+matrices and the vertex's words. Now a pass of its own makes every vertex a command claims once a frame, after the draw
+IDs and before the uploads (GPUVertices, `gpu_front_fragment`): a fragment a vertex into six 512 x 384 textures (the
+position, the colour, the two pairs of coordinates and the edge as floats; the texture's words, the key and the light map's
+as words, `_GpuMade*`, which a float target could rewrite), and the draw, upload and copy passes and the blits take a vertex
+from there by its draw ID (`gpu_vertex_made`): their vertex stage reads no RAM (`--define GPU_NO_FRONT` the way before).
+
+`--define GPU_FRONT_CHECK` makes each drawn vertex from the list as well, and a magenta triangle over the target where the
+two differ beyond a rounding (1e-4 of the value): none on Quake's timedemo held at frame 200 or OpenTTD's scroll after 120 s.
+gpubench 9, 2 and 8 give the same bytes with and without the front end.
+
+## Copies
+
+Command 7 copies a rectangle of the list's picture into a slot (`gpu_copy`): `x | y << 16` of the picture, `w | h << 16`, the slot,
+`dx | dy << 16` in it and `COPY_TURNED` (1) for OpenGL's rows, the bottom first. The host draws the copies after all the list's
+passes (GPUCopy, `gpu_copy_fragment`: the target read, the VRAM's level 0 written; found by the draw IDs' bit 17), so a
+copy sees the whole list's picture, never a part: a draw after a copy in its list is drawn before the copy is made.
+`gpubench` 10 copies a moving pattern each frame and draws the frame before's copy four times as large.
+
+A list drawn with `SUBMIT_SIZED` (`0x1000000`) is drawn at `GPU_INTO`'s size and copied into no RAM: a picture only for its
+copies.
+
+In OpenGL (`programs/linux/gles.c`):
+
+- `glCopyTexSubImage2D` and `glCopyTexImage2D` put a copy at the list's end; the texture is then in a slot of no levels.
+- OES framebuffer objects with a texture as their colour (`glGenFramebuffersOES`, `glFramebufferTexture2DOES`,
+  `glBindFramebufferOES`): what is drawn while one is bound is a list of its own, drawn sized and waited for, its colour
+  copied into the texture when another framebuffer is bound. No renderbuffers: depth is the GPU's own.
+- `SEGL_DEBUG=1` says a draw made after a copy in its list (`segl: a draw (command N) after a copy in the same list`) and
+  counts them at exit; `SEGL_DEBUG=abort` stops there. Code copies at the list's end, or draws into a framebuffer of its
+  own: a copy in the middle is never what it seems.
+
+`linux/tcc/tests/glcopy.c` (in `/usr/share/cc-tests`, `test_all.py gl-copies`) draws into a framebuffer's texture, copies
+the window's corner, and on frame 5 makes the mistake once.
+
+## Streams
+
+A texture a draw names by its address is read from RAM by the fragment, four 16-byte texels a sample. `gles.c` uploads
+every such texture of a list at the list's end into the VRAM's rows from 3072 on (`stream_put`): words, indices, a mask,
+three bytes, tiles or a film's frame, in GPU memory or the ROM, once a list however many draws name it, padded with a texel
+of itself and of no levels; the draws are given its slot. Since a list's uploads are drawn every frame the list is, a
+texture the program writes as it runs is what it was when the list was drawn, as from RAM. The library's own textures'
+shelves stop at the band, and one that does not fit is streamed; `SEGL_STREAM=0` draws from GPU memory, as before. A sum of a
+list counts a stream as its address (`vram_source_of`).
+
+`--define GPU_VRAM_ONLY` makes a draw that reads its texture or light map from RAM magenta, to see what is left: text's
+atlases (masks, coverage, distance fields) and sprites (OpenTTD's) are apart, and read RAM still. Under `--cpu`, 5 November
+2026: `glcopy.c` with a texture of its own pixels leaves 48 magenta pixels, the pointer's (the window server draws it from
+its own picture), against 5,808 with `SEGL_STREAM=0`; the NES's thwaite 48 against 247,086, and its window the same pixels
+streamed and from RAM. What is not `gles.c`'s draws as before from RAM: Quake's (`linux/quake/gpu_shaderemu.c`), Quake III's
+own commands, ClassiCube's, OpenTTD's sprites, `programs/linux/gl.c` and the bare library (`programs/common/gpu.h`).
 
 ## Cost
 
