@@ -913,8 +913,20 @@ dropped):
 
 | On the tree with `same` as a difference: the fetch's `t - fw_t == 1`; a load's range as `va - 0x80000000`; both; a jump's alignment by its distance; x0's sink by an addition; the crossing's test as a difference; it with the fetch's | -1.05 to +0.9% | +0.3 to +1.5% | -0.1 to +1.8% | level or lost: the difference gains in `same` alone |
 
+| The difference in nine more of the hot tests (the data texel's, the remembered texels' in loads and stores, a branch's equality in the loop and the fused copies, the arithmetic test, a store's range), `same`'s second test by the word's index, M by one mask; the branch's equality and M by mask in a second run and together; mul as a branch; `[branch]` on the loop's break; the fused mul's test swapped | -0.9 to +1.4% | -1.0 to +1.6% | -0.4 to +1.2% | level: nothing over 1% on every load |
+| `imm_i` by a select; `dst` as `rd ? rd : 64`; a load's shift by `(va << 3) & 24`; the loop as a `for`; slt's turn by a shift | -0.4 to +0.6% | 0.0 to +1.35% | -0.2 to +0.4% | level or lost |
+| The register write before `pre_w` (`if (ok) xr[dst] = v;` above the break) | +3.9% | +4.4% | +4.0% | lost: what comes before the loop's break moves the driver's code (round five's `pre_w`) |
+
+**The round's count.** 189 variants of the tick timed on the card against a copy of the tree in each run (each stamped on
+WARP first), the pass's length at six lengths with histograms of where passes end, and the harness's list pass timed: two
+hundred experiments. Kept, five changes, none changing a result: the fused second word (arithmetic or a branch after
+arithmetic, a branch after a load), mul as that word, M before the atomics, the second word from the next texel, `same` as a
+difference. Against `62c2cd86`'s tick with the first four, in two runs: Tiberian Dawn -6.3% a tick (6.7% more instructions a
+second), the shell loop -0.6 to -0.85%, Quake -0.35 to -1.4%; the fifth gave Tiberian Dawn a further 1 to 2% and the shell 0.7%.
+
 **What was learnt.** Nothing of the fast loop's shape gave more than 1% on every load: f2 + fp1 (+ ffma) about 1%, at the
-noise's edge; the kept fusion 2% of Tiberian Dawn, a little of the shell, level on Quake. fp1 changes what fdiv makes (the card's quotient, which `rvc_cpu` does not make: a model of the card's
+noise's edge. What was kept is worth 7 to 8% of Tiberian Dawn, whose instructions are arithmetic pairs and products, and about
+1% of the shell and Quake. fp1 changes what fdiv makes (the card's quotient, which `rvc_cpu` does not make: a model of the card's
 division is owed first), and ffma's `mad` is fused where the general step rounds twice: neither is in the tree. The ways
 to more are outside the loop's text: the pass's length (with the write cache, which caps it at about 12k of Tiberian Dawn's
 code), a larger write cache, and fewer instructions (Zba and fmadd in the programs: `docs/plans/riscv-isa.md`).
