@@ -334,9 +334,9 @@ public static partial class ShaderEmuBuilder
     }
 
     // The speed's slider on a tower, where its floppy drive was (under the place's key): its
-    // owner's machine's instructions a frame, Snail to Turbo, 4k to 256k (EmuMachine's steps 1 to 7).
+    // owner's machine's ticks a frame, Snail to Turbo, 1 to 16 (EmuMachine's speed steps), a few of them named.
     const float TowerSpeedBay = 0.36f - 0.131f;
-    static readonly string[] SpeedSteps = { "4k", "8k", "16k", "32k", "64k", "128k", "256k" };
+    static readonly int[] SpeedNamed = { 1, 4, 8, 12, 16 };
 
     // A slider of a place's panel, in the panel's millimetres from its top-left corner.
     static Slider PlaceSlider(RectTransform panel, string name, float x, float y, float wide, float high, int min, int max, int value)
@@ -374,11 +374,11 @@ public static partial class ShaderEmuBuilder
         TextMeshProUGUI snail = Label(panel, "Snail", "Snail", left, 1, 50, 11, 8, TextAnchor.MiddleLeft, dim);
         TextMeshProUGUI turbo = Label(panel, "Turbo", "Turbo", wide - right - 50, 1, 50, 11, 8, TextAnchor.MiddleLeft, dim);
         turbo.alignment = TextAlignmentOptions.Right;
-        Slider slider = PlaceSlider(panel, "Speed slider", left, top, wide - left - right, row, 1, SpeedSteps.Length, 4);
-        // a step's name under each of the handle's places (its travel is the slider less a handle)
+        Slider slider = PlaceSlider(panel, "Speed slider", left, top, wide - left - right, row, 1, 16, 3);
+        // a few steps' numbers under the handle's places (its travel is the slider less a handle)
         float travel = wide - left - right - 9;
-        for (int i = 0; i < SpeedSteps.Length; i++)
-            Label(panel, "Step " + SpeedSteps[i], SpeedSteps[i], left + 4.5f + travel * i / (SpeedSteps.Length - 1) - 12, top + row + 1, 24, 11, 7, TextAnchor.MiddleCenter, dim);
+        foreach (int n in SpeedNamed)
+            Label(panel, "Step " + n, n.ToString(), left + 4.5f + travel * (n - 1) / 15f - 12, top + row + 1, 24, 11, 7, TextAnchor.MiddleCenter, dim);
         own.speed = slider;
         UnityEventTools.AddStringPersistentListener(slider.onValueChanged, UdonSharpEditorUtility.GetBackingUdonBehaviour(own).SendCustomEvent, "SpeedMoved");
         return slider;

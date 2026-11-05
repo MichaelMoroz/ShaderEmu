@@ -21,7 +21,7 @@ public class EmuUdonCpu : UdonSharpBehaviour
     public RenderTexture unpackTarget;    // 2048 x 2048: four million words a readback
     public TextMeshProUGUI label, powerLabel;   // the toggle's status line, and the toggle's own text
     public int sliceBudget = 2000;        // loop heads and calls a slice
-    public float[] frameMs = { 1f, 2f, 4f, 6f, 8f, 10f, 12f, 14f };   // Udon time a frame, by the speed slider's step
+    public float[] frameMs = { 1f, 2f, 4f, 6f, 8f, 10f, 12f, 14f };   // Udon time a frame, by the speed slider's step (1 to 16) halved
     public int textSum;                   // of the translated kernel's text: another image is refused
     public int textWords;
     public Texture2D[] pageStages;        // 1024 wide RGBA32, 64, 256 and 1024 rows: row 0 the page numbers, then a page a row
@@ -171,7 +171,7 @@ public class EmuUdonCpu : UdonSharpBehaviour
         Ask(devWords, copyToo ? 5 : 2);
         if (copyToo) BlitCopy();
         Rtc();
-        float budget = frameMs[Mathf.Clamp(machine.SpeedStep(), 0, frameMs.Length - 1)];
+        float budget = frameMs[Mathf.Clamp((machine.SpeedStep() - 1) / 2, 0, frameMs.Length - 1)];
         while (watch.Elapsed.TotalMilliseconds < budget)
         {
             // the guest's timer (5000 Hz) is real time since power on; a wfi ends the frame unless it is due
