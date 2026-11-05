@@ -5,6 +5,8 @@
 //   5 three bytes, smooth   6 compact quads, words smooth, times a light map (Quake's walls)
 //   7 as 2 and 8 as 6, the texture and the light map uploaded into the VRAM first (trilinear, at most 16 times smaller)
 //   9 the vertices' cost: 3,600 rectangles of 16 x 16 tiling the picture, a command each, in passes 0, 1 and 2 by turns
+//   10 a copy (gpu_copy): 64 rectangles of 32 x 32 in the top left 256 x 256, moving a pixel a frame, copied into a slot at
+//      the list's end and drawn from there over the rest of the picture, four times as large (the frame before's copy)
 
 #include "../common/gpu.h"
 
@@ -50,6 +52,27 @@ int main(void) {
 #endif
     gpu_begin();
     gpu_clear(0x00203040);
+#if MODE == 10
+    {
+        const uint32_t slot = GPU_VRAM_SLOT(16, 16, 0);
+        for (uint32_t frame = 0;; frame++) {
+            gpu_begin();
+            gpu_clear(0x00102030);
+            for (int n = 0; n < 64; n++) {
+                int x = (n % 8) * 32 + (int)(frame % 32), y = (n / 8) * 32;
+                gpu_rect(x, y, x + 24, y + 24, (uint32_t)(n * 2654435761u >> 8) & 0x00ffffff);
+            }
+            volatile uint32_t* c = gpu_command(GPU_RECT, 6);   // the copy of the frame before, four times as large
+            c[1] = 0x00ffffff;
+            c[4] = 272, c[5] = 0, c[6] = 272 + 1024, c[7] = 1024 > H ? H : 1024;
+            c[8] = GPU_FRAGMENT_TEXTURE;
+            c[9] = slot, c[10] = 256, c[11] = 256;
+            c[12] = 0, c[13] = 0, c[14] = ONE, c[15] = (1024 > H ? H : 1024) * ONE / 1024;
+            gpu_copy(0, 0, 256, 256, slot, 0, 0, 0);
+            gpu_submit();
+        }
+    }
+#endif
 #if MODE == 9
     for (int n = 0; n < (W / 16) * (H / 16); n++) {
         int x = (n % (W / 16)) * 16, y = (n / (W / 16)) * 16;

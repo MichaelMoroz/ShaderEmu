@@ -20,7 +20,7 @@
 #define GPU_MAX_COMMANDS 4096
 #define GPU_MAX_VERTICES 196608    // per list, over all commands (65,536 triangles)
 
-enum { GPU_END, GPU_CLEAR, GPU_RECT, GPU_DRAW, GPU_TEXT, GPU_SPRITES, GPU_UPLOAD };
+enum { GPU_END, GPU_CLEAR, GPU_RECT, GPU_DRAW, GPU_TEXT, GPU_SPRITES, GPU_UPLOAD, GPU_COPY };
 #define GPU_SUBMIT_UPLOADS 8   // (gpu_submit_as adds it) the list has uploads: drawn once the host has drawn them and made the levels
 
 // The VRAM (docs/machine/gpu.md, "VRAM"): 4096 x 4096 colours with mip levels, which gpu_upload() copies a texture into. A
@@ -187,6 +187,18 @@ static inline void gpu_draw(const gpu_vertex* vertices, uint32_t count, uint32_t
 
 // Copies a texture into the VRAM at `slot` (GPU_VRAM_SLOT): `kind` GPU_FRAGMENT_TEXTURE, _INDEXED or _RGB24, with
 // GPU_FRAGMENT_KEYED for texels equal to `key` to be holes; `palette` 0 for the display's, `row` 0 for rows of `w`.
+// A rectangle of the picture (x, y from its top left, w x h) copied into the VRAM's slot at (dx, dy) when the list's passes
+// are drawn: after all of them, whatever comes after it in the list (docs/machine/gpu.md, "Copies"). `turned`: the rows
+// turned over (OpenGL's order). The slot is drawn from like any other in the next list; it has no levels.
+static inline void gpu_copy(int x, int y, int w, int h, uint32_t slot, int dx, int dy, int turned) {
+    volatile uint32_t* c = gpu_command(GPU_COPY, 6);
+    c[1] = (uint32_t)x | (uint32_t)y << 16;
+    c[2] = (uint32_t)w | (uint32_t)h << 16;
+    c[4] = slot;
+    c[5] = (uint32_t)dx | (uint32_t)dy << 16;
+    c[6] = turned ? 1u : 0u;
+}
+
 static inline void gpu_upload(const void* pixels, uint32_t kind, uint32_t w, uint32_t h, uint32_t slot, uint32_t key,
                               const uint32_t* palette, uint32_t row) {
     volatile uint32_t* c = gpu_command(GPU_UPLOAD, 6);
@@ -209,7 +221,7 @@ static inline void gpu_submit_as(uint32_t how) {
     GPU_COUNT = gpu_commands;
     GPU_SUBMIT = how | (gpu_passes << 8) | gpu_uploads;   // drawn once the host draws every pass used
     do {
-        cpu_wait();   // the list is drawn between frames
+        __asm__ volatile(".word 0x0100000f");   // the pause hint: the list is drawn between frames (wfi would wait on rvc_cpu for an interrupt nothing raises)
     } while (GPU_FRAMES == before);
 }
 

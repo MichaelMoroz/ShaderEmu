@@ -99,6 +99,36 @@ Shader "ShaderEmu/gpu"
 
         Pass
         {
+            // The list's copies (CMD_COPY) of rectangles of its picture into slots of the VRAM, after all its passes
+            // (docs/machine/gpu.md, "Copies"): the target read, the VRAM's level 0 written.
+            Name "GPUCopy"
+            ZTest Off
+            ZWrite Off
+
+            CGPROGRAM
+            #pragma target 5.0
+            #pragma vertex vert
+            #pragma fragment frag
+
+            Texture2D<uint4> _State;
+            #define GPU_STATE _State
+            #define GPU_COPY_PASS
+            #ifndef GPU_NO_DRAW_IDS
+            #define GPU_DRAW_IDS
+            #endif
+            #include "src/gpu.h"
+
+            gpu_varyings vert(uint id : SV_VertexID) {
+                return gpu_vertex(id);
+            }
+            float4 frag(gpu_varyings i) : SV_Target {
+                return gpu_copy_fragment(i);
+            }
+            ENDCG
+        }
+
+        Pass
+        {
             // Each mesh vertex's command and passes (gpu_draw_ids_fragment), a texel each of a GPU_DRAW_IDS_W x GPU_DRAW_IDS_H
             // R32G32_UINT target, drawn first every frame a list is drawn: the upload pass and the GPUDraw passes read it.
             Name "GPUDrawIds"

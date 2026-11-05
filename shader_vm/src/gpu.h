@@ -46,6 +46,8 @@
 #define CMD_TEXT 4      // 6 vertices a character
 #define CMD_SPRITES 5   // 6 vertices a sprite record (docs/machine/gpu.md, "Sprites of a paletted picture")
 #define CMD_UPLOAD 6    // 6 vertices: a texture copied into the VRAM with its mip levels (docs/machine/gpu.md, "VRAM")
+#define CMD_COPY 7      // 6 vertices: a rectangle of the picture copied into a slot of the VRAM after the list's passes ("Copies")
+#define COPY_TURNED 1u  // (CMD_COPY's flags) the rows turned over: the picture's top row is the slot's last (OpenGL's order)
 
 // How a draw's vertices are projected.
 #define VERTEX_SCREEN 0   // position is already in pixels (x, y) and depth (z, 0..1)
@@ -362,6 +364,7 @@ float4 place_pixels(float2 p, float depth) {
 #define GPU_DRAW_IDS_W 512u
 #define GPU_DRAW_IDS_H 384u   // (65,536 triangles' vertices)
 #define GPU_DRAW_ID_UPLOAD 0x10000u
+#define GPU_DRAW_ID_COPY 0x20000u     // the copy pass's (CMD_COPY), after every other
 #ifdef GPU_DRAW_IDS
 // (a host whose integer target is signed, Unity's RGInt, defines GPU_DRAW_IDS_TEXEL int2: the bits are the same)
 #ifndef GPU_DRAW_IDS_TEXEL
@@ -394,7 +397,7 @@ bool gpu_owner(uint id, out uint base, out uint4 head, out uint slots) {
     head = ram(base);
     uint op = head.r;
     slots = op == CMD_CLEAR ? 3 : op == CMD_RECT ? 6 : op == CMD_DRAW ? head.b : op == CMD_TEXT ? 6 * ram(base + 1).b : op == CMD_SPRITES ? 6 * head.b
-          : op == CMD_UPLOAD ? 6 : 0;
+          : op == CMD_UPLOAD || op == CMD_COPY ? 6 : 0;
     return id >= head.a && id < head.a + slots;
 }
 
@@ -409,6 +412,7 @@ uint2 gpu_draw_ids_fragment(uint id) {
     uint op = head.r, passes;
     if (op == CMD_UPLOAD) return uint2(base, GPU_DRAW_ID_UPLOAD);
     if (SUBMIT_WAITS(ram(GPU_CTRL).r, _GpuPasses)) return 0;
+    if (op == CMD_COPY) return uint2(base, GPU_DRAW_ID_COPY);   // (with its list: not while that waits)
     if (op == CMD_SPRITES) {
         uint kind = (ram(texel_of(head.g) + (id - head.a) / 6).a >> 22) & 15;
         passes = ram(base + 1).r & (SPRITE_SHADES(kind) ? 4u : ~4u);
@@ -430,8 +434,10 @@ bool gpu_command_search(uint id, uint span, out uint base, out uint4 head) {
     uint op = head.r;
 #ifdef GPU_UPLOAD_PASS
     return op == CMD_UPLOAD;   // (the pass into the VRAM draws the uploads alone, before every other pass)
+#elif defined(GPU_COPY_PASS)
+    return op == CMD_COPY;     // (and the copies alone, after every other)
 #else
-    if (op == CMD_UPLOAD) return false;
+    if (op == CMD_UPLOAD || op == CMD_COPY) return false;
 #endif
 #ifdef GPU_PASS_UNIFORMS
     uint drawn_in = op == CMD_RECT || op == CMD_TEXT ? FRAGMENT_PASS(ram(base + 2).r) : op == CMD_DRAW ? FRAGMENT_PASS(ram(base + 1).g) : 0;
@@ -451,6 +457,8 @@ bool gpu_command(uint id, uint span, out uint base, out uint4 head) {
     uint2 c = gpu_draw_id(id);
 #ifdef GPU_UPLOAD_PASS
     if ((c.g & GPU_DRAW_ID_UPLOAD) == 0) return false;
+#elif defined(GPU_COPY_PASS)
+    if ((c.g & GPU_DRAW_ID_COPY) == 0) return false;
 #else
     if (((c.g >> _GpuPass) & 1) == 0) return false;
 #endif
@@ -520,6 +528,17 @@ gpu_varyings gpu_vertex_sized(uint id, uint base, uint4 head, float2 size) {
             o.texture_info = uint4(head.b, head.g, size.r, size.g);
             o.key = size.a;
             o.light_info = uint3(slot, more.g != 0 ? more.g : size.r, more.r);
+        } else if (op == CMD_COPY) {
+            // head.g the picture's rectangle's corner (x | y << 16, pixels from its top left), head.b its size (w | h << 16);
+            // then the slot, where in it (x | y << 16), the flags (COPY_TURNED). A quad over that place in the VRAM, drawn in
+            // the copy pass, which takes each texel from the target.
+            uint4 to = ram(base + 1);
+            uint w = head.b & 0xffff, h = head.b >> 16, slot = to.r;
+            uint corner = k < 3 ? k : (k == 3 ? 2 : (k == 4 ? 1 : 3));
+            float2 p = float2(VRAM_X(slot) + (to.g & 0xffff) + ((corner & 1) ? w : 0), VRAM_Y(slot) + (to.g >> 16) + ((corner & 2) ? h : 0));
+            o.position = float4(p.x * 2.0 / VRAM_SIDE - 1.0, 1.0 - p.y * 2.0 / VRAM_SIDE, 0.0, 1.0);
+            o.texture_info = uint4(to.b, head.g, w, h);
+            o.light_info = uint3(slot, to.g, 0);
         } else if (op == CMD_SPRITES) {
             // head.g the records, head.b how many; then the passes (a bit each), the first record's place in the
             // order, the palette (0: the picture is of indices), then words 7 and 8 the two remaps green counts (SPRITE_WORDS). A record is a
@@ -796,6 +815,17 @@ float4 gpu_upload_fragment(gpu_varyings i) {
     if (slot & VRAM_PREMULTIPLIED) c.rgb *= c.a;
     return c;
 }
+
+#ifdef GPU_COPY_PASS
+// The copy pass (CMD_COPY): a texel of the slot's rectangle, the picture's texel it stands for (the rows turned with COPY_TURNED).
+Texture2D<float4> _GpuTarget;   // the GPU's colour target, where the list was drawn
+float4 gpu_copy_fragment(gpu_varyings i) {
+    uint slot = i.light_info.r, at = i.light_info.g, from = i.texture_info.g, h = i.texture_info.a;
+    int2 local = int2(i.position.xy) - int2(VRAM_X(slot) + (at & 0xffff), VRAM_Y(slot) + (at >> 16));
+    int row = (i.texture_info.r & COPY_TURNED) ? (int)h - 1 - local.y : local.y;
+    return _GpuTarget.Load(int3((int)(from & 0xffff) + local.x, (int)(from >> 16) + row, 0));
+}
+#endif
 
 #ifdef GPU_VRAM
 // A texture in the VRAM at uv (repeating, or clamped), its texel (0, 0) at `at` and `size` texels: the four texels round

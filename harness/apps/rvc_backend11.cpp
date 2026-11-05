@@ -124,7 +124,7 @@ public:
             if (d.first == "RAM_BUFFER") csBuffer_ = true;
         if (getenv("RVC11_COMPUTE") && !buildComputeTick(shader, bo, err)) return false;
         std::string gpuErr;
-        if (opt.gpuShader && (!buildPasses(gpu_, *opt.gpuShader, {"GPUDraw", "GPUControl", "GPUUpload", "GPUDrawIds"}, bo, gpuPasses_, gpuErr) ||
+        if (opt.gpuShader && (!buildPasses(gpu_, *opt.gpuShader, {"GPUDraw", "GPUControl", "GPUUpload", "GPUDrawIds", "GPUCopy"}, bo, gpuPasses_, gpuErr) ||
                               !createGpuTarget(gpuErr))) {
             fprintf(stderr, "[harness] GPU device disabled: %s\n", gpuErr.c_str());
             gpuPasses_.clear();
@@ -811,6 +811,34 @@ private:
         ctx->OMSetRenderTargets(0, nullptr, nullptr);
     }
 
+    // The list's copies of rectangles of its picture into the VRAM (GPUCopy, CMD_COPY), after all its passes: the target
+    // read, the VRAM's level 0 written (no levels made: a copied slot has none).
+    void gpuCopy(Material& mat) {
+        ID3D11DeviceContext* ctx = gpu_.ctx.Get();
+        GpuPass& pass = gpuPasses_[4];
+        ctx->OMSetRenderTargets(1, vramRtv_.GetAddressOf(), nullptr);
+        D3D11_VIEWPORT vp{0, 0, (float)kVramSide, (float)kVramSide, 0, 1};
+        ctx->RSSetViewports(1, &vp);
+        ctx->RSSetState(gpu_.rasterNoCull.Get());
+        ctx->IASetInputLayout(nullptr);
+        ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        mat.setTexture("_GpuTarget", gpuSrv_.Get(), kGpuTarget, kGpuTarget);
+        ID3D11ShaderResourceView* state = stateSrv();
+        mat.bind(ctx, pass, gpu_);
+        for (auto& t : pass.vsLayout.textures)
+            if (t.name == "_State") ctx->VSSetShaderResources(t.slot, 1, &state);
+        for (auto& t : pass.psLayout.textures)
+            if (t.name == "_State") ctx->PSSetShaderResources(t.slot, 1, &state);
+        ctx->OMSetBlendState(gpuBlend_[0].Get(), nullptr, 0xffffffff);
+        ctx->OMSetDepthStencilState(gpuDepthState_[2].Get(), 0);
+        ctx->Draw(kGpuTriangles * 3, 0);
+        ID3D11ShaderResourceView* none = nullptr;
+        for (auto& t : pass.vsLayout.textures) ctx->VSSetShaderResources(t.slot, 1, &none);
+        for (auto& t : pass.psLayout.textures) ctx->PSSetShaderResources(t.slot, 1, &none);
+        ctx->OMSetRenderTargets(0, nullptr, nullptr);
+        vramUsed_ = true;
+    }
+
     void gpuUpload(Material& mat, bool mips) {
         ID3D11DeviceContext* ctx = gpu_.ctx.Get();
         GpuPass& pass = gpuPasses_[2];
@@ -881,6 +909,7 @@ private:
         for (auto& t : pass.gsLayout.textures) ctx->GSSetShaderResources(t.slot, 1, &none);
         if (amp) ampUnbind();
         ctx->OMSetRenderTargets(0, nullptr, nullptr);
+        if (gpuPasses_.size() > 4) gpuCopy(mat);   // (after every pass: the picture as the list left it)
     }
 
     // The sound card's mix target: two floats a sample, read back whole.
