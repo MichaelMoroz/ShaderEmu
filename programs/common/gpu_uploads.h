@@ -33,14 +33,32 @@ enum { GPU_UP_LIT = 0x800, GPU_UP_KEYED = 0x100, GPU_UP_TEXT_MORE = 0x100, GPU_U
 
 // The band's shelves and the textures copied so far, for one list (a caller's: lists made at once on several cores each
 // have one).
-#define GPU_UP_SEEN 128
+// A texture copied already: a table by its key (what it was copied from and how), its entries this list's by `gen`.
+#define GPU_UP_SEEN 512
+typedef struct { uint32_t gen, key[7], slot; } gpu_up_seen;
 typedef struct {
-    uint32_t x, y, shelf;
-    uint32_t seen[GPU_UP_SEEN][5];   // address, kind, width, height, key: a texture copied already, and its slot
-    uint32_t slots[GPU_UP_SEEN];
-    uint32_t n;
+    uint32_t x, y, shelf, gen;
     int full;
+    gpu_up_seen seen[GPU_UP_SEEN];
 } __attribute__((aligned(16))) gpu_up_state;   // (16 bytes apart: two cores never store to one texel)
+
+// The entry of `key`: this list's, its slot 0 if new (and then taken), or 0 when the table is full.
+static inline gpu_up_seen* gpu_up_find(gpu_up_state* s, const uint32_t key[7]) {
+    uint32_t h = 2166136261u;
+    for (int k = 0; k < 7; k++) h = (h ^ key[k]) * 16777619u;
+    for (uint32_t probe = 0; probe < 32; probe++) {
+        gpu_up_seen* e = &s->seen[(h + probe) & (GPU_UP_SEEN - 1)];
+        if (e->gen != s->gen) {
+            e->gen = s->gen, e->slot = 0;
+            for (int k = 0; k < 7; k++) e->key[k] = key[k];
+            return e;
+        }
+        int same = 1;
+        for (int k = 0; k < 7; k++) same &= e->key[k] == key[k];
+        if (same) return e;
+    }
+    return 0;
+}
 
 // A device address as this program reads it.
 static inline const volatile uint32_t* gpu_up_at(const gpu_uploads_list* l, uint32_t address) {
@@ -75,34 +93,31 @@ static inline uint32_t gpu_up_texture(gpu_uploads_list* l, gpu_up_state* s, uint
                                       uint32_t h, uint32_t key, uint32_t flags, uint32_t row) {
     if (GPU_UP_IS_SLOT(address) || w == 0 || h == 0) return address;
     kind &= 0xff | GPU_UP_KEYED;
-    for (uint32_t k = 0; k < s->n; k++)
-        if (s->seen[k][0] == address && s->seen[k][1] == (kind | flags) && s->seen[k][2] == (w | row << 16) && s->seen[k][3] == h &&
-            (!(kind & GPU_UP_KEYED) || s->seen[k][4] == key))
-            return s->slots[k];
+    uint32_t k[7] = {address, kind | flags, w | row << 16, h, (kind & GPU_UP_KEYED) ? key : 0, 0, 0};
+    gpu_up_seen* e = gpu_up_find(s, k);
+    if (e && e->slot) return e->slot;
     uint32_t slot = gpu_up_place(s, w, h);
     volatile uint32_t* c = slot ? gpu_up_command(l, s) : 0;
     if (!c) return address;   // (drawn magenta: the band or the list is full)
     slot |= flags | ((kind & GPU_UP_KEYED) ? GPU_UP_PREMULTIPLIED : 0);
     c[1] = address, c[2] = kind, c[4] = w, c[5] = h, c[6] = slot, c[7] = key, c[9] = row;
-    if (s->n < GPU_UP_SEEN) {
-        uint32_t* e = s->seen[s->n];
-        e[0] = address, e[1] = kind | flags, e[2] = w | row << 16, e[3] = h, e[4] = key;
-        s->slots[s->n++] = slot;
-    }
+    if (e) e->slot = slot;
     return slot;
+}
+
+// What a slot of the list `s` was made for was copied from (a list's sum goes by that, not by where a texture lies); 0 if none.
+static inline uint32_t gpu_up_source(const gpu_up_state* s, uint32_t slot) {
+    for (uint32_t k = 0; k < GPU_UP_SEEN; k++)
+        if (s->seen[k].gen == s->gen && s->seen[k].slot == slot) return s->seen[k].key[0];
+    return 0;
 }
 
 // Every texture of the list's commands from `first` on in the
 // VRAM (a program's kept commands too, given back their own textures first): 0, or -1 when the band or the list had no
 // room for one (that draw is magenta).
-// What a slot of the list `s` was made for was copied from (a list's sum goes by that, not by where a texture lies); 0 if none.
-static inline uint32_t gpu_up_source(const gpu_up_state* s, uint32_t slot) {
-    for (uint32_t k = 0; k < s->n; k++)
-        if (s->slots[k] == slot) return s->seen[k][0];
-    return 0;
-}
 static inline int gpu_list_uploads(gpu_uploads_list* l, uint32_t first, gpu_up_state* s) {
-    s->x = 0, s->y = GPU_SCRATCH_Y, s->shelf = 0, s->n = 0, s->full = 0;
+    s->x = 0, s->y = GPU_SCRATCH_Y, s->shelf = 0, s->full = 0;
+    if (++s->gen == 0) s->gen = 1;   // (every entry of before not this list's)
     const uint32_t end = l->count;
     for (uint32_t i = first; i < end; i++) {
         volatile uint32_t* c = l->list + 16 * i;
@@ -120,8 +135,9 @@ static inline int gpu_list_uploads(gpu_uploads_list* l, uint32_t first, gpu_up_s
                 c[9] = gpu_up_texture(l, s, c[9], c[8], w, h, c[2], flags, 0);
                 continue;
             }
-            uint32_t x0 = (uint32_t)(((int64_t)lu * w) >> 16), y0 = (uint32_t)(((int64_t)lv * h) >> 16);
-            uint32_t x1 = (uint32_t)(((int64_t)hu * w + 65535) >> 16), y1 = (uint32_t)(((int64_t)hv * h + 65535) >> 16);
+            // (32 bits are enough: the coordinates are at most 65,536, the sizes at most 4,096)
+            uint32_t x0 = ((uint32_t)lu * w) >> 16, y0 = ((uint32_t)lv * h) >> 16;
+            uint32_t x1 = ((uint32_t)hu * w + 65535) >> 16, y1 = ((uint32_t)hv * h + 65535) >> 16;
             if (x1 > w) x1 = w;
             if (y1 > h) y1 = h;
             if (x1 <= x0) x0 = x1 - 1;
@@ -129,8 +145,8 @@ static inline int gpu_list_uploads(gpu_uploads_list* l, uint32_t first, gpu_up_s
             uint32_t pw = x1 - x0, ph = y1 - y0, slot = gpu_up_texture(l, s, c[9] + (y0 * w + x0) * bpp, c[8], pw, ph, c[2], flags, w);
             if (!GPU_UP_IS_SLOT(slot)) continue;
             for (int k = 0; k < 4; k++) {   // (the part's coordinates: u' = (u w - x0) / pw)
-                int64_t t = (int32_t)c[12 + k], size = k & 1 ? h : w, first = k & 1 ? y0 : x0, part = k & 1 ? ph : pw;
-                c[12 + k] = (uint32_t)(int32_t)((t * size - (first << 16)) / part);
+                int32_t t = (int32_t)c[12 + k], size = (int32_t)(k & 1 ? h : w), first = (int32_t)(k & 1 ? y0 : x0);
+                c[12 + k] = (uint32_t)((t * size - (first << 16)) / (int32_t)(k & 1 ? ph : pw));
             }
             c[9] = slot, c[10] = pw, c[11] = ph;
         } else if (op == GPU_UP_DRAW) {
@@ -165,12 +181,18 @@ static inline int gpu_list_uploads(gpu_uploads_list* l, uint32_t first, gpu_up_s
                 uint32_t kind = (rec[3] >> 22) & 15, w = rec[3] & 0x7ff, h = (rec[3] >> 11) & 0x7ff;
                 l->table[r] = 0;
                 if (kind == 4 || kind == 5 || kind == 6 || w == 0 || h == 0) continue;   // (SPRITE_FILL, _FILL_SHADE, _CHECKER)
+                // (the same pixels, kind, size, remap, palette and tables are the same picture: one upload)
+                uint32_t k[7] = {rec[0], GPU_UP_SPRITE | kind << 8 | (rec[2] >> 22) << 12 | (rec[3] >> 26) << 22, rec[3] & 0x3fffff, rec[1],
+                                 c[6], c[7], c[8]};
+                gpu_up_seen* e = gpu_up_find(s, k);
+                if (e && e->slot) { l->table[r] = e->slot; continue; }
                 uint32_t slot = gpu_up_place(s, w, h);
                 volatile uint32_t* u = slot ? gpu_up_command(l, s) : 0;
                 if (!u) break;
                 u[1] = rec[0], u[2] = GPU_UP_SPRITE, u[4] = w, u[5] = h, u[6] = slot;
                 u[7] = c[1] + 16 * r, u[8] = c[6], u[9] = l->list_gpu + 64 * i;
                 l->table[r] = slot;
+                if (e) e->slot = slot;
             }
             c[15] = l->table_gpu;
             l->table += n, l->table_gpu += 4 * n, l->table_left -= n;
