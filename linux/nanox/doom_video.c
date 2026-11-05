@@ -407,6 +407,14 @@ sitter(void)
 	int now = !host || !SEGL_HOST_HOLODECK(host) ? 0 : SEGL_HOST_HANDS(host) ? 1 : SEGL_HOST_KIND(host) == 2 ? 2 : 0;
 
 	if (now != seated) {
+		/* Seated, the room is the view: a smaller view's border (screenblocks 9, the default) went onto the HUD
+		   layer as a frame of stone hung before the sitter. The whole width while seated, the player's own size
+		   again when they stand; screenblocks, which the settings keep, is not changed. */
+		extern int screenblocks, detailLevel;
+		void R_SetViewSize(int blocks, int detail);
+
+		if (!now != !seated && screenblocks < 10)
+			R_SetViewSize(now ? 10 : screenblocks, detailLevel);
 		seated = doom_seated = now;
 		dragging = 0;
 		hand_turn = now == 1 ? SEGL_HOST_HAND_YAW(host, 1) : 0;
