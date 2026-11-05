@@ -11,9 +11,9 @@ Shader "ShaderEmu/Sky"
         _Cover ("Cloud cover", Range(0, 1)) = 0.8
         _CityGlow ("The clouds' light from the city (lightning's apart)", Float) = 1
         _Wind ("Drift (uv a second)", Vector) = (0.004, 0.0015, 0, 0)
-        _FogColour ("Height fog: its colour", Color) = (0.08, 0.057, 0.047, 1)
-        _FogFlash ("Height fog: lit by lightning (at a flash of 1, ten times this)", Color) = (0.04, 0.036, 0.048, 1)
-        _FogDensity ("Height fog: a metre's at its base", Float) = 0.025
+        _FogColour ("Height fog: its colour", Color) = (0.167, 0.167, 0.177, 1)
+        _FogFlash ("Height fog: lit by lightning (at a flash of 1, ten times this)", Color) = (0.05, 0.05, 0.06, 1)
+        _FogDensity ("Height fog: a metre's at its base", Float) = 0.125
         _FogBase ("Height fog: its base (world y, the street)", Float) = -40
         _FogFalloff ("Height fog: metres up for a fall by e", Float) = 20
     }

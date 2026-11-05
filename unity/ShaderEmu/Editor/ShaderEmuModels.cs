@@ -349,8 +349,8 @@ public static partial class ShaderEmuBuilder
         return made;
     }
 
-    // unwrap: Unity lays out the lightmap's coordinates. Not for the shell, which brings its own
-    // (world/shell.py: one chart a surface, so no line shows where two pieces of a wall met).
+    // unwrap: Unity lays out the lightmap's coordinates. No model of ours asks it now: Blender lays
+    // them out (world/unwrap.py, the shell world/shell.py), and Unity's charts of a mug were slivers.
     static GameObject ImportModel(string name, Dictionary<string, Material> materials, bool unwrap)
     {
         string path = ModelsPath + "/" + name + ".fbx";
@@ -405,7 +405,10 @@ public static partial class ShaderEmuBuilder
         if (name == "Books" || name == "Shelf" || name == "Rack" || name.StartsWith("book_")) return 2f;
         if (name == "Screen housings" || name == "Desk" || name == "Consoles" || name == "Tower" || name == "Radiator") return 1.5f;
         if (name == "Panelling") return 0.7f;
-        if (name == "Desk things" || name == "Table things" || name == "Wall things" || name == "Cables" || name == "Network" || name == "Hubs") return 4f;   // small: or a mouse is three texels
+        // (world/unwrap.py keeps this table too, for the margins it packs at)
+        if (name == "Desk things" || name == "Table things" || name == "Room desk things") return 8f;   // a mug at 4 had its neighbours' light on its rim
+        if (name.EndsWith(" things")) return 4f;   // small: or a mouse is three texels
+        if (name == "Cables" || name == "Network" || name == "Hubs") return 4f;
         if (name.StartsWith("Station ") && name.EndsWith(" rest")) return 6f;   // a key's top is a centimetre, and each cap a chart with a margin
         if (name.StartsWith("pachira") || name.StartsWith("potted_plant")) return 0.35f;   // leaves: many small pieces
         return 1f;
@@ -479,7 +482,7 @@ public static partial class ShaderEmuBuilder
         foreach (string name in new[] { "Room", "Shell", "Computer", "Furniture", "FurnitureCharted", "Annex", "AnnexCharted", "City" })
         {
             bool city = name == "City";
-            GameObject instance = (GameObject)PrefabUtility.InstantiatePrefab(ImportModel(name, materials, !city && name != "Shell" && !name.EndsWith("Charted")));
+            GameObject instance = (GameObject)PrefabUtility.InstantiatePrefab(ImportModel(name, materials, false));
             instance.transform.SetParent(models, false);
             foreach (MeshRenderer renderer in instance.GetComponentsInChildren<MeshRenderer>())
             {

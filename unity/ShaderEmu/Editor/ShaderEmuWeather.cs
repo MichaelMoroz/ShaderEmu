@@ -19,13 +19,13 @@ public static partial class ShaderEmuBuilder
     const float Night = 1f / 3f;
 
     // The fog over the city (HeightFog.cginc), one for the towers and the sky: thickest at the street
-    // (world/city.py: GROUND, 42 m under the window), thinning by e every 20 m up; its colour the
-    // haze's lit a little from below by the street lamps (a guess, by eye), and lightning's as the haze's.
+    // (world/city.py: GROUND, 42 m under the window), thinning by e every 20 m up; its colour a
+    // pale mist's, near white, the night's third of it (by eye: a warm one read as smog), and lightning lights it.
     static void HeightFog(Material m)
     {
-        m.SetColor("_FogColour", new Color(0.24f, 0.17f, 0.14f) * Night);
-        m.SetColor("_FogFlash", new Color(0.040f, 0.036f, 0.048f));
-        m.SetFloat("_FogDensity", 0.025f);
+        m.SetColor("_FogColour", new Color(0.50f, 0.50f, 0.53f) * Night);
+        m.SetColor("_FogFlash", new Color(0.05f, 0.05f, 0.06f));
+        m.SetFloat("_FogDensity", 0.125f);
         m.SetFloat("_FogBase", WindowY - 42f);
         m.SetFloat("_FogFalloff", 20f);
     }

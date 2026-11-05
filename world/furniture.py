@@ -16,9 +16,10 @@ from pc import office_chair
 
 
 def mug(b, at, mat="Ceramic", turn=0):
-    with b.at(at, (0, turn, 0)):
-        b.lathe((0, 0, 0), [(0, 0.004), (0.036, 0.004), (0.04, 0), (0.041, 0.095), (0.037, 0.095), (0.036, 0.008), (0, 0.008)], mat, segs=24)
-        b.tube([(0.04, 0.075, 0), (0.062, 0.07, 0), (0.066, 0.045, 0), (0.058, 0.022, 0), (0.04, 0.02, 0)], 0.006, mat, segs=8, smooth=4)
+    """The mug of world/toys.py (this was a copy of it, its handle left at 8 sides), where it is put, not let fall:
+    the den's holds pens made round it (let fall, it went 64 mm from them)."""
+    import toys
+    toys.mug.__wrapped__(b, at, mat, turn)
 
 
 def cushion(b, at, side, thick, rot):

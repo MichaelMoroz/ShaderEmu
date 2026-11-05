@@ -11,9 +11,9 @@ Shader "ShaderEmu/City"
         _Dark ("Unlit surfaces", Float) = 0.6
         _Bright ("Lights (above 1 they bloom)", Float) = 5
         _Night ("The night's own light: what is not a bright light, times this", Float) = 1
-        _FogColour ("Height fog: its colour", Color) = (0.08, 0.057, 0.047, 1)
-        _FogFlash ("Height fog: lit by lightning (at a flash of 1, ten times this)", Color) = (0.04, 0.036, 0.048, 1)
-        _FogDensity ("Height fog: a metre's at its base", Float) = 0.025
+        _FogColour ("Height fog: its colour", Color) = (0.167, 0.167, 0.177, 1)
+        _FogFlash ("Height fog: lit by lightning (at a flash of 1, ten times this)", Color) = (0.05, 0.05, 0.06, 1)
+        _FogDensity ("Height fog: a metre's at its base", Float) = 0.125
         _FogBase ("Height fog: its base (world y, the street)", Float) = -40
         _FogFalloff ("Height fog: metres up for a fall by e", Float) = 20
     }

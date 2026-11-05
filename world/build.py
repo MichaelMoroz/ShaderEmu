@@ -21,6 +21,7 @@ import furniture    # noqa: E402
 import annex        # noqa: E402
 import shell        # noqa: E402
 import city         # noqa: E402
+import unwrap       # noqa: E402
 
 PARTS = {"Room": room, "Shell": shell, "Computer": computer, "Furniture": furniture, "Annex": annex, "City": city}
 OUT = os.path.join(HERE, "..", "unity", "ShaderEmu", "Models")
@@ -43,6 +44,8 @@ def main():
         builder = lib.Builder(seed=7)
         PARTS[name].build(builder)
         objects = builder.finish(name)
+        if name not in ("Shell", "City"):   # (the shell brings its own, one chart a surface; the city is unlit)
+            unwrap.unwrap(objects)
         # what brings its own place in the lightmap is a file of its own: Unity lays out a whole file's, or none of it
         own = [ob for ob in objects if ob.name in builder.was_charted]
         if own:

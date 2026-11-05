@@ -260,7 +260,8 @@ def cassette(b, at, turn=0.0, label="Paper"):
 def mug(b, at, mat="Ceramic", turn=0.0):
     with b.at(at, (0, turn, 0)):
         b.lathe((0, 0, 0), [(0, 0.004), (0.036, 0.004), (0.04, 0), (0.041, 0.095), (0.037, 0.095), (0.036, 0.008), (0, 0.008)], mat, segs=24)
-        b.tube([(0.04, 0.075, 0), (0.062, 0.07, 0), (0.066, 0.045, 0), (0.058, 0.022, 0), (0.04, 0.02, 0)], 0.006, mat, segs=8, smooth=4)
+        # (12 sides: at 8 each side met the next at 45 degrees, over the smoothing's 38, and the handle was faceted)
+        b.tube([(0.04, 0.075, 0), (0.062, 0.07, 0), (0.066, 0.045, 0), (0.058, 0.022, 0), (0.04, 0.02, 0)], 0.006, mat, segs=12, smooth=4)
 
 
 @loose

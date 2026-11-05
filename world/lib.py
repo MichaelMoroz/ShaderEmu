@@ -363,6 +363,7 @@ class Builder:
                         loop[uv].uv = (loop.vert.co.x / tu, loop.vert.co.z / tv)
                     else:
                         loop[uv].uv = band(profile[i], profile[j], along[k], loop.vert, u)
+        _joinable(bm, rings)
         if cap and not closed:
             for ring, (r, _) in ((rings[0], profile[0]), (rings[-1], profile[-1])):
                 if r > 1e-6:
@@ -532,6 +533,7 @@ class Builder:
                 vs = (s / segs, (s + 1) / segs, (s + 1) / segs, s / segs)
                 for loop, u, v in zip(face.loops, us, vs):
                     loop[uv].uv = (u / tu, v * 2 * math.pi * radius / tv)
+        _joinable(bm, rings)
         ends = [bm.faces.new(ring) for ring in (rings[0], rings[-1])]
         for f in ends:   # (an end is a round of the tube's radius: its picture laid flat on it)
             for k, loop in enumerate(f.loops):
@@ -701,6 +703,18 @@ class Builder:
         self.objects, self.assets, self.items, self.walls, self.poses = {}, [], [], [], []
         self.was_charted, self.charted = self.charted, set()
         return made
+
+
+def _joinable(bm, rings):
+    """Marks the edges round each ring as ones the lightmap need not be cut at (world/unwrap.py): a lathe's
+    bands and a tube's spans are pictures of their own, but one strip to the light (a mug's handle was a
+    piece a span, each lit by its own texel)."""
+    join = bm.edges.layers.int.get("lm_join") or bm.edges.layers.int.new("lm_join")
+    for ring in rings:
+        for a, b in zip(ring, ring[1:] + ring[:1]):
+            e = bm.edges.get((a, b))
+            if e is not None:
+                e[join] = 1
 
 
 def blender_material(name):

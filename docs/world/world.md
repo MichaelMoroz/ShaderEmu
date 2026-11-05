@@ -42,6 +42,15 @@ in Blender by scripts in `world/`; furniture, plants and the main surfaces come 
 - `sounds.py` computes the rain's loop, and cuts thunder and the computer's own sounds from
   recordings (`SOURCES`: Freesound, CC0; fetched once into `build/sounds`, which needs ffmpeg)
   (`Sounds/*.wav`).
+- **Every model's lightmap layout is Blender's** (5 November 2026, `world/unwrap.py`, called by `build.py`
+  for every part but the shell and the city; Unity's importer unwraps nothing, `ImportModel(..., false)`):
+  cut at edges sharper than 50 degrees and wherever the picture's coordinates are cut (a lathe's bands
+  and meridian, a tube's line, a downloaded model's islands), unwrapped by angle, a piece that comes out
+  folded or stretched (`FOLD`) laid again by Smart UV Project, one density, packed with a margin of 2.5
+  texels at the mesh's least lightmap scale (`lightmap_scale`, as `ShaderEmuModels.cs`'s; halved until
+  it fits, the build names those under it), cached by the mesh's shape in `build/unwrap`. Unity's
+  charts of a mug were slivers. What follows (`b.chart`, `charted=True`) is written first and laid
+  over by it; the files keep their names.
 - **A lightmap layout of its own.** Unity (and Bakery after it) lays out a model's place in the
   lightmap by cutting it wherever it bends, a chart a piece: a keyboard is a chart a key
   and more, each lit by its own few texels, and it shows as blotches and lines. An object made
@@ -361,7 +370,7 @@ lightmap, which shows a line wherever two pieces of a wall meet and at every cor
 - The sky is `Sky.shader`: the panorama under a layer of cloud that drifts.
 - Fog lies over the streets and thins with height (`HeightFog.cginc`, in `City.shader` and
   `Sky.shader`; `HeightFog` in `ShaderEmuWeather.cs` sets both alike, 5 November 2026): a density
-  of 0.025 a metre at the street that falls by e every 20 m up, summed along the eye's ray in
+  of 0.125 a metre at the street that falls by e every 20 m up, summed along the eye's ray in
   closed form in each fragment, no depth texture; the sky is the ray's end at infinity, so the
   horizon is all fog and the towers stand into it.
 - `EmuWeather` strikes lightning every 30 to 80 s: the global `_UdonWeatherFlash` lights the
