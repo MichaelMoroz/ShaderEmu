@@ -147,6 +147,6 @@ unsigned se_join_waits, se_rs_waits;
 void mcw_for_opt(unsigned n, void (*fn)(void *ctx, unsigned from, unsigned to), void *ctx, const void *o) { (void)o; if (n) fn(ctx, 0, n); }
 /* the drawing on two workers (gl_jk2.c's): never on the build computer */
 int jk2DrawHalfGive(void *half, void *gl) { (void)half; (void)gl; return 0; }
-void jk2DrawHalfJoin(void *gl) { (void)gl; }
+int jk2DrawHalfJoin(void *gl) { (void)gl; return 0; }
 void jk2glHalfInit(const void *gl) { (void)gl; }
 void jk2glHalfEnd(void *gl) { (void)gl; }

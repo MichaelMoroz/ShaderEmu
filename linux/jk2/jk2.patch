@@ -5694,7 +5694,7 @@ index 5464b70b..a1f3c8cd 100644
  	{
  		return;
 diff --git a/code/rd-vanilla/tr_backend.cpp b/code/rd-vanilla/tr_backend.cpp
-index 741bb95b..30aaf881 100644
+index 741bb95b..b6b8d61e 100644
 --- a/code/rd-vanilla/tr_backend.cpp
 +++ b/code/rd-vanilla/tr_backend.cpp
 @@ -27,6 +27,10 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
@@ -5726,7 +5726,18 @@ index 741bb95b..30aaf881 100644
  
  	if ( !image ) {
  		ri.Printf( PRINT_WARNING, "GL_Bind: NULL image\n" );
-@@ -508,6 +521,22 @@ static void RB_BeginDrawingView (void) {
+@@ -71,6 +84,10 @@ void GL_Bind( image_t *image ) {
+ 	}
+ 
+ 	if ( glState.currenttextures[glState.currenttmu] != texnum ) {
++#ifdef SHADEREMU
++		extern int se_half_b;
++		if ( !se_half_b )	// (the images are the first copy's: the drawing's second part marks none)
++#endif
+ 		image->frameUsed = tr.frameCount;
+ 		glState.currenttextures[glState.currenttmu] = texnum;
+ 		qglBindTexture (GL_TEXTURE_2D, texnum);
+@@ -508,6 +525,22 @@ static void RB_BeginDrawingView (void) {
  		}
  	}
  
@@ -5749,7 +5760,7 @@ index 741bb95b..30aaf881 100644
  	if ( !( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) && ( r_DynamicGlow->integer && !g_bRenderGlowingObjects ) )
  	{
  		if (tr.world && tr.world->globalFog != -1)
-@@ -583,11 +612,11 @@ static inline bool R_WorldCoordToScreenCoordFloat(vec3_t worldCoord, float *x, f
+@@ -583,11 +616,11 @@ static inline bool R_WorldCoordToScreenCoordFloat(vec3_t worldCoord, float *x, f
  	ycenter = glConfig.vidHeight / 2;
  
  	//AngleVectors (tr.refdef.viewangles, vfwd, vright, vup);
@@ -5765,7 +5776,7 @@ index 741bb95b..30aaf881 100644
  
  	transformed[0] = DotProduct(local,vright);
  	transformed[1] = DotProduct(local,vup);
-@@ -599,8 +628,8 @@ static inline bool R_WorldCoordToScreenCoordFloat(vec3_t worldCoord, float *x, f
+@@ -599,8 +632,8 @@ static inline bool R_WorldCoordToScreenCoordFloat(vec3_t worldCoord, float *x, f
  		return false;
  	}
  
@@ -5776,7 +5787,7 @@ index 741bb95b..30aaf881 100644
  
  	*x = xcenter + xzi * transformed[0];
  	*y = ycenter - yzi * transformed[1];
-@@ -641,6 +670,295 @@ typedef struct
+@@ -641,6 +674,302 @@ typedef struct
  static postRender_t g_postRenders[MAX_POST_RENDERS];
  static int g_numPostRenders = 0;
  
@@ -5802,7 +5813,7 @@ index 741bb95b..30aaf881 100644
 +static seHalf_t se_half;
 +extern "C" {
 +int jk2DrawHalfGive( void *half, void *gl );
-+void jk2DrawHalfJoin( void *gl );
++int jk2DrawHalfJoin( void *gl );
 +void jk2glHalfInit( const void *gl );
 +void jk2glHalfEnd( void *gl );
 +}
@@ -5998,10 +6009,15 @@ index 741bb95b..30aaf881 100644
 +		const char *e = getenv( "JK2_HALF" );
 +		on = e && !strcmp( e, "1" );	// (JK2_HALF=1: the second part still drawn wrong, docs/games/jk2.md)
 +	}
++	// (where the list is cut, as a share of it: the second part is mostly entities and what is drawn over, dearer a surface
++	// than the world's; moved each frame by how long the drawing waited for the second part, in 1/256ths)
++	static int share = 160;
 +	int k = numDrawSurfs;
 +	if ( on && !se_half_b && !g_bRenderGlowingObjects && r_shadows->integer != 2 && !backEnd.viewParms.isPortal &&
 +		 !( backEnd.refdef.rdflags & RDF_HYPERSPACE ) && numDrawSurfs >= 64 ) {
-+		k = numDrawSurfs / 2;
++		k = numDrawSurfs * share >> 8;
++		if ( k < 1 )
++			k = 1;
 +		while ( k < numDrawSurfs && drawSurfs[k].sort == drawSurfs[k - 1].sort )
 +			k++;
 +		if ( k < numDrawSurfs ) {
@@ -6015,7 +6031,9 @@ index 741bb95b..30aaf881 100644
 +	}
 +	SE_DrawSurfRange( drawSurfs, k, originalTime, depthRange, didShadowPass );
 +	if ( k < numDrawSurfs ) {
-+		jk2DrawHalfJoin( se_half.gl );
++		const int waited = jk2DrawHalfJoin( se_half.gl );
++		share += waited > 2 ? 4 : waited == 0 ? -2 : 0;
++		share = share < 32 ? 32 : share > 240 ? 240 : share;
 +		for ( int p = 0; p < se_half.numPost && g_numPostRenders < MAX_POST_RENDERS; p++ )
 +			g_postRenders[g_numPostRenders++] = se_half.post[p];
 +		if ( se_half.stencilled )
@@ -6072,7 +6090,7 @@ index 741bb95b..30aaf881 100644
  void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
  	shader_t		*shader, *oldShader;
  	int				fogNum, oldFogNum;
-@@ -667,6 +985,11 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
+@@ -667,6 +996,11 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
  	RB_BeginDrawingView ();
  
  	// draw everything
@@ -6084,7 +6102,7 @@ index 741bb95b..30aaf881 100644
  	oldEntityNum = -1;
  	backEnd.currentEntity = &tr.worldEntity;
  	oldShader = NULL;
-@@ -837,6 +1160,7 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
+@@ -837,6 +1171,7 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
  	if (oldShader != NULL) {
  		RB_EndSurface();
  	}
@@ -6092,7 +6110,7 @@ index 741bb95b..30aaf881 100644
  
  	if (tr_stencilled && tr_distortionPrePost)
  	{ //ok, cap it now
-@@ -966,6 +1290,28 @@ RENDER BACK END FUNCTIONS
+@@ -966,6 +1301,28 @@ RENDER BACK END FUNCTIONS
  ============================================================================
  */
  
@@ -6121,7 +6139,7 @@ index 741bb95b..30aaf881 100644
  /*
  ================
  RB_SetGL2D
-@@ -980,7 +1326,12 @@ void	RB_SetGL2D (void) {
+@@ -980,7 +1337,12 @@ void	RB_SetGL2D (void) {
  	qglScissor( 0, 0, glConfig.vidWidth, glConfig.vidHeight );
  	qglMatrixMode(GL_PROJECTION);
      qglLoadIdentity ();
@@ -6135,7 +6153,7 @@ index 741bb95b..30aaf881 100644
  	qglMatrixMode(GL_MODELVIEW);
      qglLoadIdentity ();
  
-@@ -1027,6 +1378,8 @@ const void *RB_StretchPic ( const void *data ) {
+@@ -1027,6 +1389,8 @@ const void *RB_StretchPic ( const void *data ) {
  	int		numVerts, numIndexes;
  
  	cmd = (const stretchPicCommand_t *)data;
@@ -6144,7 +6162,7 @@ index 741bb95b..30aaf881 100644
  
  	if ( !backEnd.projection2D ) {
  		RB_SetGL2D();
-@@ -1034,7 +1387,7 @@ const void *RB_StretchPic ( const void *data ) {
+@@ -1034,7 +1398,7 @@ const void *RB_StretchPic ( const void *data ) {
  
  	shader = cmd->shader;
  	if ( shader != tess.shader ) {
@@ -6153,7 +6171,7 @@ index 741bb95b..30aaf881 100644
  			RB_EndSurface();
  		}
  		backEnd.currentEntity = &backEnd.entity2D;
-@@ -1061,29 +1414,29 @@ const void *RB_StretchPic ( const void *data ) {
+@@ -1061,29 +1425,29 @@ const void *RB_StretchPic ( const void *data ) {
  	baDest = (byteAlias_t *)&tess.vertexColors[numVerts + 2]; baDest->ui = baSource->ui;
  	baDest = (byteAlias_t *)&tess.vertexColors[numVerts + 3]; baDest->ui = baSource->ui;
  
@@ -6191,7 +6209,7 @@ index 741bb95b..30aaf881 100644
  	tess.xyz[ numVerts + 3 ][2] = 0;
  
  	tess.texCoords[ numVerts + 3 ][0][0] = cmd->s1;
-@@ -1113,7 +1466,7 @@ const void *RB_RotatePic ( const void *data )
+@@ -1113,7 +1477,7 @@ const void *RB_RotatePic ( const void *data )
  
  	shader = cmd->shader;
  	if ( shader != tess.shader ) {
@@ -6200,7 +6218,7 @@ index 741bb95b..30aaf881 100644
  			RB_EndSurface();
  		}
  		backEnd.currentEntity = &backEnd.entity2D;
-@@ -1204,7 +1557,7 @@ const void *RB_RotatePic2 ( const void *data )
+@@ -1204,7 +1568,7 @@ const void *RB_RotatePic2 ( const void *data )
  
  		shader = cmd->shader;
  		if ( shader != tess.shader ) {
@@ -6209,7 +6227,7 @@ index 741bb95b..30aaf881 100644
  				RB_EndSurface();
  			}
  			backEnd.currentEntity = &backEnd.entity2D;
-@@ -1311,7 +1664,7 @@ const void	*RB_DrawSurfs( const void *data ) {
+@@ -1311,7 +1675,7 @@ const void	*RB_DrawSurfs( const void *data ) {
  	const drawSurfsCommand_t	*cmd;
  
  	// finish any 2D drawing if needed
@@ -6218,7 +6236,7 @@ index 741bb95b..30aaf881 100644
  		RB_EndSurface();
  	}
  
-@@ -1406,7 +1759,7 @@ const void	*RB_DrawBuffer( const void *data ) {
+@@ -1406,7 +1770,7 @@ const void	*RB_DrawBuffer( const void *data ) {
  	qglDrawBuffer( cmd->buffer );
  
  		// clear screen for debugging
@@ -6227,7 +6245,7 @@ index 741bb95b..30aaf881 100644
  	{
  		const fog_t		*fog = &tr.world->fogs[tr.world->numfogs];
  
-@@ -1530,10 +1883,13 @@ RB_SwapBuffers
+@@ -1530,10 +1894,13 @@ RB_SwapBuffers
  */
  extern void RB_RenderWorldEffects( void );
  const void	*RB_SwapBuffers( const void *data ) {
@@ -6242,7 +6260,7 @@ index 741bb95b..30aaf881 100644
  		RB_EndSurface();
  	}
  
-@@ -1568,6 +1924,9 @@ const void	*RB_SwapBuffers( const void *data ) {
+@@ -1568,6 +1935,9 @@ const void	*RB_SwapBuffers( const void *data ) {
  
      GLimp_LogComment( "***************** RB_SwapBuffers *****************\n\n\n" );
  
@@ -6252,7 +6270,7 @@ index 741bb95b..30aaf881 100644
  	ri.WIN_Present(&window);
  
  	backEnd.projection2D = qfalse;
-@@ -1582,7 +1941,7 @@ const void	*RB_WorldEffects( const void *data )
+@@ -1582,7 +1952,7 @@ const void	*RB_WorldEffects( const void *data )
  	cmd = (const setModeCommand_t *)data;
  
  	// Always flush the tess buffer
@@ -6261,7 +6279,7 @@ index 741bb95b..30aaf881 100644
  	{
  		RB_EndSurface();
  	}
-@@ -1604,7 +1963,16 @@ RB_ExecuteRenderCommands
+@@ -1604,7 +1974,16 @@ RB_ExecuteRenderCommands
  void RB_ExecuteRenderCommands( const void *data ) {
  	int		t1, t2;
  
@@ -6278,7 +6296,7 @@ index 741bb95b..30aaf881 100644
  
  	while ( 1 ) {
  		data = PADP(data, sizeof(void *));
-@@ -1628,6 +1996,13 @@ void RB_ExecuteRenderCommands( const void *data ) {
+@@ -1628,6 +2007,13 @@ void RB_ExecuteRenderCommands( const void *data ) {
  		case RC_DRAW_SURFS:
  			data = RB_DrawSurfs( data );
  			break;
@@ -6292,7 +6310,7 @@ index 741bb95b..30aaf881 100644
  		case RC_DRAW_BUFFER:
  			data = RB_DrawBuffer( data );
  			break;
-@@ -1640,7 +2015,11 @@ void RB_ExecuteRenderCommands( const void *data ) {
+@@ -1640,7 +2026,11 @@ void RB_ExecuteRenderCommands( const void *data ) {
  		case RC_END_OF_LIST:
  		default:
  			// stop rendering

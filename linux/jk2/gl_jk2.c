@@ -199,6 +199,7 @@ void jk2RenderSettle(void) {
 #define HALF_WORKER hw0.worker
 static int half_on(void);
 static void half_settle(void);
+static void half_post(uint32_t gen);
 static uint32_t half_job(uint32_t gen, uint32_t a1);
 static struct __attribute__((aligned(16))) { int worker, out, tried, unused; } hw0;   // this core's (the drawing on two workers: below)
 #endif
@@ -207,7 +208,7 @@ void jk2RenderGive(void (*fn)(const void*), const void* arg) {
     job.fn = fn, job.arg = arg, job.swap = 0;
     mcw_post(rw0.worker, render_job, rw0.gives + 1, 0);
 #ifndef SE_DRAW_B
-    if (half_on()) half_settle(), mcw_post(hw0.worker, half_job, rw0.gives + 1, 0), hw0.out = 1;
+    half_post(rw0.gives + 1);   // (after the drawing's, whose worker it must not take; the drawing begins after job_go)
 #endif
     rw0.out = 1, rw0.gives++;
 }
@@ -1355,51 +1356,63 @@ static uint32_t half_job(uint32_t gen, uint32_t a1) {
     half_done.gen = gen;
     return 0;
 }
+// (core 0, at the give: whether the frame's second part may be drawn; the job is taken by a free worker, never run on this
+// core, whose waiting there for the drawing would hold the drawing back: it waits for this core's skins, job_go)
+static mcw_handle half_h;
+static struct __attribute__((aligned(16))) { volatile uint32_t gen, unused[3]; } half_posted;   // this core's: the frame posted for
 static int half_on(void) {
     if (!hw0.tried) {
         const char* e = getenv("JK2_HALF");
-        hw0.tried = 1, hw0.worker = -1;
-        if (rw0.mode && e && !strcmp(e, "1")) {   // (JK2_HALF=1: not yet drawn right, docs/games/jk2.md)
-            jk2MixOn(), jk2FrontOn();
-            for (int k = mcw_count(); k >= 1; k--)
-                if (k != rw0.worker && k != mw0.worker && k != fw0.worker && k != sw0.worker && mcw_fast(k)) { hw0.worker = k; break; }
-        }
-        if (hw0.worker > 0) {
+        hw0.tried = 1, hw0.unused = rw0.mode && e && !strcmp(e, "1");   // (JK2_HALF=1: not yet drawn right, docs/games/jk2.md)
+        if (hw0.unused) {
             mcw_touch(b_jk2glHalfStack(), RENDER_STACK);
             mcw_touch(&half_go, sizeof half_go), mcw_touch((void*)&half_done, sizeof half_done), mcw_touch(&half_d, sizeof half_d);
-            printf("jk2: the drawing's second part on worker %d\n", hw0.worker);
+            mcw_touch((void*)&half_posted, sizeof half_posted);
+            printf("jk2: the drawing's second part on a free worker\n");
         }
     }
-    return hw0.worker > 0;
+    return hw0.unused;
 }
 static void half_settle(void) {
     if (!hw0.out) return;
-    while (!mcw_done(hw0.worker)) jk2ServerServe(), mcw_rest_for(&hw0.worker, 1);
+    mcw_join(half_h);
     hw0.out = 0;
+}
+static void half_post(uint32_t gen) {
+    half_settle();
+    if (!half_on()) return;
+    mcw_handle h = mcw_try_call(half_job, gen, 0);
+    if (!h) return;   // (no worker free: this frame drawn in one part)
+    half_h = h, hw0.out = 1, half_posted.gen = gen;
 }
 // (the drawing's: its 3D list's second part given, the frame's list split; 0: drawn whole by the drawing)
 static void half_frame(uint32_t given) { half_d.gen = given; }
 static void half_none(void) {   // (no part given this frame: the half's worker told so)
-    if (hw0.worker > 0 && half_d.given != half_d.gen) half_go.state = 2, half_go.gen = half_d.gen;
+    if (half_posted.gen == half_d.gen && half_d.given != half_d.gen) half_go.state = 2, half_go.gen = half_d.gen;
 }
 int jk2DrawHalfGive(void* half, void* glp) {
     gl_half* g = glp;
-    if (!on_render() || half_d.given == half_d.gen || !gpuHalfSplit(g->gpu)) return 0;
+    if (!on_render() || half_posted.gen != half_d.gen || half_d.given == half_d.gen || !gpuHalfSplit(g->gpu)) return 0;
     g->swaps = swaps, g->frames = gl_frames, g->rooms = rooms_on();
     half_go.arg = half, half_go.state = 1, half_go.gen = half_d.gen;
     half_d.given = half_d.gen;
     return 1;
 }
-void jk2DrawHalfJoin(void* glp) {
+int jk2DrawHalfJoin(void* glp) {   // (how many passes the drawing waited: tr_backend.cpp moves the cut by it)
     gl_half* g = glp;
-    while (half_done.gen != half_d.gen) mc_end_pass();
+    int waited = 0;
+    while (half_done.gen != half_d.gen) {
+        mc_end_pass();
+        waited++;
+    }
     gpuHalfMerge(g->gpu);
+    return waited;
 }
 #else
 static void half_frame(uint32_t given) { (void)given; }
 static void half_none(void) {}
 int jk2DrawHalfGive(void* half, void* glp) { (void)half, (void)glp; return 0; }
-void jk2DrawHalfJoin(void* glp) { (void)glp; }
+int jk2DrawHalfJoin(void* glp) { (void)glp; return 0; }
 #endif
 // (the second copy's, SE_DRAW_B: this file's state for the part, as the drawing's where it is the frame's)
 void jk2glHalfInit(const void* glp) {

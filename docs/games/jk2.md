@@ -1055,7 +1055,16 @@ upper half of what is left of the frame's list (`gpuHalfSplit`: commands, matrix
 the walk 219.6 passes a frame against 229.9 one part, core 0's waits for the drawing a fifth fewer. But the picture is
 wrong (streaks, no sky, no HUD): at the merge the frame's 288 KB of vertex memory was used up (287 KB), so the draws
 after it found none; with 1 MB sets (800 KB of vertices) nothing was refused, but `rvc_harness --cpu --warp` then
-stopped at frame 400. To find: what in the second part draws wrong, and room enough for two parts.
+stopped at frame 400. That was a deadlock: `mcw_post` runs a job on the posting core when its worker is not to be had,
+and the half's job then waited on core 0 for the drawing, which waits for core 0's skins (`job_go`). The job is now taken
+by any free worker (`mcw_try_call`, after the drawing's is posted), and the drawing hands a part over only in a frame its
+job was posted for. The cut moves with the work: the second part (entities, what is drawn over) costs more a surface,
+so the share the drawing keeps grows when it waited at the join and shrinks when it did not (from 160/256). The two
+copies' stores to shared marks (a texture's last frame, an image's `frameUsed`, `se_kept_stats`) are the first's alone
+now: `RVC_RACES` 0 undone but libmedia's inflate. With 1 MB sets the walk is 218.0 passes a frame (3.5 a second)
+against 227.0 one part; the drawing's two parts 751 and 527 thousand instructions a frame, and core 0 is the chain now
+(about 117 passes of its own, then the mix's settle 37, the players' joins 33, the front end 17). 16 job slots instead
+of 8 changed nothing (218.2). The picture of two parts is still to be captured.
 
 **The frame's list sets 1 MB** (`gpu_shaderemu.c` under `SE_HALVES`, Jedi Outcast's build only): a frame's vertices
 nearly filled the 288 KB a 512 KB set has (`JK2_ROOMS_LOG`'s "least left": 0 to 13 KB, up to 1,496 rooms refused in 100
