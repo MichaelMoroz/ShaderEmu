@@ -1070,6 +1070,20 @@ at the upper half) was drawn as the first part's last command, past its own vert
 commands to follow the first part's. Captured (`rvc_harness --cpu --warp`, `JK2_HOLD=1450`): the world, the sky, the
 HUD and the hands as with one part. The default since: `JK2_HALF=0` is one part. The walk 217.87 passes a frame.
 
+**The give no longer waits for this frame's front end** (`gl_jk2.c`'s `jk2RenderGive`: `jk2RenderSettleBack`, the frame
+before only; the drawing waits for the front end itself and core 0 where it next writes tr's view): 217.22 to 210.19.
+Ghoul2's info array is kept, not asked for at every use, and the client game's calls take 13 words, not 16: core 0 911
+to 901 thousand instructions a frame.
+
+**The mix's chain** (tried, not the default): the game reads the voices' levels the mix makes (`gi.VoiceVolume`: NPCs'
+reactions, combat, the player's move), so each frame's game waits for the mix before it, about 77 passes on its worker
+after the client's frame: core 0 waited about 37 passes a frame for it. The game now reads its own array
+(`snd_dma.cpp`'s `se_voice_vol`, written at a frame's start by `SE_LipGive` from the mix's list of levels), the same
+values as before; every entry of the sound system's settles the mix first. `JK2_MIX_LAZY=1` gives the game the levels of
+the mix before (always one frame later) and settles only at core 0's first sound call: the mix's waits fall from about
+31 to 18 thousand passes over the walk, but the frame does not move (209.07 against 209.80: the drawing's wait grows),
+and `RVC_RACES` finds the game's worker and core 0 on a few texels then: not the default.
+
 **The frame's list sets 1 MB** (`gpu_shaderemu.c` under `SE_HALVES`, Jedi Outcast's build only): a frame's vertices
 nearly filled the 288 KB a 512 KB set has (`JK2_ROOMS_LOG`'s "least left": 0 to 13 KB, up to 1,496 rooms refused in 100
 frames); now 800 KB, 529 KB or more left; the textures' memory is 1 MB less (32 of 35.8 MB used).

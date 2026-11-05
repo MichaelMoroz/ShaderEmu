@@ -220,14 +220,17 @@ void jk2RenderGive(void (*fn)(const void*), const void* arg) {
 static uint8_t mix_stack[MIX_STACK] __attribute__((aligned(16)));
 static struct __attribute__((aligned(16))) { int worker, out, waits, unused; } mw0;   // this core's
 static struct __attribute__((aligned(16))) { void (*fn)(void); int unused[3]; } mix_job;   // the worker's while out
-static uint32_t mix_body(uint32_t unused) {
-    (void)unused;
+// (the mix's mark when done, for the game's frame on its worker to wait for: jk2MixWaitHere)
+static struct __attribute__((aligned(16))) { volatile uint32_t gen, unused[3]; } mix_done;   // the mix's worker's
+static struct __attribute__((aligned(16))) { uint32_t gen, unused[3]; } mix_given;   // this core's
+static uint32_t mix_body(uint32_t gen) {
     mix_job.fn();
+    mix_done.gen = gen;
     return 0;
 }
 static uint32_t mix_post(uint32_t a0, uint32_t a1) {
-    (void)a0, (void)a1;
-    return jk2_call_on_stack(mix_body, 0, mix_stack + MIX_STACK);
+    (void)a1;
+    return jk2_call_on_stack(mix_body, a0, mix_stack + MIX_STACK);
 }
 int jk2MixOn(void) {
     if (!mw0.worker && rw0.mode) {   // (a worker of the larger caches other than the drawing's)
@@ -243,8 +246,9 @@ int jk2MixOn(void) {
 }
 int jk2MixWorkerHere(void);
 int jk2MixOut(void) { return mw0.out; }   // (snd_dma.cpp's se_snd_defer: a sound started now waits for the mix)
+int jk2ServerHere(void);
 void jk2MixSettle(void) {
-    if (!mw0.out || jk2MixWorkerHere() || on_render() || on_front()) return;   // (only this core waits for the mix)
+    if (!mw0.out || jk2MixWorkerHere() || on_render() || on_front() || jk2ServerHere() || mcw_on_worker()) return;   // (only this core waits for the mix)
     while (!mcw_done(mw0.worker)) jk2ServerServe(), mcw_rest_for(&mw0.worker, 1), mw0.waits++;
     mw0.out = 0;
 }
@@ -256,9 +260,17 @@ unsigned jk2MixWaits(void) {
 void jk2MixGive(void (*fn)(void)) {
     jk2MixSettle();
     mix_job.fn = fn;
-    mcw_post(mw0.worker, mix_post, 0, 0);
+    mix_given.gen++;
+    if (!mix_given.unused[0]) mix_given.unused[0] = 1, mcw_touch((void*)&mix_done, sizeof mix_done);
+    mcw_post(mw0.worker, mix_post, mix_given.gen, 0);
     mw0.out = 1;
 }
+// (the game's frame on its worker, before it reads the voices' levels the mix makes: cl_main.cpp's SE_ServerJob, while this
+// core goes on without waiting for the mix until it next asks the sound system for anything, snd_dma.cpp)
+void jk2MixWaitHere(uint32_t gen) {
+    while ((int32_t)(mix_done.gen - gen) < 0) mc_end_pass();
+}
+uint32_t jk2MixGiven(void) { return mw0.out ? mix_given.gen : 0; }
 
 // ---- the game's next frame on a worker of its own beside the client's (JK2_SPLIT=worker: cl_main.cpp's CL_Frame,
 // docs/games/jk2.md, "The game's frame apart"). What only this core may do (allocations, the zone, cvars, commands,
