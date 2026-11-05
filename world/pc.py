@@ -53,9 +53,29 @@ def rrect(w, h, r, cx=0.0, cy=0.0, n=5):
     return points
 
 
-def loft(b, rings, mat, first=False, last=False, normal='out', tile=0.3):
-    """A skin over rings of as many points each; first and last close its ends. Its picture is
-    laid by length: round each ring by the ring's own outline, from ring to ring by how far apart
+def panel_uv(points, tile):
+    """A face's picture as a panel's: laid flat along the axis its normal is nearest, upright along y (on a
+    face that looks up or down, its far side up), so that one panel of a skin is one piece of cloth or
+    moulding, unstretched, and its edges are seams where another panel begins."""
+    n = len(points)
+    normal = [sum((points[k][(a + 1) % 3] - points[k - 1][(a + 1) % 3]) * (points[k][(a + 2) % 3] + points[k - 1][(a + 2) % 3])
+                  for k in range(n)) for a in range(3)]   # (Newell's)
+    a = max(range(3), key=lambda i: abs(normal[i]))
+    size = math.sqrt(sum(c * c for c in normal)) or 1.0
+    if abs(normal[a]) < lib.OBLIQUE * size:   # (between the axes: in its own plane)
+        return [(x / tile, y / tile) for x, y in lib.plane_uv(points, [c / size for c in normal])]
+    s = 1.0 if normal[a] >= 0 else -1.0
+    if a == 0:
+        return [(-s * p[2] / tile, p[1] / tile) for p in points]
+    if a == 1:
+        return [(p[0] / tile, -s * p[2] / tile) for p in points]
+    return [(s * p[0] / tile, p[1] / tile) for p in points]
+
+
+def loft(b, rings, mat, first=True, last=True, normal=None, tile=0.3, ringwise=False):
+    """A skin over rings of as many points each; first and last close its ends (closed unless told:
+    world/check_closed.py wants every solid watertight). Its picture is laid in panels (panel_uv), or
+    with `ringwise`, by length: round each ring by the ring's own outline, from ring to ring by how far apart
     they are, so a metre of the picture is a metre of the skin wherever it narrows."""
     def apart(p, q):
         return math.sqrt(sum((p[i] - q[i]) ** 2 for i in range(3)))
@@ -69,18 +89,32 @@ def loft(b, rings, mat, first=False, last=False, normal='out', tile=0.3):
         for k in range(n):
             lengths.append(lengths[-1] + apart(ring[k], ring[(k + 1) % n]))
         round_ring.append(lengths)
-    along = [0.0]
+    along = [[0.0] * n]   # (each column along its own track: one mean for all sheared the narrow side's picture)
     for i in range(len(rings) - 1):
-        along.append(along[-1] + sum(apart(rings[i][k], rings[i + 1][k]) for k in range(n)) / n)
+        along.append([along[-1][k] + apart(rings[i][k], rings[i + 1][k]) for k in range(n)])
     for i in range(len(rings) - 1):
         for k in range(n):
-            faces.append((i * n + k, i * n + (k + 1) % n, (i + 1) * n + (k + 1) % n, (i + 1) * n + k))
-            uvs.append([(round_ring[i][k] / tile, along[i] / tile), (round_ring[i][k + 1] / tile, along[i] / tile),
-                        (round_ring[i + 1][k + 1] / tile, along[i + 1] / tile), (round_ring[i + 1][k] / tile, along[i + 1] / tile)])
+            l = (k + 1) % n
+            faces.append((i * n + k, i * n + l, (i + 1) * n + l, (i + 1) * n + k))
+            uvs.append([(round_ring[i][k] / tile, along[i][k] / tile), (round_ring[i][k + 1] / tile, along[i][l] / tile),
+                        (round_ring[i + 1][k + 1] / tile, along[i + 1][l] / tile), (round_ring[i + 1][k] / tile, along[i + 1][k] / tile)])
     for closed, ring in ((first, 0), (last, len(rings) - 1)):
-        if closed:   # an end is flat: its picture is laid flat on it
+        if closed:   # an end is flat: its picture is laid flat on it, in its own plane (a ring standing up had its picture in a line)
             faces.append(tuple(ring * n + k for k in range(n)))
-            uvs.append([(vertices[i][0] / tile, vertices[i][1] / tile) for i in faces[-1]])
+            points = [vertices[i] for i in faces[-1]]
+            normal_ = [sum((points[k][(a + 1) % 3] - points[k - 1][(a + 1) % 3]) * (points[k][(a + 2) % 3] + points[k - 1][(a + 2) % 3])
+                           for k in range(n)) for a in range(3)]   # (Newell's: the ring's plane)
+            size = math.sqrt(sum(c * c for c in normal_)) or 1.0
+            normal_ = [c / size for c in normal_]
+            first_axis = (1.0, 0.0, 0.0) if abs(normal_[0]) < 0.9 else (0.0, 1.0, 0.0)
+            e1 = [first_axis[a] - normal_[a] * sum(first_axis[k] * normal_[k] for k in range(3)) for a in range(3)]
+            size = math.sqrt(sum(c * c for c in e1))
+            e1 = [c / size for c in e1]
+            e2 = [normal_[(a + 1) % 3] * e1[(a + 2) % 3] - normal_[(a + 2) % 3] * e1[(a + 1) % 3] for a in range(3)]
+            uvs.append([(sum(p[a] * e1[a] for a in range(3)) / tile, sum(p[a] * e2[a] for a in range(3)) / tile) for p in points])
+    if not ringwise:   # (panels: a skin that narrows and swells round two ways has no picture laid round and along it unsheared;
+        # world/check_uv.py found the chair's weave sheared 40 times where its thin end ring met a thick one)
+        uvs = [panel_uv([vertices[i] for i in face], tile) for face in faces]
     b.mesh(vertices, faces, uvs, mat, normal=normal)
 
 
@@ -105,7 +139,7 @@ def monitor(b):
     # the bezel: its front face in to the opening, a chamfer, flat sides, closed behind
     loft(b, [at_z(rrect(w + 0.024, h + 0.024, 0.03, 0, mid), front), at_z(rrect(OUT_W - 0.014, OUT_H - 0.014, 0.01, 0, OUT_Y), front),
              at_z(rrect(OUT_W, OUT_H, 0.012, 0, OUT_Y), front + 0.009), at_z(rrect(OUT_W, OUT_H, 0.012, 0, OUT_Y), front + block),
-             at_z(rrect(OUT_W - 0.03, OUT_H - 0.03, 0.01, 0, OUT_Y), front + block)], skin("PlasticBeige"), last=MODE != "low")   # (the shell has no use for a face nobody sees)
+             at_z(rrect(OUT_W - 0.03, OUT_H - 0.03, 0.01, 0, OUT_Y), front + block)], skin("PlasticBeige"), first=False, last=MODE != "low")   # (open at the tube's opening: the slope down to the glass goes on from it; the shell has no use for a face nobody sees)
     if MODE == "low":   # the shell is one closed skin: the seam has a floor, which the bake finds dark
         loft(b, [at_z(rrect(OUT_W - 0.03, OUT_H - 0.03, 0.01, 0, OUT_Y), front + block), at_z(rrect(OUT_W - 0.03, OUT_H - 0.03, 0.01, 0, OUT_Y), z0)], skin("PlasticBeige"))
     else:   # what shows in the seam
@@ -149,7 +183,7 @@ def monitor(b):
                on_glass(rrect(w, h, 0.022, 0, mid))]
     # (the shell ends at the glass, a sheet of the place's own that covers the opening: a plate
     # closed it 5 cm behind, a second screen to whoever came close, and 7 parts in a hundred of the baked picture)
-    loft(b, opening, skin("PlasticGrey"), normal=(0, 0, -1))
+    loft(b, opening, skin("PlasticGrey"), first=False, last=False, normal=(0, 0, -1))   # (from the bezel's ring to the glass: it joins both, it closes nothing)
     if MODE == "full":
         # the tube: a patch of a ball, a little larger than what shows, its middle the nearest
         nx, ny, gw, gh = 24, 18, w + 0.012, h + 0.012
@@ -233,7 +267,7 @@ def dsub(b, x, y, z, kind, pins=False, insert="PlasticDark"):
     8.36, two posts; holes in its insert, or pins standing in it."""
     flange, top, posts, rows, pitch, apart = DSUB[kind]
     b.box((x, y, z + 0.0004), (flange, 0.01255, 0.0008), "MetalSteel", bevel=0.0003, segs=1)
-    loft(b, [d_ring(x, y, z + 0.0008, top, 0.00836), d_ring(x, y, z + 0.0066, top, 0.00836)], "MetalSteel")
+    loft(b, [d_ring(x, y, z + 0.0008, top, 0.00836), d_ring(x, y, z + 0.0066, top, 0.00836)], "MetalSteel", first=False, last=False)   # (a sleeve: its mouth open on the insert)
     face = z + (0.0018 if pins else 0.0058)
     b.mesh(d_ring(x, y, face, top - 0.0016, 0.0068, 0.0008), [tuple(range(8))], [[(0.5, 0.5)] * 8], insert, normal=(0, 0, 1))
     for row, count in enumerate(rows):
@@ -292,8 +326,9 @@ LAN_PLUG = 0.024            # a network lead's plug, from the panel to where the
 def lan_socket(b, x, y, z):
     """A twisted pair socket (8P8C) in a face that looks towards +z: a dark opening, its latch's notch below."""
     b.box((x, y, z + 0.0006), (0.0158, 0.0132, 0.0012), "MetalSteel", bevel=0.0004, segs=1)
-    b.box((x, y + 0.0006, z + 0.0013), (0.0118, 0.0082, 0.0004), "Rubber")
-    b.box((x, y - 0.0042, z + 0.0013), (0.006, 0.0022, 0.0004), "Rubber")
+    # (the opening 0.6 mm before the frame, and its sides clear of a plug's: 0.2 and 0.3 mm flickered)
+    b.box((x, y + 0.0006, z + 0.0015), (0.0124, 0.0086, 0.0006), "Rubber")
+    b.box((x, y - 0.0049, z + 0.0015), (0.006, 0.0022, 0.0006), "Rubber")
 
 
 def lan_plug(b, x, y, z, mat):
@@ -510,11 +545,11 @@ def tower(b):
     # (the cover is open where the front closes it, and the front's back is only its rim: a face
     # of each was hidden inside the other, 12 cm2 in a hundred of the baked picture, and seen from within)
     cover = rrect(w, h - 0.012, 0.0025, 0, h / 2 + 0.006)
-    loft(b, [at_z(cover, FRONT + 0.016), at_z(cover, back - 0.0025), at_z(rrect(w - 0.005, h - 0.017, 0.0025, 0, h / 2 + 0.006), back)], skin("PlasticCase"), last=True)   # a folded steel cover
+    loft(b, [at_z(cover, FRONT + 0.016), at_z(cover, back - 0.0025), at_z(rrect(w - 0.005, h - 0.017, 0.0025, 0, h / 2 + 0.006), back)], skin("PlasticCase"), first=False, last=True)   # a folded steel cover (open where the front's back meets it)
     loft(b, [at_z(rrect(w + 0.004, h, 0.008, 0, h / 2 + 0.006), FRONT + 0.016), at_z(rrect(w + 0.004, h, 0.01, 0, h / 2 + 0.006), FRONT + 0.004),
-             at_z(rrect(w - 0.002, h - 0.006, 0.01, 0, h / 2 + 0.006), FRONT)], skin("PlasticBeige"), last=True, normal=(0, 0, -1))
+             at_z(rrect(w - 0.002, h - 0.006, 0.01, 0, h / 2 + 0.006), FRONT)], skin("PlasticBeige"), first=False, last=True, normal=(0, 0, -1))
     # the front's back, where it stands out round the cover
-    loft(b, [at_z(rrect(w + 0.004, h, 0.008, 0, h / 2 + 0.006), FRONT + 0.016), at_z(cover, FRONT + 0.016)], skin("PlasticBeige"), normal=(0, 0, 1))
+    loft(b, [at_z(rrect(w + 0.004, h, 0.008, 0, h / 2 + 0.006), FRONT + 0.016), at_z(cover, FRONT + 0.016)], skin("PlasticBeige"), first=False, last=False, normal=(0, 0, 1))   # (a rim between the front and the cover: it joins both)
     for x in (-0.07, 0.07):
         for z in (FRONT + 0.05, back - 0.05):
             b.cyl((x, 0.003, z), 0.014, 0.006, skin("Rubber"), segs=14)
@@ -558,6 +593,7 @@ KEY_UNIT = KEY_SCALE * 0.01905 / 60       # the layout's keys are 60 apart: 19.0
 KEYS_HIGH = 437 * KEY_UNIT                # the layout's height (world/keyboard.json)
 TRAY_BACK = 0.016        # the tray's rim behind the keys, more than at their other sides: the lamps and their names are on it
 TRAY_LOW, KEYBOARD_SLOPE = 0.008, 0.0     # the tray's underside below its own frame; it lies flat on the table
+TRAY_LID = -0.0084        # where the tray's loft is closed, 2 mm under the well (in its plane it flickered)
 TRAY_AT, TRAY_TURN = (0, TRAY_LOW, KEYBOARD_Z), (90 - KEYBOARD_SLOPE, 0, 0)   # the tray's own frame in the keyboard's: -z of it is up from the keys
 CAPS_AT, CAP_HIGH = 0.012, 0.0078         # the caps' feet over the tray's frame, and a cap's height
 KEY_TOPS = CAPS_AT + CAP_HIGH + 0.0012    # where Unity lays the keys' rectangles: a hair over the caps' tops
@@ -580,15 +616,19 @@ def keyboard(b):
     def cap_chart(place, normal):
         """A cap is a chart by itself, and the chart is its top alone: its sides are drawn in to the
         top's edge, and take the top's light. A lightmap's texels are blurred into each other:
-        sides with a place of their own darkened the top, and the well darkened both."""
+        sides with a place of their own darkened the top, and the well darkened both. Its foot,
+        which faces the well's floor, is a part by itself, small: drawn in like the sides it lay
+        over the whole top, and the bake gave the top the foot's dark (every station's keys black)."""
+        if normal.z > 0.7:
+            return ("feet", place.x * 0.05, place.y * 0.05)
         px, py = place.x / s + wide / 2, tall / 2 - place.y / s
         which = min(range(len(caps)), key=lambda k: max(caps[k][0] - px, px - caps[k][0] - caps[k][2], caps[k][1] - py, py - caps[k][1] - caps[k][3]))
         x0, y0, w, h, high = caps[which]
         return (which, (min(max(px, x0 + top_in[0]), x0 + w - top_in[0]) - wide / 2) * s, (tall / 2 - min(max(py, y0 + top_in[1]), y0 + h - top_in[2])) * s)
 
-    def face(corners, normal):
+    def face(corners, normal, uv=None):
         faces.append(tuple(corners))
-        uvs.append([(vertices[i][0] / (s * wide) + 0.5, vertices[i][1] / (s * tall) + 0.5) for i in corners])
+        uvs.append(uv or [pc_faces.canvas_uv(vertices[i][0] / s + wide / 2, tall / 2 - vertices[i][1] / s, wide, tall) for i in corners])
         normals.append(normal)
     shoulder_in, top_in = pc_faces.CAP_SHOULDER, pc_faces.CAP_TOP
     # The well's floor is under no key: it is the well less every key's own square, and a key
@@ -601,11 +641,11 @@ def keyboard(b):
     ys = sorted({-edge, tall + edge} | {c[1] for c in cells} | {c[3] for c in cells})
     floor_v, floor_f, floor_uv, floor_n = [], [], [], []
 
-    def floor_face(points, normal):
+    def floor_face(points, normal, flat=None):
         first = len(floor_v)
         floor_v.extend(((px - wide / 2) * s, (tall / 2 - py) * s, z) for px, py, z in points)
         floor_f.append(tuple(range(first, first + len(points))))
-        floor_uv.append([(floor_v[i][0] / (s * wide) + 0.5, floor_v[i][1] / (s * tall) + 0.5) for i in floor_f[-1]])   # the caps' picture: dark between them
+        floor_uv.append([pc_faces.canvas_uv(px, py, wide, tall) for px, py, _ in (flat or points)])   # the caps' picture: dark between them
         floor_n.append(normal)
     for i in range(len(xs) - 1):
         for j in range(len(ys) - 1):
@@ -618,16 +658,27 @@ def keyboard(b):
         inner = [(x0 + 1.8, y1 - 1.8), (x1 - 1.8, y1 - 1.8), (x1 - 1.8, y0 + 1.8), (x0 + 1.8, y0 + 1.8)]
         for k in range(4):
             a, b2 = k, (k + 1) % 4
-            floor_face([(outer[a][0], outer[a][1], floor_z), (outer[b2][0], outer[b2][1], floor_z), (inner[b2][0], inner[b2][1], 0.0), (inner[a][0], inner[a][1], 0.0)], (0, 0, -1))
+            ramp = [(outer[a][0], outer[a][1], floor_z), (outer[b2][0], outer[b2][1], floor_z), (inner[b2][0], inner[b2][1], 0.0), (inner[a][0], inner[a][1], 0.0)]
+            # its picture unrolled from its outer edge, as long up it as the ramp is (from above it was 1.8 across for 4.3 up)
+            across = 1 if k in (0, 2) else 0
+            slant = math.hypot(1.8, floor_z / s) / 1.8
+            flat = ramp[:2] + [tuple(c if axis != across else ramp[1 if n == 2 else 0][axis] + (c - ramp[1 if n == 2 else 0][axis]) * slant
+                                     for axis, c in enumerate(ramp[n][:2])) + (0.0,) for n in (2, 3)]
+            floor_face(ramp, (0, 0, -1), flat)
     for x0, y0, w, h, legend in layout["keys"]:   # (the capture key too, where the console keyboard has it)
-        base = ring(x0 + 1.5, y0 + 1.5, x0 + w - 1.5, y0 + h - 1.5, 0)
-        shoulder = ring(x0 + shoulder_in[0], y0 + shoulder_in[1], x0 + w - shoulder_in[0], y0 + h - shoulder_in[2], -CAP_HIGH * (1 - pc_faces.CAP_STEP))
-        top = ring(x0 + top_in[0], y0 + top_in[1], x0 + w - top_in[0], y0 + h - top_in[2], -CAP_HIGH)
+        rects = [(x0 + 1.5, y0 + 1.5, x0 + w - 1.5, y0 + h - 1.5),
+                 (x0 + shoulder_in[0], y0 + shoulder_in[1], x0 + w - shoulder_in[0], y0 + h - shoulder_in[2]),
+                 (x0 + top_in[0], y0 + top_in[1], x0 + w - top_in[0], y0 + h - top_in[2])]
+        rises = (0.0, CAP_HIGH * (1 - pc_faces.CAP_STEP) / s, CAP_HIGH / s)
+        base, shoulder, top = (ring(*r, -rise * s) for r, rise in zip(rects, rises))
+        corners = [((r[0], r[3]), (r[2], r[3]), (r[2], r[1]), (r[0], r[1])) for r in rects]
         caps.append((x0, y0, w, h, -CAP_HIGH))
         face((top, top + 1, top + 2, top + 3), (0, 0, -1))
-        for lower, upper in ((base, shoulder), (shoulder, top)):
-            for k, normal in enumerate(((0, -1, 0), (1, 0, 0), (0, 1, 0), (-1, 0, 0))):
-                face((lower + k, lower + (k + 1) % 4, upper + (k + 1) % 4, upper + k), normal)
+        face((base + 3, base + 2, base + 1, base), (0, 0, 1))   # its foot, closing it (world/check_closed.py)
+        for k, normal in enumerate(((0, -1, 0), (1, 0, 0), (0, 1, 0), (-1, 0, 0))):   # its sides, unrolled into their band of the picture
+            sides = pc_faces.cap_side_uvs(corners, k, rises, pc_faces.cap_named(legend), wide, tall)
+            for (lower, upper), uv in zip(((base, shoulder), (shoulder, top)), sides):
+                face((lower + k, lower + (k + 1) % 4, upper + (k + 1) % 4, upper + k), normal, uv)
     kw, kh = wide * s, tall * s
     back = TRAY_BACK / 2   # the outline's middle is so much behind the keys': the rim is wider there
 
@@ -636,6 +687,8 @@ def keyboard(b):
         out round it. What it stands on is a part by itself, small: nobody sees it."""
         if normal.z > 0.7 and place.z > TRAY_LOW - 0.001:
             return ("under", place.x * 0.05, place.y * 0.05)
+        if abs(normal.z) > 0.7 and abs(place.z - TRAY_LID) < 1e-4:   # (the tray's lid under the well: seen from above it lay on the well's floor, and the bake gave the floor its dark)
+            return ("lid", place.x * 0.05, place.y * 0.05)
         down = max(0.0, place.z + 0.006)
         if down > 0:
             half_w, half_h = (kw + 0.03) / 2 - 0.011, (kh + 0.03 + TRAY_BACK) / 2 - 0.011
@@ -651,10 +704,11 @@ def keyboard(b):
                 b.mesh(vertices, faces, uvs, "Keyboard", normal=normals)
         with b.chart("keyboard", from_above):
             with b.at((0, 0, -CAPS_AT)):
-                b.mesh(floor_v, floor_f, floor_uv, "Keyboard", normal=floor_n)   # the well, and each key's foot out of it
+                b.mesh(floor_v, floor_f, floor_uv, "Keyboard", normal=floor_n, sheet=True)   # the well, and each key's foot out of it: a sheet over the tray
             loft(b, [at_z(rrect(kw + 0.03, kh + 0.03 + TRAY_BACK, 0.01, cy=back), TRAY_LOW), at_z(rrect(kw + 0.03, kh + 0.03 + TRAY_BACK, 0.012, cy=back), -0.006),
-                     at_z(rrect(kw + 0.022, kh + 0.022 + TRAY_BACK, 0.012, cy=back), -0.0105), at_z(rrect(kw + 0.008, kh + 0.008, 0.006), -0.0104)], "PlasticBeige",
-                 first=True, normal='out')
+                     at_z(rrect(kw + 0.022, kh + 0.022 + TRAY_BACK, 0.012, cy=back), -0.0105), at_z(rrect(kw + 0.008, kh + 0.008, 0.006), -0.0104),
+                     at_z(rrect(kw + 0.004, kh + 0.004, 0.004), TRAY_LID)], "PlasticBeige",   # (closed 2 mm under the well, not in its plane: it flickered)
+                 first=True)
         # the three lamps over the number pad and their names under them, all on the rim's flat top
         rim = kh / 2 + 0.004   # where the well ends: the flat is from here to rim + 0.007 + TRAY_BACK
         for i, mat in enumerate(("LampGreen", "PlasticDark", "PlasticDark")):   # (unlit: a lamp that glowed on a machine that was off)
@@ -693,8 +747,6 @@ def mouse_body(b):
             ring.append((half * (1 if x > 0 else -1) * abs(x) ** 0.82, 0.0040 + wall + (high - wall) * y ** 0.88, z))
         ring += [(-half, 0.0040 + wall * 0.6, z), (-half * 0.985, 0.0046, z), (-half * 0.955, 0.0040, z)]
         return ring
-    square = [(0, 0), (0.02, 0), (0.02, 0.02), (0, 0.02)]
-
     def unrolled(place, normal):
         """The mouse's chart: where along it a point is, and how far round its section from the
         top (so its sides are not on edge, as from above they would be). Its flat underside
@@ -712,7 +764,7 @@ def mouse_body(b):
     with b.at((0.0, 0, 0.0), (0, MOUSE_TURN, 0)):
         steps = (0.0, 0.012, 0.035, 0.07, 0.12, 0.19, 0.27, 0.36, 0.45, 0.54, 0.63, 0.72, 0.80, 0.87, 0.93, 0.965, 0.988, 1.0)
         with b.chart("mouse", unrolled):
-            loft(b, [section(t) for t in steps], "PlasticBeige", first=True, last=True, normal='out', tile=0.2)
+            loft(b, [section(t) for t in steps], "PlasticBeige", first=True, last=True, tile=0.2)
         # the seams are ribbons a hair over the skin: across behind the buttons, and between them
         near, far = section(0.535, 0.0003), section(0.548, 0.0003)
         n = len(near)
@@ -721,51 +773,136 @@ def mouse_body(b):
         left = [(-0.0006, y, z) for x, y, z in ridge]
         right = [(0.0006, y, z) for x, y, z in ridge]
         with b.chart("mouse seams", unrolled):
-            b.mesh(near + far, [(k, k + 1, n + k + 1, n + k) for k in range(3, n - 4)], [square] * (n - 7), "PlasticDark", normal=(0, 1, 0))
+            faces = [(k, k + 1, n + k + 1, n + k) for k in range(3, n - 4)]   # (each face's picture its own panel's: one square on each had stretched it 8 times)
+            b.mesh(near + far, faces, [panel_uv([(near + far)[i] for i in f], 0.2) for f in faces], "PlasticDark", normal=(0, 1, 0), sheet=True)
             n = len(ridge)
-            b.mesh(left + right, [(k, k + 1, n + k + 1, n + k) for k in range(n - 1)], [square] * (n - 1), "PlasticDark", normal=(0, 1, 0))
+            faces = [(k, k + 1, n + k + 1, n + k) for k in range(n - 1)]
+            b.mesh(left + right, faces, [panel_uv([(left + right)[i] for i in f], 0.2) for f in faces], "PlasticDark", normal=(0, 1, 0), sheet=True)
         # the sleeve the lead leaves by, under the buttons' edge
         b.cyl((MOUSE_LEAD[0], MOUSE_LEAD[1], MOUSE_LEAD[2] + 0.007), 0.0036, 0.014, "PlasticCase", segs=10, bevel=0.001, rot=(90, 0, 0))
 
 
-def office_chair(b):
-    """An office chair of the decade at the frame's origin, its seat's front towards +z: a five
-    star base on twin-wheel casters, a gas lift, a tilting seat, a back on a bent bar, arms."""
+# The office chair, after Steelcase's Criterion task chair (1990s; its brochure and spec sheet): a seat
+# 495 mm wide and 413 mm deep, set 406 to 533 mm high (here its middle at CHAIR_SEAT), arms 190 to
+# 292 mm over it, 699 x 648 x 1130 mm over all; on a five-star base of 25 in (635 mm) and 50 mm
+# twin-wheel casters, as task chairs of the decade had. Its seat and back are upholstered in a wool
+# herringbone (Poly Haven's poly_wool_herringbone, 0.27 m a repeat: FabricChair), the rest nylon.
+CHAIR_SEAT, CHAIR_WEAVE = 0.50, 0.27   # the seat's top at its middle; the weave's repeat
+
+
+def chair_section(w, t, dish, centre, plane, n=28):
+    """A cushion's cross section: a squared-off ellipse w wide and t thick, its face dished by
+    `dish` in the middle and rising at the sides. plane(x, up) puts a point in the frame."""
+    points = []
+    for k in range(n):
+        a = 2 * math.pi * k / n
+        c, s = math.cos(a), math.sin(a)
+        x = w / 2 * math.copysign(abs(c) ** 0.45, c)
+        up = t / 2 * math.copysign(abs(s) ** 0.45, s)
+        if up > 0:   # the face: dished in the middle, a bolster at each side
+            u = 2 * x / w
+            up += (-dish * (1 - u * u) + 0.4 * dish * u ** 6) * (up / (t / 2))
+        points.append(plane(x, centre + up))
+    return points
+
+
+def carried(path, outline, side, steps=4):
+    """Rings of `outline` (across, up) carried along a path in a plane: `side` is across it (the
+    plane's normal). The path is first smoothed through its points (Catmull-Rom)."""
+    points = [Vector(p) for p in path]
+    smooth = []
+    for i in range(len(points) - 1):
+        p0, p1, p2, p3 = points[max(i - 1, 0)], points[i], points[i + 1], points[min(i + 2, len(points) - 1)]
+        for k in range(steps if i < len(points) - 2 else steps + 1):
+            t = k / steps
+            smooth.append(0.5 * ((2 * p1) + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t * t + (-p0 + 3 * p1 - 3 * p2 + p3) * t * t * t))
+    side = Vector(side).normalized()
+    rings = []
+    for i, p in enumerate(smooth):
+        tangent = (smooth[min(i + 1, len(smooth) - 1)] - smooth[max(i - 1, 0)]).normalized()
+        up = tangent.cross(side).normalized()
+        rings.append([tuple(p + side * a + up * b) for a, b in outline])
+    return rings
+
+
+def office_chair(b, kind="seat"):
+    """An office chair of the decade at the frame's origin, its seat's front towards +z (see
+    CHAIR_SEAT): a five-star base on twin-wheel casters, a gas lift in a telescoping shroud, the
+    tilt mechanism, a contoured seat with a waterfall front, a back curved round the sitter with a
+    lumbar swell on a bent spine, and T-arms."""
+    b.pose(kind, (0.70, 1.13, 0.65), at=(0, 0.565, 0), name="Office chair")   # (a seat faces its desk: world/check_placement.py)
+    import toys
+    radius = 0.3175   # the base's
     for i in range(5):
         with b.at((0, 0, 0), (0, i * 72 + 18, 0)):
-            # a spoke, lower at its tip, and the socket there that a caster's stem goes up into
-            b.box((0, 0.098, 0.165), (0.05, 0.03, 0.29), "MetalBlack", bevel=0.01, segs=2, rot=(6, 0, 0))
-            b.cyl((0, 0.078, 0.305), 0.02, 0.046, "MetalBlack", segs=14, bevel=0.005)
-            b.cyl((0, 0.056, 0.305), 0.006, 0.02, "MetalSteel", segs=8)
-            with b.at((0, 0, 0.305), (0, 25 + i * 31, 0)):   # each caster trails its own way
-                b.box((0, 0.044, 0.012), (0.03, 0.012, 0.05), "PlasticDark", bevel=0.005, segs=2)        # the fork's bridge
-                b.prism((0, 0, 0), [(-0.012, 0.05), (0.04, 0.05), (0.052, 0.034), (0.046, 0.022), (0.0, 0.03)], 0.012, "PlasticDark", plane='zy', bevel=0.002)
+            # a spoke: tapering and falling from the hub to its tip, crowned on top, the socket under its tip
+            rings = []
+            for k in range(9):
+                d = 0.045 + (radius - 0.045 - 0.012) * k / 8
+                f = k / 8
+                w, h = 0.058 - 0.018 * f, 0.044 - 0.014 * f
+                y = 0.112 - 0.03 * f
+                rings.append([(x, y + yy, d) for x, yy in rrect(w, h, 0.4 * h, n=4)])
+            rings.append([(x * 0.7, y + yy * 0.75, radius - 0.004) for x, yy in rrect(w, h, 0.4 * h, n=4)])
+            loft(b, rings, "PlasticDark", last=True, tile=0.3)
+            tip = radius - 0.016
+            b.lathe((0, 0, tip), [(0, 0.056), (0.019, 0.056), (0.021, 0.06), (0.021, 0.075), (0, 0.075)], "PlasticDark", segs=16)
+            b.lathe((0, 0, tip), [(0.0055, 0.046), (0.0055, 0.057)], "MetalSteel", segs=8, cap=False)   # the caster's stem
+            with b.at((0, 0, tip), (0, 25 + i * 31, 0)):   # each caster trails its own way
+                # the body between the wheels, its hood over them, and the two wheels on their axle
+                toys.soft(b, toys.rounded(0.016, 0.048, 0.007), 0.034, 0.006, "PlasticDark", at=(0, 0.012, 0.012))
+                toys.soft(b, toys.rounded(0.05, 0.03, 0.01), 0.008, 0.004, "PlasticDark", at=(0, 0.046, 0.006))
                 for side in (-1, 1):
-                    b.cyl((side * 0.016, 0.026, 0.024), 0.026, 0.014, "Rubber", segs=18, bevel=0.004, rot=(0, 0, 90))
-                    b.cyl((side * 0.0235, 0.026, 0.024), 0.012, 0.002, "PlasticGrey", segs=12, rot=(0, 0, 90))
-                b.cyl((0, 0.026, 0.024), 0.004, 0.05, "MetalSteel", segs=8, rot=(0, 0, 90))            # the axle
-    # the hub and the lift: three sleeves, each inside the one below, and the bright piston
-    b.lathe((0, 0.07, 0), [(0, 0), (0.05, 0), (0.058, 0.012), (0.058, 0.05), (0.045, 0.062), (0, 0.062)], "MetalBlack", segs=24)
-    for radius, y0, y1 in ((0.036, 0.13, 0.22), (0.031, 0.22, 0.29), (0.026, 0.29, 0.35)):
-        b.cyl((0, (y0 + y1) / 2, 0), radius, y1 - y0, "PlasticDark", segs=20, bevel=0.003)
-    b.cyl((0, 0.375, 0), 0.014, 0.07, "MetalSteel", segs=14)
-    # the mechanism under the seat, with the lever that lets it down
-    b.box((0, 0.418, 0.0), (0.2, 0.034, 0.24), "MetalBlack", bevel=0.008, segs=2)
-    b.tube([(0.08, 0.415, 0.04), (0.2, 0.41, 0.05), (0.27, 0.405, 0.05)], 0.006, "MetalBlack", segs=8, smooth=3)
-    b.box((0.285, 0.404, 0.05), (0.045, 0.014, 0.03), "PlasticDark", bevel=0.005, segs=2)
-    # the seat: a shell, and the cushion on it
-    b.box((0, 0.447, 0.01), (0.47, 0.02, 0.45), "PlasticDark", bevel=0.008, segs=2)
-    b.box((0, 0.495, 0.012), (0.49, 0.085, 0.47), "FabricChair", bevel=0.038, segs=5)
-    # the back: a bar bent up behind the seat, a shell, a cushion that leans a little
-    b.tube([(0, 0.42, -0.08), (0, 0.42, -0.24), (0, 0.45, -0.3), (0, 0.6, -0.315), (0, 0.8, -0.31)], 0.016, "MetalBlack", segs=10, smooth=5)
-    with b.at((0, 0.87, -0.285), (-7, 0, 0)):
-        b.box((0, 0, -0.028), (0.43, 0.45, 0.02), "PlasticDark", bevel=0.008, segs=2)
-        b.box((0, 0, 0.01), (0.45, 0.47, 0.075), "FabricChair", bevel=0.034, segs=5)
-    # the arms: a tube out from the mechanism and up, a pad on it
+                    tyre = [(0, -0.0062), (0.016, -0.0062), (0.022, -0.0058), (0.0248, -0.0035), (0.025, 0), (0.0248, 0.0035), (0.022, 0.0058), (0.016, 0.0062), (0, 0.0062)]
+                    b.lathe((side * 0.0145, 0.025, 0.02), tyre, "Rubber", segs=20, rot=(0, 0, 90))
+                    b.lathe((side * 0.0145, 0.025, 0.02), [(0.009, side * 0.0064), (0, side * 0.0066)], "PlasticGrey", segs=12, rot=(0, 0, 90), cap=False)
+    # the hub, the shroud over the lift (three sleeves), the bright piston, the mechanism and its lever
+    b.lathe((0, 0.07, 0), [(0, 0), (0.05, 0), (0.06, 0.014), (0.06, 0.05), (0.046, 0.064), (0, 0.064)], "PlasticDark", segs=28)
+    b.lathe((0, 0, 0), [(0, 0.13), (0.037, 0.13), (0.037, 0.215), (0.033, 0.222), (0.033, 0.285), (0.029, 0.292), (0.029, 0.335), (0, 0.335)],
+            "PlasticDark", segs=24)
+    b.lathe((0, 0, 0), [(0, 0.334), (0.0135, 0.334), (0.0135, 0.395), (0, 0.395)], "MetalSteel", segs=16)
+    toys.soft(b, toys.rounded(0.2, 0.25, 0.035), 0.036, 0.01, "MetalBlack", at=(0, 0.388, 0.0))
+    b.tube([(0.09, 0.405, 0.06), (0.2, 0.4, 0.07), (0.26, 0.395, 0.075)], 0.0055, "MetalBlack", segs=8, smooth=3)
+    toys.soft(b, toys.rounded(0.05, 0.028, 0.012), 0.012, 0.005, "PlasticDark", at=(0.282, 0.389, 0.075))
+    # the seat: its pan, and over it the cushion in sections from the back to the waterfall front
+    toys.soft(b, toys.rounded(0.46, 0.40, 0.06), 0.02, 0.008, "PlasticDark", at=(0, 0.424, 0.005))
+    bottom = 0.441
+    seat = [   # (z, wide, thick, how much it falls at the front, its dish)
+        (-0.214, 0.40, 0.024, 0.0, 0.0), (-0.207, 0.445, 0.05, 0.0, 0.004), (-0.192, 0.47, 0.068, 0.0, 0.01),
+        (-0.14, 0.482, 0.074, 0.0, 0.014), (-0.05, 0.492, 0.076, 0.0, 0.016), (0.04, 0.495, 0.076, 0.0, 0.015),
+        (0.11, 0.494, 0.075, 0.003, 0.012), (0.16, 0.49, 0.073, 0.012, 0.008), (0.195, 0.484, 0.068, 0.028, 0.004),
+        (0.218, 0.474, 0.058, 0.048, 0.0), (0.231, 0.455, 0.042, 0.066, 0.0), (0.237, 0.42, 0.022, 0.08, 0.0)]
+    rings = []
+    for z, w, t, fall, dish in seat:
+        rings.append(chair_section(w, t, dish, bottom + 0.038 - fall + 0.012 * (z + 0.2) / 0.4, lambda x, y, z=z: (x, y, z)))
+    loft(b, rings, "FabricChair", first=True, last=True, tile=CHAIR_WEAVE)
+    # the back: sections from its foot up, each curved round the sitter (its edges forward), leaning
+    # back 13 degrees, swelling forward at the small of the back; its shell behind it
+    foot, top = 0.6, 1.13
+    back = [(0.0, 0.40, 0.022), (0.012, 0.42, 0.046), (0.04, 0.435, 0.062), (0.15, 0.448, 0.066), (0.3, 0.462, 0.066),
+            (0.5, 0.476, 0.064), (0.7, 0.48, 0.062), (0.86, 0.47, 0.06), (0.95, 0.45, 0.054), (0.985, 0.425, 0.04), (1.0, 0.395, 0.02)]
+
+    def middle(f):   # the back's middle line in z, at a fraction f of its height
+        return -0.285 - 0.12 * f + 0.032 * math.exp(-((f - 0.22) / 0.17) ** 2)
+    for mat, out, thin in (("FabricChair", 0.0, 1.0), ("PlasticDark", -0.04, 0.25)):
+        rings = []
+        for f, w, t in back:
+            y, mid = foot + (top - foot) * f, middle(f)
+            w, t = (w if out == 0 else w - 0.012), t * thin
+
+            def plane(x, across, y=y, mid=mid, w=w):
+                return (x, y, mid + out + 0.032 * (2 * x / w) ** 2 + across)
+            rings.append(chair_section(w, t, 0.006 if out == 0 else 0.0, 0.0, plane))
+        loft(b, rings, mat, first=True, last=True, tile=CHAIR_WEAVE if out == 0 else 0.3)
+    # the spine: a flat bar bent up from the mechanism to the shell's back
+    shell = middle(0.28) - 0.04 - 0.008
+    loft(b, carried([(0, 0.405, -0.06), (0, 0.405, -0.2), (0, 0.44, -0.3), (0, 0.56, shell - 0.012), (0, 0.78, shell - 0.004)],
+                    rrect(0.062, 0.02, 0.008, n=3), (1, 0, 0)), "MetalBlack", first=True, last=True)
+    # the arms: a flat bar out from under the seat and up, a soft pad on it
     for side in (-1, 1):
-        b.tube([(side * 0.09, 0.425, -0.02), (side * 0.24, 0.43, -0.02), (side * 0.285, 0.46, -0.02), (side * 0.29, 0.56, -0.02), (side * 0.29, 0.655, -0.02)],
-               0.012, "MetalBlack", segs=8, smooth=4)
-        b.box((side * 0.29, 0.672, 0.01), (0.058, 0.03, 0.27), "PlasticDark", bevel=0.013, segs=3)
+        loft(b, carried([(side * 0.08, 0.402, -0.03), (side * 0.25, 0.402, -0.03), (side * 0.29, 0.45, -0.03), (side * 0.29, 0.6, -0.025), (side * 0.29, 0.672, -0.02)],
+                        rrect(0.05, 0.02, 0.008, n=3), (0, 0, 1)), "PlasticDark", first=True, last=True)
+        toys.soft(b, toys.rounded(0.085, 0.27, 0.035), 0.028, 0.011, "PlasticDark", at=(side * 0.29, 0.672, 0.01))
 
 
 PLUG_LONG = 0.05   # a D-sub plug from the panel it is in to the end of its sleeve
@@ -808,7 +945,7 @@ def adapter(b, x, y):
     def ring(dw, dd, r, at):
         return [(x + px, at, pz) for px, pz in rrect(w - dw, d - dd, r)]
     loft(b, [ring(0, 0, 0.005, y), ring(0, 0, 0.005, y + 0.003), ring(0.003, 0.003, 0.005, y + 0.004), ring(0.004, 0.004, 0.006, y + h - 0.008),
-             ring(0.01, 0.01, 0.008, y + h)], "PlasticDark", first=True, last=True, normal='out')
+             ring(0.01, 0.01, 0.008, y + h)], "PlasticDark", first=True, last=True)
     b.box((x, y + 0.03, d / 2 - 0.0016), (0.03, 0.026, 0.0006), "PlasticGrey", bevel=0.0002, segs=1)
     b.lathe((x, y + h, 0), [(0.0046, 0), (0.0042, 0.003), (0.0032, 0.008), (0.0026, 0.012), (0.0023, ADAPTER_HIGH - h)], "Rubber", segs=12)
 
@@ -866,7 +1003,7 @@ def hub(b, power=HUB_POWER):
     for sx in (-1, 1):
         for sz in (-1, 1):
             b.cyl((sx * (w / 2 - 0.02), 0.002, sz * (d / 2 - 0.02)), 0.008, 0.004, "Rubber", segs=10)
-    b.quad((0, 0.02, -d / 2 - 0.0003), (0.21, 0.028), "Details", decal="hub_front")
+    b.quad((0, 0.02, -d / 2 - 0.0006), (0.21, 0.028), "Details", decal="hub_front")   # (0.3 mm off flickered)
     for k in range(HUB_PORTS):
         x, y, z = hub_lamp(k)
         b.box((x, y, z + 0.0008), HUB_LAMP + (0.0016,), "LampGreen")
@@ -947,7 +1084,7 @@ STRIP_AT = [None]   # where the last station() laid its strip of sockets
 HUB_SOCKET = 4      # the strip's socket a hub's supply is plugged into, at a place that has one
 
 
-def station(b, which="all", lie=None, desk=None, seed=0, stuck=0, bare=(), supply=False):
+def station(b, which="all", lie=None, desk=None, seed=0, stuck=0, bare=(), supply=False, lan=None):
     """A whole place on the table at the frame's origin: the monitor and keyboard, the tower
     beside them, the mouse before the tower, and their leads. which: "shell" is the monitor and
     the tower alone, "rest" all but them (with the tube's glass, which no mode but "full" gives).
@@ -955,7 +1092,9 @@ def station(b, which="all", lie=None, desk=None, seed=0, stuck=0, bare=(), suppl
     desk: the boxes its leads fall on besides its own things, the table's top first (centre, size,
     turn), in this frame; seed: the chance its leads are laid out by, a place its own.
     stuck: how many stickers it has, on any face but those of `bare` (stickers()).
-    supply: a hub's supply stands on its strip's socket HUB_SOCKET (its lead is the network's)."""
+    supply: a hub's supply stands on its strip's socket HUB_SOCKET (its lead is the network's).
+    lan: the network's socket in a wall behind the table (x, y, z of its face, which looks towards
+    -z): a lead from the card falls into it with the others, and the wall is what they fall on too."""
     lie = lie or {"keyboard": (0, 0, 0), "mouse": (0, 0, 0), "mat": (0, 0, 0)}
     kx, kz, kturn = lie["keyboard"]
     mx, mz, mturn = lie["mouse"]
@@ -1083,13 +1222,24 @@ def station(b, which="all", lie=None, desk=None, seed=0, stuck=0, bare=(), suppl
     way[-1] = (jx - 0.02,) + way[-1][1:]
     lead(b, "sound", start + way + [(jx - 0.02, jy - 0.03, lane_sound), (jx, jy, behind + 0.06), (jx, jy, behind + 0.0018 + JACK_LONG - 0.002)], r, "Rubber",
          segs=6, rng=rng, up=0.02)
+    if lan is not None:
+        # the network: from the card's socket back over the table's edge, down behind it and into the wall's socket
+        lx, ly, lz = lan
+        nx, ny = TOWER_X + at["lan"][0], at["lan"][1]
+        lan_plug(b, nx, ny, behind, "CableBlue")
+        with b.at((lx, ly, lz), (0, 180, 0)):
+            lan_plug(b, 0, 0, 0, "CableBlue")
+        r, down = 0.003, nx + rng.uniform(0.015, 0.03)
+        lead(b, "lan", [(nx, ny + 0.0006, behind + LAN_PLUG - 0.004), (nx, ny, behind + 0.05), (down, 0.012, edge - 0.01), (down, 0.006, edge + 0.012), (down, -0.03, edge + 0.03),
+                        (down, -0.3, edge + 0.04), (lx, ly - 0.06, lz - 0.05), (lx, ly + 0.0006, lz - 0.03), (lx, ly + 0.0006, lz - LAN_PLUG + 0.004)],
+             r, "CableBlue", bend=0.012, rng=rng, up=0.01)
     # what the leads fall on: the desk, the floor, the tower, the monitor (case, foot, neck), the keyboard, the mat, the strip
     boxes = list(desk) + [((0, floor - 0.05, 0), (4, 0.1, 4), 0),
                           ((TOWER_X, TOWER_HIGH / 2, TOWER_Z + FRONT + TOWER_DEEP / 2), (0.184, TOWER_HIGH, TOWER_DEEP), 0),
                           ((SET_X, LOW + OUT_H / 2, (GLASS[3] - 0.02 + back) / 2), (OUT_W, OUT_H, back - GLASS[3] + 0.02), 0),
                           ((SET_X + kx, 0.015, KEYBOARD_Z + kz), (0.58, 0.03, 2 * (KEYS_HIGH / 2 + 0.015 + TRAY_BACK) - 0.006), kturn),
                           ((mat_at[0], 0.0015, mat_at[2]), (0.21, 0.003, 0.25), pturn),
-                          strip_box(lies)] + ([adapter_box(lies, HUB_SOCKET)] if supply else [])
+                          strip_box(lies)] + ([adapter_box(lies, HUB_SOCKET)] if supply else []) +         ([((0, 0, lan[2] + 0.05), (4, 4, 0.1), 0)] if lan is not None else [])   # (the wall)
     cylinders = [((SET_X, 0.017, 0.1), 0.208, 0.034), ((SET_X, 0.05, 0.1), 0.08, 0.04)]
     fallen = drape.settle([(name, path, radius) for name, path, radius, _, _ in LEADS], boxes, cylinders)
     for one, path in zip(LEADS, fallen):

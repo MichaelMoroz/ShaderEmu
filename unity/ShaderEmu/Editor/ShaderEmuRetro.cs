@@ -606,6 +606,10 @@ public static partial class ShaderEmuBuilder
     // The keyboards' models take the material that has the legends; a model put in anew has the plain one.
     static void CapsOnModels(Transform world, Material caps)
     {
+        // the layout is the picture's top: the caps' sides are unrolled under it, two bands of SIDE_BAND (world/pc_faces.py)
+        const float layout = 437f, band = 26f;   // (keyboard.json's height, pc_faces.SIDE_BAND)
+        caps.SetVector("_Canvas", new Vector4(0f, 2f * band / (layout + 2f * band), 1f, layout / (layout + 2f * band)));
+        EditorUtility.SetDirty(caps);
         foreach (MeshRenderer renderer in world.GetComponentsInChildren<MeshRenderer>(true))
         {
             Material[] materials = renderer.sharedMaterials;

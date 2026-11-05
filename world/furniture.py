@@ -37,17 +37,55 @@ def cushion(b, at, side, thick, rot):
                 full *= 1 - 0.5 * math.exp(-(u * u + v * v) / 0.012)                                  # the button pulls it in
                 full *= 1 - 0.1 * (u * v) ** 2 * (0.5 + 0.5 * math.cos(9 * math.atan2(v, u)))          # creases run to the corners
                 vertices.append((u * side / 2 * ear(u, v), v * side / 2 * ear(u, v), face * thick / 2 * full))
+        # its picture by the distance on it, along each row and each column from the middle (from above
+        # the rim, falling steeply to the seam, had a strip too narrow for it: 1.5 times; world/check_uv.py)
+        grid = [vertices[first + j * (n + 1):first + (j + 1) * (n + 1)] for j in range(n + 1)]
+        flat = [[[0.0, 0.0] for _ in range(n + 1)] for _ in range(n + 1)]
+        for axis in (0, 1):
+            for line in range(n + 1):
+                at_ = (lambda k: grid[line][k]) if axis == 0 else (lambda k: grid[k][line])
+                for step in (1, -1):
+                    run = 0.0
+                    for k in range(n // 2 + step, n + 1 if step > 0 else -1, step):
+                        run += math.dist(at_(k), at_(k - step)) * step
+                        (flat[line][k] if axis == 0 else flat[k][line])[axis] = run
+        # then flattened as the cloth is: springs along the grid and across each square both ways, so that what a
+        # stuffed shape cannot have flat is shared out (by rows and columns alone the corners, where it rises into
+        # the ears, were sheared three times: world/check_uv.py)
+        springs = []
+        for j in range(n + 1):
+            for i in range(n + 1):
+                for di, dj in ((1, 0), (0, 1), (1, 1), (-1, 1)):
+                    if 0 <= i + di <= n and j + dj <= n:
+                        springs.append(((j, i), (j + dj, i + di), math.dist(grid[j][i], grid[j + dj][i + di])))
+        for _ in range(300):
+            push = [[[0.0, 0.0, 0] for _ in range(n + 1)] for _ in range(n + 1)]
+            for (ja, ia), (jb, ib), rest in springs:
+                pa, pb = flat[ja][ia], flat[jb][ib]
+                dx, dy = pa[0] - pb[0], pa[1] - pb[1]
+                now = math.hypot(dx, dy) or 1e-12
+                k = (rest - now) / now * 0.5
+                for (jj, ii), sign in (((ja, ia), 1), ((jb, ib), -1)):
+                    push[jj][ii][0] += sign * dx * k
+                    push[jj][ii][1] += sign * dy * k
+                    push[jj][ii][2] += 1
+            for j in range(n + 1):
+                for i in range(n + 1):
+                    if push[j][i][2]:
+                        flat[j][i][0] += push[j][i][0] / push[j][i][2]
+                        flat[j][i][1] += push[j][i][1] / push[j][i][2]
         for j in range(n):
             for i in range(n):
                 a = first + j * (n + 1) + i
                 faces.append((a, a + 1, a + n + 2, a + n + 1))
-                uvs.append([(vertices[k][0] / 0.28, vertices[k][1] / 0.28) for k in faces[-1]])
+                uvs.append([(flat[(k - first) // (n + 1)][(k - first) % (n + 1)][0] / 0.28,
+                             flat[(k - first) // (n + 1)][(k - first) % (n + 1)][1] / 0.28) for k in faces[-1]])
                 normals.append((0, 0, face))
     for u, v in [(2 * i / n - 1, -1) for i in range(n)] + [(1, 2 * i / n - 1) for i in range(n)] + [(1 - 2 * i / n, 1) for i in range(n)] + [(-1, 1 - 2 * i / n) for i in range(n + 1)]:
         seam.append((u * side / 2 * ear(u, v), v * side / 2 * ear(u, v), 0))
-    with b.at(at, rot):
+    with b.at(at, rot), b.loose():   # (it falls into the sofa's corner: world/settle.py)
         b.mesh(vertices, faces, uvs, "FabricCushion", normal=normals)
-        b.tube(seam, 0.0045, "FabricCushion", segs=6, smooth=0)
+        b.tube(seam, 0.0045, "FabricCushion", segs=6, bend=0.012)   # (a cord rounds the ears; turned in one ring it was squashed there, its picture 3.5 times)
         for face in (1, -1):
             b.cyl((0, 0, face * thick * 0.24), 0.012, 0.004, "FabricCushion", segs=12, bevel=0.0015, rot=(90, 0, 0))
 
@@ -56,8 +94,8 @@ def sofa(b):
     b.asset("sofa_02", (-0.4, 0, -HALF_D + 0.63), size=(2.26, None, None))   # its back clear of the panelling's cap
     b.obj("Cushions")
     with b.at((-0.4, 0, -HALF_D + 0.63)):
-        cushion(b, (-0.74, 0.60, 0.0), 0.44, 0.15, (-24, 16, 8))
-        cushion(b, (0.76, 0.59, 0.0), 0.42, 0.15, (-22, -22, -6))
+        cushion(b, (-0.74, 0.74, -0.06), 0.44, 0.15, (-24, 16, 8))   # (let go just over the seat, leaning on the back: it falls into place)
+        cushion(b, (0.76, 0.74, -0.06), 0.42, 0.15, (-22, -22, -6))
 
 
 def low_table(b):
@@ -97,6 +135,7 @@ def table_parts(x, z):
 
 def table(b, x, z):
     """Two metres of the main desk's kind: an oak top on panel ends, a board behind the knees."""
+    b.pose("desk", (2.0, TABLE_TOP, 0.9), at=(x, TABLE_TOP / 2, z), rot=(0, 180, 0), name="Table")   # (its sitters at -z)
     for centre, size, mat, (bevel, segs), grain in table_parts(x, z):
         b.box(centre, size, mat, bevel=bevel, segs=segs, grain=grain)
     for gx in (-0.5, 0.5):   # grommets for the cables
@@ -139,7 +178,8 @@ def thing_size(name):
 def lying(b, name, at, turn):
     """A box or a magazine lying face up, its underside's middle at `at`, turned about up."""
     w, h, t = thing_size(name)
-    game_box(b, name, (at[0], at[1] + t / 2, at[2]), rot=(90, turn, 0))
+    with b.loose():
+        game_box(b, name, (at[0], at[1] + t / 2, at[2]), rot=(90, turn, 0))
 
 
 def pile(b, names, at, turns, drift=0.006):
@@ -148,7 +188,7 @@ def pile(b, names, at, turns, drift=0.006):
     x, y, z = at
     for i, (name, turn) in enumerate(zip(names, turns)):
         lying(b, name, (x + drift * math.sin(i * 2.3), y, z + drift * math.cos(i * 1.7)), turn)
-        y += thing_size(name)[2] + 0.0004
+        y += thing_size(name)[2] + 0.001   # (a millimetre apart: each falls on the one under it, world/settle.py)
     return y
 
 
@@ -192,16 +232,22 @@ SHELF_GAMES = ["doom2", "ultimate_doom", "heretic", "hexen", "duke3d", "descent"
                "monkey2", "tentacle", "sam_max", "full_throttle", "the_dig", "grim_fandango", "broken_sword", "flashback", "alone_dark",
                "lost_vikings", "lemmings2", "worms", "rayman", "earthworm_jim"]
 SOFTWARE = ["msdos6", "windows31", "windows95", "netscape", "flight_sim5", "entertainment_pack"]
+# the portable cassette player of Poly Haven's file and its tape: the file's three objects, the body and its lid one
+# thing and the tape another, each falling by itself (as one model the tape hung beside the body)
+PLAYER, TAPE = ("=portable_cassette_player", "_lid"), ("_casette",)
 MAGAZINES = [name for name, thing in GAME_BOXES.items() if thing.get("atlas") == "Magazines"]
 
 
 def leaning_box(b, x, y, wall, turn, lean, game):
-    """A game in its box standing on y at x, turned, and leaning back till its top meets the face at z = wall."""
+    """A game in its box standing on y at x, turned, and leaning back till its top meets the face at z = wall,
+    where it falls into place (world/settle.py) against that face."""
     w, h, t = GAME_BOXES[game]["size"]
     a, yaw = math.radians(lean), math.radians(abs(turn))
     back = h / 2 * math.sin(a) + t / 2 * math.cos(a)
-    with b.at((x, y + h / 2 * math.cos(a) + t / 2 * math.sin(a), wall - 0.0005 - back * math.cos(yaw) - w / 2 * math.sin(yaw)), (lean, turn, 0)):
-        game_box(b, game, (0, 0, 0))
+    with b.at((x, y + h / 2 * math.cos(a) + t / 2 * math.sin(a), wall - 0.002 - back * math.cos(yaw) - w / 2 * math.sin(yaw)), (lean, turn, 0)):
+        with b.loose():
+            game_box(b, game, (0, 0, 0))
+    b.wall((x, y + 0.5, wall + 0.05), (1.0, 1.0, 0.1))   # (what it leans on, which may be another part's)
 
 
 # a place: the boxes and magazines lying on its tower, the lowest first, and their turns (the hubs' towers, 1 and 9, have none)
@@ -497,13 +543,14 @@ def classroom(b):
 def floor_lamp(b):
     b.obj("Floor lamp")
     with b.at((1.15, 0, -HALF_D + 0.4)):
+        b.pose("floor", (0.4, 1.76, 0.4), at=(0, 0.88, 0), name="Floor lamp")
         b.lathe((0, 0, 0), [(0.16, 0), (0.165, 0.012), (0.13, 0.024), (0.03, 0.04), (0.016, 0.07), (0.013, 1.45), (0.02, 1.46), (0.02, 1.5), (0, 1.5)],
                 "Brass", segs=28)
         b.lathe((0, 1.46, 0), [(0.20, 0), (0.204, 0), (0.134, 0.30), (0.13, 0.30), (0.20, 0)], "Shade", segs=32, cap=False)
         for i in range(3):
             a = math.radians(i * 120)
             b.tube([(0.02 * math.cos(a), 1.49, 0.02 * math.sin(a)), (0.13 * math.cos(a), 1.75, 0.13 * math.sin(a))], 0.003, "Brass", segs=6)
-        b.tube([(0.013, 1.2, 0), (0.03, 1.19, 0), (0.03, 1.08, 0)], 0.002, "Brass", segs=5, smooth=4)
+        b.tube([(0.013, 1.2, 0), (0.03, 1.19, 0), (0.03, 1.08, 0)], 0.002, "Brass", segs=5, bend=0.006)   # (a wire bent round 3 of its thicknesses)
 
 
 def shelf(b):
@@ -511,6 +558,7 @@ def shelf(b):
     with on_wall(b, "left"):
         with b.at((-2.6, 0, 0)):
             b.obj("Shelf")
+            b.pose("against", (wide, high, deep), at=(0, high / 2, -deep / 2), rot=(0, 180, 0), name="Shelf", back=0.05, clear=0.6)
             b.box((0, high / 2, -0.008), (wide - 0.03, high - 0.02, 0.012), "WoodOak", grain=1)
             for x in (-wide / 2 + 0.015, wide / 2 - 0.015):
                 b.box((x, high / 2, -deep / 2), (0.03, high, deep), "WoodOak", bevel=0.003, segs=1, grain=1)
@@ -569,10 +617,20 @@ def boxes(b):
 
 
 def posters(b):
+    # posters of the decade (world/posters.py, world/rooms.py's DEN_POSTERS) where the walls are bare
+    import rooms
+    import random
+    rng = random.Random(24)
+    b.obj("Posters")
+    for name, (wall, along, y, high, kind) in rooms.DEN_POSTERS.items():
+        with on_wall(b, wall):
+            rooms.poster(b, name, along, y, high, kind, tilt=rng.uniform(-1.2, 1.2) if kind == "pin" else 0.0)
+    # and three of the room's own
     with on_wall(b, "back"):
         b.obj("Posters")
         for i, mat in enumerate(("PosterDie", "PosterWords", "PosterGrid")):
             x = 1.5 - i * 1.1
+            b.pose("hung", (0.8, 1.04, 0.03), at=(x, 1.95, -0.015), rot=(0, 180, 0), name="Poster " + mat)
             b.box((x, 1.95, -0.006), (0.78, 1.02, 0.012), "PlasticDark")
             moulding = [(0, 0), (0.03, 0), (0.03, 0.022), (0.022, 0.03), (0.006, 0.03), (0, 0.018)]
             frame(b, (x, 1.95, 0), 0.75, 0.99, moulding, "MetalBlack")
@@ -582,6 +640,7 @@ def posters(b):
 def pot(b, at, r=0.2):
     """A clay pot with its saucer and soil; a plant stands in it at r * 1.8 up."""
     with b.at(at):
+        b.pose("floor", (r * 2.2, r * 1.95, r * 2.2), at=(0, r * 0.975, 0), name="Pot")
         b.lathe((0, 0, 0), [(r * 0.62, 0), (r * 0.66, 0.012), (r * 0.95, r * 1.7), (r * 1.06, r * 1.72), (r * 1.06, r * 1.95), (r * 0.94, r * 1.95),
                             (r * 0.9, r * 1.8), (0, r * 1.8)], "Terracotta", segs=32)
         b.lathe((0, 0, 0), [(r * 0.8, 0), (r * 0.9, 0.006), (r * 0.9, 0.02), (r * 0.82, 0.022)], "Terracotta", segs=32)
@@ -600,6 +659,42 @@ def plants(b):
     b.asset("potted_plant_02", (2.05, 0, -HALF_D + 0.6), rot=(0, 140, 0), parts=("_dirt",), scale=1.19, limit=2500)   # its soil
 
 
+def scattered(b):
+    """What lies about the den (world/toys.py's and Poly Haven's): on the low table, by the sofa,
+    on the window's sill, by the boxes in the corner."""
+    import random
+    import toys
+    rng = random.Random(55)
+    b.obj("Table things")
+    top, at = 0.401, (-0.4, 0.003, -HALF_D + 1.75)   # the low table's (low_table)
+    with b.at(at):
+        toys.puzzle_cube(b, (-0.5, top, -0.12), turn=27, twist=-31)
+        toys.die(b, (-0.47, top, 0.12), turn=12)
+        toys.die(b, (-0.41, top, 0.17), turn=51, mat="GamepadRed", pip="Ceramic")
+    b.obj("Floor things")
+    # by the sofa's left end, on the rug: magazines in a heap, a game face up, a yo-yo
+    pile(b, ["computer_gaming_world_issue_101", "bytevolume22number01", "pc_computing_magazine_v7i9"], (-1.95, 0.006, -4.35), [12, 75, 140], drift=0.05)
+    lying(b, "doom2", (-1.75, 0.006, -3.35), 205)
+    toys.yoyo(b, (0.95, 0.006, -3.15), turn=40)
+    toys.cassette(b, (-1.45, 0.006, -3.15), turn=-20, label="GamepadRed")
+    # by the boxes in the corner: a ball, and a game leaning on the lower box
+    b.asset("football", (-2.72, 0, -5.05), rot=(0, 75, 0), size=(0.22, None, None), parts=("football_inflated",), loose=True)
+    b.obj("Floor things")
+    leaning_box(b, -2.5, 0.0, -HALF_D, 0, 10, "duke3d")
+    # the window's sill: the duck, a radio, a picture of somebody's
+    with on_wall(b, "right"):
+        sill = WINDOW_Y_SILL
+        b.wall((1.6, sill - 0.02, -0.05), (3.84, 0.04, 0.25))   # (the sill is the room's, world/room.py's window: what stands on it falls on this)
+        b.asset("rubber_duck_toy", (2.95, sill, -0.075), rot=(0, 160, 0), size=(None, 0.11, None), loose=True)
+        b.asset("portable_cassette_player", (0.25, sill, -0.08), rot=(0, 195, 0), parts=PLAYER, loose=True)
+        b.asset("portable_cassette_player", (0.4, sill + 0.006, -0.07), rot=(-90, 160, 0), parts=TAPE, loose=True)   # its tape out beside it
+        b.asset("standing_picture_frame_01", (-0.05, sill, -0.09), rot=(0, 260, 0), size=(None, 0.22, None), loose=True)
+        b.asset("carved_wooden_elephant", (1.9, sill, -0.07), rot=(0, 85, 0), size=(0.12, None, None), loose=True)
+
+
+WINDOW_Y_SILL = 1.004   # the den's window's sill's top (world/room.py: the opening's foot, less 16 mm, and the board 40 mm)
+
+
 def build(b):
     sofa(b)
     low_table(b)
@@ -609,3 +704,4 @@ def build(b):
     boxes(b)
     posters(b)
     plants(b)
+    scattered(b)   # (last: what it draws by chance moves nothing before it)

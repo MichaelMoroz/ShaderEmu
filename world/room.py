@@ -53,13 +53,16 @@ def reveal(b, x0, x1, top, mat, deep=WALL_THICK, sill=None):
     b.quad(((x0 + x1) / 2, 0, deep / 2), (x1 - x0, deep), sill or mat, rot=(90, 0, 0))
 
 
-def wainscot(b, x0, x1):
-    """Frame-and-panel oak to 0.92 m along a wall, from x0 to x1 in the wall's space."""
+def wainscot(b, x0, x1, scribe=(False, False)):
+    """Frame-and-panel oak to 0.92 m along a wall, from x0 to x1 in the wall's space. scribe: whether
+    its skirting, rail and cap stop at x0 (and at x1) against those of the wall across the corner,
+    which run into it: both into the corner, their faces lay in one another's planes and flickered."""
     length, mid = x1 - x0, (x0 + x1) / 2
     b.quad((mid, 0.45, -0.006), (length, 0.9), "WoodDark")
-    b.box((mid, 0.055, -0.019), (length, 0.11, 0.026), "WoodDark", bevel=0.006, grain=0)
-    b.box((mid, 0.83, -0.017), (length, 0.10, 0.022), "WoodDark", bevel=0.003, grain=0)
-    b.box((mid, 0.9, -0.026), (length, 0.03, 0.05), "WoodDark", bevel=0.008, grain=0)
+    for y, high, z, deep, bevel in ((0.055, 0.11, -0.019, 0.026, 0.006), (0.83, 0.10, -0.017, 0.022, 0.003), (0.9, 0.03, -0.026, 0.05, 0.008)):
+        out = deep / 2 - z   # (how far its front is out of the wall: so far the other wall's stands into the corner)
+        a, c = x0 + (out if scribe[0] else 0.0), x1 - (out if scribe[1] else 0.0)
+        b.box(((a + c) / 2, y, z), (c - a, high, deep), "WoodDark", bevel=bevel, grain=0)
     bays = max(1, round(length / 0.78))
     bay = length / bays
     for i in range(bays + 1):
@@ -73,8 +76,8 @@ def shell(b):
     # (the floor, the ceiling and the walls are world/shell.py's: one mesh a surface)
     b.obj("Panelling")
     with on_wall(b, "front"):   # not behind the screens' wall of boards
-        wainscot(b, -HALF_W, -3.87)
-        wainscot(b, 3.87, HALF_W)
+        wainscot(b, -HALF_W, -3.87, scribe=(True, False))   # (the side walls' run into the corners)
+        wainscot(b, 3.87, HALF_W, scribe=(False, True))
     with on_wall(b, "left"):    # nor behind the bookshelf, which is at -3.6 to -1.6 along this wall
         wainscot(b, -HALF_D, -3.63)
         wainscot(b, -1.57, HOLO_Z - HOLO_WIDE / 2 - 0.09)
@@ -82,8 +85,8 @@ def shell(b):
     with on_wall(b, "right"):
         wainscot(b, -HALF_D, HALF_D)
     with on_wall(b, "back"):
-        wainscot(b, -HALF_W, -DOOR_X - DOOR_WIDE / 2 - 0.09)
-        wainscot(b, -DOOR_X + DOOR_WIDE / 2 + 0.09, HALF_W)
+        wainscot(b, -HALF_W, -DOOR_X - DOOR_WIDE / 2 - 0.09, scribe=(True, False))
+        wainscot(b, -DOOR_X + DOOR_WIDE / 2 + 0.09, HALF_W, scribe=(False, True))
 
     b.obj("Mouldings")
     cove = [(0, 0), (0.07, 0), (0.07, -0.012), (0.045, -0.02), (0.022, -0.045), (0.014, -0.075), (0, -0.075)]
@@ -156,6 +159,38 @@ def window(b):
             b.tube([(0.84, -0.2, 0), (0.9, -0.2, 0)], 0.009, "MetalSteel")
 
 
+def wall_socket(b, x, y):
+    """A mains socket of the decade (Schuko: CEE 7/3) in a wall's own space, its middle at x, y, the
+    room towards -z: an 80 mm plate 10 mm proud with a round well 38 mm across (its floor 1.5 mm off
+    the wall: deeper and the wall's face would cover it), two pin holes 19 mm apart in its floor and
+    the earth's two springs in its wall, top and bottom."""
+    from pc import loft, rrect
+    plate = rrect(0.08, 0.08, 0.006, n=7)
+    well = [(0.019 * math.cos(math.atan2(py, px)), 0.019 * math.sin(math.atan2(py, px))) for px, py in plate]
+
+    def at_z(points, z):
+        return [(x + px, y + py, z) for px, py in points]
+    loft(b, [at_z(rrect(0.078, 0.078, 0.005, n=7), -0.0004), at_z(plate, -0.008), at_z(rrect(0.076, 0.076, 0.004, n=7), -0.010),
+             at_z(well, -0.010), at_z(well, -0.0015)], "PlasticWhite", tile=0.3)
+    for side in (-1, 1):
+        b.cyl((x + side * 0.0095, y, -0.0018), 0.0024, 0.0006, "Rubber", segs=12, rot=(90, 0, 0))     # a pin's hole, dark on the floor
+        b.box((x, y + side * 0.0178, -0.0046), (0.008, 0.0024, 0.006), "MetalSteel", bevel=0.0006, segs=1)   # an earth spring, on the well's wall
+
+
+def light_switch(b, x, y):
+    """A light's switch of the decade in a wall's own space, its middle at x, y, the room towards -z:
+    an 80 mm plate, a frame round the rocker, and the rocker, tipped 5 degrees (pressed at its foot: on)."""
+    from pc import loft, rrect
+
+    def at_z(points, z):
+        return [(x + px, y + py, z) for px, py in points]
+    loft(b, [at_z(rrect(0.078, 0.078, 0.005, n=4), -0.0004), at_z(rrect(0.08, 0.08, 0.006, n=4), -0.007),
+             at_z(rrect(0.074, 0.074, 0.004, n=4), -0.0085)], "PlasticWhite", tile=0.3)
+    loft(b, [at_z(rrect(0.054, 0.054, 0.004, n=3), -0.0084), at_z(rrect(0.052, 0.052, 0.003, n=3), -0.0098)], "PlasticWhite", tile=0.3)
+    with b.at((x, y, -0.0098), (5, 0, 0)):
+        b.box((0, 0, -0.0035), (0.046, 0.046, 0.009), "PlasticWhite", bevel=0.0025, segs=3)
+
+
 def door_leaf(b, w=DOOR_WIDE, h=DOOR_HIGH, both=False):
     """A six-panel door in a wall's space, its hinges at -w/2, its face a little before the wall.
     both: panelled behind too, for a door that stands open."""
@@ -163,22 +198,24 @@ def door_leaf(b, w=DOOR_WIDE, h=DOOR_HIGH, both=False):
     for side in ((-1, 1) if both else (-1,)):
         z = -0.02 + side * 0.024
         # stiles and rails standing proud of six panels
-        for x in (-w / 2 + 0.06, 0, w / 2 - 0.06):
-            b.box((x, h / 2, z), (0.12 if x else 0.10, h, 0.012), "WoodDark", bevel=0.003, segs=1, grain=1)
-        for y, t in ((0.11, 0.22), (0.86, 0.14), (1.42, 0.12), (h - 0.07, 0.14)):
-            b.box((0, y, z - side * 0.0005), (w, t, 0.011), "WoodDark", bevel=0.003, segs=1, grain=0)   # a hair under the stiles
+        # (a millimetre in from the leaf's edges and top: flush with them, their faces flickered with the leaf's)
+        for x in (-w / 2 + 0.061, 0, w / 2 - 0.061):
+            b.box((x, h / 2, z), (0.12 if x else 0.098, h - 0.002, 0.012), "WoodDark", bevel=0.003, segs=1, grain=1)
+        for y, t in ((0.111, 0.218), (0.86, 0.14), (1.42, 0.12), (h - 0.071, 0.138)):
+            b.box((0, y, z - side * 0.0005), (w - 0.004, t, 0.010), "WoodDark", bevel=0.003, segs=1, grain=0)   # a hair under the stiles, its back clear of theirs
         for x in (-0.2175, 0.2175):
             for y, t in ((0.505, 0.57), (1.14, 0.42), (1.72, 0.48)):
                 b.box((x, y, z - side * 0.003), (0.255, t - 0.06, 0.01), "WoodDark", bevel=0.008, segs=1, grain=1)
         with b.at((0.37, 1.0, -0.02 + side * 0.03), (0, 0 if side < 0 else 180, 0)):   # the handle's side
             b.lathe((0, 0, 0), [(0.026, 0), (0.026, 0.004), (0.012, 0.008), (0.009, 0.03), (0.02, 0.04), (0.03, 0.055),
                                 (0.028, 0.07), (0.012, 0.078), (0, 0.08)], "Brass", segs=16, rot=(-90, 0, 0))
-            b.box((0, -0.09, 0.002), (0.03, 0.05, 0.004), "Brass", bevel=0.002, segs=1)
+            b.box((0, -0.09, -0.002), (0.03, 0.05, 0.004), "Brass", bevel=0.002, segs=1)   # (on the stile, not in it)
     for y in (0.25, 1.05, 1.85):
         b.cyl((-w / 2 - 0.004, y, -0.046), 0.007, 0.09, "Brass", segs=8)
 
 
 def door_casing(b, w=DOOR_WIDE, h=DOOR_HIGH):
+    b.pose("door", (w, h, 0.05), rot=(0, 180, 0), name="Door")   # (its foot's middle at the wall's face; the casing lies towards -z, and the space before it is kept free)
     casing = [(0, 0), (0.09, 0), (0.09, 0.014), (0.075, 0.026), (0.014, 0.03), (0, 0.02)]
     b.sweep(casing, [(w / 2, 0, 0), (w / 2, h, 0), (-w / 2, h, 0), (-w / 2, 0, 0)], "WoodDark", up=(0, 0, -1))   # round this way it lies outside the door
 
@@ -205,8 +242,7 @@ def door(b):
                 with b.at((w / 2, 0, 0)):
                     door_leaf(b, both=True)
         b.obj("Wall things")
-        b.box((-DOOR_X + 0.72, 1.25, -0.004), (0.075, 0.115, 0.008), "TrimWhite", bevel=0.003, segs=1)
-        b.quad((-DOOR_X + 0.72, 1.25, -0.0085), (0.072, 0.108), "Details", decal="switch")
+        light_switch(b, -DOOR_X + 0.72, 1.25)
         # a clock and a calendar by the door
         b.asset("wall_clock", (-2.45, 2.26, -0.024), rot=(0, 180, 0), parts=("=wall_clock",),
                 hands=((0, 0, 0), ("hour", "wall_clock_hours_hand"), ("minute", "wall_clock_minute_hand"), ("second", "wall_clock_second_hand")))
@@ -214,8 +250,7 @@ def door(b):
         b.quad((-2.45, 1.62, -0.007), (0.296, 0.371), "Details", decal="calendar")
     for wall, x in (("front", 4.2), ("left", -4.6), ("right", 4.6), ("back", 1.8)):
         with on_wall(b, wall):
-            b.box((x, 1.05, -0.004), (0.085, 0.085, 0.008), "TrimWhite", bevel=0.003, segs=1)
-            b.quad((x, 1.05, -0.0085), (0.08, 0.08), "Details", decal="socket")
+            wall_socket(b, x, 1.05)
 
 
 def build(b):

@@ -13,6 +13,7 @@ Shader "ShaderEmu/Plate"
         [NoScaleOffset] _Glyphs ("Glyphs", 2D) = "black" {}
         [NoScaleOffset] _Fonts ("Fonts' distance fields", 2D) = "black" {}
         _Usual ("The sheet's texels across the plate, for its usual lettering", Vector) = (0, 0, 0, 0)
+        _Canvas ("Where the lettering's canvas lies in the surface's picture (start, size)", Vector) = (0, 0, 1, 1)
         _GradientScale ("The fields' gradient scale", Float) = 9
         _Glossiness ("Smoothness", Range(0, 1)) = 0.3
         _InkGlossiness ("The lettering's smoothness", Range(0, 1)) = 0.65
@@ -32,7 +33,7 @@ Shader "ShaderEmu/Plate"
         #pragma target 4.0
 
         sampler2D _MainTex, _Fonts, _Index, _Glyphs;   // the last two are point filtered
-        float4 _Color, _Glyphs_TexelSize, _Fonts_TexelSize, _Usual;
+        float4 _Color, _Glyphs_TexelSize, _Fonts_TexelSize, _Usual, _Canvas;
         float _Glossiness, _InkGlossiness, _InkMetallic, _InkGlow, _Flat, _Bold, _Cutoff, _GradientScale;
 
         struct Input { float2 uv_MainTex; };
@@ -101,6 +102,7 @@ Shader "ShaderEmu/Plate"
             float2 uv = i.uv_MainTex;
             float4 c = tex2D(_MainTex, uv) * _Color;
             clip(c.a - _Cutoff);
+            uv = (uv - _Canvas.xy) / _Canvas.zw;   // (a keyboard's picture has its caps' sides under the canvas: world/pc_faces.py)
             float2 across = ddx(uv), down = ddy(uv), grain = abs(across) + abs(down);
             // the fields' texels a pixel spans, for the plate's usual lettering: a field's edge is
             // good for one or two of them, so beyond that the pixel is cut into n by n places
@@ -115,6 +117,7 @@ Shader "ShaderEmu/Plate"
                     sum += lettering(uv + across * at.x + down * at.y, grain / n);
                 }
             sum /= n * n;
+            if (any(uv < 0) || any(uv > 1)) sum = 0;   // (no lettering off the canvas)
             float cover = sum.a;
             float3 ink = cover > 1e-4 ? sum.rgb / cover : 0;
             c.rgb = lerp(c.rgb, ink, cover);

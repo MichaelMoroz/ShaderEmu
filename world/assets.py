@@ -23,6 +23,130 @@ def two_sided():
     return names
 
 
+OURS = {"pc_station"}   # models we make (world/bake_pc.py): their parts are laid out against world/pc.py's, whose leads plug into them
+
+
+GAP = 0.003   # metres: a gap in a model this small is its maker's slip, larger it is a thing apart
+
+
+def seat_parts(mesh, asset, touch=0.002, far=0.05):
+    """A model's parts that hang in it (a panel before its body, a button off its face) put against
+    what holds them, as world/check_float.py wants every part held: the parts that touch (within
+    `touch`) are a group, the one with the model's foot holds, and each group that touches none is
+    lowered onto the nearest held part under it (`far` at most), till none moves. A group with
+    nothing of the model under it is left where it is: it is a thing of its own (a cassette player's
+    tape beside it), to be loaded apart with `parts` and placed loose, never pushed onto another; but
+    a part within GAP of the held ones (a button a hair off its face: the maker's gap) is moved to them."""
+    import bmesh
+    from mathutils.bvhtree import BVHTree
+    bm = bmesh.new()
+    bm.from_mesh(mesh)
+    bm.verts.ensure_lookup_table()
+    seen, islands = set(), []
+    for v in bm.verts:
+        if v.index in seen:
+            continue
+        todo, island = [v], []
+        seen.add(v.index)
+        while todo:
+            u = todo.pop()
+            island.append(u)
+            for e in u.link_edges:
+                w = e.other_vert(u)
+                if w.index not in seen:
+                    seen.add(w.index)
+                    todo.append(w)
+        if any(u.link_faces for u in island):
+            islands.append(island)
+
+    def tree(island):
+        faces = {f for u in island for f in u.link_faces}
+        index = {u.index: k for k, u in enumerate(island)}
+        return BVHTree.FromPolygons([u.co.copy() for u in island], [[index[u.index] for u in f.verts] for f in faces])
+    trees = [tree(i) for i in islands]
+    boxes = [(Vector((min(u.co[k] for u in i) for k in range(3))), Vector((max(u.co[k] for u in i) for k in range(3)))) for i in islands]
+    group = list(range(len(islands)))
+
+    def find(i):
+        while group[i] != i:
+            group[i] = group[group[i]]
+            i = group[i]
+        return i
+
+    def near(a, b):
+        (alo, ahi), (blo, bhi) = boxes[a], boxes[b]
+        if any(alo[k] > bhi[k] + touch or blo[k] > ahi[k] + touch for k in range(3)):
+            return False
+        if trees[a].overlap(trees[b]):
+            return True
+        return any(trees[b].find_nearest(u.co, touch)[0] is not None for u in islands[a]) or             any(trees[a].find_nearest(u.co, touch)[0] is not None for u in islands[b])
+    order = sorted(range(len(islands)), key=lambda i: boxes[i][0].x)
+    for k, i in enumerate(order):
+        for j in order[k + 1:]:
+            if boxes[j][0].x > boxes[i][1].x + touch:
+                break
+            if find(i) != find(j) and near(i, j):
+                group[find(i)] = find(j)
+    foot = min(boxes[i][0].z for i in range(len(islands)))
+    held = {find(i) for i in range(len(islands)) if boxes[i][0].z <= foot + touch}
+    down, lowered = Vector((0, 0, -1)), 0
+    if os.environ.get("SEAT_TRACE"):
+        roots = {find(i) for i in range(len(islands))}
+        print("SEAT %s: %d parts in %d groups, %d held" % (asset, len(islands), len(roots), len(held)))
+        for root in roots - held:
+            members = [i for i in range(len(islands)) if find(i) == root]
+            lo = Vector((min(boxes[i][0][k] for i in members) for k in range(3)))
+            hi = Vector((max(boxes[i][1][k] for i in members) for k in range(3)))
+            print("SEAT   free: %d parts, %s .. %s" % (len(members), tuple(round(x, 4) for x in lo), tuple(round(x, 4) for x in hi)))
+    for _ in range(8):
+        moved = False
+        for root in {find(i) for i in range(len(islands))} - held:
+            members = [i for i in range(len(islands)) if find(i) == root]
+            others = [i for i in range(len(islands)) if find(i) in held]
+            gap = None
+            for i in members:
+                for u in islands[i][::max(1, len(islands[i]) // 200)]:
+                    for j in others:
+                        lo, hi = boxes[j]
+                        if not (lo.x - 0.001 <= u.co.x <= hi.x + 0.001 and lo.y - 0.001 <= u.co.y <= hi.y + 0.001) or lo.z > u.co.z:
+                            continue
+                        hit = trees[j].ray_cast(u.co + Vector((0, 0, 0.0005)), down, far)
+                        if hit[0] is not None:
+                            gap = hit[3] - 0.0005 if gap is None else min(gap, hit[3] - 0.0005)
+            shift = None
+            if gap is not None and gap > touch * 0.5:
+                shift = Vector((0, 0, -(gap - 0.0002)))
+            elif gap is None:   # nothing under it: a modelling gap (a button 2 mm off its face) is closed, never more
+                best = None
+                for i in members:
+                    for u in islands[i][::max(1, len(islands[i]) // 200)]:
+                        for j in others:
+                            hit = trees[j].find_nearest(u.co, GAP)
+                            if hit[0] is not None and (best is None or hit[3] < best[0]):
+                                best = (hit[3], hit[0] - u.co)
+                if best is not None:
+                    shift = best[1] * (1 - 0.0002 / best[0]) if best[0] > touch * 0.5 else Vector()
+            if shift is not None:
+                if shift.length > 0:
+                    for i in members:
+                        for u in islands[i]:
+                            u.co += shift
+                        trees[i] = tree(islands[i])
+                        boxes[i] = (boxes[i][0] + shift, boxes[i][1] + shift)
+                    lowered += 1
+                held.add(root)
+                moved = True
+            elif gap is not None:
+                held.add(root)
+                moved = True
+        if not moved:
+            break
+    if lowered:
+        bm.to_mesh(mesh)
+        print("ASSET %s: %d parts put against what holds them" % (asset, lowered))
+    bm.free()
+
+
 def load(asset, limit=None, parts=None):
     """The asset as one mesh, with its bounds in Unity's axes. `parts` keeps only the objects
     whose names contain one of its words (a file may hold several plants side by side). `limit`
@@ -50,6 +174,8 @@ def load(asset, limit=None, parts=None):
         modifier.ratio = limit / count
         bpy.ops.object.modifier_apply(modifier=modifier.name)
     mesh = ob.data
+    if asset not in OURS:
+        seat_parts(mesh, asset)
     for slot, material in enumerate(mesh.materials):
         if material.name.startswith("PH_"):
             continue

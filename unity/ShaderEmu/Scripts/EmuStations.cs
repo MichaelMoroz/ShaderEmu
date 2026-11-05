@@ -4,7 +4,8 @@ using TMPro;
 using UnityEngine.UI;
 using VRC.SDKBase;
 
-// The classroom's computers (docs/world/stations.md): twelve tubes, one a visitor whose machine is on.
+// The classroom's computers (docs/world/stations.md): twelve tubes, one a visitor whose machine is on,
+// and three more in the side rooms off the corridor (places 12 to 14: N13 to N15 on their doors).
 // A visitor's place is a number in their own EmuShare, so nobody can move anybody else; whoever
 // holds a place sends their display (EmuShareHub does, as it does anyway), EmuStreams receives
 // it and this puts it on that place's tube. A visitor's own tube shows their machine itself.
@@ -46,6 +47,8 @@ public class EmuStations : UdonSharpBehaviour
     public Slider[] volumeSliders;
 
     private const int FirstSurface = 1;   // of EmuStreams' surfaces: the classroom's are 1 to 12
+    private const int SideSurface = 21;   // and the side rooms' 21 to 23 (13 to 20 are the holodecks')
+    private const int SidePlace = 12;
     private const int Steady = 0xffff, Beckon = 0x00ff;
 
     private int count;
@@ -95,6 +98,9 @@ public class EmuStations : UdonSharpBehaviour
     public void Take9() { Take(9); }
     public void Take10() { Take(10); }
     public void Take11() { Take(11); }
+    public void Take12() { Take(12); }
+    public void Take13() { Take(13); }
+    public void Take14() { Take(14); }
 
     // The place this visitor has, or -1.
     public int Own()
@@ -304,7 +310,7 @@ public class EmuStations : UdonSharpBehaviour
             }
             mode[s] = wants;
             bool theirs = owner[s] > 0 && owner[s] != myId;
-            streams.SetWant(FirstSurface + s, theirs ? owner[s] : 0);
+            streams.SetWant(s < SidePlace ? FirstSurface + s : SideSurface + s - SidePlace, theirs ? owner[s] : 0);
             int slot = theirs ? streams.SlotOf(owner[s]) : -1;
             if (relabel)
             {

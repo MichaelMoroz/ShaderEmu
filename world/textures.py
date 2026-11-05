@@ -330,35 +330,49 @@ def bay(kind):
     return img
 
 
-def rack_unit(kind, seed):
+RACK_PX = 512 / 0.58   # the rack's pictures: pixels a metre of the face plate (its 0.58 m between the posts)
+
+
+def rack_unit(kind, seed, high):
+    """A rack unit's front, `high` metres of it (EIA-310-D: a unit is 1.75 in, 44.45 mm, a plate of n units
+    n x 44.45 less 0.8 mm; here less the gap the model leaves), drawn at its own height: the drives a 4U
+    chassis of 5.25 in bays (SFF-8551: 146 x 41.3 mm) three high and three across, the switch and the
+    vent 2U, the console's panel 3U. Where the parts sit on them is a guess."""
     rng = np.random.default_rng(seed)
-    img, d = card(512, 76, (52, 54, 58))
-    d.rectangle((0, 0, 511, 75), outline=(20, 20, 22), width=2)
+    h = int(round(high * RACK_PX))
+    img, d = card(512, h, (52, 54, 58))
+    d.rectangle((0, 0, 511, h - 1), outline=(20, 20, 22), width=2)
     for x in (10, 502):
-        for y in (16, 60):
+        for y in (16, h - 16):
             d.ellipse((x - 5, y - 5, x + 5, y + 5), fill=(150, 152, 156))
+    mid = h // 2
     if kind == "drives":
-        for i in range(6):
-            x = 34 + i * 76
-            d.rectangle((x, 12, x + 66, 64), fill=(34, 35, 38), outline=(90, 92, 98))
-            d.rectangle((x + 6, 18, x + 60, 30), fill=(70, 72, 78))
-            d.rectangle((x + 8, 52, x + 14, 58), fill=(60, 220, 90) if rng.random() < 0.8 else (240, 170, 40))
+        bw, bh = int(round(0.146 * RACK_PX)), int(round(0.0413 * RACK_PX))
+        top = mid - (3 * bh + 2 * 5) // 2
+        for row in range(3):
+            for col in range(3):
+                x, y = 34 + col * (bw + 8), top + row * (bh + 5)
+                d.rectangle((x, y, x + bw, y + bh), fill=(34, 35, 38), outline=(90, 92, 98))
+                d.rectangle((x + 8, y + 6, x + bw - 30, y + 12), fill=(70, 72, 78))
+                d.rectangle((x + bw - 18, y + bh - 10, x + bw - 12, y + bh - 4), fill=(60, 220, 90) if rng.random() < 0.8 else (240, 170, 40))
     elif kind == "switch":
+        o = mid - 38
         for i in range(24):
             x = 34 + i * 18 + (i // 8) * 10
-            d.rectangle((x, 34, x + 14, 50), fill=(20, 20, 22), outline=(120, 122, 128))
-            d.rectangle((x + 4, 24, x + 9, 28), fill=(60, 220, 90) if rng.random() < 0.7 else (40, 60, 40))
-        d.text((34, 54), "24 PORT 10BASE-T HUB", fill=(170, 172, 178), font=font("arial.ttf", 11))
+            d.rectangle((x, o + 34, x + 14, o + 50), fill=(20, 20, 22), outline=(120, 122, 128))
+            d.rectangle((x + 4, o + 24, x + 9, o + 28), fill=(60, 220, 90) if rng.random() < 0.7 else (40, 60, 40))
+        d.text((34, o + 54), "24 PORT 10BASE-T HUB", fill=(170, 172, 178), font=font("arial.ttf", 11))
     elif kind == "vent":
         for x in range(34, 480, 9):
-            d.line((x, 14, x, 62), fill=(22, 22, 24), width=4)
+            d.line((x, 14, x, h - 14), fill=(22, 22, 24), width=4)
     else:
-        d.rectangle((34, 14, 250, 62), fill=(24, 30, 26), outline=(90, 92, 98))
-        d.text((44, 22), "LOAD 0.42  UP 211d", fill=(80, 230, 110), font=font("consola.ttf", 16))
-        d.text((44, 42), "rv32 node %02d" % rng.integers(1, 20), fill=(80, 230, 110), font=font("consola.ttf", 14))
+        o = mid - 38
+        d.rectangle((34, o + 14, 250, o + 62), fill=(24, 30, 26), outline=(90, 92, 98))
+        d.text((44, o + 22), "LOAD 0.42  UP 211d", fill=(80, 230, 110), font=font("consola.ttf", 16))
+        d.text((44, o + 42), "rv32 node %02d" % rng.integers(1, 20), fill=(80, 230, 110), font=font("consola.ttf", 14))
         for i in range(5):
-            d.ellipse((290 + i * 36, 28, 314 + i * 36, 52), fill=(30, 30, 32), outline=(110, 112, 118))
-        d.rectangle((470, 30, 480, 40), fill=(230, 60, 50))
+            d.ellipse((290 + i * 36, o + 28, 314 + i * 36, o + 52), fill=(30, 30, 32), outline=(110, 112, 118))
+        d.rectangle((470, o + 30, 480, o + 40), fill=(230, 60, 50))
     return img
 
 
@@ -418,8 +432,15 @@ def pc_lettering(a):
     # the monitor's six keys, each named for what it does here (EmuPlace), under its own key:
     # the legend is 145 mm long, the first key's middle 17.5 mm into it and the keys 22 mm apart (pc.OSD_...)
     osd = printed([], 9, 290, 14)
+    narrow = os.path.exists(FONTS + "ARIALNB.TTF")   # (Arial Narrow comes with Office; without it, Arial Bold at its 82% width)
     for i, name in enumerate(("TERM +", "TERM -", "CONSOLE", "DISPLAY", "LINKS OFF", "LINKS ON")):
-        ImageDraw.Draw(osd).text((35 + 44 * i, 7), name, fill=(60, 58, 54), anchor="mm", font=font("ARIALNB.TTF", 9))
+        if narrow:
+            ImageDraw.Draw(osd).text((35 + 44 * i, 7), name, fill=(60, 58, 54), anchor="mm", font=font("ARIALNB.TTF", 9))
+            continue
+        word = Image.new("L", (80, 14), 0)
+        ImageDraw.Draw(word).text((40, 7), name, fill=255, anchor="mm", font=font("arialbd.ttf", 9))
+        word = word.resize((66, 14), Image.LANCZOS)
+        osd.paste((60, 58, 54), (35 + 44 * i - 33, 0, 35 + 44 * i + 33, 14), word)
     a.add("crt_osd", osd)
     a.add("crt_rear", printed(["SHADERVISION 21  COLOUR MONITOR", "MODEL SV-2196   100-240 V~  2.0 A  50/60 Hz", "SERIAL 96-1017-00428", "",
                                "CAUTION: HIGH VOLTAGE INSIDE.", "NO USER SERVICEABLE PARTS.", "MADE IN TAIWAN"], 12, 330, 180,
@@ -538,10 +559,10 @@ def network(a):
 def atlas():
     a = Atlas(2048, 2048)
     a.add("keyboard", keyboard_top())
-    a.add("rack_drives", rack_unit("drives", 1))
-    a.add("rack_switch", rack_unit("switch", 2))
-    a.add("rack_vent", rack_unit("vent", 3))
-    a.add("rack_panel", rack_unit("panel", 4))
+    a.add("rack_drives", rack_unit("drives", 1, 4 * 0.044 - 0.008))   # (the plates' heights in world/computer.py: n x 0.044 less 0.008)
+    a.add("rack_switch", rack_unit("switch", 2, 2 * 0.044 - 0.008))
+    a.add("rack_vent", rack_unit("vent", 3, 2 * 0.044 - 0.008))
+    a.add("rack_panel", rack_unit("panel", 4, 3 * 0.044 - 0.008))
     for name, kind in (("bay_floppy", "floppy"), ("bay_cd", "cd"), ("bay_blank", "blank")):
         a.add(name, bay(kind))
     a.add("floppy_black", floppy((38, 38, 42), (236, 232, 220), ["LINUX", "boot 1/2"]))
@@ -856,22 +877,24 @@ def ui():
     Image.fromarray((np.clip(paper, 0, 1) * 255 + 0.5).astype(np.uint8)).save(os.path.join(out, "Paper.png"))
 
 
+CAP_LIGHT, CAP_DARK = (229, 222, 199), (168, 163, 148)   # a character's cap and a named key's
+
+
 def keyboard():
     """world/keyboard.json is the builder's layout (a key: x, y, width, height from the panel's top
     left, in millimetres, and its legend). The caps of world/computer.py take this picture from above.
     The legends themselves are the panel's lettering, not part of it."""
     layout = json.load(open(os.path.join(HERE, "keyboard.json"), encoding="utf-8"))
     wide, high, scale = layout["width"], layout["height"], 6
-    img = Image.new("RGB", (int(wide * scale), int(high * scale)), (38, 36, 33))
+    import pc_faces
+    band = pc_faces.SIDE_BAND   # (the caps' sides under the layout, unrolled: pc_faces.side_v)
+    img = Image.new("RGB", (int(wide * scale), int((high + 2 * band) * scale)), (38, 36, 33))
     shade = Image.new("L", img.size, 120)   # how much light reaches a place among the caps: the lightmap is too coarse to say
     draw, lit = ImageDraw.Draw(img), ImageDraw.Draw(shade)
     # a cap seen from above, as pc.py and computer.py build it: its foot, its shoulder, its top (insets left and right, behind, before)
-    import pc_faces
     foot, shoulder, top = (1.5, 1.5, 1.5), pc_faces.CAP_SHOULDER, pc_faces.CAP_TOP
     for x, y, w, h, legend in layout["keys"]:
-        named = (sum(c.isalpha() for c in legend) >= 2 and " " not in legend.strip()) or (len(legend) > 1 and legend[0] == "F" and legend[1].isdigit())
-        named = named or legend.startswith("Use my")
-        cap = (168, 163, 148) if named else (229, 222, 199)
+        cap = CAP_DARK if pc_faces.cap_named(legend) else CAP_LIGHT
         draw.rectangle((x * scale, y * scale, (x + w) * scale, (y + h) * scale), fill=cap)
         lit.rectangle((x * scale, y * scale, (x + w) * scale, (y + h) * scale), fill=140)
         steps = 10
@@ -881,6 +904,12 @@ def keyboard():
                 side, far, near = (a[i] + (b[i] - a[i]) * t for i in range(3))
                 lit.rectangle(((x + side) * scale, (y + far) * scale, (x + w - side) * scale, (y + h - near) * scale), fill=int(255 * (dark + (light - dark) * t)))
         lit.rectangle(((x + top[0]) * scale, (y + top[1]) * scale, (x + w - top[0]) * scale, (y + h - top[2]) * scale), fill=255)
+    for colour, named in ((CAP_LIGHT, False), (CAP_DARK, True)):   # the sides' bands: the light down each from its top edge
+        for row in range(int(high * scale), img.size[1]):
+            d = (1 - (row + 0.5) / img.size[1]) * (high + 2 * band) - (0.0 if named else band) - pc_faces.SIDE_MARGIN
+            if -pc_faces.SIDE_MARGIN <= d < band - pc_faces.SIDE_MARGIN:
+                draw.line((0, row, img.size[0], row), fill=colour)
+                lit.line((0, row, img.size[0], row), fill=int(255 * pc_faces.side_shade(max(d, 0.0))))
     img, shade = img.resize((4096, 2048), Image.LANCZOS), shade.resize((4096, 2048), Image.LANCZOS)
     a, s = np.asarray(img).astype(float) / 255, np.asarray(shade).astype(float) / 255
     save("Keyboard", a * s[..., None] * (0.96 + 0.04 * np.random.default_rng(500).random(a.shape[:2]))[..., None], 0.32)
@@ -962,16 +991,122 @@ def frame_art():
     img.convert("RGBA").save(os.path.join(OUT, "..", "Assets", "PH_hanging_picture_frame_01_artwork_d.png"))
 
 
+def soda_cans():
+    """The drink cans' print (world/can.py's outline, laid round the can as the lathe lays it: across
+    once round, up from the dome's middle under it to the lid's): bare aluminium but for the body.
+    The 1990s US cans: Coca-Cola Classic red, its script logo white across the front over the white
+    wave (the Dynamic Ribbon, the company's since 1969: coca-colacompany.com, "Coke Lore: Trademark
+    Chronology"), "Classic" under it; Diet Coke silver, its logo red. The logos are Wikimedia Commons'
+    (world/fetch.py's LOGOS, made pictures by world/logos.py). On the back, as their cans then said:
+    the Nutrition Facts (the 1994 panel), the ingredients, the maker, the deposit, the UPC."""
+    import can
+    logos = os.path.join(HERE, "..", "build", "fetched", "logos")
+    v0, v1 = can.print_band()
+    lengths = [0.0]
+    for (r0, y0), (r1, y1) in zip(can.PROFILE, can.PROFILE[1:]):
+        lengths.append(lengths[-1] + np.hypot(r1 - r0, y1 - y0))
+    girth = 2 * np.pi * 0.033
+    W = 2048
+    H = int(round(lengths[-1] / girth * W))        # drawn at one scale both ways, then stretched to the square
+    top, bottom = int((1 - v1) * H), int((1 - v0) * H)
+    band = bottom - top
+    red, white, silver = (228, 0, 43), (250, 250, 250), (200, 202, 206)
+    cans = {
+        "CanCoke": dict(ground=red, ink=white, logo="Coca-Cola_logo.png", logo_w=0.46, under="Classic", wave=white,
+                        cal="140", sodium="50mg", sod_pc="2%", carb="39g", carb_pc="13%", sugar="39g", upc="0 49000 00634 6",
+                        ingredients="CARBONATED WATER, HIGH FRUCTOSE CORN SYRUP AND/OR SUCROSE, CARAMEL COLOR, PHOSPHORIC ACID, NATURAL FLAVORS, CAFFEINE."),
+        "CanDiet": dict(ground=silver, ink=red, logo="Diet_Coke_logo.png", logo_w=0.34, under=None, wave=red,
+                        cal="0", sodium="40mg", sod_pc="2%", carb="0g", carb_pc="0%", sugar="0g", upc="0 49000 00635 3",
+                        ingredients="CARBONATED WATER, CARAMEL COLOR, ASPARTAME, PHOSPHORIC ACID, POTASSIUM BENZOATE (TO PROTECT TASTE), "
+                                    "NATURAL FLAVORS, CITRIC ACID, CAFFEINE. PHENYLKETONURICS: CONTAINS PHENYLALANINE."),
+    }
+    for name, c in cans.items():
+        img = Image.new("RGB", (W, H), silver)
+        d = ImageDraw.Draw(img)
+        d.rectangle((0, top, W, bottom), fill=c["ground"])
+        # the wave: a ribbon swelling and thinning twice round, under the logo
+        for x in range(W):
+            t = 2 * np.pi * x / W * 2
+            y = top + band * (0.70 + 0.06 * np.sin(t))
+            half = band * (0.025 + 0.03 * (0.5 + 0.5 * np.sin(t + 1.2)))
+            d.line((x, y - half, x, y + half), fill=c["wave"])
+        front = W * 0.27
+        mark = Image.open(os.path.join(logos, c["logo"])).convert("RGBA")
+        mw = int(W * c["logo_w"])
+        mark = mark.resize((mw, int(mw * mark.height / mark.width)), Image.LANCZOS)
+        alpha = mark.split()[3]
+        img.paste(c["ink"], (int(front - mw / 2), int(top + band * 0.40 - mark.height / 2)), alpha)
+        small = font("arialbd.ttf", int(band * 0.065))
+        if c["under"]:
+            d.text((front + mw * 0.30, top + band * 0.40 + mark.height * 0.47), c["under"], fill=c["ink"], anchor="mm", font=font("ariali.ttf", int(band * 0.08)))
+        d.text((front, top + band * 0.90), "12 FL OZ (355 mL)", fill=c["ink"], anchor="mm", font=small)
+        # the back: the facts, the UPC, the ingredients, the maker and the deposit
+        tiny, tiny_b, fine = font("arial.ttf", int(band * 0.03)), font("arialbd.ttf", int(band * 0.032)), font("arial.ttf", int(band * 0.026))
+        box = (int(W * 0.50), top + int(band * 0.05), int(W * 0.50 + band * 0.56), top + int(band * 0.60))
+        d.rectangle(box, fill=white, outline=(10, 10, 10), width=2)
+        facts = [("Nutrition Facts", tiny_b, True), ("Serving Size 1 Can", tiny, True), ("Amount Per Serving", tiny, False),
+                 ("Calories " + c["cal"], tiny_b, True), ("                         % Daily Value*", tiny, False),
+                 ("Total Fat 0g                    0%", tiny, False), ("Sodium " + c["sodium"] + "                  " + c["sod_pc"], tiny, False),
+                 ("Total Carb. " + c["carb"] + "               " + c["carb_pc"], tiny, False), ("   Sugars " + c["sugar"], tiny, False),
+                 ("Protein 0g", tiny, True), ("*Percent Daily Values are based", fine, False), ("on a 2,000 calorie diet.", fine, False)]
+        y = box[1] + band * 0.02
+        for line, f, rule in facts:
+            d.text((box[0] + band * 0.025, y), line, fill=(10, 10, 10), font=f)
+            y += band * 0.042
+            if rule:
+                d.line((box[0] + band * 0.025, y - band * 0.007, box[2] - band * 0.025, y - band * 0.007), fill=(10, 10, 10), width=3)
+        rng = np.random.RandomState(sum(map(ord, c["upc"])))
+        bx, by, bw, bh = box[2] + int(band * 0.05), top + int(band * 0.06), int(band * 0.36), int(band * 0.18)
+        d.rectangle((bx, by, bx + bw, by + bh + int(band * 0.05)), fill=white)
+        x = bx + band * 0.03
+        while x < bx + bw - band * 0.05:
+            w = rng.choice([1, 2, 3, 4]) * band * 0.004
+            d.rectangle((x, by + band * 0.02, x + w, by + bh), fill=(10, 10, 10))
+            x += w + rng.choice([1, 2, 3]) * band * 0.004
+        d.text((bx + bw / 2, by + bh + band * 0.025), c["upc"], fill=(10, 10, 10), anchor="mm", font=tiny)
+        words, line = [], "INGREDIENTS:"
+        for word in c["ingredients"].split():
+            if d.textlength(line + " " + word, font=fine) > bw * 1.05:
+                words.append(line)
+                line = word
+            else:
+                line += " " + word
+        words.append(line)
+        y = by + bh + band * 0.075
+        text_ink = (10, 10, 10) if c["ground"] == silver else c["ink"]
+        for line in words:
+            d.text((bx, y), line, fill=text_ink, font=fine)
+            y += band * 0.031
+        for k, line in enumerate(("THE COCA-COLA COMPANY, ATLANTA, GA 30313", "PLEASE RECYCLE    ME VT MA CT IA OR 5¢  MI 10¢  CA CASH REFUND")):
+            d.text(((box[0] + bx + bw) / 2, top + band * (0.88 + 0.05 * k)), line, fill=text_ink, anchor="mm", font=tiny_b if k else tiny)
+        # aluminium where it is bare: a fine brushed noise, round the can
+        a = np.asarray(img.resize((W, W), Image.BICUBIC)).astype(np.float32) / 255.0
+        grain = unit(noise(W, 0.5, 70 + len(name), stretch=(1.0, 0.02)))[..., None]
+        bare = np.ones((W, 1, 1), np.float32)
+        bare[int((1 - v1) * W):int((1 - v0) * W)] = 0.0
+        if c["ground"] == silver:
+            bare = bare * 0 + 1   # (a silver can's print is on bare metal: brushed everywhere)
+        a = a * (1 - bare * (0.06 - 0.12 * grain))
+        smooth = np.where(bare[..., 0] > 0, 0.82 + 0.08 * grain[..., 0], 0.74)
+        save(name, a, smooth)
+    for old in ("SodaRed", "SodaBlue"):
+        for suffix in (".png", "_p.png"):
+            if os.path.exists(os.path.join(OUT, old + suffix)):
+                os.remove(os.path.join(OUT, old + suffix))
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     # walls, floor, wood and cloth are Poly Haven's (world/fetch.py)
-    for make in (plastic, metal, cardboard, rug, round_rug, books, atlas, prop_screen, city_street, night_sky, cloud_noise, rain_streaks, ui, keyboard, holo_grid, holo_panel, carpet, smudges):
+    for make in (plastic, metal, soda_cans, cardboard, rug, round_rug, books, atlas, prop_screen, city_street, night_sky, cloud_noise, rain_streaks, ui, keyboard, holo_grid, holo_panel, carpet, smudges):
         make()
     city_windows("CityOffice", 100, "office")
     city_windows("CityFlats", 101, "flats")
     city_windows("CityGlass", 102, "glass")
     save("White", np.ones((8, 8, 3)))
     frame_art()
+    import wear   # (what use leaves, laid over a thing's material: world/wear.py)
+    wear.main()
 
 
 if __name__ == "__main__":

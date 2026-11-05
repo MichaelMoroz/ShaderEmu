@@ -9,7 +9,8 @@ using UnityEngine.Rendering;
 using UnityEngine.UI;
 
 // The classroom in the den (world/furniture.py, docs/world/stations.md): twelve computers on six wooden
-// tables, one a visitor whose machine is on. The models are the furniture's; this gives each
+// tables, one a visitor whose machine is on; and one in each of the three side rooms off the corridor
+// (world/rooms.py), places 12 to 14. The models are the furniture's; this gives each
 // one's glass its tube, its keyboard and tube their beams' plates, the keys modelled on its
 // monitor and tower their work, its tower's window the speed of its owner's machine, and its
 // small lamps (disk, network, the hubs' ports) their light.
@@ -79,7 +80,16 @@ public static partial class ShaderEmuBuilder
 
     static StationsPlan ReadStations()
     {
-        return JsonUtility.FromJson<StationsPlan>(System.IO.File.ReadAllText(ModelsPath + "/stations.json"));
+        StationsPlan plan = JsonUtility.FromJson<StationsPlan>(System.IO.File.ReadAllText(ModelsPath + "/stations.json"));
+        // the side rooms' computers (world/rooms.py) are places too, after the classroom's: N13 to N15
+        SideRoomsPlan sides = SideRooms();
+        if (sides != null && sides.places != null && sides.first == plan.places.Length)
+        {
+            List<StationPlace> all = new List<StationPlace>(plan.places);
+            all.AddRange(sides.places);
+            plan.places = all.ToArray();
+        }
+        return plan;
     }
 
     // Keys with nothing to show, over keys the model has: a canvas the beams find. `keys` are

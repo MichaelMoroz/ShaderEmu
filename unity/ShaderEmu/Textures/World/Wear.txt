@@ -1,0 +1,4 @@
+FloppyShell	WearFloppyShell	0.100
+FloppyShutter	WearFloppyShutter	0.100
+DeskWalnut	WearDeskWalnut	0.500
+DeskWalnutSides	WearDeskWalnutSides	0.500
