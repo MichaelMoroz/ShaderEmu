@@ -140,6 +140,8 @@ public:
             };
             fprintf(stderr, "[harness] GPUDraw reads RAM: vertex %s, fragment %s\n", reads(d.vsLayout) ? "yes" : "no", reads(d.psLayout) ? "yes" : "no");
         }
+        for (auto& d : opt.compile.defines)
+            if (d.first == "GPU_NO_STREAMS") noStreams_ = true;
         if (opt.gpuShader && !gpuPasses_.empty() && getenv("RVC_GPU_COMPARE")) {
             // RVC_GPU_COMPARE=N (docs/machine/gpu.md, "Streams"): every N-th frame the list drawn again the way before
             // (GPU_NO_STREAMS: the fragment reading RAM) into a second target from the same picture, and the two counted
@@ -1081,9 +1083,10 @@ private:
         if (gpuPasses_.size() > 3) {
             gpuDrawIds(mat);
             mat.setTexture("_GpuDrawIds", drawIdsSrv_.Get(), kDrawIdsW, kDrawIdsH);
-            if (gpuPasses_.size() > 7) gpuStreamSums(mat);
+            bool streams = gpuPasses_.size() > 7 && !noStreams_;   // (--define GPU_NO_STREAMS: the draws read RAM, no stream is made)
+            if (streams) gpuStreamSums(mat);
             if (gpuPasses_.size() > 5) gpuVertices(mat);
-            if (gpuPasses_.size() > 7) gpuStream(mat);
+            if (streams) gpuStream(mat);
         }
         if (gpuPasses_.size() > 2 && !comparing_) gpuUpload(mat, (gpuPasses & 0x10000u) != 0);   // (the levels made on GPU_UPLOADED)
         mat.setTexture("_GpuVram", vramSrv_.Get(), kVramSide, kVramSide);
@@ -1709,6 +1712,7 @@ private:
     ComPtr<ID3D11Texture2D> gpuAltColor_;
     ComPtr<ID3D11RenderTargetView> gpuAltRtv_;
     bool comparing_ = false;
+    bool noStreams_ = false;
     int compareEvery_ = 1;
 public:
     uint64_t compareFrame_ = 0, compareLists_ = 0, compareBad_ = 0;
