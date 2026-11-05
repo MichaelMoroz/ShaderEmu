@@ -451,6 +451,11 @@ leaves' holes in one picture). A texture whose memory the program writes as it r
 it is unless the program says it changed. A sum of a list that should not go by where a texture lies counts a slot as what
 it was uploaded from (Quake III's `gpuListSum`).
 
+The GPU's draw (`RVC_PASS_PROF=1`, "gpu draw") of a game's frame from a snapshot of it, RTX 3090, 5 November 2026, the mean
+of two 10 s runs each way (one line of 200 frames a run): Quake III's q3dm17 0.122 ms with its pictures and light maps in
+the VRAM against 0.197 with `QUAKE3_VRAM=0` (0.62x); Half-Life's hldemo1 0.115 against 0.114, level (its light is the
+atlas's, in GPU memory, and its corridor's textures are near).
+
 `programs/gpubench` (a program in the kernel's place: `tools\make_lazy_image.py DIR --program gpubenchN`) covers a 1280 x
 720 picture eight times in one fragment mode. The GPU's draw (`RVC_PASS_PROF=1`, "gpu draw"), RTX 5090, 4 November 2026:
 

@@ -73,7 +73,8 @@ how it was checked, and what is left, in the order it is worth doing.
    plain slot dropping its texels of no alpha (`gpu.h`). Each was checked on a private image with its test_all cases (with
    `--races` where it has workers: Quake 9, Half-Life 3, Quake III 6, ClassiCube 15, Jedi Outcast 9, 0 undone) and a
    capture against its way before (`--cpu`): the same picture but for what the levels smooth far away. Fragments drawn
-   from the VRAM in those frames: Quake III 558,496, Half-Life 525,634, Jedi Outcast 976,439, ClassiCube 674,026. Not
+   from the VRAM in those frames: Quake III 558,496, Half-Life 525,634, Jedi Outcast 976,439, ClassiCube 674,026. On the card
+   (`gpu.md`, "VRAM"): Quake III's frame 0.197 to 0.122 ms of the GPU's draw, Half-Life's level (0.114 to 0.115). Not
    done: OpenTTD's sprites (a CMD_SPRITES record's pixels are drawn through remaps and shades, not as a texture; nothing to
    sample) and the words with holes of Half-Life drawn smooth (a slot has its key only premultiplied, which a blended
    draw of the same texture is not). Jedi Outcast does not build from this tree alone: `jk2.patch` includes
