@@ -384,8 +384,9 @@ rest was left out, so a seated game had no HUD at all. `GpuHolodeckHud.shader` (
 `volume_flat_command` and `volume_picture` in `src/gpu.h`) draws them on a quad of their own, "Holodeck HUD", in the GPU's
 pass order and blending, over everything of the room (no depth), each vertex at its place in the picture as a share of
 the quad. `EmuHolodeck.PlaceHud` keeps the quad before the sitter's eyes while a world is shown: 1.1 m ahead and 0.12 m
-below them (`hudDistance`, `hudDrop`), 1.0 m wide at the picture's shape (`hudWidth`); on a desktop it turns with the view,
-in a headset it follows the head's turn about the upright at `hudFollow` (2.5 a second), never its tilt or roll. A menu
+below them (`hudDistance`, `hudDrop`), 1.0 m wide at the picture's shape (`hudWidth`); on a desktop it turns and tilts with
+the view, in a headset it follows the head's turn about the upright and its tilt up and down at `hudFollow` (2.5 a second), never
+its roll (5 November 2026: before, it kept level, so a sitter who looked down had the HUD above the view). A menu
 or a load is flat, and then the whole picture is on the large screen instead. `_HudFlip` (-1) turns it over if a
 platform's clip space is upside down there. "ShaderEmu/Add the holodecks' HUD layer to the open scene" puts it into a
 built scene. Compiled with fxc against Unity's includes (the same warnings as `GpuVolumePass.cginc`) and the Editor and
