@@ -298,6 +298,8 @@ def shade(m, colour, uv, tex, key, light=None):
         if addr & 0x08000000:
             keep = t[:, 3] >= 0.5
             t = np.concatenate([t[:, :3] / np.maximum(t[:, 3:4], 1e-9), np.ones((len(t), 1))], axis=1)
+        elif tex[0] & 0x100 and not tex[0] & 0x400:
+            keep = t[:, 3] > 0   # (a keyed draw of a plain slot: its key is the texel of no alpha)
         m.vram_drawn += int(keep.sum())
         return np.clip(colour * t, 0, 1), keep
     if clamped:

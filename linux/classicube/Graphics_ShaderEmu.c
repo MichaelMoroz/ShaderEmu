@@ -290,6 +290,7 @@ static uint32_t kept_epoch = 1;
 static int view_x, view_y, view_w, view_h;
 static struct Matrix se_view, se_proj;
 static struct SETexture* se_texture;
+static cc_bool vram_on;   /* (the VRAM's: Textures, below) */
 static cc_bool se_depthOnly, se_alphaTest, se_alphaBlend, se_depthTest = true;
 static uint32_t* chunk_table;   /* the colours every chunk's vertices are tagged with */
 static uint32_t chunk_colours;
@@ -324,6 +325,7 @@ void Gfx_Create(void) {
 	segs_off   = getenv("CLASSICUBE_WALK") != NULL;
 	hold_late  = getenv("CLASSICUBE_HOLD_LATE") != NULL;
 	check_kept = getenv("CLASSICUBE_CHECK_KEPT") != NULL;
+	vram_on    = !((s = getenv("CLASSICUBE_VRAM")) && !strcmp(s, "0"));
 
 	Gfx.MaxTexWidth  = 1024;
 	Gfx.MaxTexHeight = 1024;
@@ -380,8 +382,63 @@ void Gfx_SetScissor(int x, int y, int w, int h) { }
 *#########################################################################################################################*/
 /* A texture is words of 0xTTRRGGBB (T: transparency). `wide` is the same four times across,
    for chunks: their vertices have 12 bits of u, and a run of blocks repeats it up to 16 times. */
-struct SETexture { struct Span *span, *wide; int width, height; };
+struct SETexture { struct Span *span, *wide; int width, height; uint32_t slot, wide_slot; };
 #define WIDE 4
+
+/* The VRAM (docs/machine/gpu.md, "VRAM"; CLASSICUBE_VRAM=0 the way before): a texture, and the chunks' copy of it four
+   times across, drawn from a slot of no levels (the terrain is an atlas: a level would mix its blocks), copied there
+   from where it lies whenever its texels are written. A keyed draw drops the texel of no alpha there, which is the key
+   (KEY_TEXEL): the slot is uploaded plain, as the atlas has translucent texels (water) too. The uploads are commands at
+   the end of the next list submitted (Gfx_EndFrame), made by the core that owns the drawing (Gfx_SE_Own). */
+#define VRAM_SIDE 4096
+#define VRAM_FREES 256
+#define VRAM_UPLOADS 256
+enum { CMD_UPLOAD = 6 };
+static uint32_t shelf_x, shelf_y, shelf_h;
+static struct { uint16_t x, y, w, h; } vram_free[VRAM_FREES];
+static int vram_frees;
+static struct { uint32_t at, w, h, slot; } vram_uploads[VRAM_UPLOADS];
+static int vram_upload_count;
+
+/* A block of (w + 2) x (h + 2), a texel of padding each way, from the shelves of whole 16 texels: its slot, 0 if full. */
+static uint32_t Vram_Take(int w, int h) {
+	uint32_t bw = (uint32_t)w + 2, bh = (uint32_t)h + 2, sw = (bw + 15) & ~15u, sh = (bh + 15) & ~15u, x, y;
+	int i;
+	if (!vram_on || w <= 0 || h <= 0 || w > 2048 || h > 2048) return 0;
+	for (i = 0; i < vram_frees; i++)
+		if (vram_free[i].w == bw && vram_free[i].h == bh) {
+			x = vram_free[i].x, y = vram_free[i].y;
+			vram_free[i] = vram_free[--vram_frees];
+			return (x + 1) | (y + 1) << 12;
+		}
+	if (shelf_x + sw > VRAM_SIDE) shelf_x = 0, shelf_y += shelf_h, shelf_h = 0;
+	if (shelf_y + sh > VRAM_SIDE) return 0;
+	x = shelf_x, y = shelf_y;
+	shelf_x += sw;
+	if (sh > shelf_h) shelf_h = sh;
+	return (x + 1) | (y + 1) << 12;
+}
+static void Vram_Give(uint32_t slot, int w, int h) {
+	int i;
+	if (!slot) return;
+	for (i = 0; i < vram_upload_count; i++)
+		if (vram_uploads[i].slot == slot) vram_uploads[i] = vram_uploads[--vram_upload_count], i--;
+	if (vram_frees < VRAM_FREES) {
+		vram_free[vram_frees].x = (uint16_t)((slot & 0xfff) - 1), vram_free[vram_frees].y = (uint16_t)((slot >> 12 & 0xfff) - 1);
+		vram_free[vram_frees].w = (uint16_t)(w + 2), vram_free[vram_frees].h = (uint16_t)(h + 2);
+		vram_frees++;
+	}
+}
+static void Vram_Upload(uint32_t slot, uint32_t at, int w, int h) {
+	int i;
+	if (!slot) return;
+	for (i = 0; i < vram_upload_count; i++)
+		if (vram_uploads[i].slot == slot) return;
+	if (vram_upload_count == VRAM_UPLOADS) return;
+	vram_uploads[vram_upload_count].at = at, vram_uploads[vram_upload_count].w = (uint32_t)w;
+	vram_uploads[vram_upload_count].h = (uint32_t)h, vram_uploads[vram_upload_count].slot = slot;
+	vram_upload_count++;
+}
 
 static CC_INLINE uint32_t Texel(BitmapCol c) {
 	return (c >> 24) == 0 ? KEY_TEXEL : c ^ 0xFF000000u;
@@ -405,6 +462,8 @@ static void CopyTexels(struct SETexture* tex, int x, int y, struct Bitmap* part,
 		for (; xx < count; xx++) dst[xx] = Texel(src[xx]);
 	}
 	stat_texels += count * rows;
+	Vram_Upload(tex->slot, tex->span->at, tex->width, tex->height);
+	if (tex->wide) Vram_Upload(tex->wide_slot, tex->wide->at, tex->width * WIDE, tex->height);
 
 	if (tex->wide) {
 		/* the same texels again, four times across */
@@ -433,6 +492,8 @@ static void MakeWide(struct SETexture* tex) {
 	int x, y;
 	tex->wide = Heap_Alloc(tex->width * tex->height * 4 * WIDE);
 	if (!tex->wide) return;
+	tex->wide_slot = Vram_Take(tex->width * WIDE, tex->height);
+	Vram_Upload(tex->wide_slot, tex->wide->at, tex->width * WIDE, tex->height);
 
 	src = (uint32_t*)(gpu + tex->span->at);
 	dst = (uint32_t*)(gpu + tex->wide->at);
@@ -463,6 +524,7 @@ GfxResourceID Gfx_AllocTexture(struct Bitmap* bmp, int rowWidth, cc_uint8 flags,
 	if (!tex->span) { Mem_Free(tex); return NULL; }
 	tex->width  = bmp->width;
 	tex->height = bmp->height;
+	tex->slot   = Vram_Take(tex->width, tex->height);
 	CopyTexels(tex, 0, 0, bmp, rowWidth);
 	if (texture_sums) TextureSum(tex);
 	return tex;
@@ -523,6 +585,8 @@ void Gfx_DeleteTexture(GfxResourceID* texId) {
 	kept_epoch++;
 	{ int i; for (i = 0; i < later_count; i++) if (later[i].tex == tex) later[i].tex = NULL; }
 
+	Vram_Give(tex->slot, tex->width, tex->height);
+	Vram_Give(tex->wide_slot, tex->width * WIDE, tex->height);
 	Heap_FreeLater(tex->span);
 	Heap_FreeLater(tex->wide);
 	Mem_Free(tex);
@@ -1175,6 +1239,7 @@ static CC_NOINLINE void DeriveState(int packed) {
 	address = packed ? (tex->wide ? tex->wide->at : 0) : tex->span->at;
 	if (!address) s->skip = true;
 	s->address = GPU_PHYS + address;
+	if (packed ? tex->wide_slot : tex->slot) s->address = packed ? tex->wide_slot : tex->slot;
 	s->width   = (uint32_t)tex->width * (packed ? WIDE : 1);
 	s->height  = (uint32_t)tex->height;
 }
@@ -1432,6 +1497,17 @@ void Gfx_EndFrame(void) {
 		frame_number = hold_frame;
 		hold_late    = false;
 	} else if (commands && SE_Surface(&address, &width, &height, &row)) {
+		/* the uploads waiting, at the list's end (of no levels: nothing waits for them) */
+		int u;
+		for (u = 0; u < vram_upload_count && commands < MAX_COMMANDS && mesh_vertices + 6 <= MAX_MESH; u++) {
+			uint32_t* c = draw.set + 16 * commands++;
+			c[0] = CMD_UPLOAD, c[1] = GPU_PHYS + vram_uploads[u].at, c[2] = FRAGMENT_TEXTURE, c[3] = mesh_vertices;
+			c[4] = vram_uploads[u].w, c[5] = vram_uploads[u].h, c[6] = vram_uploads[u].slot, c[7] = 0;
+			c[8] = 0, c[9] = 0;
+			mesh_vertices += 6;
+		}
+		for (int k = u; k < vram_upload_count; k++) vram_uploads[k - u] = vram_uploads[k];
+		vram_upload_count -= u;
 		for (;;) {
 			while (__atomic_exchange_n(&regs[REG_LOCK / 4], 1, __ATOMIC_ACQUIRE)) sched_yield();
 			if (regs[REG_SUBMIT / 4] == 0) break;

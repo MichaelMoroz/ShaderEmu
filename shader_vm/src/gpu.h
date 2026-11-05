@@ -931,6 +931,10 @@ float4 gpu_fragment(gpu_varyings i) {
                 if (t.a < 0.5) discard;
                 t.rgb /= t.a;
                 t.a = 1.0;
+            } else if ((i.texture_info.r & FRAGMENT_KEYED) && t.a == 0.0) {
+                // a keyed draw of a slot uploaded plain: its key is the word of no alpha (ClassiCube's KEY_TEXEL), and
+                // a nearest texel is the texel itself (a premultiplied slot would make the texture's translucent ones opaque)
+                discard;
             }
         }
         return saturate(c * t);
