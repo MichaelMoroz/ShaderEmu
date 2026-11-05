@@ -1375,8 +1375,10 @@ SIGUSR2 at the mark's end (the game's quit ends the program without its exit's h
 carried over the console in base64, and `python3 linux/tdawn/profile.py make linux/jk2/jk2.profile FILE`. `gcov.c` lists
 the files it was given in a table: the game's module is made fresh at each load and gave its infos again with their links
 reset. On one game (the same sums) the walk 192.38 to 184.16 passes a frame, the march 314.07 to 294.46. A function not
-public is known by a sum with its source's path in it: the counts were made in a private home (`~/agents/jk2s`), so a build
-in another folder keeps the counts of the public functions only.
+public is known by a sum with its source's path in it: every compile now runs from `$WORK/src` with that folder's paths
+relative (`$WORK/bin/jk2-relative`, as Tiberian Dawn's), and the counts were made again so: they hold in any home. A build
+in `~/nm` with them: the walk 183.82 passes a frame on one game (the counts of the public functions alone had given 184.16),
+the march on the card's pace 151.54, 5.0 frames a second.
 
 ### What bounds it
 

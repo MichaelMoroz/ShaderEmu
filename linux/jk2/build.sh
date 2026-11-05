@@ -61,6 +61,19 @@ else
 fi
 SRC=${JK2_SRC:-$WORK/src/openjk}
 mkdir -p "$WORK/src" "$BUILD"
+# Every compile from $WORK/src with that folder's paths relative (Tiberian Dawn's tdawn-relative): GCC knows a function that
+# is not public, in the played counts (jk2.profile), by a sum with its source's path in it, and the counts were otherwise
+# kept only in the home they were made in
+mkdir -p "$WORK/bin"
+cat > "$WORK/bin/jk2-relative.new" <<EOF
+#!/usr/bin/env bash
+top=$WORK/src
+cd "\$top" || exit 1
+exec "\${@//\$top\//}"
+EOF
+chmod +x "$WORK/bin/jk2-relative.new"
+cmp -s "$WORK/bin/jk2-relative.new" "$WORK/bin/jk2-relative" && rm "$WORK/bin/jk2-relative.new" || mv "$WORK/bin/jk2-relative.new" "$WORK/bin/jk2-relative"
+REL=$WORK/bin/jk2-relative
 
 if [ ! -d "$SRC/.git" ]; then
     step "OpenJK ${COMMIT:0:8}"
@@ -158,7 +171,7 @@ compile() {   # part, then lines "source object compiler flags..."
         set -- {}; src=$1; obj=$2; shift 2
         if [ "$obj" -nt "$src" ] && [ "$obj" -nt "'"$HERE"'/build.sh" ] && [ "$obj" -nt "'"$HERE"'/jk2.patch" ] &&
            [ "$obj" -nt "'"$HERE"'/sys_shaderemu.cpp" ] && [ "$obj" -nt "'"$HERE"'/nullgl.c" ] && [ "$obj" -nt "'"$HERE"'/se_rand.c" ] && [ "$obj" -nt "'"$HERE"'/cg_rand.c" ]; then exit 0; fi
-        "$@" -c "$src" -o "$obj" || { echo "failed: $src"; exit 255; }'
+        "'"$REL"'" "$@" -c "$src" -o "$obj" || { echo "failed: $src"; exit 255; }'
 }
 lines() {   # part, compiler and flags, then sources (with their extension)
     local part=$1 cc=$2; shift 2
