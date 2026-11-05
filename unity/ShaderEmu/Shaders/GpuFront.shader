@@ -14,6 +14,7 @@ Shader "ShaderEmu/GpuFront"
         Tags { "RenderType"="Opaque" "IgnoreProjector"="true" }
         Pass
         {
+            Name "GpuFront"
             Cull Off
             ZTest Always
             ZWrite Off

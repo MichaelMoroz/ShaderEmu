@@ -27,7 +27,7 @@ struct volume_point {
 };
 struct volume_out {
     gpu_varyings v;
-    float behind : SV_ClipDistance0;   // how far behind the screen: what is before it is cut away
+    float behind : SV_ClipDistance1;   // how far behind the screen: what is before it is cut away (0 is the edge's, gpu_varyings)
 #ifdef HOLODECK
     float3 world : TEXCOORD5;
 #endif
