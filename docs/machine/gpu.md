@@ -634,8 +634,14 @@ read its rectangle. So:
   distances (`GPU_EDGE`; `--define GPU_NO_EDGE` in the harness leaves it whole). Its colour and depth are the same
   at every corner, so no pixel inside changes. 3D triangles past a program's view are not cut: a cut triangle's
   new corners move the interpolation inside it.
-- The world's depth clear (GpuDrawBlit's pass 8, a draw) covers the list's
-  picture, not the whole target: depth past it is tested only by pixels past it.
+- The world's depth clear (GpuDrawBlit's pass 8, a draw) covers the list's picture, after pass 15 has put the whole
+  target's depth at the near plane (5 November 2026): past the picture a depth-tested pass's fragment (passes 0 to 3, 8
+  and 9: the 3D) fails the card's depth test before it is shaded. Before, 3D triangles past a program's view were drawn
+  and shaded over the rest of the 1280 x 720 target (Quake's 640 x 480 is a third of it). It is no clip, so no pixel
+  inside changes, and the depth is the vertices', not `SV_Depth`, which would turn the card's coarse depth culling off for
+  the passes after it. The passes that test no depth (4 to 7, 12 and 13: 2D, blends) still draw what they are given past
+  the picture (Quake's flash of a key, a rectangle over all of it). The harness clears all of its 2048 square to far
+  still.
 - The world's display blit draws the mode's rectangle of its 2048 x 1024 texture (Display.shader's `_Rect`; 800
   x 600 is a quarter), and a whole one when the mode shrinks, after power off and for another's display: outside
   the rectangle the texture keeps the `_Off` a whole blit wrote, so the mipmaps are made over the whole texture.

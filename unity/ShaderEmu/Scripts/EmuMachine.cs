@@ -1357,6 +1357,9 @@ public class EmuMachine : UdonSharpBehaviour
                     vramMipsPending = false;
                 }
             }
+            // the depth: the whole target's at the near plane (pass 15), then the picture's at far (pass 8), so nothing
+            // depth-tested is drawn or shaded past the picture (docs/machine/gpu.md, "The picture's rectangle")
+            VRCGraphics.Blit(blackTexture, target, gpuBlitMaterial, 15);
             VRCGraphics.Blit(blackTexture, target, gpuBlitMaterial, 8);
             // the GPU's passes in their order (FRAGMENT_PASS in gpu.h): 0-3, 8 and 9 (the shader's 9 and 10), 4-7,
             // 12 and 13 (its 11 and 12)

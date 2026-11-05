@@ -50,9 +50,27 @@ int2 frag(float4 p : SV_Position) : SV_Target {
     uint2 at = uint2(p.xy);
     return asint(gpu_draw_ids_fragment(at.y * GPU_DRAW_IDS_W + at.x));
 }
+#elif defined(GPU_CLEAR_NEAR)
+// GpuDrawBlit.shader's pass 15, blitted before pass 8: the whole target's depth at the near plane, so that past the
+// picture (which nothing reads) a depth-tested pass's fragment fails the card's depth test before it is shaded: 3D
+// triangles past a program's view were drawn and shaded over the rest of the 1280 x 720 target. Not a clip: a pixel
+// inside the picture is drawn as before. Depth by the vertices, not SV_Depth, which would turn the card's coarse depth
+// culling off for the passes after it.
+float4 vert(float4 v : POSITION) : SV_Position {
+#if defined(UNITY_REVERSED_Z)
+    float near = 1.0;
+#else
+    float near = 0.0;
+#endif
+    return float4(v.xy * 2.0 - 1.0, near, 1.0);
+}
+
+float4 frag() : SV_Target {
+    return 0;
+}
 #elif defined(GPU_CLEAR)
-// GpuDrawBlit.shader's pass 8: the depth cleared to far over the list's picture only, where the camera cleared the
-// whole target: depth past it is tested only by pixels past it, which nothing reads. A blit's quad is 0 to 1 each way.
+// GpuDrawBlit.shader's pass 8: the depth cleared to far over the list's picture only, after pass 15 put the whole
+// target's at the near plane: past the picture a depth-tested fragment is not drawn. A blit's quad is 0 to 1 each way.
 float4 vert(float4 v : POSITION) : SV_Position {
     float2 part = gpu_picture_size() / float2(GPU_TARGET_W, GPU_TARGET_H);
 #if defined(UNITY_REVERSED_Z)
