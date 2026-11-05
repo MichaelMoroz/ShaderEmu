@@ -691,8 +691,83 @@ gpu_varyings gpu_vertex_of(uint id, uint base, uint4 head) {
     return gpu_vertex_sized(id, base, head, gpu_picture_size());
 }
 
+// ---- the vertex front end (docs/machine/gpu.md, "The vertex front end") ----
+// Every vertex a command claims is made once a frame, by the GPUVertices pass, from the list in RAM, into six textures of
+// GPU_DRAW_IDS_W x GPU_DRAW_IDS_H, a texel each (floats: the position, the colour, the two pairs of coordinates, the edge;
+// words: the texture's four, the key and the light map's three). The passes after it take a vertex from there by its draw ID
+// and read no RAM for it: a draw pass's vertex stage reads only the VRAM's textures.
+#if defined(GPU_FRONT) || defined(GPU_FRONT_PASS)
+uint2 gpu_made_at(uint id) { return uint2(id % GPU_DRAW_IDS_W, id / GPU_DRAW_IDS_W); }
+#endif
+#ifdef GPU_FRONT
+#ifndef GPU_MADE_WORDS
+#define GPU_MADE_WORDS uint4   // (a host whose integer targets are signed defines int4: the bits are the same)
+#endif
+Texture2D<float4> _GpuMadePos, _GpuMadeColour, _GpuMadeUv, _GpuMadeEdge;
+Texture2D<GPU_MADE_WORDS> _GpuMadeTex, _GpuMadeMore;
+gpu_varyings gpu_vertex_made(uint id) {
+    gpu_varyings o;
+    int3 at = int3(gpu_made_at(id), 0);
+    float4 uv = _GpuMadeUv.Load(at);
+    uint4 more = asuint(_GpuMadeMore.Load(at));
+    o.position = _GpuMadePos.Load(at);
+    o.colour = _GpuMadeColour.Load(at);
+    o.uv = uv.xy;
+    o.light_uv = uv.zw;
+    o.texture_info = asuint(_GpuMadeTex.Load(at));
+    o.key = more.r;
+    o.light_info = more.gba;
+#ifdef GPU_EDGE
+    o.edge = _GpuMadeEdge.Load(at).xy;
+#endif
+    return o;
+}
+// Whether the pass being drawn draws mesh vertices id to id + span - 1 (all of one command's): the draw IDs alone.
+bool gpu_drawn(uint id, uint span) {
+    uint2 c = gpu_draw_id(id);
+#ifdef GPU_UPLOAD_PASS
+    if ((c.g & GPU_DRAW_ID_UPLOAD) == 0) return false;
+#elif defined(GPU_COPY_PASS)
+    if ((c.g & GPU_DRAW_ID_COPY) == 0) return false;
+#else
+    if (((c.g >> _GpuPass) & 1) == 0) return false;
+#endif
+    return span < 2 || gpu_draw_id(id + span - 1).r == c.r;
+}
+#endif
+#ifdef GPU_FRONT_PASS
+struct gpu_made {
+    float4 pos : SV_Target0;
+    float4 colour : SV_Target1;
+    float4 uv : SV_Target2;
+    float4 edge : SV_Target3;
+    uint4 tex : SV_Target4;
+    uint4 more : SV_Target5;
+};
+// Mesh vertex `id` as the draw passes made it, for all of them (a sprite's shade or not is in its draw ID's passes).
+gpu_made gpu_front_fragment(uint id) {
+    gpu_made m;
+    m.pos = float4(2, 2, 2, 1);
+    m.colour = 0, m.uv = 0, m.edge = 0, m.tex = 0, m.more = 0;
+    uint2 c = gpu_draw_id(id);
+    [branch]
+    if (c.g != 0) {
+        gpu_varyings o = gpu_vertex_of(id, c.r, ram(c.r));
+        m.pos = o.position;
+        m.colour = o.colour;
+        m.uv = float4(o.uv, o.light_uv);
+#ifdef GPU_EDGE
+        m.edge = float4(o.edge, 0, 0);
+#endif
+        m.tex = o.texture_info;
+        m.more = uint4(o.key, o.light_info);
+    }
+    return m;
+}
+#endif
+
 // The mesh's vertex `id` belongs to whichever command claims that slot. Vertices no command
-// draw IDs, and everything while no list is submitted, collapse to nothing.
+// claims, and everything while no list is submitted, collapse to nothing.
 gpu_varyings gpu_vertex(uint id) {
     gpu_varyings o;
     o.position = float4(2, 2, 2, 1);   // outside the clip volume
@@ -723,8 +798,31 @@ gpu_varyings gpu_vertex(uint id) {
         return o;
     }
 #endif
+#ifdef GPU_FRONT
+    [branch]
+    if (gpu_drawn(id, 1)) {
+        o = gpu_vertex_made(id);
+#ifdef GPU_FRONT_CHECK
+        // (--define GPU_FRONT_CHECK: the vertex made again here from the list; one the front end made otherwise, beyond a
+        // rounding, is a corner of a magenta triangle over the whole target)
+        gpu_command(id, 1, base, head);
+        gpu_varyings f = gpu_vertex_of(id, base, head);
+        float4 dp = abs(f.position - o.position), dc = abs(f.colour - o.colour);
+        float2 du = abs(f.uv - o.uv), dl = abs(f.light_uv - o.light_uv);
+        float tol = 1e-4 * (1.0 + max(abs(f.position.w), max(abs(f.uv.x), abs(f.uv.y))));
+        bool differs = any(dp > tol) || any(dc > 1e-4) || any(du > tol) || any(dl > 1e-4) || any(f.texture_info != o.texture_info) ||
+                       f.key != o.key || any(f.light_info != o.light_info);
+        if (differs) {
+            o.position = float4(id % 3 == 1 ? 3.0 : -1.0, id % 3 == 2 ? -3.0 : 1.0, 0.0, 1.0);
+            o.colour = float4(1, 0, 1, 1);
+            o.texture_info = 0;
+        }
+#endif
+    }
+#else
     [branch]
     if (gpu_command(id, 1, base, head)) o = gpu_vertex_of(id, base, head);
+#endif
     return o;
 }
 
@@ -746,15 +844,23 @@ gpu_varyings gpu_vertex(uint id) {
 [instance(AMP_INST)]
 void gpu_amp_geom(point amp_d I[1], inout TriangleStream<gpu_varyings> stream, uint inst : SV_GSInstanceID) {
     // nothing to do unless the submitted list says it has commands for this pass
+#ifndef GPU_FRONT
     if (_GpuPass != 0 && ((ram(GPU_CTRL).r >> (8 + _GpuPass)) & 1) == 0) return;
+#endif
     uint first = amp_call(I[0], inst) * GPU_AMP_EACH;
     for (uint t = 0; t < GPU_AMP_EACH; t++) {
         if (first + t >= GPU_TRIANGLES) break;
         uint v = (first + t) * 3, base;
         uint4 head;
+#ifdef GPU_FRONT
+        if (gpu_drawn(v, 3)) {
+            for (uint k = 0; k < 3; k++) {
+                gpu_varyings o = gpu_vertex_made(v + k);
+#else
         if (gpu_command(v, 3, base, head)) {
             for (uint k = 0; k < 3; k++) {
                 gpu_varyings o = gpu_vertex_of(v + k, base, head);
+#endif
                 GPU_AMP_Z(o);
                 stream.Append(o);
             }

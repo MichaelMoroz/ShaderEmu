@@ -53,6 +53,9 @@ Shader "ShaderEmu/gpu"
             #define GPU_VRAM   // textures uploaded into the VRAM (docs/machine/gpu.md, "VRAM")
             #ifndef GPU_NO_DRAW_IDS
             #define GPU_DRAW_IDS   // each vertex's command from the draw-ID pass (docs/machine/gpu.md, "Draw IDs")
+            #ifndef GPU_NO_FRONT
+            #define GPU_FRONT      // each vertex made by the front end (GPUVertices): no RAM read for it here
+            #endif
             #endif
             #include "src/gpu.h"
 
@@ -85,6 +88,9 @@ Shader "ShaderEmu/gpu"
             #define GPU_UPLOAD_PASS
             #ifndef GPU_NO_DRAW_IDS
             #define GPU_DRAW_IDS
+            #ifndef GPU_NO_FRONT
+            #define GPU_FRONT
+            #endif
             #endif
             #include "src/gpu.h"
 
@@ -115,6 +121,9 @@ Shader "ShaderEmu/gpu"
             #define GPU_COPY_PASS
             #ifndef GPU_NO_DRAW_IDS
             #define GPU_DRAW_IDS
+            #ifndef GPU_NO_FRONT
+            #define GPU_FRONT
+            #endif
             #endif
             #include "src/gpu.h"
 
@@ -123,6 +132,42 @@ Shader "ShaderEmu/gpu"
             }
             float4 frag(gpu_varyings i) : SV_Target {
                 return gpu_copy_fragment(i);
+            }
+            ENDCG
+        }
+
+        Pass
+        {
+            // The vertex front end (docs/machine/gpu.md, "The vertex front end"): every vertex a command claims made once,
+            // from the list in RAM, into six targets of GPU_DRAW_IDS_W x GPU_DRAW_IDS_H, after the draw IDs and before the
+            // uploads; the passes after it read their vertices from there.
+            Name "GPUVertices"
+            ZTest Off
+            ZWrite Off
+
+            CGPROGRAM
+            #pragma target 5.0
+            #pragma vertex vert
+            #pragma fragment frag
+
+            Texture2D<uint4> _State;
+            Texture2D<float4> _Data_ROM;   // (packed vertices may be a file's bytes where it lies in the ROM)
+            #define GPU_ROM
+            #define GPU_STATE _State
+            #define GPU_DRAW_IDS
+            #define GPU_FRONT_PASS
+            #define _GpuPass 0u   // (no pass of its own: gpu_command, which it does not call, names one)
+            #ifndef GPU_NO_EDGE
+            #define GPU_EDGE
+            #endif
+            #include "src/gpu.h"
+
+            float4 vert(uint id : SV_VertexID) : SV_Position {
+                return float4(id == 1 ? 3.0 : -1.0, id == 2 ? -3.0 : 1.0, 0.0, 1.0);
+            }
+            gpu_made frag(float4 p : SV_Position) {
+                uint2 at = uint2(p.xy);
+                return gpu_front_fragment(at.y * GPU_DRAW_IDS_W + at.x);
             }
             ENDCG
         }
