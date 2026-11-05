@@ -895,6 +895,16 @@ merged tree's for both):
 | Shell loop | 1.6365 | 1.6267 | -0.6% |
 | Quake, e1m1 | 1.7582 | 1.7521 | -0.35% |
 
+On the tree with all four (against a copy of it in each run; a variant that stops the machine spoils every tick of its run,
+so a patch applied with fuzz to the moved text was looked at first: br3's and la1's landed in the wrong blocks and were
+dropped):
+
+| What | Quake | Tiberian Dawn | Shell | Verdict |
+|---|---|---|---|---|
+| op_m's mul as a branch; mulhi; pfp; fp1; beq/bne after a load; M before the jumps; fb1 | -0.5%; +0.1%; -0.4%; -0.1%; +0.15%; +0.4%; -1.1% | -0.2%; 0.0%; +0.3%; +0.4%; +0.2%; +0.3%; -0.3% | +0.3%; +0.4%; +0.6%; +0.8%; +0.65%; +1.3%; +0.5% | level |
+| Pairs and all three of op_m's branch, fb1 and pfp; op_m's branch with mulhi; the crossing's test as one comparison; a load's range test first; crossing only after arithmetic | -0.6 to +0.5% | -0.6 to +0.1% | -0.8 to +0.2% | level |
+| The local arrays larger: the cache's 456, 464, 480, 512; the registers' 66, 68, 72, 80, 96 | -0.8 to +1.0% | -0.5 to +0.2% | -0.2 to +1.6% | level |
+
 **What was learnt.** Nothing of the fast loop's shape gave more than 1% on every load: f2 + fp1 (+ ffma) about 1%, at the
 noise's edge; the kept fusion 2% of Tiberian Dawn, a little of the shell, level on Quake. fp1 changes what fdiv makes (the card's quotient, which `rvc_cpu` does not make: a model of the card's
 division is owed first), and ffma's `mad` is fused where the general step rounds twice: neither is in the tree. The ways
