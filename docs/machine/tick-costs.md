@@ -868,6 +868,18 @@ On the tree with M before the atomics:
 | fb1; fp1 | -0.8%; -0.4% | +0.7%; -0.1% | +0.5%; 0.0% | level |
 | Another first hash of the write cache | | | | not run: `src/fb.h` and `src/types.h` find texels in the cores' caches by the same hash (`L1_H1`), so the tick's alone cannot change |
 
+More on the tree with M first (Quake, Tiberian Dawn, shell, against a copy of it):
+
+| What | Quake | Tiberian Dawn | Shell | Verdict |
+|---|---|---|---|---|
+| mul among arithmetic's selects (m1); la1; fp3; pfp | +2.0%; +1.7%; +1.1%; +0.4% | +0.1%; +0.3%; +0.9%; -0.3% | +1.0%; +1.5%; +0.3%; +0.6% | lost or level |
+| mul as a plain branch, not op_m's return (t4om), in three runs | -1.1%, -0.25%, -0.3% | -0.3%, -0.4%, +0.4% | 0.0%, +0.1%, 0.0% | level |
+| The branch after a load only for beq and bne (t4nl2), in two runs; with t4om | -0.75%, +0.6%; +0.7% | -1.1%, +0.1%; +0.2% | -0.1%, +0.3%; +0.1% | level |
+| The fused branch after arithmetic only for beq and bne; a jalr fused after arithmetic, committed only on a word | -0.2%; +1.1% | +1.3%; +2.0% | +0.2%; +1.45% | lost |
+| fmadd as one `mad`; fmadd before the atomics | -0.9%; -0.3% | +0.1%; +2.0% | -0.1%; +1.0% | level or lost |
+| The fused branch forwarding only its first register; a load's check by alignment alone; `imm_b` from the word's sign; flw before 0x53 | -1.1%; +1.1%; +0.5%; -0.4% | +1.3%; +2.2%; +1.3%; +1.8% | +0.45%; +1.0%; +0.5%; +1.1% | lost |
+| The fused word's sub by one mask; its rd 0 by an or; a branch's less-than by two compares; arithmetic's M test by funct7; the fused word from the texel, not the turned window; the same for the load's; shifts by `y & 31`; slt by two compares; the write before the forwarding selects | +0.4%; +1.9%; +2.0%; +1.4%; +7.6%; +7.3%; +2.0%; +1.8%; +0.4% | +0.7%; +0.2%; +0.5%; +0.4%; +3.5%; +1.2%; +0.3%; +0.4%; -0.3% | +0.9%; +1.0%; +1.2%; +0.3%; +7.7%; +6.5%; +0.6%; +0.6%; +0.3% | lost: the kept text's form is what it gains by |
+
 **What was learnt.** Nothing of the fast loop's shape gave more than 1% on every load: f2 + fp1 (+ ffma) about 1%, at the
 noise's edge; the kept fusion 2% of Tiberian Dawn, a little of the shell, level on Quake. fp1 changes what fdiv makes (the card's quotient, which `rvc_cpu` does not make: a model of the card's
 division is owed first), and ffma's `mad` is fused where the general step rounds twice: neither is in the tree. The ways
