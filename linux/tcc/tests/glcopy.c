@@ -1,7 +1,8 @@
 /*
  * Copies from the framebuffer into textures (docs/machine/gpu.md, "Copies"): a framebuffer object whose colour is a
  * texture, drawn as a list of its own and drawn from in the window; glCopyTexSubImage2D of the window's corner into a
- * second texture, drawn the next frame; and on frame 5 a draw after a copy, which SEGL_DEBUG=1 reports. Compiled in the
+ * second texture, drawn the next frame; a texture of the program's own pixels, streamed into the VRAM by every list that
+ * draws it ("Streams"); and on frame 5 a draw after a copy, which SEGL_DEBUG=1 reports. Compiled in the
  * machine:   cc glcopy.c -o glcopy && SEGL_DEBUG=1 ./glcopy
  * It draws 8 frames and prints "glcopy: done", then stays until it is closed (for a capture).
  */
@@ -26,7 +27,8 @@ main(void)
 {
 	GR_WINDOW_ID window;
 	GR_EVENT event;
-	GLuint tex[2], fb;
+	GLuint tex[3], fb;
+	static unsigned char checks[16 * 16 * 4];
 	int frame, width, height;
 
 	if (GrOpen() < 0)
@@ -39,11 +41,17 @@ main(void)
 	while (event.type != GR_EVENT_TYPE_EXPOSURE);
 	if (seglInit(window) < 0)
 		return 1;
-	glGenTextures(2, tex);
+	glGenTextures(3, tex);
 	for (int i = 0; i < 2; i++) {
 		glBindTexture(GL_TEXTURE_2D, tex[i]);
 		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 64, 64, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
 	}
+	for (int i = 0; i < 16 * 16; i++) {
+		int on = ((i % 16) ^ (i / 16)) & 4;
+		checks[4 * i] = on ? 240 : 30, checks[4 * i + 1] = on ? 200 : 30, checks[4 * i + 2] = on ? 40 : 90, checks[4 * i + 3] = 255;
+	}
+	glBindTexture(GL_TEXTURE_2D, tex[2]);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 16, 16, 0, GL_RGBA, GL_UNSIGNED_BYTE, checks);
 	glGenFramebuffersOES(1, &fb);
 	glBindFramebufferOES(GL_FRAMEBUFFER_OES, fb);
 	glFramebufferTexture2DOES(GL_FRAMEBUFFER_OES, GL_COLOR_ATTACHMENT0_OES, GL_TEXTURE_2D, tex[0], 0);
@@ -74,6 +82,8 @@ main(void)
 		quad(-0.9f, -0.9f, 0.3f, 0.6f);
 		glBindTexture(GL_TEXTURE_2D, tex[1]);
 		quad(0.45f, 0.45f, 0.95f, 0.95f);
+		glBindTexture(GL_TEXTURE_2D, tex[2]);
+		quad(0.45f, -0.3f, 0.95f, 0.3f);
 		glDisableClientState(GL_TEXTURE_COORD_ARRAY);
 		/* the window's bottom left 64 x 64 into the second texture, at the list's end */
 		glBindTexture(GL_TEXTURE_2D, tex[1]);

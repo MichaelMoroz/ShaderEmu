@@ -1084,6 +1084,14 @@ float4 gpu_fragment(gpu_varyings i) {
 #endif
     [branch]
     if (mode == FRAGMENT_SPRITE) return gpu_sprite_fragment(i);
+#ifdef GPU_VRAM_ONLY
+    // (--define GPU_VRAM_ONLY, docs/machine/gpu.md, "Streams": what still reads its texture or light map from RAM is magenta,
+    // but a text's atlas, a mask, coverage or distance fields, and sprites)
+    bool from_ram = (i.texture_info.r & FRAGMENT_LIT) && !VRAM_IS(i.light_info.r);
+    from_ram = from_ram || (mode != FRAGMENT_COLOUR && mode != FRAGMENT_SPRITE && mode != FRAGMENT_MASK && mode != FRAGMENT_COVER && mode != FRAGMENT_MSDF &&
+                            width != 0 && height != 0 && !VRAM_IS(i.texture_info.g));
+    if (from_ram) return float4(1.0, 0.0, 1.0, 1.0);
+#endif
     [branch]
     if (i.texture_info.r & FRAGMENT_LIT) c.rgb *= gpu_light(i);
 #ifdef GPU_VRAM
