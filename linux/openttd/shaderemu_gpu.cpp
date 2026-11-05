@@ -20,6 +20,7 @@
 #include "../blitter/factory.hpp"
 #include "../core/math_func.hpp"
 #include "shaderemu_gpu.h"
+#include "gpu_uploads.h"
 #include <sched.h>
 extern "C" {
 #include <GLES/segl.h>
@@ -118,6 +119,8 @@ struct List {
 	Rec *bg;          ///< that picture as a record
 	uint32_t frame;   ///< (debugging) the frame it was made in
 	uint32_t asked;   ///< _lists_asked when it was given to the GPU
+	uint32_t *table;  ///< the records' slots, a word each (gpu_list_uploads: the GPU draws from the VRAM alone)
+	gpu_up_state *ups;
 };
 uint32_t _frame;
 
@@ -189,7 +192,7 @@ uint32_t *_chat_words;          ///< the lines over their rectangle of the pictu
 uint32_t _chat_words_cap;
 uint32_t _picture_lists;        ///< lists drawn into the picture so far
 uint32_t _chat_made_for = ~0u;  ///< _picture_lists when _chat_words were made of the set shown (~0: not made)
-struct ChatList { uint32_t *cmds; Rec *bg; uint32_t asked; };
+struct ChatList { uint32_t *cmds; Rec *bg; uint32_t asked; uint32_t *table; gpu_up_state *ups; };
 ChatList _chat_lists[2];
 int _chat_list_next;
 uint32_t _chat_stat_sets, _chat_stat_lists; ///< (OPENTTD_PLAY_CHAT's line) sets of lines made, lists that drew them
@@ -223,9 +226,18 @@ void WaitDrawn()
 	for (PostOwed(); !Drawn(); PostOwed()) Rest();
 }
 
-/** A list to the GPU, its picture copied into (into, w, h, row): it waits for the lists before it. */
-void Submit(const uint32_t *cmds, int n, uint32_t passes, uint32_t into, int w, int h, int row)
+/** A list to the GPU, its picture copied into (into, w, h, row): it waits for the lists before it. Its records' pixels
+ * are copied into the VRAM by the list first (programs/common/gpu_uploads.h): the GPU draws from there alone. */
+void Submit(List &l, uint32_t into, int w, int h, int row)
 {
+	gpu_uploads_list u = { nullptr, 0, 0, l.cmds, Address(l.cmds), static_cast<uint32_t>(l.n), MAX_COMMANDS, l.vertices, MAX_VERTICES,
+		l.table, Address(l.table), MAX_RECORDS };
+	gpu_list_uploads(&u, 0, l.ups);
+	l.n = static_cast<int>(u.count);
+	l.vertices = u.mesh;
+	const uint32_t *cmds = l.cmds;
+	int n = l.n;
+	uint32_t passes = l.passes;
 	static const bool off = getenv("OPENTTD_GPU_OWED") != nullptr && getenv("OPENTTD_GPU_OWED")[0] == '0';
 	_owed_off = off;
 	_se_gpu_counts.lists++;
@@ -335,7 +347,7 @@ void SubmitList()
 	List &l = _lists[_cur];
 	l.ta = Address(_shade_a);
 	l.tb = Address(_shade_b);
-	Submit(l.cmds, l.n, l.passes, Address(_words), _width, _height, _row);
+	Submit(l, Address(_words), _width, _height, _row);
 	l.asked = _lists_asked;
 	_last = _cur;
 	_cur = -1;
@@ -743,18 +755,22 @@ void ChatMake()
 	_chat_list_next ^= 1;
 	WaitLists(cl.asked);
 	if (cl.cmds == nullptr) {
-		cl.cmds = AlignedNew<uint32_t>(2 * 16);
+		cl.cmds = AlignedNew<uint32_t>(MAX_COMMANDS * 16);   /* (and room for its uploads) */
 		cl.bg = AlignedNew<Rec>(1);
+		cl.table = AlignedNew<uint32_t>(MAX_RECORDS);
+		cl.ups = AlignedNew<gpu_up_state>(1);
 	}
 	List l{};
 	l.cmds = cl.cmds;
+	l.table = cl.table;
+	l.ups = cl.ups;
 	l.passes = 1;
 	*cl.bg = MakeRec(Address(_words + c.y * _row + c.x), 0, 0, 0, c.w, c.h, K_WORDS, _row * 4);
 	Command(l, cl.bg, 1, 0, false, 0, LastA(), LastB());
 	bool shades = false;
 	for (uint32_t i = 0; i < c.n; i++) shades |= Shades(RecKind(c.recs[i]));
 	Command(l, c.recs, c.n, 1, shades, 0);
-	Submit(l.cmds, l.n, l.passes, Address(_chat_words), c.w, c.h, c.w);
+	Submit(l, Address(_chat_words), c.w, c.h, c.w);
 	cl.asked = c.asked = _lists_asked;
 	_chat_made_for = _picture_lists;
 	_chat_stat_lists++;
@@ -1091,9 +1107,15 @@ bool SeGpuStart(int max_w, int max_h)
 		l.bg = AlignedNew<Rec>(1);
 	}
 	for (List &l : _shows) {
-		l.cmds = AlignedNew<uint32_t>(3 * 16);
+		l.cmds = AlignedNew<uint32_t>(MAX_COMMANDS * 16);   /* (three commands, and room for their uploads) */
 		l.bg = AlignedNew<Rec>(2); /* (the picture, and the chat's lines over their rectangle of it) */
 	}
+	for (List *ls : {_lists, _shows})
+		for (int k = 0; k < LISTS; k++) {
+			ls[k].table = AlignedNew<uint32_t>(MAX_RECORDS);
+			ls[k].ups = AlignedNew<gpu_up_state>(1);
+			*ls[k].ups = {};
+		}
 	_overlay = AlignedNew<Rec>(OVERLAY_RECORDS);
 	_overlay_side = AlignedNew<uint8_t>(OVERLAY_SIDE);
 	_streams[0].recs = nullptr;
@@ -1199,7 +1221,7 @@ void SeGpuPaint(const uint32_t *palette, unsigned window)
 		Command(l, l.bg + 1, 1, 1, false, Address(pal), c.ta, c.tb);
 	}
 	if (_overlay_n != 0 && !_capturing) Command(l, _overlay, _overlay_n, 2, false, Address(pal), 0);
-	Submit(l.cmds, l.n, l.passes, _window_info.surface_address, _window_info.width, _window_info.height, _window_info.surface_row);
+	Submit(l, _window_info.surface_address, _window_info.width, _window_info.height, _window_info.surface_row);
 	l.asked = _lists_asked;
 	if (!_capturing) se_fps_caption(&_window_info, _regs[REG_CLOCK]);   /* (the frames shown, as the machine's OpenGL counts its own) */
 }

@@ -35,7 +35,6 @@ public class EmuMachine : UdonSharpBehaviour
     public Material gatherMaterial;         // MachineGather.shader, on the gather's mesh on the same layer
     public MeshRenderer gatherRenderer;     // that mesh: the camera draws one of the two at a time
     public Material machineMaterial;        // Machine.shader: Commit (the state rows), GPUControl, Unpack, WindowBack
-    public Material gpuMaterial;            // the GPU mesh's material
     public Material volumeMaterial;         // the holodeck's: the same lists, seen from the room
     public Material volumeMaskMaterial;     // and what marks where they show, which looks whether there is a frame
     public Camera gpuCamera;                // disabled: rendered from here, once a round (with oldPaths' bit 6; its target is the blits')
@@ -48,6 +47,10 @@ public class EmuMachine : UdonSharpBehaviour
     public Material gpuBlitMaterial;        // GpuDrawBlit.shader: the depth cleared (pass 8), then the GPU's 12 passes
     public RenderTexture vram;              // 4096 x 4096 RGBA8 with mip levels: textures the guest uploaded (GpuDrawBlit's pass 13)
     public RenderTexture drawIds;            // 512 x 384 RGInt: each mesh vertex's command and passes (GpuDrawBlit's pass 14)
+    public Camera frontCamera;              // the vertex front end (GpuFront.shader): every vertex made once, into `made`
+    public Material frontMaterial;
+    public RenderTexture[] made;            // its eight targets of 512 x 385 (shader_vm/src/gpu_draw.h, gpu_made)
+    public RenderTexture madeDepth;
     public Material orderMaterial;          // BlitOrder.shader
     public RenderTexture orderTexture;      // 81 x 81: its pass 0's
     public RenderTexture rankTexture;       // 81 x 1: each point's place, which the blits' calls go by (_AmpRank)
@@ -457,7 +460,7 @@ public class EmuMachine : UdonSharpBehaviour
         pointsMaterial.SetTexture("_Data_ROM", Pick(1));
         gatherMaterial.SetTexture("_Data_ROM", Pick(1));
         pointsMaterial.SetTexture("_Data_RAM", Pick(0));
-        gpuMaterial.SetTexture("_Data_ROM", Pick(1));
+        if (frontMaterial != null) frontMaterial.SetTexture("_Data_ROM", Pick(1));
         if (pointsBlitMaterial != null)
         {
             pointsBlitMaterial.SetTexture("_Data_ROM", Pick(1));
@@ -535,6 +538,13 @@ public class EmuMachine : UdonSharpBehaviour
             machineMaterial.SetTexture("_TickOut" + i, tickTargets[i]);
         }
         tickCamera.SetTargetBuffers(colours, tickDepth.depthBuffer);
+        // and the front end's eight, which every pass of the GPU's drawing and the holodeck read
+        if (frontCamera != null && made != null)
+        {
+            RenderBuffer[] madeColours = new RenderBuffer[made.Length];
+            for (int i = 0; i < made.Length; i++) madeColours[i] = made[i].colorBuffer;
+            frontCamera.SetTargetBuffers(madeColours, madeDepth.depthBuffer);
+        }
         gpuDrew = true;
         machineMaterial.SetInt("_GpuDrawn", 1);
         gpuBusyUntil = 0f;
@@ -1341,13 +1351,14 @@ public class EmuMachine : UdonSharpBehaviour
     private bool vramSet, vramMipsPending;
     private void GpuDraw()
     {
-        if ((oldPaths & 64) == 0 && gpuBlitMaterial != null)
+        if (gpuBlitMaterial != null)
         {
             RenderTexture target = gpuCamera.targetTexture;
             gpuBlitMaterial.SetTexture("_State", state);
-            // each vertex's command and passes, found once for the uploads and the 12 passes (docs/machine/gpu.md, "Draw IDs")
-            if (drawIds != null) VRCGraphics.Blit(blackTexture, drawIds, gpuBlitMaterial, 14);
-            if (vram != null)
+            // each vertex's command and passes (docs/machine/gpu.md, "Draw IDs"), then each vertex made once by the front end
+            VRCGraphics.Blit(blackTexture, drawIds, gpuBlitMaterial, 14);
+            frontMaterial.SetTexture("_State", state);
+            frontCamera.Render();
             {
                 // the list's uploads into level 0, then its levels when asked (the list waits for them)
                 VRCGraphics.Blit(blackTexture, vram, gpuBlitMaterial, 13);
@@ -1364,10 +1375,10 @@ public class EmuMachine : UdonSharpBehaviour
             // the GPU's passes in their order (FRAGMENT_PASS in gpu.h): 0-3, 8 and 9 (the shader's 9 and 10), 4-7,
             // 12 and 13 (its 11 and 12)
             for (int i = 0; i < 12; i++) VRCGraphics.Blit(blackTexture, target, gpuBlitMaterial, BlitPassOrder[i]);
-            return;
+            // the list's copies of its picture into the VRAM, after every pass (docs/machine/gpu.md, "Copies")
+            gpuBlitMaterial.SetTexture("_GpuTarget", target);
+            VRCGraphics.Blit(blackTexture, vram, gpuBlitMaterial, 16);
         }
-        gpuMaterial.SetTexture("_State", state);
-        gpuCamera.Render();
     }
 
     // A preview camera prepares none of the room's canvases when it renders (82 of them: half
@@ -1462,7 +1473,6 @@ public class EmuMachine : UdonSharpBehaviour
             }
         }
         // whoever shows the state reads the texture this frame ended in
-        gpuMaterial.SetTexture("_State", state);
         ShowDisplay();
         heatMaterial.SetTexture("_State", state);
         if (stateViewMaterial != null) stateViewMaterial.SetTexture("_State", state);

@@ -268,8 +268,7 @@ Shader "ShaderEmu/GpuDrawBlit"
             #pragma geometry gpu_amp_geom
             #pragma fragment frag
             #define GPU_AMP
-            #define GPU_UPLOAD_PASS
-            #define _GpuPass 0
+            #define _GpuPass 16   // (the uploads' bit of the draw IDs)
             #include "GpuDrawPass.cginc"
             ENDCG
         }
@@ -302,6 +301,26 @@ Shader "ShaderEmu/GpuDrawBlit"
             #pragma fragment frag
             #define _GpuPass 0
             #define GPU_CLEAR_NEAR
+            #include "GpuDrawPass.cginc"
+            ENDCG
+        }
+        Pass
+        {
+            // 16: the list's copies (CMD_COPY) of rectangles of its picture into the VRAM's level 0, a blit into it after every
+            // pass (EmuMachine.GpuDraw; docs/machine/gpu.md, "Copies"), _GpuTarget the GPU's target
+            Name "GPUCopy"
+            Blend One Zero
+            ZTest Always
+            ZWrite Off
+            CGPROGRAM
+            #pragma target 5.0
+            #pragma vertex amp_vert
+            #pragma hull amp_hull
+            #pragma domain amp_dom
+            #pragma geometry gpu_amp_geom
+            #pragma fragment frag
+            #define GPU_AMP
+            #define _GpuPass 17   // (the copies' bit of the draw IDs)
             #include "GpuDrawPass.cginc"
             ENDCG
         }

@@ -12,6 +12,7 @@
 #include <sys/mman.h>
 #include <nano-X.h>
 #include "fps_caption.h"
+#include "../common/gpu_uploads.h"
 
 // ---- GPU memory: the part Nano-X leaves to one program ----
 
@@ -89,6 +90,8 @@ static int swaps;
 static uint32_t buffers_seen;
 
 static uint32_t commands, blocks, mesh_vertices, vertex_top, texture_top = TEXTURES_AT, passes_used;
+static uint32_t kept_texture[MAX_COMMANDS][2];   // a kept command's texture and light map as the program gave them (stream_put)
+static gpu_up_state list_uploads;   // the last list's uploads (stream_put)
 static uint32_t set_at = SETS_AT;   // the set the frame being built is in
 static uint32_t* last_draw;   // the command the next vertices may join, with what it was made for
 static uint32_t last_state[6];
@@ -770,15 +773,8 @@ void glGenTextures(GLsizei n, GLuint* out) {
 #define VRAM_SIDE 4096
 #define VRAM_PREMULTIPLIED 0x08000000u
 #define MAX_UPLOADS 512
-// The VRAM's rows STREAM_Y to STREAM_END are the library's streams (stream_put): a texture a draw names in GPU memory is
-// uploaded there in every list that draws it, once however many draws name it, and drawn by the sampler (docs/machine/gpu.md,
-// "Streams"). SEGL_STREAM=0 leaves them to the device's streams, the rows after these, one a draw.
-#define STREAM_Y 3072
-#define STREAM_END 3328
-#define MAX_STREAMS 256
-static int stream_off = -1;   // -1: not asked yet
-static struct { uint32_t address, how, width, height, key, slot; } streams[MAX_STREAMS];
-static int stream_count;
+// The VRAM's rows from GPU_SCRATCH_Y are every list's scratch band (gpu_list_uploads, programs/common/gpu_uploads.h): what
+// a draw names in GPU memory or the ROM is copied there by the list that draws it; the library's own textures lie above.
 static int vram_lod = -2;   // -2: not asked yet (SEGL_VRAM, then seglVram); -1 off
 typedef struct { uint16_t x, y, w, h; } vram_block;
 static vram_block vram_free[MAX_TEXTURES];
@@ -795,8 +791,8 @@ static int slot_upload_count, slot_uploads_left;
 static struct { uint32_t slot, address; } vram_sources[MAX_SOURCES];
 static int vram_source_count;
 static uint32_t vram_source_of(uint32_t slot) {
-    for (int i = 0; i < stream_count; i++)
-        if (streams[i].slot == slot) return streams[i].address;
+    uint32_t from = gpu_up_source(&list_uploads, slot);
+    if (from) return from;
     for (int i = 0; i < vram_source_count; i++)
         if (vram_sources[i].slot == slot) return vram_sources[i].address;
     return slot;
@@ -848,7 +844,7 @@ static uint32_t vram_block_take(uint32_t w, uint32_t h, int levels) {
         // shelves of whole 16 texels: the corner of a block of any L up to 4 a whole 2^L
         uint32_t sw = (bw + 15) & ~15u, sh = (bh + 15) & ~15u;
         if (shelf_x + sw > VRAM_SIDE) shelf_x = 0, shelf_y += shelf_h, shelf_h = 0;
-        if (shelf_y + sh > (stream_off ? VRAM_SIDE : STREAM_Y)) return 0;   // (full: streamed, or drawn from GPU memory)
+        if (shelf_y + sh > GPU_SCRATCH_Y) return 0;   // (full: drawn from the scratch band, copied every list)
         at_x = shelf_x, at_y = shelf_y;
         shelf_x += sw;
         if (sh > shelf_h) shelf_h = sh;
@@ -925,46 +921,22 @@ void seglVramLevels(int levels) {
 // if one has mip levels, which the host then makes before the list is drawn. They are taken off only once the list is
 // submitted (uploads_done).
 static void stream_put(void) {
-    if (stream_off < 0) {
-        const char* e = getenv("SEGL_STREAM");
-        stream_off = e && *e == '0';
-    }
-    stream_count = 0;
-    if (stream_off || !gpu) return;
-    uint32_t x = 0, y = STREAM_Y, shelf = 0, end = commands;
-    for (uint32_t i = kept; i < end; i++) {
-        uint32_t* c = (uint32_t*)(gpu + set_at) + 16 * i;
-        uint32_t mode = c[5] & 0xff, address = c[7], w = c[8], h = c[9];
-        // (a draw of words, a palette's indices, a mask, three bytes, tiles or a film's frame, in GPU memory or the ROM)
-        if (c[0] != CMD_DRAW || mode < 1 || mode > 6 || !w || !h || address >> 30 == 0) continue;
-        uint32_t how = mode | (c[5] & (FRAGMENT_KEYED | 0x1000u)), key = c[10], slot = 0;
-        for (int k = 0; k < stream_count && !slot; k++)
-            if (streams[k].address == address && streams[k].how == how && streams[k].width == w && streams[k].height == h &&
-                (!(how & FRAGMENT_KEYED) || streams[k].key == key))
-                slot = streams[k].slot;
-        if (!slot) {
-            // its block on a shelf of the band: the texture and a texel of padding round it (no mip levels)
-            uint32_t bw = (w + 2 + 3) & ~3u, bh = h + 2;
-            if (x + bw > VRAM_SIDE) x = 0, y += shelf, shelf = 0;
-            if (bw > VRAM_SIDE || y + bh > STREAM_END || stream_count == MAX_STREAMS) continue;   // (the device's streams then)
-            uint32_t* u = command(CMD_UPLOAD, 6);
-            if (!u) break;
-            slot = (x + 1) | (y + 1) << 12 | (how & FRAGMENT_KEYED ? VRAM_PREMULTIPLIED : 0) | (how & 0x1000u ? 0x10000000u : 0);
-            u[1] = address;
-            u[2] = how & (0xff | FRAGMENT_KEYED);
-            u[4] = w;
-            u[5] = h;
-            u[6] = slot;
-            u[7] = key;
-            u[8] = 0;   // (the display's palette, as a draw from GPU memory has it)
-            u[9] = 0;
-            x += bw;
-            if (bh > shelf) shelf = bh;
-            streams[stream_count].address = address, streams[stream_count].how = how, streams[stream_count].width = w;
-            streams[stream_count].height = h, streams[stream_count].key = key, streams[stream_count++].slot = slot;
+    if (!gpu) return;
+    // (a kept command's texture or light map in the scratch band is a copy an earlier list made: the program's own again,
+    // for this list to copy; any other is the program's, kept for that)
+    for (uint32_t i = 0; i < kept; i++)
+        for (int w = 0; w < 2; w++) {
+            uint32_t* c = (uint32_t*)(gpu + set_at) + 16 * i, *a = c + (w ? 13 : 7);
+            if (c[0] != CMD_DRAW || (w && !((c[5] & GPU_UP_LIT) && (c[4] & GPU_UP_COMPACT)))) continue;   // (word 13 a light map's only there)
+            if (VRAM_IS_SCRATCH(*a)) *a = kept_texture[i][w];
+            else kept_texture[i][w] = *a;
         }
-        c[7] = slot;
-    }
+    gpu_uploads_list l = {gpu, GPU_PHYS, GPU_SIZE, (uint32_t*)(gpu + set_at), GPU_PHYS + set_at, commands, GLES_COMMANDS_END,
+                          mesh_vertices, GLES_MESH_END, (uint32_t*)(gpu + vertex_top), GPU_PHYS + vertex_top,
+                          (GLES_VERTEX_END - vertex_top) / 4};
+    gpu_list_uploads(&l, 0, &list_uploads);
+    commands = l.count, mesh_vertices = l.mesh;
+    vertex_top = l.table_gpu - GPU_PHYS;
 }
 static uint32_t uploads_put(void) {
     int n = 0;

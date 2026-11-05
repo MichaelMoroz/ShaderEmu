@@ -41,6 +41,8 @@ for f in video/shaderemu_v.cpp video/shaderemu_v.h video/shaderemu_gpu.cpp video
          mixer_shaderemu.cpp; do
     put "$HERE/$(basename "$f")" "$SRC/src/$f"
 done
+# (every record a list names copied into the VRAM by the list: shaderemu_gpu.cpp, programs/common/gpu_uploads.h)
+put "$REPO/programs/common/gpu_uploads.h" "$SRC/src/video/gpu_uploads.h"
 
 # zlib and liblzma, which saved games are packed with
 mkdir -p "$DEPS"

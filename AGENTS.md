@@ -461,14 +461,12 @@
   of writing a texture's pixels uploads it again (`seglTextureChanged`, `seglVramUpload`), or the card draws the old
   picture, and `rvc_cpu`, which draws no list, never shows it: capture under `rvc_harness --cpu` with the switch at 1 and
   0. `gles.c`'s slots and uploads are the swapping core's alone: a frame drawn on a worker takes them where no frame is
-  out or on the drawing core. A sum of a list counts a slot as what it was uploaded from (`gpuListSum`). The vertices find
-  their commands in the draw-ID pass: a change to which vertices a command claims or to its pass changes
-  `gpu_draw_ids_fragment` with `gpu_command_search`, and `--define GPU_DRAW_IDS_CHECK` must leave no magenta.
-  Each vertex is made once a frame by GPUVertices (`gpu_front_fragment`, "The vertex front end"): a change to how a vertex is
-  made is a change there, and `--define GPU_FRONT_CHECK` must leave no magenta. A copy (command 7, `glCopyTexSubImage2D`,
-  framebuffer objects; "Copies") is made after the whole list: a draw after it in its list is a mistake `SEGL_DEBUG=1`
-  reports. GPUDraw reads the VRAM alone ("Streams"): what a draw would read from RAM is copied into the band by the device
-  (GPUStreamSums, GPUStream), and the fragment's RAM paths are compiled out (`GPU_VRAM_ONLY`). A new kind of what a draw
-  reads, or a new command that reads a texture, is an item of `gpu_stream_item`, a conversion of the stream pass's and a read
-  of the fragment's, and `RVC_GPU_READS=1` must still say `vertex no, fragment no`; compare a capture with `--define
-  GPU_NO_STREAMS`.
+  out or on the drawing core. A sum of a list counts a slot as what it was uploaded from (`gpuListSum`). The draws read the
+  VRAM alone (`docs/plans/gpu-vram-only.md`): RAM is read by the draw-ID pass, the front end (GPUVertices, which makes every
+  vertex once, its holodeck targets and the frame's row) and the uploads, nothing else; a draw of an address that is not a
+  slot is magenta. Every list maker calls `gpu_list_uploads()` (`programs/common/gpu_uploads.h`) on its finished list:
+  gles.c, Nano-X's driver, nxweb's strips, ClassiCube, `programs/common/gpu.h`; a new one does too, and a new command or
+  kind of texture is a case there and an upload kind of `gpu_upload_fragment`. The harness says `GPUDraw reads RAM` if a
+  draw pass binds the state texture. The holodeck draws the device's last list from the front end's targets, and reads no
+  RAM. A copy (command 7, `glCopyTexSubImage2D`, framebuffer objects; "Copies") is made after the whole list: a draw after it
+  in its list is a mistake `SEGL_DEBUG=1` reports.

@@ -31,6 +31,12 @@ Nothing new is drawn by the guest. A program's last whole frame is a command lis
 
 ## What the host draws
 
+Since 5 November 2026 the holodeck draws the device's last list, as the GPU's front end made it, and reads no RAM
+(`docs/plans/gpu-vram-only.md`): each vertex's place in its program's camera, its kind (world or flat) and its projection are
+the front end's targets, and the frame's camera, the up axis (from the size word above) and the picture's size its row past
+the mesh's. A list the device drew is whole, so the holodeck never shows one being written. What follows of the commands,
+the planes and the stencil is as before; where it says a command's words, read the front end's.
+
 `GpuVolumePass.cginc` draws the same point mesh as the GPU device, one point a triangle, with the
 visitor's camera. Of the frame's commands it takes only draws in perspective with a modelview
 of their own (`VERTEX_MODELVIEW`, and a projection whose w comes from z): those have a place in
