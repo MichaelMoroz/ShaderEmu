@@ -409,11 +409,25 @@ HUD; Doom's and Quake III's menus by Escape the same. Two things were wrong: a Q
 while one is played) drew "Awaiting gamestate" as a world (the room black, the picture on the HUD layer), as its flat word was told
 only at the input poll (`SE_TellFlat` now at the frame's end too), and Doom's default view (screenblocks 9) put its border on the
 HUD layer as a frame of stone before the sitter (`doom_video.c` takes the whole width while seated); both changes were written
-that day without a build (the session could not reach WSL), so they wait for one and `test_all.py`. A desktop sitter's click on the
+that day without a build (the session could not reach WSL); built the same day, the doom and quake3 cases pass 12 of 12, and on
+`rvc_cpu` a seated Doom has at most 3 flat draws (4 before) and Quake III's `map q3dm17` while playing is 26 frames flat (45 of
+world and 33 flat draws before). A desktop sitter's click on the
 console both pressed its key and reached the game (one click turned "3D: games only" and hosted ClassiCube on the LAN): the
 console's plates are the desktop view's too now (`EmuPointer`, `holoAim`). Escape is ClientSim's menu key, as it is VRChat's: in
-the editor every Escape also opened ClientSim's menu. Half-Life and Jedi Outcast stop at their licence windows, which the check
+the editor every Escape also opened ClientSim's menu. Half-Life and Jedi Outcast stop at their licence windows, which that check
 left unaccepted.
+
+A second run the same day accepted them, as the owner allowed (`build/unity_checks/20261105c`). Half-Life from the seat: the
+world round it, the menu by `HL_SCRIPT` flat on the large screen, Escape back to the world; `kill` stays the world (the dead view
+looks up from the floor), and 20 s after `hldemo2`'s spawn the room was still black with a world told (not followed further).
+Jedi Outcast's level drew as torn triangles: `volume_vertex` (`src/gpu.h`) read only compact and plain vertices, so Ghoul2's
+skinned draws (`VERTEX_BONES`) were read as plain ones; it reads them now as `gpu_vertex_sized` does (2fda440a). That image's
+`jk2.bin` came from a tree with the uncommitted arrays' vertices (`VERTEX_ARRAYS`), which the shaders of that run did not have
+at all, so its level was wrong for that reason too; the world from the seat is still to be seen with both. Two setup lessons:
+`tools/fxc2/scripts/unity-overlay.ps1` puts the plain `d3dcompiler_47.dll` in the overlay, which Unity's shader compiler cannot
+load (copy `tools/fxc2/bin/unity`'s two files into the overlay's `Data\Tools` instead), and an editor started once with a
+compiler that fails gives `Machine.shader` a default asset ("the importer crashed on it last time"): the machine then never
+powers on until the shaders are imported again. The probe's `power` wants a few seconds' `sleep` before it.
 
 `rvc_cpu --volume-log FILE` writes a line for each whole frame a program gives a host (its words, its draws in space, flat
 and text), and `python tools/volume_frames.py FILE` prints them as runs of a kind: a flat screen, a world with or without
