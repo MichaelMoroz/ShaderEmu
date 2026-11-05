@@ -741,6 +741,10 @@ believed only where it holds in two runs or more. Another session's Unity editor
 | **fp1**: fdiv inline with the sum, difference and product, as the card's `a / b` (FAST's division, out of FAST) | -0.2% (3) | -0.9% (3) | -0.4% (3) | a little |
 | **f2 + fp1** | -1.2% (3) | -1.0% (3) | -0.2% (3) | about -1% |
 | **f2 + fp1 + ffma** (fmadd, fmsub, fnmsub, fnmadd in the fast loop, one `mad`, the loop's last test) | -0.7% (2) | -1.0% (2) | -0.7% (2) | about -1%; ffma costs nothing measurable |
+| On f2 + fp1 + ffma (k2): la1; a load fused after arithmetic (k2al); a loop over the texel's run of arithmetic (k2t); no `n + 1 < budget` (k2nb); br3; br1 | +1.2%; +1.8%; +0.2%; +0.3%; +0.2%; +1.6% | -0.5%; +2.5%; 0.0%; -0.8%; -1.0%; -2.8% | -0.4%; +1.9%; +0.8%; -0.4%; -0.1%; +0.2% | level or lost; br1 Tiberian Dawn only again |
+| k2 again, in two more runs | +0.2%, -0.5% | -0.9%, -0.8% | -0.6%, -0.3% | about -0.5%: the noise's edge |
+| k2 with fdiv inline as `fp_all` makes it (exponents to the middle) and ffma rounded twice as the general step (k3: the results unchanged) | +1.7% | +0.5% | +0.8% | lost: the division's work is done for every sum, product and difference |
+| The same with the division under a branch of its own in the inline block (k3b); f2 + ffma rounded twice, fdiv where it was (k3c) | +0.7%; -0.25% | +0.1%; -0.1% | +0.4%; +0.4% | level: what k2 had over them was the card's quotient and the fused `mad`, or layout |
 | fp3 (the conversions before the light floats); pfp (no `precise` on the sum, difference and product); fcmpn (no NaN test in comparisons: the card's compare is false on a NaN too) | -0.5%; -0.7%; +0.8% | -0.3%; -0.5%; +0.1% | -0.6%; 0.0%; -0.4% | level |
 | m1: mul among arithmetic's selects (as round two found) | +0.5% (2) | -1.4% (2) | +1.8% (2) | lost but on Tiberian Dawn |
 | br1 (branches before stores and floats); br2, br3 (branches in the first group, after loads; after arithmetic) | +0.9%; +0.5%; -0.9% | -1.7%; -0.5%; -0.4% | -0.6%; +0.6%; 0.0% | br1 Tiberian Dawn only, as before |
