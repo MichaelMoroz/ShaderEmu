@@ -84,7 +84,7 @@
   turning in place. After a change to how bodies are shared
   out, measure 191 to 255 again (`PHYS_WORKERS`).
 
-- Tick utilization is instructions run over busy passes times 8,192 (`pwsh tools\tick_util.ps1
+- Tick utilization is instructions run over busy passes times the pass (12,288, the harness's and the world's since 5 November 2026; `--ticks`) (`pwsh tools\tick_util.ps1
   -Name N -Cmd "..." [-From TEXT]`, `docs/machine/boot.md` "Passes that end early"): it prints what
   ended passes early by reason and place, the kernel's idle loop apart, and a WORKERS line.
   In the harness an early end costs 0.2 ms, not the rest of the pass (a pass is 0.2 ms + 0.24
@@ -354,8 +354,8 @@
 - Lanes (`docs/machine/lanes.md`, lean tick only): a worker's pixels each run `fn(index, ctx)`
   (`mcw_lanes`), and a field of 3,968 lanes of no core's takes a job from a program's first core and
   does not wait for it (`mcw_field_begin`/`_ready`; `mcw_shade` in `mcwx.h` for a picture). An index
-  stores only to its stack and its own texels of the output, and ends within one pass (8,192
-  instructions; a texel of four pixels is an index): one that does not is skipped and made by the
+  stores only to its stack and its own texels of the output, and ends within one pass (12,288
+  instructions in the harness and the world, 8,192 on `rvc_cpu`; a texel of four pixels is an index): one that does not is skipped and made by the
   core that asked, or by its workers (`mcw_field_apart`, as `nxpath` does: 2% of its paths). A group
   leader's texel says which of its lanes skipped any; the first core must not scan every lane (290 ms
   a job). A static the tick sets before a pass's loop and reads after it is carried through every

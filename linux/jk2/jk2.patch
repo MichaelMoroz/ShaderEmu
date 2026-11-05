@@ -912,7 +912,7 @@ index f2990bba..e7022d12 100644
  			re.EndFrame( &time_frontend, &time_backend );
  		} else {
 diff --git a/code/client/snd_dma.cpp b/code/client/snd_dma.cpp
-index bb539e4c..6c29f9f5 100644
+index bb539e4c..ccbbdba6 100644
 --- a/code/client/snd_dma.cpp
 +++ b/code/client/snd_dma.cpp
 @@ -51,9 +51,112 @@ void S_StopAllSounds(void);
@@ -1060,7 +1060,7 @@ index bb539e4c..6c29f9f5 100644
  		chMP3_Bgrnd.iMP3SlidingDecodeWindowPos = 0;
  		chMP3_Bgrnd.iMP3SlidingDecodeWritePos = 0;
  		MP3Stream_SeekTo( &chMP3_Bgrnd, fTime );
-@@ -154,6 +273,58 @@ channel_t   s_channels[MAX_CHANNELS];
+@@ -154,6 +273,66 @@ channel_t   s_channels[MAX_CHANNELS];
  
  int			s_soundStarted;
  qboolean	s_soundMuted;
@@ -1099,7 +1099,15 @@ index bb539e4c..6c29f9f5 100644
 +		return;
 +	// (a frame's samples ahead, as many as the last mix painted, at most 8,000: the window keeps 18,750 behind what is
 +	// decoded, so what the next mix paints and its lips' levels read stay in it)
-+	const int ahead = se_va_painted + 256 < 8000 ? se_va_painted + 256 : 8000;
++	// (JK2_VOICE_AHEAD_FRAMES=N: N frames' samples ahead; one, the default: two were no faster, 162.49 passes a frame of the
++	// walk against 159.25 on one build)
++	static int frames = -1;
++	if ( frames < 0 ) {
++		const char *f = getenv( "JK2_VOICE_AHEAD_FRAMES" );
++		frames = f && atoi( f ) >= 1 && atoi( f ) <= 4 ? atoi( f ) : 1;
++	}
++	const int want = frames * ( se_va_painted + 256 );
++	const int ahead = want < 8000 ? want : 8000;
 +	se_va_n = 0;
 +	channel_t *ch = s_channels;
 +	for ( int i = 0; i < MAX_CHANNELS; i++, ch++ ) {
@@ -1119,7 +1127,7 @@ index bb539e4c..6c29f9f5 100644
  
  dma_t		dma;
  
-@@ -647,6 +818,12 @@ void S_Init( void ) {
+@@ -647,6 +826,12 @@ void S_Init( void ) {
  //
  void S_ReloadAllUsedSounds(void)
  {
@@ -1132,7 +1140,7 @@ index bb539e4c..6c29f9f5 100644
  	if (s_soundStarted && !s_soundMuted )
  	{
  		// new bit, reload all soundsthat are used on the current level...
-@@ -668,6 +845,15 @@ void S_ReloadAllUsedSounds(void)
+@@ -668,6 +853,15 @@ void S_ReloadAllUsedSounds(void)
  
  void S_Shutdown( void )
  {
@@ -1148,7 +1156,7 @@ index bb539e4c..6c29f9f5 100644
  	if ( !s_soundStarted ) {
  		return;
  	}
-@@ -905,6 +1091,12 @@ are no longer valid.
+@@ -905,6 +1099,12 @@ are no longer valid.
  ===================
  */
  void S_DisableSounds( void ) {
@@ -1161,7 +1169,7 @@ index bb539e4c..6c29f9f5 100644
  	S_StopAllSounds();
  	s_soundMuted = qtrue;
  }
-@@ -917,6 +1109,15 @@ S_BeginRegistration
+@@ -917,6 +1117,15 @@ S_BeginRegistration
  */
  void S_BeginRegistration( void )
  {
@@ -1177,7 +1185,7 @@ index bb539e4c..6c29f9f5 100644
  	s_soundMuted = qfalse;		// we can play again
  
  #ifdef USE_OPENAL
-@@ -1003,9 +1204,37 @@ S_RegisterSound
+@@ -1003,9 +1212,37 @@ S_RegisterSound
  Creates a default buzz sound if the file can't be loaded
  ==================
  */
@@ -1215,7 +1223,7 @@ index bb539e4c..6c29f9f5 100644
  
  	if (!s_soundStarted) {
  		return 0;
-@@ -1441,6 +1670,17 @@ Starts an ambient, 'one-shot" sound.
+@@ -1441,6 +1678,17 @@ Starts an ambient, 'one-shot" sound.
  
  void S_StartAmbientSound( const vec3_t origin, int entityNum, unsigned char volume, sfxHandle_t sfxHandle )
  {
@@ -1233,7 +1241,7 @@ index bb539e4c..6c29f9f5 100644
  	channel_t	*ch;
  	/*const*/ sfx_t *sfx;
  
-@@ -1498,7 +1738,11 @@ void S_StartAmbientSound( const vec3_t origin, int entityNum, unsigned char volu
+@@ -1498,7 +1746,11 @@ void S_StartAmbientSound( const vec3_t origin, int entityNum, unsigned char volu
  
  	if (sfx->pMP3StreamHeader)
  	{
@@ -1245,7 +1253,7 @@ index bb539e4c..6c29f9f5 100644
  		//ch->iMP3SlidingDecodeWritePos = 0; // These will be zero from the memset in S_PickChannel(), but keep them here for reference...
  		//ch->iMP3SlidingDecodeWindowPos= 0; //
  	}
-@@ -1519,6 +1763,17 @@ Entchannel 0 will never override a playing sound
+@@ -1519,6 +1771,17 @@ Entchannel 0 will never override a playing sound
  */
  void S_StartSound(const vec3_t origin, int entityNum, soundChannel_t entchannel, sfxHandle_t sfxHandle )
  {
@@ -1263,7 +1271,7 @@ index bb539e4c..6c29f9f5 100644
  	channel_t	*ch;
  	/*const*/ sfx_t *sfx;
  
-@@ -1625,7 +1880,11 @@ void S_StartSound(const vec3_t origin, int entityNum, soundChannel_t entchannel,
+@@ -1625,7 +1888,11 @@ void S_StartSound(const vec3_t origin, int entityNum, soundChannel_t entchannel,
  
  	if (sfx->pMP3StreamHeader)
  	{
@@ -1275,7 +1283,7 @@ index bb539e4c..6c29f9f5 100644
  		//ch->iMP3SlidingDecodeWritePos = 0; // These will be zero from the memset in S_PickChannel(), but keep them here for reference...
  		//ch->iMP3SlidingDecodeWindowPos= 0; //
  	}
-@@ -1641,6 +1900,15 @@ S_StartLocalSound
+@@ -1641,6 +1908,15 @@ S_StartLocalSound
  ==================
  */
  void S_StartLocalSound( sfxHandle_t sfxHandle, int channelNum ) {
@@ -1291,7 +1299,7 @@ index bb539e4c..6c29f9f5 100644
  	if ( !s_soundStarted || s_soundMuted ) {
  		return;
  	}
-@@ -1658,6 +1926,15 @@ S_StartLocalLoopingSound
+@@ -1658,6 +1934,15 @@ S_StartLocalLoopingSound
  ==================
  */
  void S_StartLocalLoopingSound( sfxHandle_t sfxHandle) {
@@ -1307,7 +1315,7 @@ index bb539e4c..6c29f9f5 100644
  	vec3_t nullVec = {0,0,0};
  
  	if ( !s_soundStarted || s_soundMuted ) {
-@@ -1702,6 +1979,15 @@ so sound doesn't stutter.
+@@ -1702,6 +1987,15 @@ so sound doesn't stutter.
  ==================
  */
  void S_ClearSoundBuffer( void ) {
@@ -1323,7 +1331,7 @@ index bb539e4c..6c29f9f5 100644
  	int		clear;
  
  	if ( !s_soundStarted || s_soundMuted ) {
-@@ -1783,6 +2069,12 @@ S_StopAllSounds
+@@ -1783,6 +2077,12 @@ S_StopAllSounds
  */
  void S_StopSounds(void)
  {
@@ -1336,7 +1344,7 @@ index bb539e4c..6c29f9f5 100644
  	if ( !s_soundStarted ) {
  		return;
  	}
-@@ -1829,6 +2121,15 @@ S_StopAllSounds
+@@ -1829,6 +2129,15 @@ S_StopAllSounds
  ==================
  */
  void S_StopAllSounds(void) {
@@ -1352,7 +1360,7 @@ index bb539e4c..6c29f9f5 100644
  	if ( !s_soundStarted ) {
  		return;
  	}
-@@ -1854,6 +2155,9 @@ S_ClearLoopingSounds
+@@ -1854,6 +2163,9 @@ S_ClearLoopingSounds
  */
  void S_ClearLoopingSounds( void )
  {
@@ -1362,7 +1370,7 @@ index bb539e4c..6c29f9f5 100644
  #ifdef USE_OPENAL
  	if (s_UseOpenAL)
  	{
-@@ -1873,6 +2177,12 @@ Include velocity in case I get around to doing doppler...
+@@ -1873,6 +2185,12 @@ Include velocity in case I get around to doing doppler...
  ==================
  */
  void S_AddLoopingSound( int entityNum, const vec3_t origin, const vec3_t velocity, sfxHandle_t sfxHandle, soundChannel_t chan ) {
@@ -1375,7 +1383,7 @@ index bb539e4c..6c29f9f5 100644
  	/*const*/ sfx_t *sfx;
  
    	if ( !s_soundStarted || s_soundMuted ) {
-@@ -1916,6 +2226,9 @@ S_AddAmbientLoopingSound
+@@ -1916,6 +2234,9 @@ S_AddAmbientLoopingSound
  */
  void S_AddAmbientLoopingSound( const vec3_t origin, unsigned char volume, sfxHandle_t sfxHandle )
  {
@@ -1385,7 +1393,7 @@ index bb539e4c..6c29f9f5 100644
  	/*const*/ sfx_t *sfx;
  
  	if ( !s_soundStarted || s_soundMuted ) {
-@@ -2066,6 +2379,9 @@ Music streaming
+@@ -2066,6 +2387,9 @@ Music streaming
  */
  void S_RawSamples( int samples, int rate, int width, int channels, const byte *data, float volume, qboolean bFirstOrOnlyUpdateThisFrame )
  {
@@ -1395,7 +1403,7 @@ index bb539e4c..6c29f9f5 100644
  	int		i;
  	int		src, dst;
  	float	scale;
-@@ -2275,6 +2591,9 @@ let the sound system know where an entity currently is
+@@ -2275,6 +2599,9 @@ let the sound system know where an entity currently is
  */
  void S_UpdateEntityPosition( int entityNum, const vec3_t origin )
  {
@@ -1405,7 +1413,7 @@ index bb539e4c..6c29f9f5 100644
  	if ( entityNum < 0 || entityNum >= MAX_GENTITIES ) {
  		Com_Error( ERR_DROP, "S_UpdateEntityPosition: bad entitynum %i", entityNum );
  	}
-@@ -2456,6 +2775,9 @@ Change the volumes of all the playing sounds for changes in their positions
+@@ -2456,6 +2783,9 @@ Change the volumes of all the playing sounds for changes in their positions
  */
  void S_Respatialize( int entityNum, const vec3_t head, vec3_t axis[3], qboolean inwater )
  {
@@ -1415,7 +1423,7 @@ index bb539e4c..6c29f9f5 100644
  #ifdef USE_OPENAL
  	EAXOCCLUSIONPROPERTIES eaxOCProp;
  	EAXACTIVEFXSLOTS eaxActiveSlots;
-@@ -2651,10 +2973,44 @@ qboolean S_ScanChannelStarts( void ) {
+@@ -2651,10 +2981,44 @@ qboolean S_ScanChannelStarts( void ) {
  // this is now called AFTER the DMA painting, since it's only the painter calls that cause the MP3s to be unpacked,
  //	and therefore to have data readable by the lip-sync volume calc code.
  //
@@ -1460,7 +1468,7 @@ index bb539e4c..6c29f9f5 100644
  
  	// clear out the lip synching override array for this frame
  	memset(s_entityWavVol, 0,(MAX_GENTITIES * 4));
-@@ -2674,6 +3030,10 @@ void S_DoLipSynchs( const int s_oldpaintedtime )
+@@ -2674,6 +3038,10 @@ void S_DoLipSynchs( const int s_oldpaintedtime )
  		{
  			// go away and work out amplitude for this sound we are playing right now.
  			s_entityWavVol[ ch->entnum ] = S_CheckAmplitude( ch, s_oldpaintedtime );
@@ -1471,7 +1479,7 @@ index bb539e4c..6c29f9f5 100644
  			if ( s_show->integer == 3 ) {
  				Com_Printf( "(%i)%i %s vol = %i\n", ch->entnum, i, ch->thesfx->sSoundName, s_entityWavVol[ ch->entnum ] );
  			}
-@@ -2693,9 +3053,23 @@ Called once each time through the main loop
+@@ -2693,9 +3061,23 @@ Called once each time through the main loop
  ============
  */
  void S_Update( void ) {
@@ -1495,7 +1503,7 @@ index bb539e4c..6c29f9f5 100644
  	if ( !s_soundStarted || s_soundMuted ) {
  		return;
  	}
-@@ -2900,7 +3274,11 @@ void S_Update_(void) {
+@@ -2900,7 +3282,11 @@ void S_Update_(void) {
  
  			if (ch->thesfx->pMP3StreamHeader)
  			{
@@ -1507,7 +1515,7 @@ index bb539e4c..6c29f9f5 100644
  				ch->iMP3SlidingDecodeWritePos = 0;
  				ch->iMP3SlidingDecodeWindowPos= 0;
  
-@@ -3063,6 +3441,16 @@ void S_Update_(void) {
+@@ -3063,6 +3449,16 @@ void S_Update_(void) {
  			endtime = s_soundtime + samps;
  
  
@@ -1524,7 +1532,7 @@ index bb539e4c..6c29f9f5 100644
  		SNDDMA_BeginPainting ();
  
  		S_PaintChannels (endtime);
-@@ -4062,6 +4450,9 @@ static void FreeMusic( MusicInfo_t *pMusicInfo )
+@@ -4062,6 +4458,9 @@ static void FreeMusic( MusicInfo_t *pMusicInfo )
  {
  	if (pMusicInfo->pLoadedData)
  	{
@@ -1534,7 +1542,7 @@ index bb539e4c..6c29f9f5 100644
  		Z_Free(pMusicInfo->pLoadedData);
  		pMusicInfo->pLoadedData		= NULL;		// these two MUST be kept as valid/invalid together
  		pMusicInfo->sLoadedDataName[0]= '\0';	//
-@@ -4073,6 +4464,12 @@ static void FreeMusic( MusicInfo_t *pMusicInfo )
+@@ -4073,6 +4472,12 @@ static void FreeMusic( MusicInfo_t *pMusicInfo )
  //
  void S_UnCacheDynamicMusic( void )
  {
@@ -1547,7 +1555,7 @@ index bb539e4c..6c29f9f5 100644
  	for (int i = eBGRNDTRACK_DATABEGIN; i != eBGRNDTRACK_DATAEND; i++)
  	{
  		FreeMusic( &tMusic_Info[i]);
-@@ -4134,7 +4531,13 @@ static qboolean S_StartBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolean
+@@ -4134,7 +4539,13 @@ static qboolean S_StartBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolean
  											// scan up to halfway of it to find floating headers, so don't make it
  											// too small. 8k works fine.
  		qboolean bMusicSucceeded = qfalse;
@@ -1562,7 +1570,7 @@ index bb539e4c..6c29f9f5 100644
  		{
  			if (!pMusicInfo->pLoadedData)
  			{
-@@ -4177,7 +4580,7 @@ static qboolean S_StartBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolean
+@@ -4177,7 +4588,7 @@ static qboolean S_StartBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolean
  							pMusicInfo->sfxMP3_Bgrnd.pMP3StreamHeader		= &pMusicInfo->streamMP3_Bgrnd;
  				Q_strncpyz( pMusicInfo->sfxMP3_Bgrnd.sSoundName, name, sizeof(pMusicInfo->sfxMP3_Bgrnd.sSoundName) );
  
@@ -1571,7 +1579,7 @@ index bb539e4c..6c29f9f5 100644
  				{
  					MP3Stream_InitPlayingTimeFields ( &pMusicInfo->streamMP3_Bgrnd, name, pbMP3DataSegment, pMusicInfo->iLoadedDataLen, qtrue);
  				}
-@@ -4193,7 +4596,7 @@ static qboolean S_StartBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolean
+@@ -4193,7 +4604,7 @@ static qboolean S_StartBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolean
  						pMusicInfo->chMP3_Bgrnd.thesfx = &pMusicInfo->sfxMP3_Bgrnd;
  				memcpy(&pMusicInfo->chMP3_Bgrnd.MP3StreamHeader, pMusicInfo->sfxMP3_Bgrnd.pMP3StreamHeader, sizeof(*pMusicInfo->sfxMP3_Bgrnd.pMP3StreamHeader));
  
@@ -1580,7 +1588,7 @@ index bb539e4c..6c29f9f5 100644
  				{
  					if (pMusicInfo->s_backgroundFile != -1)
  					{
-@@ -4498,6 +4901,12 @@ static char gsLoopMusic [MAX_QPATH]={0};
+@@ -4498,6 +4909,12 @@ static char gsLoopMusic [MAX_QPATH]={0};
  
  void S_RestartMusic( void )
  {
@@ -1593,7 +1601,7 @@ index bb539e4c..6c29f9f5 100644
  	if (s_soundStarted && !s_soundMuted )
  	{
  		//if (gsIntroMusic[0] || gsLoopMusic[0])	// dont test this anymore (but still *use* them), they're blank for JK2 dynamic-music levels anyway
-@@ -4518,6 +4927,12 @@ void S_RestartMusic( void )
+@@ -4518,6 +4935,12 @@ void S_RestartMusic( void )
  //
  void S_StartBackgroundTrack( const char *intro, const char *loop, qboolean bCalledByCGameStart )
  {
@@ -1606,7 +1614,7 @@ index bb539e4c..6c29f9f5 100644
  	bMusic_IsDynamic = qfalse;
  
  	if (!s_soundStarted)
-@@ -4647,6 +5062,12 @@ void S_StartBackgroundTrack( const char *intro, const char *loop, qboolean bCall
+@@ -4647,6 +5070,12 @@ void S_StartBackgroundTrack( const char *intro, const char *loop, qboolean bCall
  
  void S_StopBackgroundTrack( void )
  {
@@ -1619,7 +1627,7 @@ index bb539e4c..6c29f9f5 100644
  	for (int i=0; i<eBGRNDTRACK_NUMBEROF; i++)
  	{
  		S_StopBackgroundTrack_Actual( &tMusic_Info[i] );
-@@ -4711,6 +5132,54 @@ static qboolean S_UpdateBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolea
+@@ -4711,6 +5140,54 @@ static qboolean S_UpdateBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolea
  		return qfalse;
  	}
  
@@ -1674,7 +1682,7 @@ index bb539e4c..6c29f9f5 100644
  	// see how many samples should be copied into the raw buffer
  	if ( s_rawend < s_soundtime ) {
  		s_rawend = s_soundtime;
-@@ -4935,6 +5404,9 @@ static void S_UpdateBackgroundTrack( void )
+@@ -4935,6 +5412,9 @@ static void S_UpdateBackgroundTrack( void )
  			if ( pMusicInfoCurrent->s_backgroundFile == -1)
  			{
  				int iRawEnd = s_rawend;
@@ -1684,7 +1692,7 @@ index bb539e4c..6c29f9f5 100644
  				S_UpdateBackgroundTrack_Actual( pMusicInfoCurrent, qtrue, s_musicVolume->value );
  
  	/*			static int iPrevFrontVol = 0;
-@@ -4947,6 +5419,9 @@ static void S_UpdateBackgroundTrack( void )
+@@ -4947,6 +5427,9 @@ static void S_UpdateBackgroundTrack( void )
  				if (pMusicInfoFadeOut->bActive)
  				{
  					s_rawend = iRawEnd;
@@ -1694,7 +1702,7 @@ index bb539e4c..6c29f9f5 100644
  					S_UpdateBackgroundTrack_Actual( pMusicInfoFadeOut, qfalse, s_musicVolume->value );	// inactive-checked internally
  	/*
  					static int iPrevFadeVol = 0;
-@@ -5096,6 +5571,9 @@ static int SND_MemUsed(sfx_t *sfx)
+@@ -5096,6 +5579,9 @@ static int SND_MemUsed(sfx_t *sfx)
  //
  static int SND_FreeSFXMem(sfx_t *sfx)
  {
@@ -1704,7 +1712,7 @@ index bb539e4c..6c29f9f5 100644
  	int iBytesFreed = 0;
  
  #ifdef USE_OPENAL
-@@ -5181,6 +5659,12 @@ void SND_TouchSFX(sfx_t *sfx)
+@@ -5181,6 +5667,12 @@ void SND_TouchSFX(sfx_t *sfx)
  //
  void S_FreeAllSFXMem(void)
  {
@@ -1717,7 +1725,7 @@ index bb539e4c..6c29f9f5 100644
  	for (int i=1 ; i < s_numSfx ; i++)	// start @ 1 to skip freeing default sound
  	{
  		SND_FreeSFXMem(&s_knownSfx[i]);
-@@ -5255,6 +5739,23 @@ int SND_FreeOldestSound(void)
+@@ -5255,6 +5747,23 @@ int SND_FreeOldestSound(void)
  extern qboolean gbInsideLoadSound;
  qboolean SND_RegisterAudio_LevelLoadEnd(qboolean bDeleteEverythingNotUsedThisLevel /* 99% qfalse */)
  {
@@ -2448,6 +2456,75 @@ index 3427e786..8b9b0049 100644
  #ifdef RENDERER
  		return TheGhoul2InfoArray();
  #elif _JK2EXE
+diff --git a/code/mp3code/cwin.c b/code/mp3code/cwin.c
+index b1714055..46af7519 100644
+--- a/code/mp3code/cwin.c
++++ b/code/mp3code/cwin.c
+@@ -180,8 +180,64 @@ void window_dual(float *vbuf, int vb_ptr, short *pcm)
+ }
+ /*------------------------------------------------------------*/
+ /*------------------- 16 pt window ------------------------------*/
++#ifdef SHADEREMU
++/* (docs/games/jk2.md, "The voices' decoder": window16 unrolled, each sample's eight steps written out with their ring
++   indices, the same products and sums in the same order: the loops' counters and the pointers' steps were most of it,
++   and this one function was two thirds of the voices' decoding on the workers. SE_WINDOW16_LOOP keeps the loops) */
++#define SE_W16_CLAMP(sum, out) do { long t_ = (long)(sum); if (t_ > 32767) t_ = 32767; else if (t_ < -32768) t_ = -32768; *(out) = (short)t_; } while (0)
++#ifndef SE_WINDOW16_LOOP
++#define SE_W16 1
++#endif
++#endif
+ void window16(float *vbuf, int vb_ptr, short *pcm)
+ {
++#ifdef SE_W16
++   {
++      unsigned char si = (unsigned char)(vb_ptr + 8), bx = (unsigned char)(si + 16);
++      const float *c = wincoef;
++      float sum;
++#define SI(j) vbuf[(unsigned char)(si + 32 * (j))]
++#define BX(j) vbuf[(unsigned char)(bx + 32 * (j))]
++      for (int i = 0; i < 8; i++, si++, bx--, c += 32) {
++         sum = 0.0F;
++         sum += c[0] * SI(0);  sum -= c[1] * BX(0);
++         sum += c[2] * SI(1);  sum -= c[3] * BX(1);
++         sum += c[4] * SI(2);  sum -= c[5] * BX(2);
++         sum += c[6] * SI(3);  sum -= c[7] * BX(3);
++         sum += c[8] * SI(4);  sum -= c[9] * BX(4);
++         sum += c[10] * SI(5); sum -= c[11] * BX(5);
++         sum += c[12] * SI(6); sum -= c[13] * BX(6);
++         sum += c[14] * SI(7); sum -= c[15] * BX(7);
++         SE_W16_CLAMP(sum, pcm++);
++      }
++      /* the special case */
++      sum = 0.0F;
++      sum += c[0] * BX(0); sum += c[1] * BX(1); sum += c[2] * BX(2); sum += c[3] * BX(3);
++      sum += c[4] * BX(4); sum += c[5] * BX(5); sum += c[6] * BX(6); sum += c[7] * BX(7);
++      SE_W16_CLAMP(sum, pcm++);
++      /* the last 7, back through the coefficients */
++      c = wincoef + 255;
++      for (int i = 0; i < 7; i++) {
++         c -= 16;
++         si--;
++         bx++;
++         sum = 0.0F;
++         sum += c[0] * SI(0);   sum += c[-1] * BX(0);
++         sum += c[-2] * SI(1);  sum += c[-3] * BX(1);
++         sum += c[-4] * SI(2);  sum += c[-5] * BX(2);
++         sum += c[-6] * SI(3);  sum += c[-7] * BX(3);
++         sum += c[-8] * SI(4);  sum += c[-9] * BX(4);
++         sum += c[-10] * SI(5); sum += c[-11] * BX(5);
++         sum += c[-12] * SI(6); sum += c[-13] * BX(6);
++         sum += c[-14] * SI(7); sum += c[-15] * BX(7);
++         c -= 16;
++         SE_W16_CLAMP(sum, pcm++);
++      }
++#undef SI
++#undef BX
++      return;
++   }
++#endif
+    int i, j;
+    unsigned char si, bx;
+    const float *coef;
 diff --git a/code/mp3code/towave.c b/code/mp3code/towave.c
 index ff83a002..335fcfe9 100644
 --- a/code/mp3code/towave.c
@@ -6459,7 +6536,7 @@ index 5464b70b..a1f3c8cd 100644
  	{
  		return;
 diff --git a/code/rd-vanilla/tr_backend.cpp b/code/rd-vanilla/tr_backend.cpp
-index 741bb95b..70001a46 100644
+index 741bb95b..7dea5c4e 100644
 --- a/code/rd-vanilla/tr_backend.cpp
 +++ b/code/rd-vanilla/tr_backend.cpp
 @@ -27,6 +27,10 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
@@ -7083,12 +7160,19 @@ index 741bb95b..70001a46 100644
  	{
  		RB_EndSurface();
  	}
-@@ -1604,7 +2013,16 @@ RB_ExecuteRenderCommands
+@@ -1604,7 +2013,23 @@ RB_ExecuteRenderCommands
  void RB_ExecuteRenderCommands( const void *data ) {
  	int		t1, t2;
  
 +#ifdef SHADEREMU
 +	const int here = jk2RenderWorkerHere();	// (on the worker: no system call for the time)
++	{
++		extern backEndData_t *se_backEndData[2];
++		extern int drawskyboxportal;
++		const backEndData_t *bd = se_backEndData[1] && (const byte *)data >= (const byte *)se_backEndData[1] &&
++			(const byte *)data < (const byte *)( se_backEndData[1] + 1 ) ? se_backEndData[1] : se_backEndData[0];
++		backEnd.se_drawsky = se_backEndData[0] ? bd->se_drawsky : drawskyboxportal;
++	}
 +	t1 = here ? 0 : ri.Milliseconds ();
 +	memset( &backEnd.pc, 0, sizeof( backEnd.pc ) );	// (its counters its own: core 0 no longer clears them, tr_cmds.cpp)
 +	if ( here ) {
@@ -7100,7 +7184,7 @@ index 741bb95b..70001a46 100644
  
  	while ( 1 ) {
  		data = PADP(data, sizeof(void *));
-@@ -1628,6 +2046,13 @@ void RB_ExecuteRenderCommands( const void *data ) {
+@@ -1628,6 +2053,13 @@ void RB_ExecuteRenderCommands( const void *data ) {
  		case RC_DRAW_SURFS:
  			data = RB_DrawSurfs( data );
  			break;
@@ -7114,7 +7198,7 @@ index 741bb95b..70001a46 100644
  		case RC_DRAW_BUFFER:
  			data = RB_DrawBuffer( data );
  			break;
-@@ -1640,7 +2065,11 @@ void RB_ExecuteRenderCommands( const void *data ) {
+@@ -1640,7 +2072,11 @@ void RB_ExecuteRenderCommands( const void *data ) {
  		case RC_END_OF_LIST:
  		default:
  			// stop rendering
@@ -7253,7 +7337,7 @@ index afbbb175..5fec07ac 100644
  	else
  	{
 diff --git a/code/rd-vanilla/tr_cmds.cpp b/code/rd-vanilla/tr_cmds.cpp
-index 04ad9bdb..9594bd39 100644
+index 04ad9bdb..1f5c9115 100644
 --- a/code/rd-vanilla/tr_cmds.cpp
 +++ b/code/rd-vanilla/tr_cmds.cpp
 @@ -35,30 +35,37 @@ R_PerformanceCounters
@@ -7336,13 +7420,18 @@ index 04ad9bdb..9594bd39 100644
  void R_IssueRenderCommands( qboolean runPerformanceCounters ) {
  	renderCommandList_t	*cmdList;
  
-@@ -101,6 +129,31 @@ void R_IssueRenderCommands( qboolean runPerformanceCounters ) {
+@@ -101,6 +129,36 @@ void R_IssueRenderCommands( qboolean runPerformanceCounters ) {
  	// clear it out, in case this is a sync and not a buffer flip
  	cmdList->used = 0;
  
 +#ifdef SHADEREMU
 +	void R_SE_G2Wait( void );
 +	R_SE_G2Wait();	// (the Ghoul2 surfaces the front end's worker makes of this frame: tr_main.cpp)
++	// (docs/games/jk2.md, "The sky portal's flag": tr_scene.cpp sets drawskyboxportal at each scene and the back end reads
++	// it; a back end at the frame's end read the frame's last scene's, the drawing a frame behind read the next frame's,
++	// and the floor over the sky portal's scene blinked between it and black. Kept with the frame's commands)
++	extern int drawskyboxportal;
++	backEndData->se_drawsky = drawskyboxportal;
 +	unsigned se_from = SE_RSFrom();
 +	// (the frame's bones given to the slots first, then the frame before waited for, done and shown (not this frame's
 +	// front end, which the drawing waits for), then the bones: the two waits at once)
@@ -7368,7 +7457,7 @@ index 04ad9bdb..9594bd39 100644
  	// at this point, the back end thread is idle, so it is ok
  	// to look at it's performance counters
  	if ( runPerformanceCounters ) {
-@@ -166,6 +219,9 @@ make sure there is enough command space
+@@ -166,6 +224,9 @@ make sure there is enough command space
  static void *R_GetCommandBuffer( int bytes ) {
  	return R_GetCommandBufferReserved( bytes, PAD( sizeof( swapBuffersCommand_t ), sizeof(void *) ) );
  }
@@ -7378,7 +7467,7 @@ index 04ad9bdb..9594bd39 100644
  
  
  /*
-@@ -309,6 +365,9 @@ void RE_RotatePic2 ( float x, float y, float w, float h,
+@@ -309,6 +370,9 @@ void RE_RotatePic2 ( float x, float y, float w, float h,
  
  void RE_LAGoggles( void )
  {
@@ -7388,7 +7477,7 @@ index 04ad9bdb..9594bd39 100644
  	tr.refdef.rdflags |= (RDF_doLAGoggles|RDF_doFullbright);
  	tr.refdef.doLAGoggles = qtrue;
  
-@@ -322,6 +381,9 @@ void RE_LAGoggles( void )
+@@ -322,6 +386,9 @@ void RE_LAGoggles( void )
  	fog->tcScale = 2.0f / ( fog->parms.depthForOpaque * (1.0f + cos( tr.refdef.floatTime) * 0.1f));
  }
  
@@ -7398,7 +7487,7 @@ index 04ad9bdb..9594bd39 100644
  void RE_RenderWorldEffects(void)
  {
  	setModeCommand_t	*cmd;
-@@ -329,6 +391,9 @@ void RE_RenderWorldEffects(void)
+@@ -329,6 +396,9 @@ void RE_RenderWorldEffects(void)
  	if (!tr.registered) {
  		return;
  	}
@@ -7408,7 +7497,7 @@ index 04ad9bdb..9594bd39 100644
  
  	cmd = (setModeCommand_t *)R_GetCommandBuffer( sizeof( *cmd ) );
  	if ( !cmd ) {
-@@ -369,12 +434,26 @@ If running in stereo, RE_BeginFrame will be called twice
+@@ -369,12 +439,26 @@ If running in stereo, RE_BeginFrame will be called twice
  for each RE_EndFrame
  ====================
  */
@@ -7435,7 +7524,7 @@ index 04ad9bdb..9594bd39 100644
  	glState.finishCalled = qfalse;
  
  	tr.frameCount++;
-@@ -509,7 +588,9 @@ void RE_EndFrame( int *frontEndMsec, int *backEndMsec ) {
+@@ -509,7 +593,9 @@ void RE_EndFrame( int *frontEndMsec, int *backEndMsec ) {
  	if ( backEndMsec ) {
  		*backEndMsec = backEnd.pc.msec;
  	}
@@ -8777,7 +8866,7 @@ index d176af56..0ded1bff 100644
  	}
  }
 diff --git a/code/rd-vanilla/tr_local.h b/code/rd-vanilla/tr_local.h
-index c9e745aa..d9f6bac9 100644
+index c9e745aa..cc736446 100644
 --- a/code/rd-vanilla/tr_local.h
 +++ b/code/rd-vanilla/tr_local.h
 @@ -618,7 +618,7 @@ typedef struct srfGridMesh_s {
@@ -8832,7 +8921,17 @@ index c9e745aa..d9f6bac9 100644
  
  #define	FOG_TABLE_SIZE		256
  #define FUNCTABLE_SIZE		1024
-@@ -1075,6 +1088,25 @@ void	 R_Images_DeleteImage(image_t *pImage);
+@@ -942,6 +955,9 @@ typedef struct {
+ 	byte		color2D[4];
+ 	qboolean	vertexes2D;		// shader needs to be finished
+ 	trRefEntity_t	entity2D;	// currentEntity will point at this when doing 2D rendering
++#ifdef SHADEREMU
++	int		se_drawsky;	// (drawskyboxportal as the frame drawn left it: tr_cmds.cpp)
++#endif
+ } backEndState_t;
+ 
+ /*
+@@ -1075,6 +1091,25 @@ void	 R_Images_DeleteImage(image_t *pImage);
  
  extern backEndState_t	backEnd;
  extern trGlobals_t	tr;
@@ -8858,7 +8957,7 @@ index c9e745aa..d9f6bac9 100644
  extern glconfig_t	glConfig;		// outside of TR since it shouldn't be cleared during ref re-init
  extern glstate_t	glState;		// outside of TR since it shouldn't be cleared during ref re-init
  extern window_t		window;
-@@ -1397,10 +1429,20 @@ TESSELATOR/SHADER DECLARATIONS
+@@ -1397,10 +1432,20 @@ TESSELATOR/SHADER DECLARATIONS
  */
  typedef byte color4ub_t[4];
  
@@ -8879,7 +8978,7 @@ index c9e745aa..d9f6bac9 100644
  } stageVars_t;
  
  #define	NUM_TEX_COORDS		(MAXLIGHTMAPS+1)
-@@ -1408,7 +1450,11 @@ typedef struct stageVars
+@@ -1408,7 +1453,11 @@ typedef struct stageVars
  struct shaderCommands_s
  {
  	glIndex_t	indexes[SHADER_MAX_INDEXES] QALIGN(16);
@@ -8891,7 +8990,7 @@ index c9e745aa..d9f6bac9 100644
  	vec4_t		normal[SHADER_MAX_VERTEXES] QALIGN(16);
  	vec2_t		texCoords[SHADER_MAX_VERTEXES][NUM_TEX_COORDS] QALIGN(16);
  	color4ub_t	vertexColors[SHADER_MAX_VERTEXES] QALIGN(16);
-@@ -1445,6 +1491,15 @@ typedef shaderCommands_s	shaderCommands_t;
+@@ -1445,6 +1494,15 @@ typedef shaderCommands_s	shaderCommands_t;
  #endif
  
  extern	shaderCommands_t	tess;
@@ -8907,7 +9006,7 @@ index c9e745aa..d9f6bac9 100644
  
  extern	color4ub_t	styleColors[MAX_LIGHT_STYLES];
  extern	bool		styleUpdated[MAX_LIGHT_STYLES];
-@@ -1587,6 +1642,12 @@ public:
+@@ -1587,6 +1645,12 @@ public:
  #endif
   	CBoneCache 		*boneCache;		// pointer to transformed bone list for this surf
  	mdxmSurface_t	*surfaceData;	// pointer to surface data loaded into file - only used by client renderer DO NOT USE IN GAME SIDE - if there is a vid restart this will be out of wack on the game
@@ -8920,7 +9019,7 @@ index c9e745aa..d9f6bac9 100644
  #ifdef _G2_GORE
  	float			*alternateTex;		// alternate texture coordinates.
  	void			*goreChain;
-@@ -1604,6 +1665,10 @@ public:
+@@ -1604,6 +1668,10 @@ public:
  		surfaceData = src.surfaceData;
  		alternateTex = src.alternateTex;
  		goreChain = src.goreChain;
@@ -8931,7 +9030,7 @@ index c9e745aa..d9f6bac9 100644
  
  		return *this;
  	}
-@@ -1625,6 +1690,10 @@ CRenderableSurface():
+@@ -1625,6 +1693,10 @@ CRenderableSurface():
  	{
  		boneCache=0;
  		surfaceData=0;
@@ -8942,7 +9041,7 @@ index c9e745aa..d9f6bac9 100644
  #ifdef _G2_GORE
  		ident = SF_MDX;
  		alternateTex=0;
-@@ -1778,6 +1847,9 @@ typedef enum {
+@@ -1778,6 +1850,9 @@ typedef enum {
  	RC_DRAW_BUFFER,
  	RC_SWAP_BUFFERS,
  	RC_WORLD_EFFECTS,
@@ -8952,8 +9051,18 @@ index c9e745aa..d9f6bac9 100644
  } renderCommand_t;
  
  
+@@ -1796,6 +1871,9 @@ typedef struct {
+ 	srfPoly_t	polys[MAX_POLYS];
+ 	polyVert_t	polyVerts[MAX_POLYVERTS];
+ 	renderCommandList_t	commands;
++#ifdef SHADEREMU
++	int		se_drawsky;	// (drawskyboxportal at this frame's end, for its back end a frame later)
++#endif
+ } backEndData_t;
+ 
+ extern	backEndData_t	*backEndData;
 diff --git a/code/rd-vanilla/tr_main.cpp b/code/rd-vanilla/tr_main.cpp
-index da619736..b57714b4 100644
+index da619736..8296f511 100644
 --- a/code/rd-vanilla/tr_main.cpp
 +++ b/code/rd-vanilla/tr_main.cpp
 @@ -205,7 +205,15 @@ void R_LocalPointToWorld (const vec3_t local, vec3_t world) {
@@ -8972,7 +9081,34 @@ index da619736..b57714b4 100644
  
  void R_InvertMatrix(float *sourcemat, float *destmat)
  {
-@@ -1139,6 +1147,38 @@ Radix sort with 4 byte size buckets
+@@ -565,6 +573,26 @@ void R_SetupProjection( void ) {
+ 	tr.viewParms.projectionMatrix[7] = 0;
+ 	tr.viewParms.projectionMatrix[11] = -1;
+ 	tr.viewParms.projectionMatrix[15] = 0;
++#ifdef SHADEREMU
++	// (docs/games/jk2.md, "The sky portal's depth": the GPU has one depth buffer a frame and no depth clear between two
++	// scenes (gl_shaderemu.c's glClear keeps the colour's bit only), so the sky portal's scene, drawn first from a camera in
++	// a small box, was nearer than the main scene's floor wherever its geometry was, and the floor blinked between itself
++	// and the sky. In a level with a sky portal its view takes the far half of the depth range and every other view the
++	// near half: what the depth clear between them gave. z' = z / 2 + w (+-1/2), the view's own terms unchanged.
++	// JK2_SKY_SLICE=0: not)
++	extern int skyboxportal;
++	static int se_slice = -1;
++	if ( se_slice < 0 ) {
++		const char *e = getenv( "JK2_SKY_SLICE" );
++		se_slice = !( e && !strcmp( e, "0" ) );
++	}
++	if ( se_slice && skyboxportal ) {
++		const float t = ( tr.refdef.rdflags & RDF_SKYBOXPORTAL ) ? 0.5f : -0.5f;
++		float *m = tr.viewParms.projectionMatrix;
++		for ( int c = 0 ; c < 4 ; c++ )
++			m[4 * c + 2] = 0.5f * m[4 * c + 2] + t * m[4 * c + 3];
++	}
++#endif
+ }
+ 
+ /*
+@@ -1139,6 +1167,38 @@ Radix sort with 4 byte size buckets
  static void R_RadixSort( drawSurf_t *source, int size )
  {
    static drawSurf_t scratch[ MAX_DRAWSURFS ];
@@ -9011,7 +9147,7 @@ index da619736..b57714b4 100644
  #ifdef Q3_LITTLE_ENDIAN
    R_Radix( 0, size, source, scratch );
    R_Radix( 1, size, scratch, source );
-@@ -1203,6 +1243,74 @@ void R_DecomposeSort( unsigned sort, int *entityNum, shader_t **shader,
+@@ -1203,6 +1263,74 @@ void R_DecomposeSort( unsigned sort, int *entityNum, shader_t **shader,
  R_SortDrawSurfs
  =================
  */
@@ -9086,7 +9222,7 @@ index da619736..b57714b4 100644
  void R_SortDrawSurfs( drawSurf_t *drawSurfs, int numDrawSurfs ) {
  	shader_t		*shader;
  	int				fogNum;
-@@ -1225,6 +1333,9 @@ void R_SortDrawSurfs( drawSurf_t *drawSurfs, int numDrawSurfs ) {
+@@ -1225,6 +1353,9 @@ void R_SortDrawSurfs( drawSurf_t *drawSurfs, int numDrawSurfs ) {
  
  	// sort the drawsurfs by sort type, then orientation, then shader
  	R_RadixSort( drawSurfs, numDrawSurfs );
@@ -9096,7 +9232,7 @@ index da619736..b57714b4 100644
  
  	// check for any pass through drawing, which
  	// may cause another view to be rendered first
-@@ -1258,6 +1369,21 @@ void R_SortDrawSurfs( drawSurf_t *drawSurfs, int numDrawSurfs ) {
+@@ -1258,6 +1389,21 @@ void R_SortDrawSurfs( drawSurf_t *drawSurfs, int numDrawSurfs ) {
  R_AddEntitySurfaces
  =============
  */
@@ -9118,7 +9254,7 @@ index da619736..b57714b4 100644
  void R_AddEntitySurfaces (void) {
  	trRefEntity_t	*ent;
  	shader_t		*shader;
-@@ -1270,6 +1396,10 @@ void R_AddEntitySurfaces (void) {
+@@ -1270,6 +1416,10 @@ void R_AddEntitySurfaces (void) {
  	      tr.currentEntityNum < tr.refdef.num_entities;
  		  tr.currentEntityNum++ ) {
  		ent = tr.currentEntity = &tr.refdef.entities[tr.currentEntityNum];
@@ -9129,7 +9265,7 @@ index da619736..b57714b4 100644
  
  		ent->needDlights = qfalse;
  
-@@ -1550,4 +1680,339 @@ void R_RenderView (viewParms_t *parms) {
+@@ -1550,4 +1700,357 @@ void R_RenderView (viewParms_t *parms) {
  
  	// draw main system development information (surface outlines, etc)
  	R_DebugGraphics();
@@ -9232,7 +9368,10 @@ index da619736..b57714b4 100644
 +	return h;
 +}
 +static struct { unsigned views, wrong, unused[2], world, whole_world, polys, whole_polys; } __attribute__(( aligned( 16 ) )) se_front_check;	// (the worker's)
-+static unsigned se_check_world, se_check_polys;	// (this core's: JK2_FRONT=check's whole view, its world's surfaces and polygons')
++static unsigned se_check_world, se_check_polys;
++// (every view the front end's worker made, and those whose list had a portal or mirror surface, which that worker does not
++// make the portal's view of: the floor drawn without its reflection. Printed by the first core every 100 views)
++static struct { unsigned views, portals, unused[2]; } __attribute__(( aligned( 16 ) )) se_front_portals;	// (the worker's)	// (this core's: JK2_FRONT=check's whole view, its world's surfaces and polygons')
 +static int SE_FrontNot( int why )	// (JK2_FRONT_LOG=1: why a view is made here, the first 8 times)
 +{
 +	static int log = -1, logged;
@@ -9383,6 +9522,16 @@ index da619736..b57714b4 100644
 +	if ( n > 0 )
 +		R_RadixSort( out, n );
 +	SE_ViewSumNote( out, n, 1 );
++	{
++		int has = 0;
++		for ( int i = 0 ; i < n && !has ; i++ ) {
++			int en, fog, dl;
++			shader_t *sh;
++			R_DecomposeSort( out[i].sort, &en, &sh, &fog, &dl );
++			has = sh->sort <= SS_PORTAL;
++		}
++		se_front_portals.views++, se_front_portals.portals += has;
++	}
 +	if ( SE_FrontOn() == 2 ) {
 +		se_front_check.views++;
 +		if ( (unsigned)n != cmd->checkCount || ( n > 0 && SE_FrontSum( out, n ) != cmd->check ) )
@@ -9440,6 +9589,11 @@ index da619736..b57714b4 100644
 +int se_world_checked, se_world_wrong;	// (JK2_WORLD_HALF=check: tr_world.cpp)
 +void R_SE_FrontWait( void )
 +{
++	{
++		static unsigned printed;
++		if ( se_front_portals.views >= printed + 100 )
++			printed = se_front_portals.views, ri.Printf( PRINT_ALL, "jk2front: %u views on the worker, %u with a portal surface in their list\n", se_front_portals.views, se_front_portals.portals );
++	}
 +	{	// (JK2_FRONT=check's counts: here, before the returns of a frame whose views the front end's worker made)
 +		static unsigned printed;
 +		if ( SE_FrontOn() == 2 && se_front_check.views >= printed + 100 )
@@ -9803,7 +9957,7 @@ index d0b6b549..8e7112d5 100644
  
  	// the next scene rendered in this frame will tack on after this one
 diff --git a/code/rd-vanilla/tr_shade.cpp b/code/rd-vanilla/tr_shade.cpp
-index 48f3ed13..acef44d8 100644
+index 48f3ed13..cbca02dd 100644
 --- a/code/rd-vanilla/tr_shade.cpp
 +++ b/code/rd-vanilla/tr_shade.cpp
 @@ -234,7 +234,7 @@ void R_BindAnimatedImage( const textureBundle_t *bundle) {
@@ -10289,7 +10443,19 @@ index 48f3ed13..acef44d8 100644
  		Com_Error (ERR_DROP, "RB_EndSurface() - SHADER_MAX_VERTEXES hit");
  	}
  
-@@ -2269,6 +2644,9 @@ void RB_EndSurface( void ) {
+@@ -2236,7 +2611,11 @@ void RB_EndSurface( void ) {
+ 		// portal sky
+ 		else
+ 		{
++#ifdef SHADEREMU
++			if(!backEnd.se_drawsky)	// (the frame's own: tr_cmds.cpp)
++#else
+ 			if(!drawskyboxportal)
++#endif
+ 			{
+ 				if( !(tess.currentStageIteratorFunc == RB_StageIteratorSky))
+ 				{	// /only/ process sky tris
+@@ -2269,6 +2648,9 @@ void RB_EndSurface( void ) {
  	// call off to shader specific tess end function
  	//
  	tess.currentStageIteratorFunc();
@@ -10299,7 +10465,7 @@ index 48f3ed13..acef44d8 100644
  
  	//
  	// draw debugging stuff
-@@ -2284,6 +2662,9 @@ void RB_EndSurface( void ) {
+@@ -2284,6 +2666,9 @@ void RB_EndSurface( void ) {
  
  	// clear shader so we can tell we don't have any unclosed surfaces
  	tess.numIndexes = 0;

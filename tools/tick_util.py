@@ -1,6 +1,6 @@
 """Tick utilization of a run, from `rvc_harness --frame-log FILE` (tools/tick_util.ps1 runs both).
 
-    python tools/tick_util.py FILE [--ticks 8192] [--top N] [--json OUT] kernel=vmlinux.nm [name=prog.nm ...]
+    python tools/tick_util.py FILE [--ticks 12288] [--top N] [--json OUT] kernel=vmlinux.nm [name=prog.nm ...]
 
 Utilization is the instructions busy passes ran over what they could have run. A pass that
 ended early is listed by why; a wfi or pause by where the guest was: the kernel's idle loop
@@ -20,7 +20,7 @@ APART = ('wfi: kernel idle', REST)         # passes with nothing to run: not bus
 
 args = sys.argv[1:]
 path = args.pop(0)
-ticks, top, out, syms = 8192, 12, None, []
+ticks, top, out, syms = 12288, 12, None, []   # (the harness's pass since 5 November 2026; --ticks for a run of another)
 while args:
     a = args.pop(0)
     if a == '--ticks': ticks = int(args.pop(0))

@@ -242,6 +242,8 @@ int jk2MixOn(void) {
         if (!(how && !strcmp(how, "core"))) {
             for (int k = mcw_count(); k >= 1; k--)   // (the highest but the drawing's: render_open)
                 if (k != rw0.worker && k != HALF_WORKER && mcw_fast(k)) { mw0.worker = k; break; }
+            const char* pick = getenv("JK2_MIX_WORKER");   // (a worker by its number: whether the mix waits behind other jobs)
+            if (pick && atoi(pick) >= 1 && atoi(pick) <= mcw_count() && atoi(pick) != rw0.worker) mw0.worker = atoi(pick);
             if (mw0.worker > 0) mcw_touch(mix_stack, MIX_STACK), mcw_touch(&mix_job, sizeof mix_job);
         }
     }
