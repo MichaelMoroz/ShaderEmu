@@ -178,6 +178,8 @@ def thing_size(name):
 def lying(b, name, at, turn):
     """A box or a magazine lying face up, its underside's middle at `at`, turned about up."""
     w, h, t = thing_size(name)
+    # (its print's top: the box's +y, tipped to +z and turned: world/check_placement.py's "reads" wants it to the wall where one is near)
+    b.pose("reads", (w, t, h), at=(at[0], at[1] + t / 2, at[2]), rot=(0, turn, 0), name="%s %s" % (b.current, name))
     with b.loose():
         game_box(b, name, (at[0], at[1] + t / 2, at[2]), rot=(90, turn, 0))
 

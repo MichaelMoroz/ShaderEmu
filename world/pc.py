@@ -72,6 +72,46 @@ def panel_uv(points, tile):
     return [(s * p[0] / tile, p[1] / tile) for p in points]
 
 
+CONE = 30.0   # degrees: a region of a skin laid flat as one piece turns no more than this from its first face
+
+
+def region_uv(vertices, faces, tile):
+    """A skin's picture laid in regions: from its largest face, the faces joined to it whose normals are
+    within CONE of that face's, laid flat on that face's plane (lib.plane_uv), so a region is one piece with
+    no seam in it, stretched at most 1 / cos(CONE) (1.15) where it curves away; a seam only where the skin
+    has turned further. (A face a panel of its own, the weave of a chair's curved back changed its way at
+    every face: a seam each few centimetres.)"""
+    def normal_of(face):
+        points = [vertices[i] for i in face]
+        n = len(points)
+        v = Vector([sum((points[k][(a + 1) % 3] - points[k - 1][(a + 1) % 3]) * (points[k][(a + 2) % 3] + points[k - 1][(a + 2) % 3])
+                        for k in range(n)) for a in range(3)])   # (Newell's: twice its area along its normal)
+        return v
+    normals = [normal_of(f) for f in faces]
+    by_edge = {}
+    for fi, f in enumerate(faces):
+        for k in range(len(f)):
+            by_edge.setdefault(frozenset((f[k], f[(k + 1) % len(f)])), []).append(fi)
+    region = [None] * len(faces)
+    uvs = [None] * len(faces)
+    limit = math.cos(math.radians(CONE))
+    for seed in sorted(range(len(faces)), key=lambda fi: -normals[fi].length):
+        if region[seed] is not None or normals[seed].length < 1e-12:
+            continue
+        axis = normals[seed].normalized()
+        region[seed], todo = seed, [seed]
+        while todo:
+            fi = todo.pop()
+            uvs[fi] = [(x / tile, y / tile) for x, y in lib.plane_uv([vertices[i] for i in faces[fi]], axis)]
+            f = faces[fi]
+            for k in range(len(f)):
+                for g in by_edge[frozenset((f[k], f[(k + 1) % len(f)]))]:
+                    if region[g] is None and normals[g].length > 1e-12 and normals[g].normalized().dot(axis) >= limit:
+                        region[g] = seed
+                        todo.append(g)
+    return [uv if uv is not None else panel_uv([vertices[i] for i in faces[fi]], tile) for fi, uv in enumerate(uvs)]
+
+
 def loft(b, rings, mat, first=True, last=True, normal=None, tile=0.3, ringwise=False):
     """A skin over rings of as many points each; first and last close its ends (closed unless told:
     world/check_closed.py wants every solid watertight). Its picture is laid in panels (panel_uv), or
@@ -112,9 +152,9 @@ def loft(b, rings, mat, first=True, last=True, normal=None, tile=0.3, ringwise=F
             e1 = [c / size for c in e1]
             e2 = [normal_[(a + 1) % 3] * e1[(a + 2) % 3] - normal_[(a + 2) % 3] * e1[(a + 1) % 3] for a in range(3)]
             uvs.append([(sum(p[a] * e1[a] for a in range(3)) / tile, sum(p[a] * e2[a] for a in range(3)) / tile) for p in points])
-    if not ringwise:   # (panels: a skin that narrows and swells round two ways has no picture laid round and along it unsheared;
+    if not ringwise:   # (regions: a skin that narrows and swells round two ways has no picture laid round and along it unsheared;
         # world/check_uv.py found the chair's weave sheared 40 times where its thin end ring met a thick one)
-        uvs = [panel_uv([vertices[i] for i in face], tile) for face in faces]
+        uvs = region_uv(vertices, faces, tile)
     b.mesh(vertices, faces, uvs, mat, normal=normal)
 
 

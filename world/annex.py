@@ -248,9 +248,9 @@ def corridor_fittings(b):
     bench = b.asset("painted_wooden_bench", ((bx0 + bx1) / 2, 0, (bz0 + bz1) / 2), rot=(0, 90, 0))
     import furniture
     furniture.pile(b, ["computer_gaming_world_issue_148", "bytevolume20number12", "pc_computing_1998_05"],
-                   ((tx0 + tx1) / 2 - 0.02, FURNITURE["table"][4], (tz0 + tz1) / 2 + 0.01), (-8, 5, 21))
-    furniture.pile(b, ["computer_gaming_world_issue_116"], ((bx0 + bx1) / 2 + 0.05, FURNITURE["bench"][4], (bz0 + bz1) / 2 - 0.35), (82,))
-    furniture.pile(b, ["linuxjournalissue58", "bytevol21no11"], ((bx0 + bx1) / 2 - 0.02, FURNITURE["bench"][4], (bz0 + bz1) / 2 + 0.3), (95, 70))
+                   ((tx0 + tx1) / 2 - 0.02, FURNITURE["table"][4], (tz0 + tz1) / 2 + 0.01), (172, 185, 201))   # (their print to the trim behind: read from the corridor)
+    furniture.pile(b, ["computer_gaming_world_issue_116"], ((bx0 + bx1) / 2 + 0.05, FURNITURE["bench"][4], (bz0 + bz1) / 2 - 0.35), (262,))
+    furniture.pile(b, ["linuxjournalissue58", "bytevol21no11"], ((bx0 + bx1) / 2 - 0.02, FURNITURE["bench"][4], (bz0 + bz1) / 2 + 0.3), (275, 250))
 
 
 def holodecks(b):

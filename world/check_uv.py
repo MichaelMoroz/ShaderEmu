@@ -8,6 +8,8 @@
 # STRETCH times one way than the other (sheared or squeezed: the same area, a weave drawn out; in the
 # picture's pixels, so a picture that is not square counts as it is drawn), or whose picture has
 # no area (collapsed: a smear), counts, and a piece with more than SHARE of its area so is listed.
+# And a seam across a smooth surface (two faces within SMOOTH of flat) where the picture turns more than TURNED
+# or changes its size shows as a line: an object with more than SEAMS of them is listed too.
 # A material with no picture (a plain colour: Rubber, the cables) shows no stretch and is not looked at,
 # nor is a triangle narrower than SLIVER (no texel's width):
 #   blender -b build/world.blend --python world/check_uv.py -- [WORD ...] [--all] [--assets]
@@ -29,6 +31,9 @@ SMALL = 4e-6         # square metres: a piece smaller than this (2 x 2 mm) is no
 SEAM = 1e-5         # texture coordinates nearer than this are one
 COLLAPSED = 1e-12    # a face's picture area under this is a smear
 SLIVER = 0.0002      # metres: a triangle no higher than this (a texel of a 0.3 m picture of 1024) shows no stretch
+SMOOTH = 25.0        # degrees: two faces meeting within this of flat are one smooth surface, where a seam shows
+TURNED = 10.0        # degrees the picture turns across such a seam (or 1.15 times its scale) that shows as a seam
+SEAMS = 0.02         # metres of such seams an object may have (a texel's slip here and there)
 
 
 def aspect_of(mat):
@@ -79,7 +84,7 @@ def main():
     args = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     every, assets = "--all" in args, "--assets" in args
     words = [a for a in args if not a.startswith("--")]
-    found = []
+    found, seams = [], []
     for ob in bpy.data.objects:
         if ob.type != 'MESH' or ob.name.startswith(SKIP) or not len(ob.data.polygons):
             continue
@@ -94,6 +99,33 @@ def main():
         names = [m.name if m else "?" for m in ob.data.materials]
         aspects = [aspect_of(m) for m in ob.data.materials]
         pictured = [has_picture(m) for m in ob.data.materials]
+        turned = 0.0   # turned seams: the picture changes its way or its size across a smooth surface (a cylinder's own seam goes on as it was)
+        for e in bm.edges:
+            if len(e.link_loops) != 2 or e.calc_length() < 1e-5:
+                continue
+            l1, l2 = e.link_loops
+            f1, f2 = l1.face, l2.face
+            if f1.material_index != f2.material_index or f1.material_index >= len(pictured) or not pictured[f1.material_index]:
+                continue
+            if math.degrees(f1.normal.angle(f2.normal, 0.0)) > SMOOTH:
+                continue
+            a1, b1 = l1[uv].uv, l1.link_loop_next[uv].uv          # the edge from l1's vertex to the next, on each side
+            if l2.vert == l1.vert:
+                a2, b2 = l2[uv].uv, l2.link_loop_next[uv].uv
+            else:
+                a2, b2 = l2.link_loop_next[uv].uv, l2[uv].uv
+            if (a1 - a2).length < SEAM and (b1 - b2).length < SEAM:
+                continue   # (no seam)
+            asp = aspects[f1.material_index]
+            d1, d2 = ((b1 - a1).x * asp, (b1 - a1).y), ((b2 - a2).x * asp, (b2 - a2).y)
+            n1, n2 = math.hypot(*d1), math.hypot(*d2)
+            if n1 < 1e-9 or n2 < 1e-9:
+                continue
+            turn = math.degrees(math.acos(max(-1.0, min(1.0, (d1[0] * d2[0] + d1[1] * d2[1]) / (n1 * n2)))))
+            if turn > TURNED or max(n1, n2) / min(n1, n2) > 1.15:
+                turned += e.calc_length()
+        if turned > SEAMS:
+            seams.append((turned, ob.name))
         seen = set()
         for face in bm.faces:
             if face.index in seen:
@@ -154,6 +186,10 @@ def main():
         print("UV %s (%s): %.0f%% of its %.0f cm2 stretched, the worst %s, at (%.3f, %.3f, %.3f)"
               % (name, mat, share * 100, total * 1e4, "%.1f times (in scale, or one way against the other)" % worst if worst else "smeared", -at.x, at.z, -at.y))
     print("UV stretched pieces: %d" % len(found))
+    seams.sort(reverse=True)
+    for length, name in seams if every else seams[:30]:
+        print("UV seam %s: %.0f cm of seams where the picture turns or changes size across a smooth surface" % (name, length * 100))
+    print("UV objects with turned seams: %d" % len(seams))
 
 
 if __name__ == "__main__":
