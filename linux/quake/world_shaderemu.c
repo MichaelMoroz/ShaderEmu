@@ -173,10 +173,14 @@ static int	styled_cached[MAX_STYLED][MAXLIGHTMAPS] __attribute__ ((aligned (16))
 static struct { int values[MAX_LIGHTSTYLES]; int count, unused[3]; } light_job __attribute__ ((aligned (16)));
 static int	light_how = -1, light_on, light_was;
 static se_group_t	light_out;	/* the workers' calls, while they are out */
-/* The pages of light maps the workers make, each copied into the VRAM again (qglLightChanged) in every list while their job
- * is out and in the first after it is in: the GPU reads them there, not in the pool the workers write. */
+/* The pages of light maps the workers make, each copied into the VRAM again (qglLightChanged) in a list after every frame
+ * their job is out and the first after it is joined: the GPU reads them there, not in the pool the workers write. The
+ * core that gives the job out raises light_gen (with the scene on a worker, the first core), and the core that draws
+ * makes the uploads when it sees a count it has not (light_seen): GL is that core's alone. A word each, texels apart. */
 static unsigned char	light_pages[64];
 static int	light_page_count, light_upload;
+static volatile unsigned	light_gen __attribute__ ((aligned (16)));
+static unsigned	light_seen __attribute__ ((aligned (16)));
 
 /* A worker's share: the light maps of every `step`th page of them, so that no two workers
  * store to the same 16 bytes. GLQuake's sum of a surface's maps by their styles (R_BuildLightMap). */
@@ -311,8 +315,6 @@ static void light_frame (void)
 /* The light maps' job for the frame, if the styles have changed (on this core: it is a call). */
 void SE_LightFrame (void)
 {
-	int	i;
-
 	if (kept_on && SE_LightsApart ())
 		light_frame ();
 	else
@@ -325,9 +327,21 @@ void SE_LightFrame (void)
 	}
 	if (light_upload > 0) {
 		light_upload--;
-		for (i = 0; i < light_page_count; i++)
-			qglLightChanged (lightmap_textures + light_pages[i]);
+		light_gen++;
 	}
+}
+
+/* The drawing core's: the pages into the VRAM again, if the light job has been out since it last looked. */
+static void light_uploads (void)
+{
+	unsigned	gen = light_gen;
+	int		i;
+
+	if (gen == light_seen)
+		return;
+	light_seen = gen;
+	for (i = 0; i < light_page_count; i++)
+		qglLightChanged (lightmap_textures + light_pages[i]);
 }
 
 int SE_LightWait (void) { return light_how == HOW_WAIT; }
@@ -1160,6 +1174,7 @@ void SE_MarkWorld (void)
 	lights_apart = kept_on && SE_LightsApart ();
 	if (!se_scene_split)
 		SE_LightFrame ();	/* (else this core did, when it gave the frame out) */
+	light_uploads ();
 	/* with the light maps and the water the workers', and the sky kept, a frame has nothing to
 	 * ask of a leaf: what stands in the leaves in sight is a list of its own */
 	free_of_leaves = lights_apart && (water_apart || !level_water) && (sky_run >= 0 || !level_sky) && !mark_leaves && !r_novis.value;
