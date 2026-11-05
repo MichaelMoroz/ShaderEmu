@@ -1206,6 +1206,7 @@ pc at each pass's end.
 | The voices decoded ahead, the Ghoul2 surfaces on the front end's worker | 163.23 | 177.00 |
 | The ranges cut by their work, the skins' table by a flag, a job ends at an effect or a draw | 165.59 | 177.71 |
 | The world's walk asks its planes' sides inline (`SE_BoxOnPlaneSide`) | 164.30 | 174.59 |
+| The Ghoul2 copies in the handover's ranges, eight of them, the HUD's menus found by name once, light styles and cvars told only when changed, the loops to the most entities used | 160.99 | 172.01 |
 
 On the build of the voices decoded ahead the walk is 233.12 with `JK2_VOICE_AHEAD=0` (another state: core 0 1,083 thousand instructions a
 frame against 833) and 169.33 with `JK2_G2_FRONT=0`. 163.23 passes a frame is 4.5 frames a second.
@@ -1277,6 +1278,21 @@ ranges often find no free worker and run on core 0. By the fields' list, each co
 **The planes' sides inline** (`tr_world.cpp`'s `SE_BoxOnPlaneSide`): `q_math.c`'s `BoxOnPlaneSide` written out where
 the world's walk asks it (some 4,000 times a frame of the walk), the same sums per axis in the same order without the
 call and the arrays on the stack. The walk 164.30, the march 174.59 (`RVC_RACES` the inflate's one undone, as always).
+
+**The Ghoul2 copies in the handover's ranges** (`g_main.cpp`'s `se_g2_give_fits`, `se_g2_take_fits`; `JK2_G2_HAND=0` the way
+before): the give's and the take's copies of the Ghoul2 instances (about 47 and 57 thousand instructions a frame of core 0)
+are made by the helper of the entity's range when core 0 found that nothing of it allocates (the copy's lists hold what they
+get, the record's buffer is large enough, no model is added or taken away), else by core 0; a helper stores only to its
+entity's copy, its game instance and its record (the counters too, summed at the take). With four ranges core 0 waited
+for them longer than it had made the copies beside them (the walk 170.12, the march 177.89), so the handover has **eight
+ranges** now (`JK2_HAND_PARTS=4` as before; an instance weighs 80 in the cuts). **The give's and the take's loops** stop
+at the most entities in use since the game came up (`se_hi`: 320 of 1,024 in the walk; `JK2_HAND_ALL=1` every one), and
+`SE_GameDown` clears the copy: its entities past a new level's count kept the old level's, in use, and every take would
+have written them into the game's (`se_take_unseen`). **The HUD's menus** (`ui_shared.cpp`'s `Menus_FindByName`, 44 times
+a frame, each a `Q_stricmp` of every menu's name until its own) are remembered by name, checked by name and found again
+when the menus' count moves; **the light styles** (`cg_lights.cpp`) are told the renderer only when one changed (64 system
+calls a frame told it the same), and **the client game's cvars** (`CG_UpdateCvars`, 80 calls a frame) are looked at only
+when `cvar.cpp`'s count of changes (`se_cvar_gen`) moved. Core 0 840 to 770 thousand instructions a frame of the walk.
 
 ### What bounds it
 

@@ -3578,10 +3578,19 @@ index aeaff246..1e2e1394 100644
  			if ( com_speeds->integer ) {
  				timeAfter = Sys_Milliseconds ();
 diff --git a/code/qcommon/cvar.cpp b/code/qcommon/cvar.cpp
-index a5cef1e1..52f002d5 100644
+index a5cef1e1..926b8f3f 100644
 --- a/code/qcommon/cvar.cpp
 +++ b/code/qcommon/cvar.cpp
-@@ -323,7 +323,18 @@ If the variable already exists, the value will not be set unless CVAR_ROM
+@@ -213,6 +213,8 @@ void	Cvar_CommandCompletion( callbackFunc_t callback ) {
+ 	}
+ }
+ 
++// (every change of a cvar counted: CG_UpdateCvars looks at its copies only when this moved)
++int se_cvar_gen;
+ /*
+ ============
+ Cvar_Validate
+@@ -323,7 +325,18 @@ If the variable already exists, the value will not be set unless CVAR_ROM
  The flags will be or'ed in if the variable exists.
  ============
  */
@@ -3600,7 +3609,16 @@ index a5cef1e1..52f002d5 100644
  	cvar_t	*var;
  	long	hash;
  	int		index;
-@@ -573,6 +584,13 @@ Cvar_Set2
+@@ -447,7 +460,7 @@ cvar_t *Cvar_Get( const char *var_name, const char *var_value, int flags ) {
+ 	var->name = CopyString (var_name);
+ 	var->string = CopyString (var_value);
+ 	var->modified = qtrue;
+-	var->modificationCount = 1;
++	var->modificationCount = 1, se_cvar_gen++;
+ 	var->value = atof (var->string);
+ 	var->integer = atoi(var->string);
+ 	var->resetString = CopyString( var_value );
+@@ -573,6 +586,13 @@ Cvar_Set2
  ============
  */
  cvar_t *Cvar_Set2( const char *var_name, const char *value, qboolean force ) {
@@ -3614,6 +3632,32 @@ index a5cef1e1..52f002d5 100644
  	cvar_t	*var;
  
  	//Com_DPrintf( "Cvar_Set2: %s %s\n", var_name, value );
+@@ -657,7 +677,7 @@ cvar_t *Cvar_Set2( const char *var_name, const char *value, qboolean force ) {
+ 			Com_Printf ("%s will be changed upon restarting.\n", var_name);
+ 			var->latchedString = CopyString(value);
+ 			var->modified = qtrue;
+-			var->modificationCount++;
++			var->modificationCount++, se_cvar_gen++;
+ 			return var;
+ 		}
+ 
+@@ -680,7 +700,7 @@ cvar_t *Cvar_Set2( const char *var_name, const char *value, qboolean force ) {
+ 		return var;		// not changed
+ 
+ 	var->modified = qtrue;
+-	var->modificationCount++;
++	var->modificationCount++, se_cvar_gen++;
+ 
+ 	Cvar_FreeString (var->string);	// free the old value string
+ 
+@@ -1299,6 +1319,7 @@ void	Cvar_Register( vmCvar_t *vmCvar, const char *varName, const char *defaultVa
+ 	}
+ 	vmCvar->handle = cv - cvar_indexes;
+ 	vmCvar->modificationCount = -1;
++	se_cvar_gen++;
+ 	Cvar_Update( vmCvar );
+ }
+ 
 diff --git a/code/qcommon/files.cpp b/code/qcommon/files.cpp
 index d105742d..3f27c919 100644
 --- a/code/qcommon/files.cpp
@@ -11730,7 +11774,7 @@ index 4a20f0ee..27bb06df 100644
  =================
  UI_KeyEvent
 diff --git a/code/ui/ui_shared.cpp b/code/ui/ui_shared.cpp
-index 2f5cbdf8..3ad64b58 100644
+index 2f5cbdf8..df0d879b 100644
 --- a/code/ui/ui_shared.cpp
 +++ b/code/ui/ui_shared.cpp
 @@ -285,11 +285,27 @@ qboolean PC_ParseRect(rectDef_t *r)
@@ -11789,7 +11833,45 @@ index 2f5cbdf8..3ad64b58 100644
  	}
  }
  
-@@ -7067,6 +7097,9 @@ void UI_TalkingHead(itemDef_t *item)
+@@ -1606,13 +1636,37 @@ void Menus_OpenByName(const char *p)
+ Menus_FindByName
+ ===============
+ */
++#ifdef SHADEREMU
++#include "qcommon/se_slot.h"
++#endif
+ menuDef_t *Menus_FindByName(const char *p)
+ {
+ 	int i;
++#ifdef SHADEREMU
++	// (the menus a name found last, by the name's letters: the HUD asks some 44 times a frame, each a Q_stricmp of every
++	// menu's name until its own; a menu found is still checked by its name, and the search below made when the menus' count moved, or
++	// another core asks)
++	struct seMenuHit { char name[32]; menuDef_t *menu; int count; };
++	static seMenuHit se_hits[16];
++	unsigned h = 0;
++	int len = 0;
++	for ( const char *c = p ; *c && len < 31 ; c++, len++ )
++		h = h * 31 + ( (unsigned char)*c | 0x20 );
++	seMenuHit *e = &se_hits[h & 15];
++	const int first = !p[len] && SE_OnFirstCore();
++	if ( first && e->menu && e->count == menuCount && e->menu >= Menus && e->menu < Menus + menuCount && !Q_stricmp( e->name, p )
++		&& !Q_stricmp( e->menu->window.name, p ) ) {
++		return e->menu;
++	}
++#endif
+ 	for (i = 0; i < menuCount; i++)
+ 	{
+ 		if (Q_stricmp(Menus[i].window.name, p) == 0)
+ 		{
++#ifdef SHADEREMU
++			if ( first )
++				Q_strncpyz( e->name, p, sizeof( e->name ) ), e->menu = &Menus[i], e->count = menuCount;
++#endif
+ 			return &Menus[i];
+ 		}
+ 	}
+@@ -7067,6 +7121,9 @@ void UI_TalkingHead(itemDef_t *item)
  	}
  */
  
@@ -12674,6 +12756,45 @@ index bdb72696..0919f611 100644
  	{
  		char	text[1024]={0};
  		cgi_SP_GetStringTextString( "INGAME_ALONGTIME", text, sizeof(text) );
+diff --git a/codeJK2/cgame/cg_lights.cpp b/codeJK2/cgame/cg_lights.cpp
+index 7def0f40..615d1986 100644
+--- a/codeJK2/cgame/cg_lights.cpp
++++ b/codeJK2/cgame/cg_lights.cpp
+@@ -36,9 +36,17 @@ static	int				lastofs;
+ FX_ClearLightStyles
+ ================
+ */
++#ifdef SHADEREMU
++// (what the renderer was told of each style: some 64 calls a frame through the system calls told it the same; a level's
++// start tells it all again)
++static int se_style_told[MAX_LIGHT_STYLES], se_style_known;
++#endif
+ void CG_ClearLightStyles (void)
+ {
+ 	int	i;
++#ifdef SHADEREMU
++	se_style_known = 0;
++#endif
+ 
+ 	memset (cl_lightstyle, 0, sizeof(cl_lightstyle));
+ 	lastofs = -1;
+@@ -87,8 +95,16 @@ void CG_RunLightStyles (void)
+ 			ls->value[2] = ls->map[ofs%ls->length][2];
+ 			ls->value[3] = 255; //ls->map[ofs%ls->length][3];
+ 		}
++#ifdef SHADEREMU
++		if ( se_style_known && se_style_told[i] == ba->i )
++			continue;
++		se_style_told[i] = ba->i;
++#endif
+ 		trap_R_SetLightStyle( i, ba->i );
+ 	}
++#ifdef SHADEREMU
++	se_style_known = 1;
++#endif
+ }
+ 
+ void CG_SetLightstyle (int i)
 diff --git a/codeJK2/cgame/cg_local.h b/codeJK2/cgame/cg_local.h
 index 67946c5d..5f32a977 100644
 --- a/codeJK2/cgame/cg_local.h
@@ -12704,10 +12825,29 @@ index dd1a72ec..60f4f652 100644
  
  	if ( !cg_freeLocalEntities ) {
 diff --git a/codeJK2/cgame/cg_main.cpp b/codeJK2/cgame/cg_main.cpp
-index 9be003e9..af57cb68 100644
+index 9be003e9..35ab7b7f 100644
 --- a/codeJK2/cgame/cg_main.cpp
 +++ b/codeJK2/cgame/cg_main.cpp
-@@ -743,6 +743,20 @@ static void CG_RegisterSounds( void ) {
+@@ -461,9 +461,18 @@ void CG_RegisterCvars( void ) {
+ CG_UpdateCvars
+ =================
+ */
++#ifdef SHADEREMU
++extern int se_cvar_gen;	// (cvar.cpp's: some 80 system calls a frame found no cvar changed)
++#endif
+ void CG_UpdateCvars( void ) {
+ 	size_t		i;
+ 	cvarTable_t	*cv;
++#ifdef SHADEREMU
++	static int se_seen = -1;
++	if ( se_seen == se_cvar_gen )
++		return;
++	se_seen = se_cvar_gen;
++#endif
+ 
+ 	for ( i=0, cv=cvarTable; i<cvarTableSize; i++, cv++ ) {
+ 		if ( cv->vmCvar ) {
+@@ -743,6 +752,20 @@ static void CG_RegisterSounds( void ) {
  
  	cg.loadLCARSStage = 2;
  	CG_LoadingString( "preregistered sounds" );
@@ -12728,7 +12868,7 @@ index 9be003e9..af57cb68 100644
  
  	for ( i = 1 ; i < MAX_SOUNDS ; i++ ) {
  		soundName = CG_ConfigString( CS_SOUNDS+i );
-@@ -1502,6 +1516,21 @@ void CG_LinkCentsToGents(void)
+@@ -1502,6 +1525,21 @@ void CG_LinkCentsToGents(void)
  		cg_entities[i].gent = &g_entities[i];
  	}
  }
@@ -13514,10 +13654,10 @@ index 221cf26d..f87c9246 100644
  void WriteInUseBits(void);
  void ReadInUseBits(void);
 diff --git a/codeJK2/game/g_main.cpp b/codeJK2/game/g_main.cpp
-index 671b309a..20c38b26 100644
+index 671b309a..3f86be59 100644
 --- a/codeJK2/game/g_main.cpp
 +++ b/codeJK2/game/g_main.cpp
-@@ -28,6 +28,716 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
+@@ -28,6 +28,823 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
  #include "Q3_Interface.h"
  #include "g_nav.h"
  #include "g_roff.h"
@@ -13539,6 +13679,9 @@ index 671b309a..20c38b26 100644
 +// (the library's memcpy, never a loop GCC makes in its place: the machine's copy from 4 KB up)
 +static void *( *volatile se_copy )( void *, const void *, size_t ) = memcpy;
 +static unsigned char se_was_used[MAX_GENTITIES];
++// (the most entities in use since the game came up: past it every entity is free and has no client, NPC or Ghoul2, and
++// the arrays above are 0 there, so this core's loops of the give and the take stop at it; 320 of 1,024 in the walk)
++static int se_hi;
 +static const unsigned short se_ent_ptrs[] = { offsetof( gentity_t, owner ), offsetof( gentity_t, nextTrain ),
 +	offsetof( gentity_t, prevTrain ), offsetof( gentity_t, chain ), offsetof( gentity_t, enemy ), offsetof( gentity_t, activator ),
 +	offsetof( gentity_t, teamchain ), offsetof( gentity_t, teammaster ), offsetof( gentity_t, lastEnemy ) };
@@ -13738,7 +13881,7 @@ index 671b309a..20c38b26 100644
 +static int se_g2_bones = 1, se_g2_was, se_g2_check_on;
 +static unsigned se_g2_copied, se_g2_checked, se_g2_wrong;
 +static int se_g2_clone[MAX_GENTITIES];
-+struct seG2Given_t { unsigned char *buf; int room, used, orig; };
++struct seG2Given_t { unsigned char *buf; int room, used, orig; unsigned copied, conflicts; } __attribute__(( aligned( 16 ) ));
 +static seG2Given_t se_g2_given[MAX_GENTITIES];
 +// (the entities given a copy at the give, in order: the take and the copies' handles go through them, not through every
 +// entity; an entity's orig is set only while it is listed)
@@ -13813,11 +13956,11 @@ index 671b309a..20c38b26 100644
 +			d.mBlist.resize( o.mBlist.size() );
 +			for ( size_t j = 0 ; j < o.mBlist.size() ; j++ )
 +				memcpy( (void *)&d.mBlist[j], (const void *)&o.mBlist[j], bw * 4 );
-+			se_g2_copied += (unsigned)o.mBlist.size();
++			gv->copied += (unsigned)o.mBlist.size();
 +		} else {	// (by the bone: those the game changed since the give before, the copy's others the same)
 +			for ( size_t j = 0 ; j < o.mBlist.size() ; j++ )
 +				if ( SE_G2BoneMark( o.mBlist[j] ) == se_g2_was )
-+					memcpy( (void *)&d.mBlist[j], (const void *)&o.mBlist[j], bw * 4 ), se_g2_copied++;
++					memcpy( (void *)&d.mBlist[j], (const void *)&o.mBlist[j], bw * 4 ), gv->copied++;
 +		}
 +		memcpy( (char *)&d + at, (const char *)&o + at, sw * 4 );
 +		d.mSkin = o.mSkin, d.mValid = o.mValid, d.currentModel = o.currentModel, d.currentModelSize = o.currentModelSize;
@@ -13856,8 +13999,59 @@ index 671b309a..20c38b26 100644
 +		}
 +	}
 +}
++// ---- the Ghoul2 copies in the handover's ranges (JK2_G2_HAND=0: all on this core, as before): an entity's copy made at
++// the give, or given back at the take, by the helper of its range when this core found that nothing of it allocates (the
++// copy's lists hold what they get, the record's buffer is large enough, no model is added or taken away), else by this
++// core. A helper stores only to its entity's copy, its game instance and its record (se_g2_given[i]: its counters too)
++static int se_g2_hand = -1;
++static unsigned char se_g2_h[MAX_GENTITIES];	// (1: the give's by the range's helper; at the take, 1: the take's too)
++static int se_g2_cand[MAX_GENTITIES], se_g2_ncand, se_g2_core[MAX_GENTITIES], se_g2_ncore;
++static int se_g2_give_fits( int i, gentity_t *g )
++{
++	IGhoul2InfoArray &A = TheGameGhoul2InfoArray();
++	const int orig = se_g2_item( g->ghoul2 ), c = se_g2_clone[i];
++	if ( !orig || !A.IsValid( orig ) || !c || !A.IsValid( c ) )
++		return 0;
++	std::vector<CGhoul2Info> &src = A.Get( orig ), &dst = A.Get( c );
++	if ( !src.size() || dst.size() != src.size() )
++		return 0;
++	const size_t sw = se_g2_scalar_words(), bw = se_bone_words();
++	size_t need = 4;
++	for ( size_t m = 0 ; m < src.size() ; m++ ) {
++		const CGhoul2Info &d = dst[m], &o = src[m];
++		if ( d.mModelindex != o.mModelindex || d.mModel != o.mModel || d.mBlist.size() != o.mBlist.size()
++			|| d.mSlist.capacity() < o.mSlist.size() || d.mBltlist.capacity() < o.mBltlist.size() )
++			return 0;
++		need += sw * 4 + 12 + o.mSlist.size() * sizeof( surfaceInfo_t ) + o.mBltlist.size() * sizeof( boltInfo_t )
++			+ ( se_g2_bones ? 0 : o.mBlist.size() * bw * 4 );
++	}
++	seG2Given_t *gv = &se_g2_given[i];
++	if ( (int)need > gv->room ) {	// (grown here, as se_put would)
++		gv->room = (int)need * 2 + 1024;
++		gv->buf = (unsigned char *)realloc( gv->buf, gv->room );
++	}
++	return 1;
++}
++static int se_g2_take_fits( int i )
++{
++	seG2Given_t *gv = &se_g2_given[i];
++	const int orig = gv->orig, c = se_g2_clone[i];
++	IGhoul2InfoArray &A = TheGameGhoul2InfoArray();
++	if ( !orig || !A.IsValid( orig ) || !c || !A.IsValid( c ) )
++		return 0;
++	std::vector<CGhoul2Info> &cl = A.Get( c ), &dst = A.Get( orig );
++	if ( cl.size() != dst.size() )
++		return 0;
++	for ( size_t m = 0 ; m < cl.size() ; m++ ) {
++		const CGhoul2Info &k = cl[m], &o = dst[m];
++		if ( k.mModelindex < 0 || k.mSlist.size() > o.mSlist.size() || k.mBltlist.size() > o.mBltlist.size()
++			|| k.mBlist.size() > o.mBlist.size() )
++			return 0;
++	}
++	return 1;
++}
 +// one list's entries (surfaces, bolts) the client's frame changed or added: into the game's at the same place
-+template <class T> static const unsigned char *se_g2_list_back( const unsigned char *p, const std::vector<T> &cl, std::vector<T> &o )
++template <class T> static const unsigned char *se_g2_list_back( const unsigned char *p, const std::vector<T> &cl, std::vector<T> &o, unsigned &se_g2_conflicts )
 +{
 +	int n;
 +	memcpy( &n, p, 4 ), p += 4;
@@ -13877,6 +14071,7 @@ index 671b309a..20c38b26 100644
 +{
 +	seG2Given_t *gv = &se_g2_given[i];
 +	const int orig = gv->orig, c = se_g2_clone[i];
++	unsigned &se_g2_conflicts = gv->conflicts;
 +	gv->orig = 0;
 +	IGhoul2InfoArray &A = TheGameGhoul2InfoArray();
 +	if ( !orig || !A.IsValid( orig ) || !c || !A.IsValid( c ) )
@@ -13917,8 +14112,8 @@ index 671b309a..20c38b26 100644
 +		for ( size_t w = 0 ; w < sw ; w++ )
 +			if ( w != skel_w && w != mesh_w && kw[w] != given[w] )
 +				ow[w] = kw[w];
-+		p = se_g2_list_back( p, k.mSlist, o.mSlist );
-+		p = se_g2_list_back( p, k.mBltlist, o.mBltlist );
++		p = se_g2_list_back( p, k.mSlist, o.mSlist, se_g2_conflicts );
++		p = se_g2_list_back( p, k.mBltlist, o.mBltlist, se_g2_conflicts );
 +		p += 4;
 +		const uint32_t *gb = (const uint32_t *)bones;
 +		for ( size_t j = 0 ; j < k.mBlist.size() ; j++ ) {
@@ -13962,6 +14157,10 @@ index 671b309a..20c38b26 100644
 +void SE_GameDown( void )
 +{
 +	se_game_up = 0, se_given = 0, se_cg_gents = g_entities;
++	se_hi = 0;
++	memset( se_was_used, 0, sizeof se_was_used ), memset( se_live_cl, 0, sizeof se_live_cl ), memset( se_live_npc, 0, sizeof se_live_npc );
++	memset( se_g2_h, 0, sizeof se_g2_h );
++	memset( se_sh_buf, 0, sizeof se_sh_buf );
 +	se_g2_tag = 0;	// (no bone kept or marked until the next give)
 +	SE_GameHooks( NULL, NULL );
 +	for ( int i = 0 ; i < MAX_GENTITIES ; i++ )
@@ -13973,8 +14172,12 @@ index 671b309a..20c38b26 100644
 +// moved and a client's listed words kept as given (se_give_range); its listed words given back (se_take_range). Each on a
 +// helper worker (gl_jk2.c's jk2HandPost) or this core; a range stores only to its own entities, clients and NPCs and
 +// their copies, a range being whole texels (no texel of another range's). No allocation, no print there
-+#define SE_HAND_PARTS 4
-+static unsigned se_cut[SE_HAND_PARTS + 1];	// (the ranges' ends: SE_GameGive's, used by the take too)
++#define SE_HAND_MAX 8
++// (8 ranges since the Ghoul2 copies went into them: with 4 the first core waited for them longer than it had made the
++// copies itself beside them. JK2_HAND_PARTS=4 as before; gl_jk2.c holds 8 helpers' jobs)
++static int se_hand_parts = -1;
++#define SE_HAND_PARTS se_hand_parts
++static unsigned se_cut[SE_HAND_MAX + 1];	// (the ranges' ends: SE_GameGive's, used by the take too)
 +// (a copy's buffer in whole texels: a helper copies a client or NPC whole, and two malloc'd buffers may be closer than one)
 +static void *SE_HandAlloc( size_t bytes ) { return aligned_alloc( 16, ( bytes + 15 ) & ~(size_t)15 ); }
 +extern "C" int jk2HandPost_( unsigned ( *fn )( unsigned, unsigned ), unsigned a0, unsigned a1 ) __asm__( "jk2HandPost" );
@@ -13990,7 +14193,7 @@ index 671b309a..20c38b26 100644
 +}
 +extern "C" void jk2HandJoin( void );
 +extern "C" void jk2WaitPass( void );
-+static_assert( ( MAX_GENTITIES / SE_HAND_PARTS ) * sizeof( gentity_t ) % 16 == 0, "a range in whole texels" );	// (the arrays start on 16 bytes: se_sh aligned, g_entities in a section of its own on 16, build.sh)
++static_assert( ( MAX_GENTITIES / SE_HAND_MAX ) * sizeof( gentity_t ) % 16 == 0, "a range in whole texels" );	// (the arrays start on 16 bytes: se_sh aligned, g_entities in a section of its own on 16, build.sh)
 +static unsigned se_give_range( unsigned first, unsigned last )
 +{
 +	SE_CGEntitiesRange( se_sh, (int)first, (int)last );	// (the client's game reads the copy: SE_GameGive)
@@ -14016,6 +14219,8 @@ index 671b309a..20c38b26 100644
 +			se_move_ptrs( s, se_ent_ptrs, SE_COUNT( se_ent_ptrs ) );
 +		if ( se_was_used[i] && se_gv_pack > 0 && se_split != 2 )
 +			se_gv_keep( i );
++		if ( se_g2_h[i] )
++			se_g2_give( i, g, s );
 +	}
 +	return 0;
 +}
@@ -14033,6 +14238,8 @@ index 671b309a..20c38b26 100644
 +			se_gv_take( i );
 +		else
 +			SE_TakeEntity( &se_sh[i], &se_gv[i], &g_entities[i] );
++		if ( se_g2_h[i] )
++			se_g2_take( i );
 +	}
 +	return 0;
 +}
@@ -14060,6 +14267,10 @@ index 671b309a..20c38b26 100644
 +	}
 +	if ( se_gv_pack < 0 )
 +		se_gv_init();
++	if ( se_hand_parts < 0 ) {
++		const char *e = getenv( "JK2_HAND_PARTS" );
++		se_hand_parts = e && atoi( e ) >= 1 && atoi( e ) <= SE_HAND_MAX ? atoi( e ) : SE_HAND_MAX;
++	}
 +	unsigned long long se_t = SE_Instructions(), se_u;
 +	// (the entities up to the last one ever used: a slot past globals.num_entities is never in use, 701 of 1,024 in the
 +	// walk; the machine's copy is 256 KB a pass of this core's)
@@ -14068,13 +14279,34 @@ index 671b309a..20c38b26 100644
 +		se_copy_all = getenv( "JK2_COPY_ALL" ) != NULL;
 +	const int se_n = !se_copy_all && globals.num_entities > 0 && globals.num_entities <= MAX_GENTITIES ? globals.num_entities : MAX_GENTITIES;
 +	se_copy( se_sh, g_entities, sizeof( gentity_t ) * se_n );
++	{
++		static int se_all = -1;	// (JK2_HAND_ALL=1: the loops over every entity, as before)
++		if ( se_all < 0 )
++			se_all = getenv( "JK2_HAND_ALL" ) != NULL;
++		const int n = se_all ? MAX_GENTITIES : ( se_n + 1 ) & ~1;
++		if ( n > se_hi )
++			se_hi = n;
++	}
 +	se_u = SE_Instructions(), se_hp[0] += se_u - se_t, se_t = se_u;
 +	// (this core: what each entity has, and the buffers of a new client or NPC, made and touched here)
 +	se_words_init();
-+	for ( int i = 0 ; i < MAX_GENTITIES ; i++ ) {
++	if ( se_g2_hand < 0 ) {
++		const char *e = getenv( "JK2_G2_HAND" );
++		se_g2_hand = !( e && !strcmp( e, "0" ) ) && !se_g2_check_on && se_split != 2;
++	}
++	se_g2_ncand = se_g2_ncore = 0;
++	for ( int i = 0 ; i < se_hi ; i++ ) {
 +		gentity_t *g = &g_entities[i];
 +		se_live_cl[i] = g->client, se_live_npc[i] = g->NPC;
 +		se_was_used[i] = g->inuse || g->client || g->NPC;
++		se_g2_h[i] = 0;
++		if ( se_g2_mode && g->inuse && se_g2_item( g->ghoul2 ) ) {
++			se_g2_cand[se_g2_ncand++] = i;
++			if ( se_g2_hand && se_g2_give_fits( i, g ) )
++				se_g2_h[i] = 1;
++			else
++				se_g2_core[se_g2_ncore++] = i;
++		}
 +		if ( g->client && !se_sh_cl[i] ) {
 +			se_sh_cl[i] = (gclient_t *)SE_HandAlloc( sizeof( gclient_t ) );
 +			se_gv_cl[i] = (gclient_t *)SE_HandAlloc( sizeof( gclient_t ) );
@@ -14097,12 +14329,12 @@ index 671b309a..20c38b26 100644
 +			by_number = e && !strcmp( e, "even" );
 +		}
 +		int total = 0;
-+		for ( int i = 0 ; i < MAX_GENTITIES ; i++ )
-+			total += se_was_used[i] + ( se_live_cl[i] ? 40 : 0 ) + ( se_live_npc[i] ? 16 : 0 );
++		for ( int i = 0 ; i < se_hi ; i++ )
++			total += se_was_used[i] + ( se_live_cl[i] ? 40 : 0 ) + ( se_live_npc[i] ? 16 : 0 ) + ( se_g2_h[i] ? 80 : 0 );
 +		se_cut[0] = 0, se_cut[SE_HAND_PARTS] = MAX_GENTITIES;
 +		int r = 1, acc = 0;
-+		for ( int i = 0 ; i < MAX_GENTITIES && r < SE_HAND_PARTS ; i++ ) {
-+			acc += se_was_used[i] + ( se_live_cl[i] ? 40 : 0 ) + ( se_live_npc[i] ? 16 : 0 );
++		for ( int i = 0 ; i < se_hi && r < SE_HAND_PARTS ; i++ ) {
++			acc += se_was_used[i] + ( se_live_cl[i] ? 40 : 0 ) + ( se_live_npc[i] ? 16 : 0 ) + ( se_g2_h[i] ? 80 : 0 );
 +			if ( !by_number && ( i & 1 ) && acc * SE_HAND_PARTS >= total * r )
 +				se_cut[r++] = i + 1;
 +		}
@@ -14124,18 +14356,20 @@ index 671b309a..20c38b26 100644
 +	if ( se_g2_mode ) {
 +		const unsigned long long se_g0 = SE_Instructions();
 +		se_g2_n = 0;
-+		for ( int i = 0 ; i < MAX_GENTITIES ; i++ )
-+			if ( g_entities[i].inuse && se_g2_item( g_entities[i].ghoul2 ) ) {	// (no instance: nothing given)
-+				se_g2_give( i, &g_entities[i], &se_sh[i] );
-+				if ( se_g2_given[i].orig )
-+					se_g2_list[se_g2_n++] = i;
-+			}
++		for ( int k = 0 ; k < se_g2_ncore ; k++ ) {	// (those that allocate, or every one with JK2_G2_HAND=0)
++			const int i = se_g2_core[k];
++			se_g2_give( i, &g_entities[i], &se_sh[i] );
++		}
 +		se_hp[5] += SE_Instructions() - se_g0;
 +	}
 +	jk2HandJoin();
-+	if ( se_g2_mode )
++	if ( se_g2_mode ) {
++		for ( int k = 0 ; k < se_g2_ncand ; k++ )	// (in the entities' order, the helpers' and this core's)
++			if ( se_g2_given[se_g2_cand[k]].orig )
++				se_g2_list[se_g2_n++] = se_g2_cand[k];
 +		for ( int k = 0 ; k < se_g2_n ; k++ )
 +			se_g2_item( se_sh[se_g2_list[k]].ghoul2 ) = se_g2_clone[se_g2_list[k]];
++	}
 +	se_u = SE_Instructions(), se_hp[1] += se_u - se_t, se_t = se_u;
 +	if ( se_split == 2 ) {	// (=check: every word as given, for the difference)
 +		se_copy( se_gv, se_sh, sizeof( gentity_t ) * MAX_GENTITIES );
@@ -14166,6 +14400,14 @@ index 671b309a..20c38b26 100644
 +	unsigned long long se_t = SE_Instructions();
 +	if ( !check )	// (the listed words given back in ranges on helper workers, this core giving back the Ghoul2 copies)
 +		jk2WaitPass();	// (the client's frame's last stores made before a helper reads them)
++	se_g2_ncore = 0;
++	if ( se_g2_mode > 0 )
++		for ( int k = 0 ; k < se_g2_n ; k++ ) {
++			const int i = se_g2_list[k];
++			se_g2_h[i] = !check && se_g2_hand && se_g2_take_fits( i );
++			if ( !se_g2_h[i] )
++				se_g2_core[se_g2_ncore++] = i;
++		}
 +	if ( !check )
 +		for ( int r = 0 ; r < SE_HAND_PARTS ; r++ )
 +			if ( se_cut[r] == se_cut[r + 1] )
@@ -14173,11 +14415,16 @@ index 671b309a..20c38b26 100644
 +			else if ( !jk2HandPost( se_take_range, se_cut[r], se_cut[r + 1] ) )
 +				se_take_range( se_cut[r], se_cut[r + 1] );
 +	if ( se_g2_mode > 0 ) {
-+		for ( int k = 0 ; k < se_g2_n ; k++ )
-+			se_g2_take( se_g2_list[k] );
-+		se_g2_n = 0;
++		for ( int k = 0 ; k < se_g2_ncore ; k++ )
++			se_g2_take( se_g2_core[k] );
 +		se_hp[3] += SE_Instructions() - se_t, se_t = SE_Instructions();
 +		if ( ++se_frames % 100 == 0 ) {
++			if ( !check )
++				jk2HandJoin();	// (the helpers' counters)
++			for ( int k = 0 ; k < se_g2_n ; k++ ) {
++				seG2Given_t *gv = &se_g2_given[se_g2_list[k]];
++				se_g2_copied += gv->copied, se_g2_conflicts += gv->conflicts, gv->copied = gv->conflicts = 0;
++			}
 +			gi.Printf( "jk2split: Ghoul2 copies: %u given back over the game's own change, %u made again, %u bones copied%s\n",
 +				se_g2_conflicts, se_g2_remade, se_g2_copied, se_g2_bones ? " (by the bone)" : "" );
 +			if ( se_g2_check_on )
@@ -14191,7 +14438,7 @@ index 671b309a..20c38b26 100644
 +	}
 +	if ( !check ) {	// (the helpers done; an entity free at the give and in use in the copy, here)
 +		jk2HandJoin();
-+		for ( int i = 0 ; i < MAX_GENTITIES ; i++ )
++		for ( int i = 0 ; i < se_hi ; i++ )
 +			if ( !se_was_used[i] && se_sh[i].inuse )
 +				se_take_unseen( i );
 +		se_hp[4] += SE_Instructions() - se_t;
@@ -14234,7 +14481,7 @@ index 671b309a..20c38b26 100644
  #include "g_navigator.h"
  #include "b_local.h"
  #include "anims.h"
-@@ -55,11 +765,20 @@ void G_ASPreCacheFree(void);
+@@ -55,11 +872,20 @@ void G_ASPreCacheFree(void);
  
  void ClearAllInUse(void)
  {
@@ -14255,7 +14502,7 @@ index 671b309a..20c38b26 100644
  	assert(((uintptr_t)ent)>=(uintptr_t)g_entities);
  	assert(((uintptr_t)ent)<=(uintptr_t)(g_entities+MAX_GENTITIES-1));
  	unsigned int entNum=ent-g_entities;
-@@ -68,18 +787,23 @@ void SetInUse(gentity_t *ent)
+@@ -68,18 +894,23 @@ void SetInUse(gentity_t *ent)
  
  void ClearInUse(gentity_t *ent)
  {
@@ -14279,7 +14526,7 @@ index 671b309a..20c38b26 100644
  
  qboolean PInUse2(gentity_t *ent)
  {
-@@ -736,6 +1460,10 @@ ShutdownGame
+@@ -736,6 +1567,10 @@ ShutdownGame
  =================
  */
  void ShutdownGame( void ) {
@@ -14290,7 +14537,7 @@ index 671b309a..20c38b26 100644
  	gi.Printf ("==== ShutdownGame ====\n");
  
  	gi.Printf ("... ICARUS_Shutdown\n");
-@@ -1256,6 +1984,9 @@ void G_RunFrame( int levelTime ) {
+@@ -1256,6 +2091,9 @@ void G_RunFrame( int levelTime ) {
  	int			i;
  	gentity_t	*ent;
  	int			ents_inuse=0; // someone's gonna be pissed I put this here...
@@ -14300,7 +14547,7 @@ index 671b309a..20c38b26 100644
  #if	AI_TIMERS
  	AITime = 0;
  	navTime = 0;
-@@ -1482,8 +2213,84 @@ void G_RunFrame( int levelTime ) {
+@@ -1482,8 +2320,84 @@ void G_RunFrame( int levelTime ) {
  		ValidateInUseBits();
  	}
  #endif
@@ -14385,7 +14632,7 @@ index 671b309a..20c38b26 100644
  
  
  extern qboolean player_locked;
-@@ -1518,5 +2325,14 @@ void PrintEntClassname( int gentNum )
+@@ -1518,5 +2432,14 @@ void PrintEntClassname( int gentNum )
  
  IGhoul2InfoArray &TheGameGhoul2InfoArray()
  {
