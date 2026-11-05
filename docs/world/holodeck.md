@@ -402,6 +402,19 @@ Uplink) opens the menu from `HL_SCRIPT` (flat for 9 s, Escape closes it), kills,
 level goes, 63 s of load, 3 flat frames, then the world; the new level's player has no suit, so no HUD); `jk2-seat` loads the demo's
 level flat and walks it from the seat.
 
+In the editor's play mode (5 November 2026, fxc2's overlay editor, a desktop sitter in holodeck 1 under ClientSim, driven by
+`tools/unity_check`): Doom, Quake, Quake III and ClassiCube showed their world round the seat with the HUD layer before the sitter;
+Quake's menu, `kill` and `changelevel e1m2` were flat (the large screen) until the level's GPU copy was made, then the world and
+HUD; Doom's and Quake III's menus by Escape the same. Two things were wrong: a Quake III level loaded from within a frame (`map`
+while one is played) drew "Awaiting gamestate" as a world (the room black, the picture on the HUD layer), as its flat word was told
+only at the input poll (`SE_TellFlat` now at the frame's end too), and Doom's default view (screenblocks 9) put its border on the
+HUD layer as a frame of stone before the sitter (`doom_video.c` takes the whole width while seated); both changes were written
+that day without a build (the session could not reach WSL), so they wait for one and `test_all.py`. A desktop sitter's click on the
+console both pressed its key and reached the game (one click turned "3D: games only" and hosted ClassiCube on the LAN): the
+console's plates are the desktop view's too now (`EmuPointer`, `holoAim`). Escape is ClientSim's menu key, as it is VRChat's: in
+the editor every Escape also opened ClientSim's menu. Half-Life and Jedi Outcast stop at their licence windows, which the check
+left unaccepted.
+
 `rvc_cpu --volume-log FILE` writes a line for each whole frame a program gives a host (its words, its draws in space, flat
 and text), and `python tools/volume_frames.py FILE` prints them as runs of a kind: a flat screen, a world with or without
 draws over it, or an empty world (not flat and nothing in space: the room would show nothing; over a second is an exit 1).
