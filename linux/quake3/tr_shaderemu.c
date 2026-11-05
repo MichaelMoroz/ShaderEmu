@@ -148,6 +148,15 @@ int SE_ClientPlaying (void)
 	return clc.state == CA_ACTIVE && !clc.demoplaying;
 }
 
+/* A menu, the console, a level loading: a picture for a screen, not a world for a room (and a level's end, its
+   scoreboard: PM_INTERMISSION and PM_SPINTERMISSION are 5 and 6). Told every input poll and again at a frame's end:
+   a level loaded from within a frame of the game (`map`, `devmap` while one is played) draws its loading pictures
+   with no poll between, and they went out as a world (the room black, the picture on the HUD layer). */
+static void SE_TellFlat (void)
+{
+	seglWorldFlat (Key_GetCatcher () != 0 || clc.state != CA_ACTIVE || (cl.snap.valid && cl.snap.ps.pm_type >= 5));
+}
+
 static int		mouse_x, mouse_y, mouse_known, mouse_inside = 1;
 static int		origin_x, origin_y, origin_known, mouse_menu;	/* the window's place on the display */
 static int		dragging;	/* the left button is held on the game: the pointer's travel turns the view */
@@ -239,9 +248,7 @@ void SE_Input (void)
 	}
 	input = gpuControl (REG_INPUT);
 	host = seglHostState ();
-	/* a menu, the console, a level loading: a picture for a screen, not a world for a room */
-	/* (and a level's end, its scoreboard: PM_INTERMISSION and PM_SPINTERMISSION are 5 and 6) */
-	seglWorldFlat (Key_GetCatcher () != 0 || clc.state != CA_ACTIVE || (cl.snap.valid && cl.snap.ps.pm_type >= 5));
+	SE_TellFlat ();
 	/* the eye 50 units over the floor (26 over a player's origin, 24 over its feet) */
 	seglWorldEye (7, 50, Z_NEAR, Z_FAR, 1 / tan (seat_fov_x * (M_PI / 360)), 1 / tan (seat_fov_y * (M_PI / 360)));
 	if (mouse_inside || dragging) {		/* (a drag goes on outside the window) */
@@ -2178,6 +2185,7 @@ static void RE_EndFrame (int *frontEndMsec, int *backEndMsec)
 		*frontEndMsec = 0;
 	if (backEndMsec)
 		*backEndMsec = 0;
+	SE_TellFlat ();
 	if (world_loaded == 1 && clc.state == CA_ACTIVE) {	/* (where a level's loading is measured to) */
 		world_loaded = 2;
 		printf ("quake3: pictures decoded so far %u (%u KB), not for want of GPU memory %u, this core's instructions in them "

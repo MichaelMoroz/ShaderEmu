@@ -1,0 +1,302 @@
+{
+ "doom_ad": {
+  "uv": [
+   0.001953,
+   0.802734,
+   0.145996,
+   0.998047
+  ],
+  "aspect": 0.7375,
+  "title": "Doom magazine advertisement (id Software)"
+ },
+ "hexen_poster": {
+  "uv": [
+   0.147949,
+   0.802734,
+   0.298828,
+   0.998047
+  ],
+  "aspect": 0.7725,
+  "title": "Hexen: Beyond Heretic poster"
+ },
+ "matrix_1999": {
+  "uv": [
+   0.300781,
+   0.802734,
+   0.430664,
+   0.998047
+  ],
+  "aspect": 0.665,
+  "title": "The Matrix"
+ },
+ "system_shock_poster": {
+  "uv": [
+   0.432617,
+   0.802734,
+   0.583496,
+   0.998047
+  ],
+  "aspect": 0.7725,
+  "title": "System Shock poster (Origin, 1994 CES)"
+ },
+ "xwing_poster": {
+  "uv": [
+   0.585449,
+   0.802734,
+   0.7229,
+   0.998047
+  ],
+  "aspect": 0.7037,
+  "title": "Star Wars: X-Wing poster (LucasArts)"
+ },
+ "lemmings_poster": {
+  "uv": [
+   0.724854,
+   0.802734,
+   0.863037,
+   0.998047
+  ],
+  "aspect": 0.7075,
+  "title": "Lemmings and Oh No! More Lemmings promotional poster (Psygnosis)"
+ },
+ "tron_1982": {
+  "uv": [
+   0.86499,
+   0.802734,
+   0.993408,
+   0.998047
+  ],
+  "aspect": 0.6575,
+  "title": "Tron"
+ },
+ "kyrandia_poster": {
+  "uv": [
+   0.001953,
+   0.605469,
+   0.148682,
+   0.800781
+  ],
+  "aspect": 0.7512,
+  "title": "The Legend of Kyrandia store poster (Westwood)"
+ },
+ "hackers_1995": {
+  "uv": [
+   0.150635,
+   0.605469,
+   0.282471,
+   0.800781
+  ],
+  "aspect": 0.675,
+  "title": "Hackers"
+ },
+ "terminator2_1991": {
+  "uv": [
+   0.284424,
+   0.605469,
+   0.41626,
+   0.800781
+  ],
+  "aspect": 0.675,
+  "title": "Terminator 2: Judgment Day"
+ },
+ "windows95_ad_tgim": {
+  "uv": [
+   0.418213,
+   0.605469,
+   0.580811,
+   0.800781
+  ],
+  "aspect": 0.8325,
+  "title": "Windows 95 magazine advertisement 'T.G.I. Monday' (Microsoft)"
+ },
+ "diablo_flyer": {
+  "uv": [
+   0.582764,
+   0.605469,
+   0.720947,
+   0.800781
+  ],
+  "aspect": 0.7075,
+  "title": "Diablo flyer (Blizzard / Bomico, German)"
+ },
+ "intel_pentium_pro_poster": {
+  "uv": [
+   0.7229,
+   0.605469,
+   0.849609,
+   0.800781
+  ],
+  "aspect": 0.6488,
+  "title": "Intel Pentium Pro Processor poster"
+ },
+ "wargames_1983": {
+  "uv": [
+   0.851562,
+   0.605469,
+   0.981689,
+   0.800781
+  ],
+  "aspect": 0.6663,
+  "title": "WarGames"
+ },
+ "amiga500_ad": {
+  "uv": [
+   0.001953,
+   0.408203,
+   0.129639,
+   0.603516
+  ],
+  "aspect": 0.6538,
+  "title": "Commodore Amiga 500 advertisement (Swedish)"
+ },
+ "sneakers_1992": {
+  "uv": [
+   0.131592,
+   0.408203,
+   0.26001,
+   0.603516
+  ],
+  "aspect": 0.6575,
+  "title": "Sneakers"
+ },
+ "jurassic_park_1993": {
+  "uv": [
+   0.261963,
+   0.408203,
+   0.393311,
+   0.603516
+  ],
+  "aspect": 0.6725,
+  "title": "Jurassic Park"
+ },
+ "ultima8_poster": {
+  "uv": [
+   0.395264,
+   0.408203,
+   0.546143,
+   0.603516
+  ],
+  "aspect": 0.7725,
+  "title": "Ultima VIII: Pagan poster (Origin, 1994 CES)"
+ },
+ "blood_money_poster": {
+  "uv": [
+   0.548096,
+   0.408203,
+   0.685791,
+   0.603516
+  ],
+  "aspect": 0.705,
+  "title": "Blood Money poster (Psygnosis, Amiga)"
+ },
+ "halflife_ad": {
+  "uv": [
+   0.687744,
+   0.408203,
+   0.82959,
+   0.603516
+  ],
+  "aspect": 0.7262,
+  "title": "Half-Life magazine advertisement (Dreamcast version)"
+ },
+ "windows95_ad_smarter": {
+  "uv": [
+   0.831543,
+   0.408203,
+   0.990234,
+   0.603516
+  ],
+  "aspect": 0.8125,
+  "title": "Windows 95 magazine advertisement (Microsoft)"
+ },
+ "tomb_raider_poster": {
+  "uv": [
+   0.001953,
+   0.210938,
+   0.278076,
+   0.40625
+  ],
+  "aspect": 1.4138,
+  "title": "Tomb Raider poster (Hobby Consolas pull-out, landscape)"
+ },
+ "lawnmower_man_1992": {
+  "uv": [
+   0.280029,
+   0.210938,
+   0.405273,
+   0.40625
+  ],
+  "aspect": 0.6412,
+  "title": "The Lawnmower Man"
+ },
+ "intel_manufacturing_poster": {
+  "uv": [
+   0.407227,
+   0.210938,
+   0.539307,
+   0.40625
+  ],
+  "aspect": 0.6763,
+  "title": "Intel manufacturing poster"
+ },
+ "star_trek_first_contact_1996": {
+  "uv": [
+   0.54126,
+   0.210938,
+   0.672852,
+   0.40625
+  ],
+  "aspect": 0.6737,
+  "title": "Star Trek: First Contact"
+ },
+ "virtuosity_1995": {
+  "uv": [
+   0.674805,
+   0.210938,
+   0.806641,
+   0.40625
+  ],
+  "aspect": 0.675,
+  "title": "Virtuosity"
+ },
+ "existenz_1999": {
+  "uv": [
+   0.001953,
+   0.013672,
+   0.265625,
+   0.208984
+  ],
+  "aspect": 1.35,
+  "title": "eXistenZ"
+ },
+ "last_starfighter_1984": {
+  "uv": [
+   0.267578,
+   0.013672,
+   0.39624,
+   0.208984
+  ],
+  "aspect": 0.6587,
+  "title": "The Last Starfighter"
+ },
+ "total_recall_1990": {
+  "uv": [
+   0.398193,
+   0.013672,
+   0.529785,
+   0.208984
+  ],
+  "aspect": 0.6737,
+  "title": "Total Recall"
+ },
+ "thirteenth_floor_1999": {
+  "uv": [
+   0.531738,
+   0.013672,
+   0.663086,
+   0.208984
+  ],
+  "aspect": 0.6725,
+  "title": "The Thirteenth Floor"
+ }
+}

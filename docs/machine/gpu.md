@@ -132,6 +132,7 @@ Flags added to the vertex mode:
 | `0x20000` facing | with tagged: word 11 is the address of a table of the 256 ways a vertex can face, a texel each of three floats in the model's own space, and a vertex's tag is which. Word 13 is the address of three texels of floats: where the light comes from, its colour, and the colour of the light from everywhere. The vertex's colour is the last plus the second times how much it faces the first: a model is lit by those three texels and nothing is worked out for its vertices |
 
 | `0x40000` bones | floats, not compact: a skinned model's vertex made by the GPU from the model as it lies in memory ("A skinned model" below): word 1 the indices, 12 the vertices, 13 the bones, 14 the texture coordinates, 15 the light or 0 |
+| `0x100000` arrays | floats: a vertex from a renderer's arrays by its index, made as a compact vertex of them would have been ("A renderer's arrays" below): word 1 the indices, 11 one colour, 12 the positions, 13 the texture coordinates, 14 the colours, 15 the flags and the coordinates' least |
 
 A textured quad is then 16 words of vertices instead of 96.
 
@@ -147,6 +148,18 @@ of 0 to 255: from where the light comes in the model's space, its colour, and th
 then floor(min(the last + the second times max(normal . the first, 0), 255) x word 11's colour) / 255 and word 11's
 alpha, otherwise word 11 as it is. The draw's matrices are the modelview flag's; nothing of the model is copied a
 frame but its bones and light.
+
+**A renderer's arrays** (`0x100000`, 5 November 2026; Jedi Outcast's shim, `linux/jk2/gl_jk2.c`'s `fast_triangles`;
+`docs/games/jk2.md`, "The drawing's stores"): drawn vertex k is the vertex whose index is word k of word 1's buffer
+(with flag 16; else two 16-bit indices a word), counted from the arrays' first. Word 12 is its position, a texel each of
+three floats; word 13 its texture coordinates, two floats each; word 14 its colour, the GL's four bytes each (red
+first). Word 15's low byte is flags: 1 the depth the far plane's (-0.9999), 2 every vertex word 11's colour, 4 the
+coordinates as a tagged vertex has them (12 bits each, by an unsigned conversion), 8 alpha 255, 16 the indices a word
+each; bits 8 to 19 and 20 to 31 are the least u and v, integers subtracted before the coordinates are made 1,024ths (16
+bits each by an int, or flag 4's). A colour is made as a compact draw's word: transparency 255 less alpha, then red,
+green, blue. So a program that made a compact vertex's words of its arrays on a core instead copies them as they lie,
+and the picture is the same to the pixel (Jedi Outcast's walk captured both ways at frame 1,450: the same but the HUD's
+two dials, which differ between any two runs). The draw's matrices are the modelview flag's.
 
 **Fragment modes**
 

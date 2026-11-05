@@ -2014,27 +2014,144 @@ static uint32_t se_malloc_0( void *p ) { seAllocArgs_t *a = (seAllocArgs_t *)p; 
 static uint32_t se_calloc_0( void *p ) { seAllocArgs_t *a = (seAllocArgs_t *)p; return (uint32_t)(uintptr_t)__real_calloc( a->a, a->b ); }
 static uint32_t se_realloc_0( void *p ) { seAllocArgs_t *a = (seAllocArgs_t *)p; return (uint32_t)(uintptr_t)__real_realloc( a->p, a->a ); }
 static uint32_t se_free_0( void *p ) { seAllocArgs_t *a = (seAllocArgs_t *)p; __real_free( a->p ); return 0; }
+// ---- The game's frame's own allocations (JK2_SPLIT=worker; docs/games/jk2.md, "The game's frame apart"). Its paths and
+// combat points make short-lived containers (CNavigator::CalculatePath, NPC_FindCombatPoint: about 19 a frame of the walk)
+// that were asked of this core: the answer came when this core next looked, so the heap's addresses went by the two
+// cores' timing. They come from an arena of the worker's own instead (4 MB made and touched here when the worker is
+// taken, SE_ArenaOpen): blocks of a power of two from 32 bytes to 512 KB after a 16-byte head, a free list a size, never
+// joined: a block is whole texels, apart from this core's heap. A block another core frees is queued and freed by the
+// worker at its frame's start (SE_ArenaDrain), a fixed point; a larger allocation, or a free of this core's memory, is
+// still asked. JK2_ARENA=0: all asked, as before
+#define SE_ARENA_BYTES ( 4u << 20 )
+#define SE_ARENA_LEAST 5	// (32 bytes, the head's 16 among them)
+#define SE_ARENA_MOST 19
+#define SE_ARENA_MAGIC 0x5e0a3e1au
+static unsigned char *se_arena;
+static unsigned se_arena_used;	// (the worker's, as its free lists)
+static void *se_arena_free[SE_ARENA_MOST + 1];
+struct seArenaHead_t { unsigned cls, magic, bytes, unused; };
+// (frees of other cores: put by this core, taken by the worker at its frame's start)
+static struct { void *volatile at[512]; volatile unsigned put, unused[3]; } se_arena_q __attribute__(( aligned( 16 ) ));
+static struct { volatile unsigned got, lost, unused[2]; } se_arena_qg __attribute__(( aligned( 16 ) ));
+#ifdef SE_WINDOW
+extern "C" void mcw_touch( void *memory, unsigned bytes );
+#else
+static void mcw_touch( void *, unsigned ) {}
+#endif
+extern "C" void SE_ArenaOpen( void )
+{
+	const char *e = getenv( "JK2_ARENA" );
+	if ( se_arena || ( e && !strcmp( e, "0" ) ) )
+		return;
+	se_arena = (unsigned char *)aligned_alloc( 16, SE_ARENA_BYTES );
+	if ( se_arena ) {
+		memset( se_arena, 0, SE_ARENA_BYTES );
+		mcw_touch( se_arena, SE_ARENA_BYTES );
+		mcw_touch( (void *)&se_arena_q, sizeof se_arena_q ), mcw_touch( (void *)&se_arena_qg, sizeof se_arena_qg );
+	}
+}
+static inline int se_in_arena( const void *p ) { return se_arena && (uintptr_t)p - (uintptr_t)se_arena < SE_ARENA_BYTES; }
+static void *se_arena_alloc( size_t n )
+{
+	if ( !se_arena || n > ( 1u << SE_ARENA_MOST ) - 16 )
+		return NULL;
+	int cls = SE_ARENA_LEAST;
+	while ( ( 1u << cls ) < n + 16 )
+		cls++;
+	seArenaHead_t *h = (seArenaHead_t *)se_arena_free[cls];
+	if ( h ) {
+		se_arena_free[cls] = *(void **)( h + 1 );
+	} else {
+		if ( se_arena_used + ( 1u << cls ) > SE_ARENA_BYTES )
+			return NULL;
+		h = (seArenaHead_t *)( se_arena + se_arena_used );
+		se_arena_used += 1u << cls;
+		h->cls = (unsigned)cls, h->magic = SE_ARENA_MAGIC;
+	}
+	h->bytes = (unsigned)n;
+	return h + 1;
+}
+static void se_arena_put( void *p )	// (the worker's)
+{
+	seArenaHead_t *h = (seArenaHead_t *)p - 1;
+	*(void **)p = se_arena_free[h->cls];
+	se_arena_free[h->cls] = h;
+}
+extern "C" void SE_ArenaDrain( void )	// (the worker, at its frame's start)
+{
+	while ( se_arena_qg.got != se_arena_q.put ) {
+		se_arena_put( se_arena_q.at[se_arena_qg.got % 512] );
+		se_arena_qg.got = se_arena_qg.got + 1;
+	}
+}
+static void se_arena_queue( void *p )	// (another core's free of the worker's block)
+{
+	if ( se_arena_q.put - se_arena_qg.got >= 512 ) {
+		se_arena_qg.lost = se_arena_qg.lost + 1;	// (left: a full queue loses the block, counted)
+		return;
+	}
+	se_arena_q.at[se_arena_q.put % 512] = p;
+	se_arena_q.put = se_arena_q.put + 1;
+}
+static inline size_t se_arena_bytes( const void *p ) { return ( (const seArenaHead_t *)p - 1 )->bytes; }
 extern "C" void *__wrap_malloc( size_t n )
 {
-	SE_NOT_AHEAD( SE_WHY_MALLOC ); se_allocs[0]++;
-	if ( jk2ServerHere() ) { seAllocArgs_t a = { NULL, n, 0 }; return (void *)(uintptr_t)jk2ServerOnCore0( se_malloc_0, &a ); }
+	SE_NOT_AHEAD( SE_WHY_MALLOC );
+	if ( jk2ServerHere() ) {
+		if ( void *r = se_arena_alloc( n ) )
+			return r;
+		seAllocArgs_t a = { NULL, n, 0 };
+		return (void *)(uintptr_t)jk2ServerOnCore0( se_malloc_0, &a );
+	}
+	se_allocs[0]++;	// (this core's count: the worker's are not counted, RVC_RACES found both storing to it)
 	return __real_malloc( n );
 }
 extern "C" void *__wrap_calloc( size_t n, size_t m )
 {
-	SE_NOT_AHEAD( SE_WHY_MALLOC ); se_allocs[0]++;
-	if ( jk2ServerHere() ) { seAllocArgs_t a = { NULL, n, m }; return (void *)(uintptr_t)jk2ServerOnCore0( se_calloc_0, &a ); }
+	SE_NOT_AHEAD( SE_WHY_MALLOC );
+	if ( jk2ServerHere() ) {
+		if ( void *r = se_arena_alloc( n * m ) ) {
+			memset( r, 0, n * m );
+			return r;
+		}
+		seAllocArgs_t a = { NULL, n, m };
+		return (void *)(uintptr_t)jk2ServerOnCore0( se_calloc_0, &a );
+	}
+	se_allocs[0]++;
 	return __real_calloc( n, m );
 }
+extern "C" void __wrap_free( void *p );
 extern "C" void *__wrap_realloc( void *p, size_t n )
 {
-	SE_NOT_AHEAD( SE_WHY_MALLOC ); se_allocs[0]++;
-	if ( jk2ServerHere() ) { seAllocArgs_t a = { p, n, 0 }; return (void *)(uintptr_t)jk2ServerOnCore0( se_realloc_0, &a ); }
+	SE_NOT_AHEAD( SE_WHY_MALLOC );
+	if ( p && se_in_arena( p ) ) {	// (a block of the worker's: made again where the core that asks allocates)
+		void *r = __wrap_malloc( n );
+		if ( r ) {
+			const size_t old = se_arena_bytes( p );
+			memcpy( r, p, old < n ? old : n );
+			__wrap_free( p );
+		}
+		return r;
+	}
+	if ( jk2ServerHere() ) {
+		if ( !p ) return __wrap_malloc( n );
+		seAllocArgs_t a = { p, n, 0 };
+		return (void *)(uintptr_t)jk2ServerOnCore0( se_realloc_0, &a );
+	}
+	se_allocs[0]++;
 	return __real_realloc( p, n );
 }
 extern "C" void __wrap_free( void *p )
 {
-	SE_NOT_AHEAD( SE_WHY_MALLOC ); se_allocs[1] += p != 0;
+	SE_NOT_AHEAD( SE_WHY_MALLOC );
+	if ( p && se_in_arena( p ) ) {
+		if ( jk2ServerHere() )
+			se_arena_put( p );
+		else
+			se_arena_queue( p );
+		return;
+	}
 	if ( p && jk2ServerHere() ) { seAllocArgs_t a = { p, 0, 0 }; jk2ServerOnCore0( se_free_0, &a ); return; }
+	se_allocs[1] += p != 0;
 	__real_free( p );
 }

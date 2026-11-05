@@ -217,15 +217,12 @@ put "$BUILD/game.ld.new" "$BUILD/game.ld"; rm "$BUILD/game.ld.new"
 module() {   # part, entries
     local part=$1; shift
     local script=; [ "$part" = game ] && script="-T $BUILD/game.ld"
-    $LD -r --force-group-allocation $script -o "$BUILD/$part.all.o" "$BUILD/$part"/*.o
+    local extra=; [ "$part" = renderer ] && extra=$RENDERER_B
+    $LD -r --force-group-allocation $script -o "$BUILD/$part.all.o" "$BUILD/$part"/*.o $extra
     $OBJCOPY $(for e in "$@"; do echo "--keep-global-symbol=$e"; done) "$BUILD/$part.all.o" "$BUILD/$part.o"
     $OBJCOPY $(for e in "$@"; do echo "--redefine-sym $e=se_$e"; done) "$BUILD/$part.o"
 }
 module game GetGameAPI dllEntry vmMain
-module renderer GetRefAPI
-if [ "${JK2_HOST:-}" != 1 ]; then
-    $OBJCOPY $($NM -u "$BUILD/renderer.o" | awk '$2 ~ /^gl[A-Z]/ {print "--redefine-sym " $2 "=jk2_" $2}') "$BUILD/renderer.o"
-fi
 
 MACHINE=
 if [ "${JK2_HOST:-}" != 1 ]; then
@@ -235,11 +232,24 @@ if [ "${JK2_HOST:-}" != 1 ]; then
     MW=${SE_MW:-$WORK/src/microwindows}
     [ -f "$MW/src/lib/libnano-X.a" ] || { echo "run linux/nanox/build.sh first"; exit 1; }
     WF="$OPT -fno-pie -Wall -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable"
+    GPUF="-DSEGL_FLOAT -DMAX_TEXTURES=64 -DSE_HALVES -idirafter $PROGRAMS/linux/include -I$MW/src/include -I$PROGRAMS/linux -I$REPO/linux/quake3"
     compile window \
         "$(lines window "$CXX $CXXSTD $EF -DSE_WINDOW -I$MW/src/include -I$PROGRAMS/mc -I$REPO/linux/libmedia" "$HERE/sys_shaderemu.cpp")" \
-        "$(lines window "$CC $WF -DSEGL_FLOAT -DMAX_TEXTURES=64 -idirafter $PROGRAMS/linux/include -I$MW/src/include -I$PROGRAMS/linux -I$REPO/linux/quake3" "$REPO/linux/quake3/gpu_shaderemu.c")" \
-        "$(lines window "$CC $WF -I$REPO/linux/quake3 -I$PROGRAMS/mc" "$HERE/gl_jk2.c")" \
+        "$(lines window "$CC $WF $GPUF" "$REPO/linux/quake3/gpu_shaderemu.c")" \
+        "$(lines window "$CC $WF -DHLGL_SHARE -I$REPO/linux/quake3 -I$PROGRAMS/mc" "$HERE/gl_jk2.c")" \
         "$(lines window "$CC -O2 -fno-common -fdata-sections -w -I$PROGRAMS/mc" "$PROGRAMS/mc/mcw.c" "$PROGRAMS/mc/mcwx.c")"
+    # The drawing's second copy of the GL and the list's builder (gl_jk2.c, "The drawing on two workers"): every name of
+    # theirs b_ (the renderer's second copy calls them so: below), the textures and their pool the first's (SE_DRAW_B)
+    compile drawb \
+        "$(lines drawb "$CC $WF $GPUF -DSE_DRAW_B" "$REPO/linux/quake3/gpu_shaderemu.c")" \
+        "$(lines drawb "$CC $WF -DSE_DRAW_B -I$REPO/linux/quake3 -I$PROGRAMS/mc" "$HERE/gl_jk2.c")"
+    for o in "$BUILD"/drawb/*.o; do
+        $OBJCOPY --set-section-alignment '.data*=16' --set-section-alignment '.sdata*=16' --set-section-alignment '.bss*=16' \
+            --set-section-alignment '.sbss*=16' "$o"
+    done
+    $LD -r -o "$BUILD/drawb_shim.all.o" "$BUILD"/drawb/*.o
+    $NM -g --defined-only "$BUILD/drawb_shim.all.o" | awk '{print $3, "b_" $3}' > "$BUILD/drawb_shim.syms"
+    $OBJCOPY --redefine-syms "$BUILD/drawb_shim.syms" "$BUILD/drawb_shim.all.o" "$BUILD/drawb_shim.o"
     # libmedia (docs/system/media.md): the music decoded on the worker cores (sys_shaderemu.cpp, "Music on the card")
     MEDIA=${MEDIA_LIB:-$WORK/src/libmedia/libmedia.a}
     [ -f "$MEDIA" ] || { echo "run linux/libmedia/build.sh first"; exit 1; }
@@ -248,9 +258,40 @@ if [ "${JK2_HOST:-}" != 1 ]; then
             --set-section-alignment '.sbss*=16' "$o"
     done
     # (every strtod and atof through sys_shaderemu.cpp's __wrap_strtod and __wrap_atof: musl's parses in software long doubles)
-    MACHINE="$BUILD/window/*.o $MW/src/lib/libnano-X.a $MEDIA -Wl,--wrap=strtod -Wl,--wrap=atof $SE_WRAP"
+    MACHINE="$BUILD/window/*.o $BUILD/drawb_shim.o $MW/src/lib/libnano-X.a $MEDIA -Wl,--wrap=strtod -Wl,--wrap=atof $SE_WRAP"
 fi
 
+# The back end's second copy (gl_jk2.c, "The drawing on two workers"; tr_backend.cpp's SE_DrawHalfB): its files linked
+# apart, its functions and the state of its own (tess, backEnd, glState, the list's) renamed b_, its GL calls the second
+# GL's (b_jk2_glX), everything else of its data weak: the first copy's, which it shares (tr, the shaders, the models)
+RENDERER_B=
+if [ "${JK2_HOST:-}" != 1 ]; then
+    RSET="tr_shade tr_shade_calc tr_surface tr_backend tr_sky tr_shadows tr_surfacesprites tr_quicksprite tr_ghoul2"
+    $LD -r --force-group-allocation -o "$BUILD/drawb_r.all.o" $(for f in $RSET; do echo "$BUILD/renderer/rd-vanilla_$f.o"; done)
+    $OBJCOPY $($NM -u "$BUILD/drawb_r.all.o" | awk -v f="$BUILD/drawb_shim.syms" '
+        BEGIN { while ((getline l < f) > 0) { split(l, w, " "); have[w[1]] = 1 } }
+        $2 ~ /^gl[A-Z]/ && (("jk2_" $2) in have) {print "--redefine-sym " $2 "=jk2_" $2}') \
+        --redefine-sym glState=se_glState_b "$BUILD/drawb_r.all.o" "$BUILD/drawb_r.1.o"
+    OWN="tess backEnd rb_surfaceTable se_kf_n se_kf_ok se_kf_indices se_mesh_frame se_mesh_ni se_mesh_nv se_mesh_surface lightOrigin
+        tr_stencilled g_bRenderGlowingObjects g_uiCurrentPixelShaderType SQuickSprite se_glState_b se_half_b SSAdditiveTransparency
+        SSUsingFog SSVertAlpha SSVertWindDir SSVertWindForce curWeatherAmount curWindBlowVect curWindGrassDir curWindGust
+        curWindPoint curWindPointActive curWindPointForce curWindSpeed gustLeft lastSSUpdateTime nextGustTime randomindex
+        randominterval rangescalefactor rightvectorcount ssLastEntityDrawn ssViewOrigin ssViewRight ssViewUp ssfwdvector
+        ssrightvectors sssurfaces standardfovinitialized standardfovx standardscalex targetWindBlowVect targetWindGrassDir
+        totalsurfsprites"
+    { cut -d' ' -f1 "$BUILD/drawb_shim.syms" | awk '{print $1, "b_" $1}'
+      $NM --defined-only "$BUILD/drawb_r.1.o" | awk '$2 ~ /^[TW]$/ {print $3, "b_" $3}'
+      for v in $OWN; do echo "$v b_$v"; done; } | sort -u > "$BUILD/drawb_r.syms"
+    $OBJCOPY --redefine-syms "$BUILD/drawb_r.syms" "$BUILD/drawb_r.1.o" "$BUILD/drawb_r.2.o"
+    $OBJCOPY --weaken "$BUILD/drawb_r.2.o" "$BUILD/drawb_r.o"
+    RENDERER_B="$BUILD/drawb_r.o"
+    module renderer GetRefAPI b_SE_DrawHalfB
+else
+    module renderer GetRefAPI
+fi
+if [ "${JK2_HOST:-}" != 1 ]; then
+    $OBJCOPY $($NM -u "$BUILD/renderer.o" | awk '$2 ~ /^gl[A-Z]/ {print "--redefine-sym " $2 "=jk2_" $2}') "$BUILD/renderer.o"
+fi
 step "the program"
 $CXX $OPT -o "$BUILD/jk2" "$BUILD/engine"/*.o "$BUILD/game.o" "$BUILD/renderer.o" $MACHINE $LIBS
 $NM -n -C "$BUILD/jk2" > "$BUILD/jk2.nm"

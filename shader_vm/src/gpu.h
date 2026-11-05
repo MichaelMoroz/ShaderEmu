@@ -68,6 +68,7 @@
 #define VERTEX_MOVED 0x10000     // flag: word 15 is the address of two rows of three numbers the texture coordinates are turned and moved by
 #define VERTEX_BONES 0x40000     // flag (floats, not compact): a skinned model's vertex, made from its indices, vertices, bones and light (words 1, 12-15; gpu.md)
 #define VERTEX_ENV 0x80000       // flag (compact, floats): u and v made from a normal a vertex (word 12, a texel each) and the eye (words 13-15), as rd-vanilla's environment map
+#define VERTEX_ARRAYS 0x100000   // flag (floats): a vertex from a renderer's arrays by its index, made as a compact vertex of them would be (words 1, 11, 12-15; gpu_arrays_vertex)
 
 // How fragments are coloured (low byte), plus flags.
 #define FRAGMENT_COLOUR 0     // interpolated colour
@@ -283,6 +284,45 @@ void gpu_compact_vertex(uint base, uint4 head, uint4 how, uint4 more, uint k, ou
         uint light = texel_of(ram(base + 3).g);
         colour = float4(saturate(asfloat(ram(light + 2)).rgb + max(dot(facing, asfloat(ram(light)).xyz), 0.0) * asfloat(ram(light + 1)).rgb), 1.0);
     }
+}
+
+// Vertex k of a draw of a renderer's arrays (VERTEX_ARRAYS; docs/machine/gpu.md, "A renderer's arrays"), as Jedi
+// Outcast's shim made a compact vertex of them (linux/jk2/gl_jk2.c, fast_triangles), so that a picture is that draw's to
+// the pixel: word 1 the indices, two of 16 bits a word, from the arrays' first vertex; word 12 the positions, a texel of
+// floats each (x, y, z); word 13 the texture coordinates, two floats each; word 14 the colours, the GL's four bytes each;
+// word 15 the flags in its low byte and the coordinates' least, two integers of 12 bits from bit 8 (subtracted, as the
+// shim made a compact vertex's coordinates from them, then in 1,024ths: 16 bits by an int, or with ARRAYS_SMALL 12 bits by
+// an unsigned, as a tagged vertex's); word 11 the colour of every vertex with ARRAYS_ONE, else each its own, made as the
+// shim's word of it (0xTTRRGGBB, T 255 less alpha; alpha 255 with ARRAYS_OPAQUE)
+#define ARRAYS_FAR 1      // z the far plane's, -0.9999: 2D before the frame's first 3D
+#define ARRAYS_ONE 2      // every vertex word 11's colour
+#define ARRAYS_SMALL 4    // the coordinates a tagged vertex's (12 bits, unsigned)
+#define ARRAYS_OPAQUE 8   // the alpha 255 (GL_ONE, GL_ONE)
+#define ARRAYS_WIDE 16    // the indices a word each (the renderer's own, copied as they are)
+void gpu_arrays_vertex(uint4 head, uint4 more, uint4 w, uint k, out float4 pos, out float2 uv, out float4 colour) {
+    uint index;
+    [branch]
+    if ((w.a & ARRAYS_WIDE) != 0) {
+        index = ram_word(head.g + 4 * k);
+    } else {
+        uint pair = ram_word(head.g + 4 * (k >> 1));
+        index = (k & 1) != 0 ? pair >> 16 : pair & 0xffff;
+    }
+    float4 p = asfloat(ram(texel_of(w.r) + index));
+    pos = float4(p.x, p.y, (w.a & ARRAYS_FAR) != 0 ? -0.9999f : p.z, 1.0);
+    float2 t = asfloat(uint2(ram_word(w.g + 8 * index), ram_word(w.g + 8 * index + 4)));
+    float2 low = float2((float)((int)(w.a << 12) >> 20), (float)((int)w.a >> 20));
+    precise float2 d = t - low;
+    precise float2 s = d * 1024.0;
+    uint2 q = (w.a & ARRAYS_SMALL) != 0 ? uint2(s) & 0xfff : uint2(int2(s)) & 0xffff;
+    uv = float2(q) / 1024.0;
+    uint word = more.a;
+    if ((w.a & ARRAYS_ONE) == 0) {
+        uint c = ram_word(w.b + 4 * index);
+        word = (255 - (c >> 24)) << 24 | (c & 0xff) << 16 | (c & 0xff00) | ((c >> 16) & 0xff);
+        if ((w.a & ARRAYS_OPAQUE) != 0) word &= 0x00ffffff;
+    }
+    colour = colour_of(word);
 }
 
 // Vertex k of a skinned draw (VERTEX_BONES; docs/machine/gpu.md, "A skinned model"), as Jedi Outcast's Ghoul2 makes
@@ -752,6 +792,8 @@ gpu_varyings gpu_vertex_sized(uint id, uint base, uint4 head, float2 size) {
             [branch]
             if (how.r & VERTEX_BONES) {
                 gpu_bones_vertex(head, more, ram(base + 3), k, pos, o.uv, o.colour);
+            } else if (how.r & VERTEX_ARRAYS) {
+                gpu_arrays_vertex(head, more, ram(base + 3), k, pos, o.uv, o.colour);
             } else if (how.r & VERTEX_COMPACT) {
                 gpu_compact_vertex(base, head, how, more, k, pos, o.uv, o.colour);
             } else {
@@ -1717,8 +1759,14 @@ gpu_varyings volume_vertex(uint id, uint base, uint4 head, out float3 eye, out f
     float4 pos, normal = 0;
     uint corner = 0;
     if (how.r & VERTEX_POINTS) { corner = k % 3; k = k / 3; }
+    // (the same kinds of vertex as gpu_vertex: without the skinned and the arrays' kinds Jedi Outcast's
+    // models and kept faces were read as plain vertices, a room of torn triangles from the seat)
     [branch]
-    if (how.r & VERTEX_COMPACT) {
+    if (how.r & VERTEX_BONES) {
+        gpu_bones_vertex(head, more, ram(base + 3), k, pos, o.uv, o.colour);
+    } else if (how.r & VERTEX_ARRAYS) {
+        gpu_arrays_vertex(head, more, ram(base + 3), k, pos, o.uv, o.colour);
+    } else if (how.r & VERTEX_COMPACT) {
         gpu_compact_vertex(base, head, how, more, k, pos, o.uv, o.colour);
     } else {
         uint v = texel_of(head.g) + 4 * k;

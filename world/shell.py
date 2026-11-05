@@ -5,6 +5,7 @@
 from room import (DOOR_HIGH, DOOR_WIDE, DOOR_X, HALF_D, HALF_W, HEIGHT, HOLO_HIGH, HOLO_WIDE, HOLO_Z, WALL_THICK, WALLS,
                   WINDOW_HIGH, WINDOW_WIDE, WINDOW_Y, WINDOW_Z)
 import annex
+import rooms
 
 GAP = 0.15   # between two charts of one layout: eight texels and more at the room's sixty a metre
 
@@ -63,8 +64,9 @@ def corridor(b):
     with b.at((mid_x, 0, annex.COR_Z1)):
         b.sheet((-long / 2, 0, long / 2, high), "Wall", [(door_at - DOOR_WIDE / 2, -1, door_at + DOOR_WIDE / 2, DOOR_HIGH)],
                 light=(0, 0), extent=long, uv_from=(0, high / 2))
-    with b.at((mid_x, 0, annex.COR_Z0), (0, 180, 0)):
-        b.sheet((-long / 2, 0, long / 2, high), "Wall", light=(0, row), extent=long, uv_from=(0, high / 2))
+    with b.at((mid_x, 0, annex.COR_Z0), (0, 180, 0)):   # the neighbours' wall: a doorway into each side room (world/rooms.py)
+        doors = [(x - DOOR_WIDE / 2, -1, x + DOOR_WIDE / 2, DOOR_HIGH) for x in rooms.corridor_doors()]
+        b.sheet((-long / 2, 0, long / 2, high), "Wall", doors, light=(0, row), extent=long, uv_from=(0, high / 2))
     with b.at((annex.COR_X1, 0, mid_z), (0, 90, 0)):   # the outer wall: a window onto the city
         b.sheet((-wide / 2, 0, wide / 2, high), "Wall", [(-w, y0, w, y1)], light=(0, 2 * row), extent=long, uv_from=(0, high / 2))
         side = 2 * (wide + GAP)
@@ -191,3 +193,4 @@ def build(b):
     den(b)
     corridor(b)
     holodecks(b)
+    rooms.rooms_shell(b, GAP)

@@ -37,6 +37,25 @@ public static partial class ShaderEmuBuilder
         public float[] furniture;  // what stands in the corridor: x0, x1, z0, z1 and the height of each
     }
 
+    // Models/rooms.json, which world/rooms.py writes with Annex's models: the side rooms off the corridor
+    [System.Serializable]
+    class SideRoomsPlan
+    {
+        public StationPlace[] places;   // their computers, places `first` on (ShaderEmuStations.cs)
+        public int first;
+        public int[] numbers;           // each room's number, on its door
+        public float[] rooms;           // x0, x1, the door's x, a window (1) of each
+        public float z0, z1, high;      // their far walls' and door walls' z, their height
+        public float[] lights;          // x, y, z, r, g, b, intensity, range of each
+        public float[] solids;          // x0, x1, y0, y1, z0, z1 of each
+    }
+
+    static SideRoomsPlan SideRooms()
+    {
+        string path = ModelsPath + "/rooms.json";
+        return System.IO.File.Exists(path) ? JsonUtility.FromJson<SideRoomsPlan>(System.IO.File.ReadAllText(path)) : null;
+    }
+
     static void Solid(Transform parent, string name, float x0, float x1, float y0, float y1, float z0, float z1)
     {
         GameObject go = new GameObject(name);
@@ -858,7 +877,10 @@ public static partial class ShaderEmuBuilder
         Solid(solid, "Wall back", dx0, dx1, BackDoorHigh, height, -halfD - wall, -halfD);
         Solid(solid, "Corridor floor", CorX0, CorX1, -0.1f, 0, corZ0, -halfD);
         Solid(solid, "Corridor ceiling", CorX0, CorX1, CorHigh, CorHigh + 0.1f, corZ0, corZ1);
-        Solid(solid, "Corridor wall", CorX0, CorX1, 0, CorHigh, corZ0 - wall, corZ0);
+        SideRoomsPlan sides = SideRooms();
+        List<float> sideDoors = new List<float>();   // the side rooms' doorways in the corridor's south wall, in rising x
+        for (int i = 0; sides != null && i + 3 < sides.rooms.Length; i += 4) sideDoors.AddRange(new[] { sides.rooms[i + 2] - BackDoorWide / 2, sides.rooms[i + 2] + BackDoorWide / 2 });
+        WallX(solid, "Corridor wall", CorX0, CorX1, corZ0 - wall, wall, CorHigh, BackDoorHigh, sideDoors);
         Solid(solid, "Corridor wall", CorX0 - wall, CorX0, 0, CorHigh, corZ0, corZ1);
         Solid(solid, "Corridor wall", CorX1, CorX1 + wall, 0, CorHigh, corZ0, corZ1);
         Solid(solid, "Corridor bench", -2.55f, -1.35f, 0, 0.45f, corZ1 - 0.5f, corZ1);
@@ -896,6 +918,27 @@ public static partial class ShaderEmuBuilder
         LightVolumeIn(world, "Light volume holodecks south", new Vector3((hx0 + hx1) / 2, tall / 2, hz0 - wall - side / 2), new Vector3(hx1 - hx0, tall, side));
         ProbeIn(decor, "Reflection probe corridor", new Vector3((CorX0 + CorX1) / 2, CorHigh / 2, (corZ0 + corZ1) / 2), new Vector3(CorX1 - CorX0, CorHigh, CorWide));
         ProbeIn(decor, "Reflection probe holo corridor", new Vector3((hx0 + hx1) / 2, hHigh / 2, HoloZ), new Vector3(hx1 - hx0, hHigh, hz1 - hz0));
+
+        // ---- the side rooms off the corridor (world/rooms.py, Models/rooms.json): their walls, what stands in them, their lamps
+        foreach (string old in new[] { "Side room light", "Reflection probe side room" }) Gone(decor, old);
+        foreach (string old in new[] { "Light volume side room" }) Gone(world, old);
+        for (int i = 0; sides != null && i + 3 < sides.rooms.Length; i += 4)
+        {
+            float x0 = sides.rooms[i], x1 = sides.rooms[i + 1], z0 = sides.z0, z1 = sides.z1, high = sides.high;
+            Solid(solid, "Side room floor", x0, x1, -0.1f, 0, z0, z1);
+            Solid(solid, "Side room ceiling", x0, x1, high, high + 0.1f, z0, z1);
+            Solid(solid, "Side room wall", x0 - wall, x0, 0, high, z0 - wall, z1);
+            Solid(solid, "Side room wall", x1, x1 + wall, 0, high, z0 - wall, z1);
+            Solid(solid, "Side room wall", x0, x1, 0, high, z0 - wall, z0);
+            Vector3 middle = new Vector3((x0 + x1) / 2, high / 2, (z0 + z1) / 2), size = new Vector3(x1 - x0, high, z1 - z0);
+            LightVolumeIn(world, "Light volume side room", middle, size);
+            ProbeIn(decor, "Reflection probe side room", middle, size);
+        }
+        for (int i = 0; sides != null && i + 5 < sides.solids.Length; i += 6)
+            Solid(solid, "Side room furniture", sides.solids[i], sides.solids[i + 1], sides.solids[i + 2], sides.solids[i + 3], sides.solids[i + 4], sides.solids[i + 5]);
+        for (int i = 0; sides != null && i + 7 < sides.lights.Length; i += 8)
+            BakedLight(decor, "Side room light", new Vector3(sides.lights[i], sides.lights[i + 1], sides.lights[i + 2]),
+                       new Color(sides.lights[i + 3], sides.lights[i + 4], sides.lights[i + 5]), sides.lights[i + 6], sides.lights[i + 7]);
 
         // ---- the holodecks: the volume display's renderers, with the faces of the room in use as the window
         Gone(computer, "Volume display");

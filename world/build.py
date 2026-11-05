@@ -10,7 +10,7 @@ import bpy
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-for name in ("lib", "materials", "assets", "bookdesigns", "room", "computer", "pc", "furniture", "annex", "shell", "city"):
+for name in ("lib", "materials", "assets", "bookdesigns", "room", "computer", "pc", "furniture", "annex", "shell", "city", "rooms", "toys", "settle"):
     sys.modules.pop(name, None)   # so a second run in an open Blender picks up edits
 
 import lib          # noqa: E402

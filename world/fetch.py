@@ -25,6 +25,7 @@ SURFACES = {
     "Walnut": ("walnut_veneer", "2k", True),
     "Velvet": ("velour_velvet", "1k"),
     "Linen": ("rough_linen", "1k"),
+    "ChairWeave": ("poly_wool_herringbone", "1k"),   # the office chairs' upholstery (world/pc.py's office_chair): 0.27 m a repeat
 }
 
 MODELS = ["sofa_02", "modern_coffee_table_01", "round_wooden_table_01", "bar_chair_round_01", "desk_lamp_arm_01", "classic_laptop",
@@ -33,7 +34,26 @@ MODELS = ["sofa_02", "modern_coffee_table_01", "round_wooden_table_01", "bar_cha
           # the corridor's
           "korean_fire_extinguisher_01", "painted_wooden_bench", "rubber_boots", "industrial_wall_sconce", "modern_ceiling_lamp_01",
           "korean_public_payphone_01", "vintage_suitcase", "metal_trash_can", "hanging_picture_frame_01", "hanging_picture_frame_02",
-          "fire_alarm", "side_table_tall_01", "wicker_basket_01", "ornate_mirror_01"]
+          "fire_alarm", "side_table_tall_01", "wicker_basket_01", "ornate_mirror_01",
+          # the side rooms' (world/rooms.py), and what lies about everywhere
+          "sofa_03", "Sofa_01", "throw_pillows_01", "side_table_01", "chess_set", "rubber_duck_toy",
+          "football", "baseball_01", "baseball_bat", "carved_wooden_elephant", "cassette_player", "portable_cassette_player",
+          "Camera_01", "vintage_video_camera", "standing_picture_frame_01", "standing_picture_frame_02",
+          "Television_01", "mantel_clock_01"]
+
+
+# logos the room's real things print (AGENTS.md: a thing's picture is the real thing's), from Wikimedia Commons, each
+# marked public domain there (a text logo): rendered to pictures by world/logos.py, drawn on by world/textures.py
+LOGOS = {"Coca-Cola_logo.svg": "https://upload.wikimedia.org/wikipedia/commons/c/ce/Coca-Cola_logo.svg",   # File:Coca-Cola_logo.svg
+         "Diet_Coke_logo.svg": "https://upload.wikimedia.org/wikipedia/commons/3/3c/Diet_Coke_logo.svg"}   # File:Diet_Coke_logo.svg
+LOGO_DIR = os.path.join(HERE, "..", "build", "fetched", "logos")
+
+
+def logos():
+    os.makedirs(LOGO_DIR, exist_ok=True)
+    for name, url in LOGOS.items():
+        if not os.path.exists(os.path.join(LOGO_DIR, name)):
+            get(url, os.path.join(LOGO_DIR, name))
 
 
 def get(url, path):
@@ -80,6 +100,9 @@ def surface(name, asset, res, turn=False, keep=1.0):
     print("surface %-8s %s %s  mean colour %s  smoothness %.2f" % (name, asset, res, np.round(colour.mean((0, 1)), 2), smooth.mean()))
 
 
+NOT_METAL = {"throw_pillows_01", "carved_wooden_elephant"}   # (their packed maps have no metal in blue: read so they were metal)
+
+
 def model(asset, lines):
     entry = files(asset)["gltf"]["1k"]["gltf"]
     folder = os.path.join(CACHE, asset)
@@ -117,7 +140,7 @@ def model(asset, lines):
             Image.open(arm_path).convert("RGB").save(os.path.join(out, name + "_p.jpg"), quality=92)
             arm = np.asarray(Image.open(arm_path).convert("RGB").resize(image.size)).astype(np.float32) / 255
             metallic, smooth = float(arm[..., 2].mean()), float(1 - arm[..., 1].mean())
-            metallic = 1.0 if metallic > 0.8 else 0.0   # one value a material: mostly metal, or not
+            metallic = 1.0 if metallic > 0.8 and asset not in NOT_METAL else 0.0   # one value a material: mostly metal, or not
             alpha = 1.0 - arm[..., 1]
         else:
             alpha = np.full(colour.shape[:2], smooth, np.float32)
@@ -159,9 +182,12 @@ def plastic_detail():
 
 
 def main():
-    for name, spec in SURFACES.items():
-        surface(name, *spec)
-    plastic_detail()
+    import sys
+    if sys.argv[1:] != ["models"]:   # (`fetch.py models`: the models alone, their listing written whole)
+        for name, spec in SURFACES.items():
+            surface(name, *spec)
+        plastic_detail()
+        logos()
     lines = []
     for asset in MODELS:
         model(asset, lines)

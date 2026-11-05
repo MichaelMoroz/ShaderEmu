@@ -8,6 +8,18 @@
 #define UNIFORMS_IN 0x00030000u
 #define VERTICES_IN 0x00038000u
 #define MAX_COMMANDS 3072
+#ifdef SE_HALVES
+// A list built in two parts at once (Jedi Outcast's drawing on two workers: linux/jk2/gl_jk2.c, "The drawing on two
+// workers"): the part this copy builds ends where these say, set by gpuHalfSplit (the first part's) and gpuHalfBegin (the
+// second's, built by a second copy of this file, SE_DRAW_B), and put back by gpuHalfMerge
+#include <stdint.h>
+static uint32_t half_vertex_end, half_commands_end = 3072, half_blocks_end = 256, half_mesh_end = 196608;
+#define GLES_VERTEX_END ( half_vertex_end ? half_vertex_end : set_at + SET_SIZE )
+#define GLES_COMMANDS_END half_commands_end
+static uint32_t used_last[4];   // matrix blocks refused (a draw with the block before's matrices), and at the last merge: blocks, KB, commands
+#define GLES_BLOCKS_END ( half_blocks_end + ( blocks >= half_blocks_end ? ( used_last[0]++, 0u ) : 0u ) )
+#define GLES_MESH_END half_mesh_end
+#endif
 #include "gles.c"
 #include "gpu_shaderemu.h"
 
@@ -39,7 +51,7 @@ void gpuModelviewRows(const float* rows) {
     for (int i = 0; i < 12; i++) m->r[i / 4][i % 4] = rows[i];
     // the block the draws that follow read: the one before with these rows in it (its other
     // words, the projection with the window folded in, are the same)
-    if (matrices_dirty || !blocks || blocks >= MAX_BLOCKS) {
+    if (matrices_dirty || !blocks || blocks >= GLES_BLOCKS_END) {
         matrices_dirty = 1;
         return;
     }
@@ -53,7 +65,7 @@ void gpuModelviewRows(const float* rows) {
 // that follow: its three rows of four, for the caller to fill. 0 when the matrices changed
 // otherwise since the last draw (gpuModelviewRows then).
 float* gpuModelviewBlock(void) {
-    if (matrices_dirty || !blocks || blocks >= MAX_BLOCKS) return 0;
+    if (matrices_dirty || !blocks || blocks >= GLES_BLOCKS_END) return 0;
     num* u = (num*)(gpu + set_at + UNIFORMS_IN) + 32 * blocks++;
     for (int i = 0; i < 16; i++) u[i] = u[i - 32];
     return u + 16;
@@ -74,6 +86,7 @@ static inline void command_state(uint32_t* c, const gpu_state* s) {
 static gpu_state joined;      // what the frame's last command was made with, when more may join it
 static uint32_t* joined_command;
 static uint32_t joined_block, joined_end;   // its matrices, and where its vertices end
+static uint32_t frame_last = 0xffffffffu;   // where gpuFrameMemory's last memory begins, nothing taken since (gpuFrameTrim)
 
 static inline int same_state(const gpu_state* a, const gpu_state* b) {
     const uint32_t *x = (const uint32_t*)a, *y = (const uint32_t*)b;
@@ -103,7 +116,7 @@ unsigned* gpuDrawAt(const gpu_state* s, unsigned vertices, int mesh) {
 }
 
 unsigned* gpuDrawRoom(const gpu_state* s, int stored, int mesh) {
-    if (vertex_top + (uint32_t)stored * 16 > set_at + SET_SIZE || mesh_vertices + (uint32_t)mesh > MAX_MESH) return 0;
+    if (vertex_top + (uint32_t)stored * 16 > GLES_VERTEX_END || mesh_vertices + (uint32_t)mesh > GLES_MESH_END) return 0;
     uint32_t* to = (uint32_t*)(gpu + vertex_top);
     uint32_t block = matrices_dirty || !blocks ? matrix_block() : GPU_PHYS + set_at + UNIFORMS_IN + 128 * (blocks - 1);
     if (joined_command && joined_command == (uint32_t*)(gpu + set_at) + 16 * (commands - 1) && block == joined_block &&
@@ -123,13 +136,14 @@ unsigned* gpuDrawRoom(const gpu_state* s, int stored, int mesh) {
     }
     vertex_top += (uint32_t)stored * 16;
     joined_end = vertex_top;
+    frame_last = 0xffffffffu;
     return to;
 }
 
 // Room for `count` draws of `mesh` vertices in all with the matrices as they are, for any core
 // to write with gpuDrawPut before the frame is shown, `passes` the passes they draw in (a bit each).
 unsigned* gpuDrawsRoom(int count, unsigned mesh, unsigned passes, unsigned* block, unsigned* first_mesh) {
-    if (count <= 0 || commands + (unsigned)count > MAX_COMMANDS || mesh_vertices + mesh > MAX_MESH) return 0;
+    if (count <= 0 || commands + (unsigned)count > GLES_COMMANDS_END || mesh_vertices + mesh > GLES_MESH_END) return 0;
     *block = matrix_block();
     uint32_t* c = (uint32_t*)(gpu + set_at) + 16 * commands;
     for (int i = 0; i < count; i++) c[16 * i] = CMD_DRAW;   // (this core's store first: the pages are a worker's to write)
@@ -154,11 +168,29 @@ void gpuDrawPut(unsigned* c, const gpu_state* s, unsigned block, unsigned vertic
 
 void* gpuFrameMemory(unsigned bytes) {
     bytes = (bytes + 15) & ~15u;
-    if (!gpu || vertex_top + bytes > set_at + SET_SIZE) return 0;
+    if (!gpu || vertex_top + bytes > GLES_VERTEX_END) return 0;
     void* at = gpu + vertex_top;
+    frame_last = vertex_top;
     vertex_top += bytes;
     joined_command = 0;   // (what follows is not next to the last command's vertices)
     return at;
+}
+// The frame's memory last given (by gpuFrameMemory, nothing taken since) cut to `bytes`: room taken for the most a
+// renderer may write, kept for what it wrote (Jedi Outcast's tess: docs/games/jk2.md, "The arrays where they are made").
+// 0: not the last given, or larger than it was.
+int gpuFrameTrim(void* at, unsigned bytes) {
+    if (!gpu || !at) return 0;
+    const uint32_t off = (uint32_t)((uint8_t*)at - (uint8_t*)gpu);
+    bytes = (bytes + 15) & ~15u;
+    if (off != frame_last || off + bytes > vertex_top) return 0;
+    vertex_top = off + bytes;
+    return 1;
+}
+// Whether `bytes` at `p` lie in what this frame's memory has given (a draw may point at them until the frame is shown)
+int gpuFrameHolds(const void* p, unsigned bytes) {
+    if (!gpu || !p) return 0;
+    const uint32_t off = (uint32_t)((const uint8_t*)p - (const uint8_t*)gpu);
+    return off >= set_at + VERTICES_IN && off + bytes <= vertex_top;
 }
 
 int gpuKeep(int count, int mesh) {
@@ -233,6 +265,9 @@ void gpuSwap(int wait) {
 
 // The swap in two halves for a frame drawn on a worker core: gpuEnd by the core that drew it (the
 // next frame goes to the other set), gpuShow by the first core later. e: set, commands, passes.
+#ifdef SE_HALVES
+void gpuUsedLast(unsigned* u) { for (int i = 0; i < 4; i++) u[i] = used_last[i]; }
+#endif
 void gpuEnd(unsigned* e) {
     joined_command = 0;
     // (the VRAM's uploads waiting go into this list: bit 0 of the passes, which is no pass, says one has levels)
@@ -246,6 +281,7 @@ void gpuEnd(unsigned* e) {
     passes_used = kept_passes;
     last_draw = 0;
     vertex_top = set_at + VERTICES_IN;
+    frame_last = 0xffffffffu;
     matrices_dirty = 1;
 }
 
@@ -283,3 +319,60 @@ void gpuShow(const unsigned* e) {
 
 // Whether the GPU has no list waiting to be drawn (on any core: a word it clears).
 int gpuIdle(void) { return gpu && ((volatile uint32_t*)gpu)[REG_SUBMIT / 4] == 0; }
+
+#ifdef SE_HALVES
+// ---- a list built in two parts at once (linux/jk2/gl_jk2.c, "The drawing on two workers") ----
+// The first part's builder (this file) splits what is left of the frame's set: commands, matrix blocks, vertex memory and
+// the device's mesh, the upper half of each the second's; the second (this file built again with SE_DRAW_B, on its own
+// worker) begins its part there with the window's size; when it is done its commands are moved to follow the first's and
+// the first goes on after all the second took. A command says its own vertices, matrices and mesh: moved, it is the same.
+typedef struct {
+    uint8_t* gpu;
+    uint32_t set_at, cmd_from, cmd_to, blocks_from, blocks_to, vertex_from, vertex_to, mesh_from, mesh_to, passes;
+    GR_WINDOW_INFO window_info;
+} gpu_half;
+_Static_assert(sizeof(gpu_half) <= 256, "gpu_half: a caller keeps 256 bytes");
+// (the first's: what the second part may take; 0 when too little is left to split)
+int gpuHalfSplit(void* hp) {
+    gpu_half* h = hp;
+    if (!gpu || half_vertex_end) return 0;
+    const uint32_t end = set_at + SET_SIZE;
+    if (end - vertex_top < 64 * 1024 || MAX_COMMANDS - commands < 256 || MAX_BLOCKS - blocks < 32) return 0;
+    h->gpu = gpu, h->set_at = set_at, h->window_info = window_info;
+    h->cmd_from = commands + (MAX_COMMANDS - commands) / 2;
+    h->blocks_from = blocks + (MAX_BLOCKS - blocks) / 2;
+    h->vertex_from = (vertex_top + (end - vertex_top) / 2) & ~15u;
+    h->mesh_from = mesh_vertices + (MAX_MESH - mesh_vertices) / 2;
+    h->cmd_to = h->cmd_from, h->blocks_to = h->blocks_from, h->vertex_to = h->vertex_from, h->mesh_to = h->mesh_from, h->passes = 0;
+    half_commands_end = h->cmd_from, half_blocks_end = h->blocks_from, half_vertex_end = h->vertex_from, half_mesh_end = h->mesh_from;
+    return 1;
+}
+// (the second's, on its own worker: its part begins where the first left it room)
+void gpuHalfBegin(const void* hp) {
+    const gpu_half* h = hp;
+    gpu = h->gpu, set_at = h->set_at, window_info = h->window_info;
+    commands = h->cmd_from, blocks = h->blocks_from, vertex_top = h->vertex_from, mesh_vertices = h->mesh_from;
+    half_commands_end = MAX_COMMANDS, half_blocks_end = MAX_BLOCKS, half_vertex_end = 0, half_mesh_end = MAX_MESH;
+    kept = 0, kept_mesh = 0, passes_used = 0, last_draw = 0, joined_command = 0, matrices_dirty = 1, frame_last = 0xffffffffu;
+}
+// (the second's, when its part is done: how far it went)
+void gpuHalfEnd(void* hp) {
+    gpu_half* h = hp;
+    h->cmd_to = commands, h->blocks_to = blocks, h->vertex_to = vertex_top, h->mesh_to = mesh_vertices, h->passes = passes_used;
+}
+// (the first's, the second done: its commands after the first's, and the first going on after all it took)
+void gpuHalfMerge(const void* hp) {
+    const gpu_half* h = hp;
+    uint32_t* list = (uint32_t*)(gpu + set_at);
+    const uint32_t n = h->cmd_to - h->cmd_from;
+    if (n) memmove(list + 16 * commands, list + 16 * h->cmd_from, (size_t)n * 64);
+    commands += n;
+    passes_used |= h->passes;
+    if (h->blocks_to > blocks) blocks = h->blocks_to;
+    if (h->vertex_to > vertex_top) vertex_top = h->vertex_to;
+    if (h->mesh_to > mesh_vertices) mesh_vertices = h->mesh_to;
+    half_commands_end = MAX_COMMANDS, half_blocks_end = MAX_BLOCKS, half_vertex_end = 0, half_mesh_end = MAX_MESH;
+    last_draw = 0, joined_command = 0, matrices_dirty = 1, frame_last = 0xffffffffu;
+    used_last[1] = blocks, used_last[2] = (vertex_top - set_at - VERTICES_IN) >> 10, used_last[3] = commands;
+}
+#endif

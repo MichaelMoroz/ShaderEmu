@@ -37,11 +37,113 @@ static int on_render(void) {
     char here;
     return (uint8_t*)&here >= render_stack && (uint8_t*)&here < render_stack + RENDER_STACK;
 }
-int jk2RenderWorkerHere(void) { return on_render(); }
+// ---- the front end of a frame's view on a worker of its own (tr_main.cpp's R_SE_RenderViewSplit and R_SE_FrontJob;
+// docs/games/jk2.md, "The front end apart"): posted by this core when it has given the view's command, waited for by
+// the drawing's worker at that command (jk2FrontAwait) and by this core where it next writes tr's view (jk2FrontSettle).
+// JK2_FRONT_WORKER=0: the drawing's worker makes it, as before ----
+#define FRONT_STACK (128 * 1024)
+static uint8_t front_stack[FRONT_STACK] __attribute__((aligned(16)));
+static struct __attribute__((aligned(16))) { int worker, out, tried, waits; } fw0;   // this core's
+static struct __attribute__((aligned(16))) { void (*fn)(void*); void* arg; int unused[2]; } front_job;   // the worker's while out
+static int on_front(void) {
+    char here;
+    return (uint8_t*)&here >= front_stack && (uint8_t*)&here < front_stack + FRONT_STACK;
+}
+// (0 this core, 1 the drawing's worker, 2 the front end's: tr_main.cpp keeps R_RotateForEntity's scratch by it)
+#ifndef SE_DRAW_B
+uint8_t* b_jk2glHalfStack(void);   // (the drawing's second part's stack: tr_main.cpp's fourth scratch)
+static int on_half(void) {
+    char here;
+    static uint8_t* at;
+    if (!at) at = b_jk2glHalfStack();
+    return (uint8_t*)&here >= at && (uint8_t*)&here < at + RENDER_STACK;
+}
+#else
+static int on_half(void) { return 0; }
+#endif
+int jk2RenderWorkerHere(void) { return on_render() ? 1 : on_front() ? 2 : on_half() ? 3 : 0; }
 void jk2ServerServe(void);   // (the game's frame's worker: below)
+// ---- a large draw's indices made into the GPU's words by helper workers (docs/games/jk2.md, "The drawing's stores"):
+// fast_triangles on the drawing's worker makes each vertex's four words once, into the frame's memory, with the indices
+// beside them, takes the draw's command and room (gpuDrawsRoom) and puts a task; two helpers this core posts with the
+// frame (jk2RenderGo) write the room, four words an index, each every other task, until the drawing says its frame is
+// done and waits for them. The drawing stored those words itself, about three an index more than a vertex's: its write
+// cache ended most of its passes. JK2_EXPAND=0: the drawing makes them, as before ----
+#define EXP_HELPERS 2
+#define EXP_TASKS 1024
+#define EXP_LEAST 96
+typedef struct { uint32_t* room; const uint32_t* made; const uint16_t* idx; uint32_t count; } exp_task;
+static exp_task exp_tasks[EXP_TASKS];   // the drawing's
+static struct __attribute__((aligned(16))) { volatile uint32_t put, end, end_gen, unused; } exp_w;   // the drawing's
+static struct __attribute__((aligned(16))) { volatile uint32_t gen, unused[3]; } exp_h[EXP_HELPERS];   // each helper's
+static struct __attribute__((aligned(16))) { uint32_t gen, base, n, on; mcw_handle h[EXP_HELPERS]; } exp0;   // this core's
+static struct __attribute__((aligned(16))) { uint32_t gen, base, n, unused; } exp_cfg;   // this core's, read by the drawing
+static uint32_t exp_server(uint32_t base, uint32_t who) {
+    const uint32_t gen = exp_cfg.gen;
+    uint32_t next = base + who;
+    for (;;) {
+        const uint32_t put = exp_w.put;
+        while ((int32_t)(put - next) > 0) {
+            const exp_task* t = &exp_tasks[next % EXP_TASKS];
+            uint32_t* to = t->room;
+            const uint32_t* made = t->made;
+            const uint16_t* idx = t->idx;
+            for (uint32_t i = 0; i < t->count; i++, to += 4) {
+                const uint32_t* m = &made[idx[i] * 4];
+                uint32_t a = m[0], b = m[1], c = m[2], d = m[3];
+                to[0] = a, to[1] = b, to[2] = c, to[3] = d;
+            }
+            next += EXP_HELPERS;
+        }
+        if (exp_w.end_gen == gen && (int32_t)(exp_w.end - next) <= 0) break;
+        mc_end_pass();
+    }
+    exp_h[who].gen = gen;
+    return 0;
+}
+// (this core, at the frame's give: the helpers of the frame before joined, this frame's posted)
+static void exp_give(void) {
+    for (uint32_t k = 0; k < exp0.n; k++) mcw_join(exp0.h[k]);
+    exp0.n = 0;
+    if (!exp0.on) {
+        const char* e = getenv("JK2_EXPAND");
+        exp0.on = e && !strcmp(e, "0") ? 2 : 1;
+        // (what the drawing's worker and the helpers store to: this core's store first, a worker stops at a page no core has)
+        mcw_touch(exp_tasks, sizeof exp_tasks), mcw_touch((void*)&exp_w, sizeof exp_w), mcw_touch((void*)exp_h, sizeof exp_h);
+    }
+    exp_cfg.n = 0;
+    if (exp0.on != 1) return;
+    exp0.gen++, exp0.base = exp_w.put;   // (the drawing's frame before is done: its count is final)
+    exp_cfg.gen = exp0.gen, exp_cfg.base = exp0.base;
+    for (uint32_t k = 0; k < EXP_HELPERS; k++) {
+        mcw_handle h = mcw_try_call(exp_server, exp0.base, k);
+        if (!h) break;
+        exp0.h[exp0.n++] = h;
+    }
+    if (exp0.n < EXP_HELPERS) {   // (too few: none, the drawing makes its words; those posted end at once)
+        exp_cfg.n = 0;
+        exp_w.end = exp0.base, exp_w.end_gen = exp0.gen;   // (this core's store to the drawing's word: the drawing is done)
+        for (uint32_t k = 0; k < exp0.n; k++) mcw_join(exp0.h[k]);
+        exp0.n = 0;
+        return;
+    }
+    exp_cfg.n = exp0.n;
+}
+// (the drawing, at its frame's end: the helpers told and waited for)
+static void exp_finish(void) {
+    if (!exp_cfg.n) return;
+    exp_w.end = exp_w.put, exp_w.end_gen = exp_cfg.gen;
+    for (uint32_t k = 0; k < exp_cfg.n; k++)
+        while (exp_h[k].gen != exp_cfg.gen) mc_end_pass();
+}
+static void half_frame(uint32_t given);   // (the drawing on two workers: below)
+static void half_none(void);
 static uint32_t render_body(uint32_t given) {
     while (job_go.go != given) mc_end_pass();   // (until this core has given the frame's skins out: SE_SkinGive)
+    half_frame(given);
     job.fn(job.arg);
+    half_none();
+    exp_finish();
     return 0;
 }
 static uint32_t render_job(uint32_t a0, uint32_t a1) {
@@ -71,19 +173,42 @@ static void render_open(void) {
 int SE_InPlay(void);
 // (JK2_RENDER=menus: the menus' frames too)
 int jk2RenderOn(void) { return on && rw0.mode && (rw0.mode == 2 || SE_InPlay()); }
-// The frame out done and shown
-void jk2RenderSettle(void) {
-    if (!rw0.out || on_render()) return;
+// The front end's view done (where this core writes tr's view or what the front end reads)
+void jk2FrontSettle(void) {
+    if (!fw0.out || on_front() || on_render()) return;
+    while (!mcw_done(fw0.worker)) jk2ServerServe(), mcw_rest_for(&fw0.worker, 1), fw0.waits++;
+    fw0.out = 0;
+}
+// The frame out done and shown (its front end not waited for: at the give, the drawing waits for it itself)
+void jk2RenderSettleBack(void) {
+    if (!rw0.out || on_render() || on_front()) return;
     while (!mcw_done(rw0.worker)) jk2ServerServe(), mcw_rest_for(&rw0.worker, 1), rw0.waits++;
     rw0.out = 0, rw0.settles++;
     if (job.swap) job.swap = 0, gl_swap();
 }
+// The frame out done and shown, and the front end's view
+void jk2RenderSettle(void) {
+    jk2FrontSettle();
+    jk2RenderSettleBack();
+}
 // (a GL call of this core's while the frame is out: the drawing's state is the worker's until it is done)
 #define SETTLE() do { if (rw0.out && !on_render()) rw0.gl_settles++, jk2RenderSettle(); } while (0)
+#ifdef SE_DRAW_B
+#define HALF_WORKER (-1)
+#else
+#define HALF_WORKER hw0.worker
+static int half_on(void);
+static void half_settle(void);
+static uint32_t half_job(uint32_t gen, uint32_t a1);
+static struct __attribute__((aligned(16))) { int worker, out, tried, unused; } hw0;   // this core's (the drawing on two workers: below)
+#endif
 void jk2RenderGive(void (*fn)(const void*), const void* arg) {
     jk2RenderSettle();
     job.fn = fn, job.arg = arg, job.swap = 0;
     mcw_post(rw0.worker, render_job, rw0.gives + 1, 0);
+#ifndef SE_DRAW_B
+    if (half_on()) half_settle(), mcw_post(hw0.worker, half_job, rw0.gives + 1, 0), hw0.out = 1;
+#endif
     rw0.out = 1, rw0.gives++;
 }
 // ---- the mix painted on a worker of its own while the next frame's game runs (sys_shaderemu.cpp's SE_MixGive;
@@ -107,14 +232,16 @@ int jk2MixOn(void) {
         mw0.worker = -1;
         if (!(how && !strcmp(how, "core"))) {
             for (int k = mcw_count(); k >= 1; k--)   // (the highest but the drawing's: render_open)
-                if (k != rw0.worker && mcw_fast(k)) { mw0.worker = k; break; }
+                if (k != rw0.worker && k != HALF_WORKER && mcw_fast(k)) { mw0.worker = k; break; }
             if (mw0.worker > 0) mcw_touch(mix_stack, MIX_STACK), mcw_touch(&mix_job, sizeof mix_job);
         }
     }
     return on && mw0.worker > 0;
 }
+int jk2MixWorkerHere(void);
+int jk2MixOut(void) { return mw0.out; }   // (snd_dma.cpp's se_snd_defer: a sound started now waits for the mix)
 void jk2MixSettle(void) {
-    if (!mw0.out) return;
+    if (!mw0.out || jk2MixWorkerHere() || on_render() || on_front()) return;   // (only this core waits for the mix)
     while (!mcw_done(mw0.worker)) jk2ServerServe(), mcw_rest_for(&mw0.worker, 1), mw0.waits++;
     mw0.out = 0;
 }
@@ -144,8 +271,11 @@ int jk2ServerHere(void) {
     char here;
     return (uint32_t)((uint8_t*)&here - server_stack) < SERVER_STACK;
 }
+void SE_ArenaOpen(void);
+void SE_ArenaDrain(void);
 static uint32_t server_body(uint32_t unused) {
     (void)unused;
+    SE_ArenaDrain();   // (the blocks other cores freed since its last frame, at a fixed point)
     server_job.fn(server_job.arg);
     return 0;
 }
@@ -158,10 +288,11 @@ int jk2ServerOn(void) {
         sw0.worker = -1;
         jk2MixOn();
         for (int k = mcw_count(); k >= 1; k--)
-            if (k != rw0.worker && k != mw0.worker && mcw_fast(k)) { sw0.worker = k; break; }
+            if (k != rw0.worker && k != mw0.worker && k != fw0.worker && k != HALF_WORKER && mcw_fast(k)) { sw0.worker = k; break; }
         if (sw0.worker > 0) {
             mcw_touch(server_stack, SERVER_STACK), mcw_touch(&server_job, sizeof server_job);
             mcw_touch(&sv_ask, sizeof sv_ask);
+            SE_ArenaOpen();   // (its allocations from an arena of its own: sys_shaderemu.cpp)
             printf("jk2: the game's frame on worker %d beside the client's\n", sw0.worker);
         }
     }
@@ -184,6 +315,15 @@ void jk2ServerServe(void) {
         sw0.asks++;
     }
     mcw_done(sw0.worker);
+}
+// (an ask of the game's frame's worker answered now, if there is one: this core polls at the client game's calls into the
+// engine, cl_cgame.cpp, so the game's frame does not wait for this core's settle at its frame's end)
+void jk2ServerPoll(void) {
+    if (sw0.out && sv_ask.seq != sv_answer.seq && !mcw_on_worker()) {   // (not a slot's job: this core's alone)
+        sv_answer.result = sv_ask.fn(sv_ask.args);
+        sv_answer.seq = sv_ask.seq;
+        sw0.asks++;
+    }
 }
 void jk2ServerSettle(void) {
     if (!sw0.out) return;
@@ -211,8 +351,48 @@ void jk2ServerStats(unsigned* waits, unsigned* asks) {
     sw0.waits = sw0.asks = 0;
 }
 
+// (the front end's worker: its job, chosen and given; "the front end of a frame's view" above)
+static uint32_t front_body(uint32_t unused) {
+    (void)unused;
+    front_job.fn(front_job.arg);
+    return 0;
+}
+static uint32_t front_post(uint32_t a0, uint32_t a1) {
+    (void)a0, (void)a1;
+    return jk2_call_on_stack(front_body, 0, front_stack + FRONT_STACK);
+}
+int jk2FrontOn(void) {
+    if (!fw0.tried && rw0.mode && on) {   // (a worker of the larger caches other than the drawing's, the mix's and the game's)
+        const char* e = getenv("JK2_FRONT_WORKER");
+        fw0.tried = 1, fw0.worker = -1;
+        if (!(e && !strcmp(e, "0"))) {
+            jk2MixOn();
+            for (int k = mcw_count(); k >= 1; k--)
+                if (k != rw0.worker && k != mw0.worker && k != sw0.worker && k != HALF_WORKER && mcw_fast(k)) { fw0.worker = k; break; }
+        }
+        if (fw0.worker > 0) {
+            mcw_touch(front_stack, FRONT_STACK), mcw_touch(&front_job, sizeof front_job);
+            printf("jk2: the front end of the view on worker %d\n", fw0.worker);
+        }
+    }
+    return on && fw0.worker > 0 && jk2RenderOn();
+}
+void jk2FrontGive(void (*fn)(void*), void* arg) {
+    jk2FrontSettle();
+    front_job.fn = fn, front_job.arg = arg;
+    mcw_post(fw0.worker, front_post, 0, 0);
+    fw0.out = 1;
+}
+// (the drawing's worker, or this core drawing a frame itself: until the front end's worker has made view seq)
+void jk2FrontAwait(volatile unsigned* made, unsigned seq) {
+    while ((int)(*made - seq) < 0) mc_end_pass();
+}
+
 // The given frame may begin (posted first, so that no helper's job takes its worker)
-void jk2RenderGo(void) { job_go.go = rw0.gives; }
+void jk2RenderGo(void) {
+    exp_give();   // (the helpers that make its large draws' words: before it may begin)
+    job_go.go = rw0.gives;
+}
 
 // ---- Ghoul2's skinning on helper workers (tr_ghoul2.cpp, SE_SkinGive): the frame's surfaces in parts ----
 static mcw_handle skin_jobs[16];
@@ -226,6 +406,33 @@ int jk2SkinPost(uint32_t (*fn)(uint32_t, uint32_t), uint32_t a0, uint32_t a1) {
 void jk2SkinJoin(void) {
     for (int i = 0; i < skin_count; i++) mcw_join(skin_jobs[i]);
     skin_count = 0;
+}
+// ---- the handover's helpers (codeJK2/game/g_main.cpp, SE_GameGive and SE_GameTake): ranges of entities on lent workers
+// while this core makes the Ghoul2 copies; 0 when no worker was free (the caller makes the range itself) ----
+static mcw_handle hand_jobs[8];
+static int hand_count;
+int jk2HandPost(uint32_t (*fn)(uint32_t, uint32_t), uint32_t a0, uint32_t a1) {
+    if (hand_count >= 8 || !rw0.mode) return 0;
+    mcw_handle h = mcw_try_call(fn, a0, a1);
+    if (h) hand_jobs[hand_count++] = h;
+    return h != 0;
+}
+void jk2HandJoin(void) {
+    for (int i = 0; i < hand_count; i++) mcw_join(hand_jobs[i]);
+    hand_count = 0;
+}
+// ---- the mix's parts (snd_mix.cpp, "The mix in parts"): helpers posted at S_Update, joined at the next ----
+static mcw_handle mixpart_jobs[4];
+static int mixpart_count;
+int jk2MixPartPost(uint32_t (*fn)(uint32_t, uint32_t), uint32_t a0, uint32_t a1) {
+    if (mixpart_count >= 4 || !rw0.mode) return 0;
+    mcw_handle h = mcw_try_call(fn, a0, a1);
+    if (h) mixpart_jobs[mixpart_count++] = h;
+    return h != 0;
+}
+void jk2MixPartJoin(void) {
+    for (int i = 0; i < mixpart_count; i++) mcw_join(mixpart_jobs[i]);
+    mixpart_count = 0;
 }
 void jk2Touch(void* memory, unsigned bytes) { mcw_touch(memory, bytes); }
 void jk2WaitPass(void) { mc_end_pass(); }
@@ -429,16 +636,86 @@ static memo_t* memo_slot(void) {
     return best;
 }
 
+static int arrays_ok(void) {   // (JK2_ARRAYS=0: not; fast_triangles)
+    static int on = -1;
+    if (on < 0) {
+        const char* e = getenv("JK2_ARRAYS");
+        on = !(e && !strcmp(e, "0"));
+    }
+    return on;
+}
 // (the colour as the plain way makes it of four bytes: alpha's complement on top)
 #define WORD_OF(c) ((255u - ((c) >> 24)) << 24 | ((c) & 0xff) << 16 | ((c) & 0xff00) | ((c) >> 16 & 0xff))
+// ---- rd-vanilla's arrays made where the GPU reads them (docs/games/jk2.md, "The arrays where they are made"; tr_shade.cpp's
+// SE_TessBegin and SE_StageRooms): its positions, a stage's colours and coordinates in rooms of the frame's GPU memory, which
+// a draw points at instead of copying them; how many vertices its arrays hold, which spares the search of the indices for
+// their range. On the drawing's worker only, which builds the list.
+// JK2_ROOMS=0: none, the arrays copied as before; =check: the range searched too, and a line if an index lies past the count.
+static int rooms_mode = -1;   // 0 off, 1 on, 2 check
+static const void *room_xyz, *room_col, *room_tc0, *room_tc1;
+static int va_count;          // the vertex arrays' vertices, as rd-vanilla says (0: not said, searched)
+static int rooms_on(void) {
+    if (rooms_mode < 0) {
+        const char* e = getenv("JK2_ROOMS");
+        rooms_mode = e && !strcmp(e, "0") ? 0 : e && !strcmp(e, "check") ? 2 : 1;
+    }
+    return rooms_mode;
+}
+static unsigned rooms_given, rooms_refused, rooms_uncut;
+static int rooms_frame;   // (JK2_ROOMS_LOG=N: a line every N frames)
+static int rooms_log = -1;
+void gpuUsedLast(unsigned* u);
+static void rooms_count(void) {
+    if (rooms_log < 0) rooms_log = getenv("JK2_ROOMS_LOG") ? atoi(getenv("JK2_ROOMS_LOG")) : 0;
+    if (rooms_log > 0 && gl_frames != rooms_frame) {
+        unsigned used[4];
+        gpuUsedLast(used);
+        if (gl_frames % rooms_log == 0)
+            printf("jk2rooms%s: frame %d, %u rooms, %u refused, %u not cut; blocks refused %u, at the last merge %u blocks, %u KB, %u commands\n",
+                   rw0.mode ? "" : "-b", gl_frames, rooms_given, rooms_refused, rooms_uncut, used[0], used[1], used[2], used[3]),
+                rooms_given = rooms_refused = rooms_uncut = 0;
+        rooms_frame = gl_frames;
+    }
+}
+void* jk2glTessRoom(unsigned bytes) {
+    if (!on || !rooms_on() || !on_render() || !arrays_ok()) return 0;
+    rooms_count();
+    void* probe = gpuFrameMemory(bytes);   // (a refused room is copied by the draw, which takes more: no room kept back)
+    if (!probe) {
+        rooms_refused++;
+        return 0;
+    }
+    gpuFrameTrim(probe, bytes);
+    rooms_given++;
+    return probe;
+}
+int jk2glTessTrim(void* at, unsigned bytes) {
+    const int cut = on && at ? gpuFrameTrim(at, bytes) : 0;
+    if (!cut) rooms_uncut++;
+    return cut;
+}
+void jk2glRooms(const void* xyz, const void* colours, const void* tc0, const void* tc1) {
+    room_xyz = xyz, room_col = colours, room_tc0 = tc0, room_tc1 = tc1;
+}
+void jk2glVertexCount(int n) { va_count = rooms_on() ? n : 0; }
 static int fast_triangles(int count, const uint32_t* idx) {
     count -= count % 3;
     if (count < 3) return 1;
-    uint32_t lo = idx[0], hi = idx[0];
-    for (int i = 1; i < count; i++) {
-        uint32_t k = idx[i];
-        if (k < lo) lo = k;
-        if (k > hi) hi = k;
+    uint32_t lo, hi;
+    if (va_count > 0 && rooms_mode == 1) {
+        lo = 0, hi = (uint32_t)va_count - 1;   // (every index names one of the arrays' vertices)
+    } else {
+        lo = idx[0], hi = idx[0];
+        for (int i = 1; i < count; i++) {
+            uint32_t k = idx[i];
+            if (k < lo) lo = k;
+            if (k > hi) hi = k;
+        }
+        if (va_count > 0 && hi >= (uint32_t)va_count) {
+            static int said;
+            if (!said++) printf("jk2gl: an index %u past the arrays' %d vertices\n", hi, va_count);
+        }
+        if (va_count > 0) lo = 0, hi = (uint32_t)va_count - 1;   // (check: the same range as without it)
     }
     int n = (int)(hi - lo) + 1;
     if (n > MAX_PRIMITIVE) return 0;
@@ -509,7 +786,61 @@ static int fast_triangles(int count, const uint32_t* idx) {
     float low_s = 0, low_t = 0, high_s = 0, high_t = 0;
     uint32_t first = *(const uint32_t*)col;
     int one = 1;
-    if (textured) {
+    // The arrays drawn by the GPU (gpu.h's VERTEX_ARRAYS; docs/games/jk2.md, "The drawing's stores"): the vertices'
+    // positions, coordinates and colours copied into the frame's memory as they are, in the one pass that finds their
+    // range and whether they are of one colour, and the indices as they are (a memcpy from the arrays' first); the GPU
+    // makes each vertex as the words below would have (the coordinates from the same least, 16 bits or a tagged vertex's
+    // 12, one colour or each its own), to the pixel. Not for a memo's draw. JK2_ARRAYS=0: the words made here, as before
+    uint32_t *P = 0, *T = 0, *C = 0;
+    int zp = 0, zt = 0, zc = 0;   // (made where the GPU reads them: rd-vanilla's rooms, pointed at, not copied)
+    if (!kept && arrays_ok()) {
+        if (rooms_mode) {
+            zp = room_xyz && va_pos.p == room_xyz && ps == 16 && gpuFrameHolds(pos, (unsigned)n * 16);
+            zt = ((room_tc0 && va_coord.p == room_tc0) || (room_tc1 && va_coord.p == room_tc1)) && ts == 8 &&
+                 gpuFrameHolds(tc, (unsigned)n * 8);
+            zc = room_col && va_colour.p == room_col && cs == 4 && gpuFrameHolds(col, (unsigned)n * 4);
+        }
+        if ((P = zp ? (uint32_t*)(uintptr_t)pos : gpuFrameMemory((unsigned)n * 16)) &&
+            (T = zt ? (uint32_t*)(uintptr_t)tc : gpuFrameMemory((unsigned)n * 8)))
+            C = zc ? (uint32_t*)(uintptr_t)col : gpuFrameMemory((unsigned)n * 4);
+    }
+    if (C && zp && zt && zc) {   // (all three where they are: their range and colours only looked at)
+        const float* t = (const float*)tc;
+        const uint32_t* c = (const uint32_t*)col;
+        low_s = high_s = t[0], low_t = high_t = t[1];
+        for (int k = 0; k < n; k++, t += 2) {
+            const float ss = t[0], tt = t[1];
+            if (ss < low_s) low_s = ss;
+            if (ss > high_s) high_s = ss;
+            if (tt < low_t) low_t = tt;
+            if (tt > high_t) high_t = tt;
+            one &= c[k] == first;
+        }
+        if (!textured) low_s = low_t = high_s = high_t = 0;
+        else if (!(s.fragment & GPU_CLAMPED)) low_s = floor_of(low_s), low_t = floor_of(low_t);
+        else low_s = low_t = 0;
+    } else if (C) {
+        const float* t0 = (const float*)tc;
+        low_s = high_s = t0[0], low_t = high_t = t0[1];
+        for (int k = 0; k < n; k++) {
+            const uint32_t* p = (const uint32_t*)(pos + (size_t)k * ps);
+            const float* t = (const float*)(tc + (size_t)k * ts);
+            const uint32_t c = *(const uint32_t*)(col + (size_t)k * cs);
+            uint32_t *pk = P + 4 * k, *tk = T + 2 * k;
+            const float ss = t[0], tt = t[1];
+            if (!zp) pk[0] = p[0], pk[1] = p[1], pk[2] = p[2];
+            if (!zt) tk[0] = ((const uint32_t*)t)[0], tk[1] = ((const uint32_t*)t)[1];
+            if (!zc) C[k] = c;
+            if (ss < low_s) low_s = ss;
+            if (ss > high_s) high_s = ss;
+            if (tt < low_t) low_t = tt;
+            if (tt > high_t) high_t = tt;
+            one &= c == first;
+        }
+        if (!textured) low_s = low_t = high_s = high_t = 0;
+        else if (!(s.fragment & GPU_CLAMPED)) low_s = floor_of(low_s), low_t = floor_of(low_t);
+        else low_s = low_t = 0;
+    } else if (textured) {
         const float* t0 = (const float*)tc;
         low_s = high_s = t0[0], low_t = high_t = t0[1];
         for (int k = 1; k < n; k++) {
@@ -528,13 +859,43 @@ static int fast_triangles(int count, const uint32_t* idx) {
     }
     first = WORD_OF(first) & keep;
     if (replace && textured) one = 1, first = 0x00ffffff;
+    if (C) {
+        const int small = !(one || high_s - low_s >= 4 || high_t - low_t >= 4);
+        const int ls = (int)low_s, lt = (int)low_t;
+        uint32_t* I = ls >= -2048 && ls <= 2047 && lt >= -2048 && lt <= 2047 && (float)ls == low_s && (float)lt == low_t
+                          ? gpuFrameMemory((unsigned)count * 4) : 0;
+        if (I) {
+            if (lo == 0)
+                memcpy(I, idx, (size_t)count * 4);
+            else
+                for (int i = 0; i < count; i++) I[i] = idx[i] - lo;
+            const int all_one = !small;   // (the plain way: every vertex the first's colour, or a replacing texture's white)
+            s.vertex = GPU_ARRAYS;
+            s.colour = all_one ? first : 0;
+            s.more[0] = gpuAddress(P), s.more[1] = gpuAddress(T), s.more[2] = gpuAddress(C);
+            s.more[3] = (far ? 1u : 0) | (all_one ? 2u : 0) | (small ? 4u : 0) | (keep != 0xffffffffu ? 8u : 0) | 16u |
+                        ((uint32_t)ls & 0xfff) << 8 | ((uint32_t)lt & 0xfff) << 20;
+            gpuDrawAt(&s, gpuAddress(I), count);
+            drawn_vertices += (uint32_t)count;
+            return 1;
+        }
+    }
     uint32_t* table = 0;
+    // (a large draw on the drawing's worker with the frame's helpers: its vertices' words in the frame's memory, where a
+    // helper makes the indices' words from them; "a large draw's indices" above)
+    uint32_t* mk = made;
+    int helped = 0;
+    if (!kept && count >= EXP_LEAST && exp_cfg.n && on_render() && exp_w.put - exp_cfg.base < EXP_TASKS - 1 &&
+        (one || high_s - low_s >= 4 || high_t - low_t >= 4 || n <= 256)) {
+        uint32_t* fm = gpuFrameMemory((unsigned)n * 16);
+        if (fm) mk = fm, helped = 1;
+    }
     if (one || high_s - low_s >= 4 || high_t - low_t >= 4) {
         s.colour = first;
         for (int k = 0; k < n; k++) {
             const float* p = (const float*)(pos + (size_t)k * ps);
             const float* t = (const float*)(tc + (size_t)k * ts);
-            uint32_t* m = &made[k * 4];
+            uint32_t* m = &mk[k * 4];
             m[0] = bits(p[0]), m[1] = bits(p[1]), m[2] = far ? far_z : bits(p[2]);
             m[3] = ((uint32_t)(int32_t)((t[0] - low_s) * 1024.0f) & 0xffff) | (uint32_t)(int32_t)((t[1] - low_t) * 1024.0f) << 16;
         }
@@ -547,7 +908,7 @@ static int fast_triangles(int count, const uint32_t* idx) {
             uint32_t c = *(const uint32_t*)(col + (size_t)k * cs);
             const float* p = (const float*)(pos + (size_t)k * ps);
             const float* t = (const float*)(tc + (size_t)k * ts);
-            uint32_t* m = &made[k * 4];
+            uint32_t* m = &mk[k * 4];
             table[k] = WORD_OF(c) & keep;
             m[0] = bits(p[0]), m[1] = bits(p[1]), m[2] = far ? far_z : bits(p[2]);
             m[3] = ((uint32_t)((t[0] - low_s) * 1024.0f) & 0xfff) | ((uint32_t)((t[1] - low_t) * 1024.0f) & 0xfff) << 12 | (uint32_t)k << 24;
@@ -574,6 +935,21 @@ static int fast_triangles(int count, const uint32_t* idx) {
         drawn_vertices += (uint32_t)count;
         return 1;
     }
+    if (helped) {   // (the draw's command and room taken here, its indices beside its vertices; a helper writes the room)
+        uint16_t* ix = gpuFrameMemory((unsigned)count * 2);
+        uint32_t* room = ix ? gpuFrameMemory((unsigned)count * 16) : 0;
+        uint32_t block, first_mesh;
+        uint32_t* c = room ? gpuDrawsRoom(1, (unsigned)count, 1u << (s.fragment >> 16 & 15), &block, &first_mesh) : 0;
+        if (c) {
+            for (int i = 0; i < count; i++) ix[i] = (uint16_t)(idx[i] - lo);
+            gpuDrawPut(c, &s, block, gpuAddress(room), first_mesh, count);
+            exp_task* t = &exp_tasks[exp_w.put % EXP_TASKS];
+            t->room = room, t->made = mk, t->idx = ix, t->count = (uint32_t)count;
+            exp_w.put = exp_w.put + 1;
+            drawn_vertices += (uint32_t)count;
+            return 1;
+        }
+    }
     uint32_t* to;
     if (kept && !table) {
         to = (uint32_t*)(memo_gpu + (size_t)(kept - memo) * MAX_PRIMITIVE * 16);
@@ -592,7 +968,7 @@ static int fast_triangles(int count, const uint32_t* idx) {
         return 1;
     }
     for (int i = 0; i < count; i++, to += 4) {
-        const uint32_t* m = &made[(idx[i] - lo) * 4];
+        const uint32_t* m = &mk[(idx[i] - lo) * 4];
         uint32_t a = m[0], b = m[1], c = m[2], d = m[3];
         to[0] = a, to[1] = b, to[2] = c, to[3] = d;
     }
@@ -936,7 +1312,7 @@ void jk2_glScalef(GLfloat x, GLfloat y, GLfloat z) { ON_THEN(s_glScalef(x, y, z)
 void jk2_glVertex2f(GLfloat x, GLfloat y) { ON_THEN(s_glVertex2f(x, y)); }
 void jk2_glVertex3f(GLfloat x, GLfloat y, GLfloat z) { ON_THEN(s_glVertex3f(x, y, z)); }
 void jk2_glVertex3fv(const GLfloat* v) { ON_THEN(s_glVertex3fv(v)); }
-void jk2_glVertexPointer(GLint size, GLenum type, GLsizei stride, const void* p) { ON_THEN(s_glVertexPointer(size, type, stride, p)); }
+void jk2_glVertexPointer(GLint size, GLenum type, GLsizei stride, const void* p) { va_count = 0; ON_THEN(s_glVertexPointer(size, type, stride, p)); }
 void jk2_glViewport(GLint x, GLint y, GLsizei w, GLsizei h) { ON_THEN(s_glViewport(x, y, w, h)); }
 
 // (the mix's worker runs on a stack of its own, where mcw_on_worker() is false: sys_shaderemu.cpp's SE_OnFirstCore asks)
@@ -944,3 +1320,87 @@ int jk2MixWorkerHere(void) {
     char here;
     return (uint8_t*)&here >= mix_stack && (uint8_t*)&here < mix_stack + MIX_STACK;
 }
+
+// ---- the drawing on two workers (docs/games/jk2.md, "The drawing on two workers"; tr_backend.cpp's SE_DrawList) ----
+// A second worker, posted by this core with the frame, waits until the drawing hands it the second part of its 3D list
+// (jk2DrawHalfGive, with the upper half of what is left of the frame's list: gpu_shaderemu.c's gpuHalfSplit) or says it
+// has none (render_body), draws it with the second copies of the back end and of this file (SE_DRAW_B, made by build.sh)
+// on that copy's own stack, and says it is done; the drawing waits for it and moves its commands after its own.
+typedef struct { uint8_t gpu[256]; int swaps, frames, rooms, unused; } gl_half;   // (in the renderer's 512 bytes)
+#ifndef SE_DRAW_B
+uint8_t* b_jk2glHalfStack(void);   // (the second copy's: its stack, as on_render's)
+void se_b_SE_DrawHalfB(void* half);   // (the renderer's second copy: tr_backend.cpp's SE_DrawHalfB)
+static struct __attribute__((aligned(16))) { volatile uint32_t gen, state; void* arg; uint32_t unused; } half_go;   // the drawing's: 1 given, 2 none
+static struct __attribute__((aligned(16))) { volatile uint32_t gen, unused[3]; } half_done;   // the half's worker's
+static struct __attribute__((aligned(16))) { uint32_t gen, given, unused[2]; } half_d;   // the drawing's
+static uint32_t half_body(uint32_t arg) {
+    se_b_SE_DrawHalfB((void*)(uintptr_t)arg);
+    return 0;
+}
+static uint32_t half_job(uint32_t gen, uint32_t a1) {
+    (void)a1;
+    for (;;) {
+        if (half_go.gen == gen) {
+            if (half_go.state == 1) jk2_call_on_stack(half_body, (uint32_t)(uintptr_t)half_go.arg, b_jk2glHalfStack() + RENDER_STACK);
+            break;
+        }
+        mc_end_pass();
+    }
+    half_done.gen = gen;
+    return 0;
+}
+static int half_on(void) {
+    if (!hw0.tried) {
+        const char* e = getenv("JK2_HALF");
+        hw0.tried = 1, hw0.worker = -1;
+        if (rw0.mode && e && !strcmp(e, "1")) {   // (JK2_HALF=1: not yet drawn right, docs/games/jk2.md)
+            jk2MixOn(), jk2FrontOn();
+            for (int k = mcw_count(); k >= 1; k--)
+                if (k != rw0.worker && k != mw0.worker && k != fw0.worker && k != sw0.worker && mcw_fast(k)) { hw0.worker = k; break; }
+        }
+        if (hw0.worker > 0) {
+            mcw_touch(b_jk2glHalfStack(), RENDER_STACK);
+            mcw_touch(&half_go, sizeof half_go), mcw_touch((void*)&half_done, sizeof half_done), mcw_touch(&half_d, sizeof half_d);
+            printf("jk2: the drawing's second part on worker %d\n", hw0.worker);
+        }
+    }
+    return hw0.worker > 0;
+}
+static void half_settle(void) {
+    if (!hw0.out) return;
+    while (!mcw_done(hw0.worker)) jk2ServerServe(), mcw_rest_for(&hw0.worker, 1);
+    hw0.out = 0;
+}
+// (the drawing's: its 3D list's second part given, the frame's list split; 0: drawn whole by the drawing)
+static void half_frame(uint32_t given) { half_d.gen = given; }
+static void half_none(void) {   // (no part given this frame: the half's worker told so)
+    if (hw0.worker > 0 && half_d.given != half_d.gen) half_go.state = 2, half_go.gen = half_d.gen;
+}
+int jk2DrawHalfGive(void* half, void* glp) {
+    gl_half* g = glp;
+    if (!on_render() || half_d.given == half_d.gen || !gpuHalfSplit(g->gpu)) return 0;
+    g->swaps = swaps, g->frames = gl_frames, g->rooms = rooms_on();
+    half_go.arg = half, half_go.state = 1, half_go.gen = half_d.gen;
+    half_d.given = half_d.gen;
+    return 1;
+}
+void jk2DrawHalfJoin(void* glp) {
+    gl_half* g = glp;
+    while (half_done.gen != half_d.gen) mc_end_pass();
+    gpuHalfMerge(g->gpu);
+}
+#else
+static void half_frame(uint32_t given) { (void)given; }
+static void half_none(void) {}
+int jk2DrawHalfGive(void* half, void* glp) { (void)half, (void)glp; return 0; }
+void jk2DrawHalfJoin(void* glp) { (void)glp; }
+#endif
+// (the second copy's, SE_DRAW_B: this file's state for the part, as the drawing's where it is the frame's)
+void jk2glHalfInit(const void* glp) {
+    const gl_half* g = glp;
+    on = 1, depth_seen = 1, memo_state = 0, env_state = 0, exp_cfg.n = 0;
+    swaps = g->swaps, gl_frames = g->frames, rooms_mode = g->rooms;
+    gpuHalfBegin(g->gpu);
+}
+void jk2glHalfEnd(void* glp) { gpuHalfEnd(((gl_half*)glp)->gpu); }
+uint8_t* jk2glHalfStack(void) { return render_stack; }

@@ -36,7 +36,8 @@ public static partial class ShaderEmuBuilder
         "B, jump Start, right grip Select.\nBLOCKS (the block world): left stick walks, right stick looks, " +
         "right trigger digs, left builds.\nHANDS (the physics demo): a hand's trigger or grip takes the box " +
         "it is at or points at, and lets it fly; left stick walks, right stick turns, up fires a box, down " +
-        "begins again, jump the next scene.\n\nCLASSROOM: twelve computers. Press POWER on a free one and your " +
+        "begins again, jump the next scene.\n\nCLASSROOM: twelve computers, and one in each side room off the corridor by the " +
+        "lift (N13 to N15). Press POWER on a free one and your " +
         "machine starts there; the slider on its tower sets its speed (Snail to Turbo), EXIT gives the place " +
         "up. PENS under this board draw in the air.";
 

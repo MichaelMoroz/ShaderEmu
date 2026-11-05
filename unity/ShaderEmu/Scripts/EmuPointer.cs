@@ -426,7 +426,10 @@ public class EmuPointer : UdonSharpBehaviour
             memoryU[h] = Mathf.Clamp01(local.x + 0.5f);
             memoryV[h] = Mathf.Clamp01(local.y + 0.5f);
         }
-        bool holoAim = holoKeys || (!drawBeam && away);
+        // (a desktop sitter's view on the console lands too: they press its keys by VRChat's interact, and that click
+        // was the game's as well. In the editor's play mode one click on "3D: games only" before ClassiCube's menu turned
+        // the key and hosted on the LAN.)
+        bool holoAim = holoKeys || (!drawBeam && (away || ownHolo >= 0));
         if (holoAim && ownHolo >= 0 && holoPlates != null && ownHolo < holoPlates.Length && holoPlates[ownHolo].Raycast(ray, out hit, best))
         {
             landed = true;
