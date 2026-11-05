@@ -84,6 +84,7 @@ the VRAM (two loads, no RAM). `SPRITE_WORDS` (the last picture) is the picture's
   After that, the VRAM alone against the RAM path, the mean of two 8 s runs: colour 0.175 against 0.181 ms, words nearest
   0.174 against 0.182, words smooth 0.172 against 0.308, indexed nearest 0.173 against 0.175, indexed smooth 0.172 against
   0.320, three bytes smooth 0.173 against 0.445, compact with a light map 0.176 against 0.532, 3,600 rectangles 0.118
-  against 0.155: faster in every mode (indexed nearest level).
+  against 0.155: faster in every mode (indexed nearest level). (The RAM path's harness ran 8,192 instructions a pass,
+  this one's default is 12,288: with `--ticks 8192` the VRAM side is the same within 0.003 ms, 0.172 to 0.178, 0.120.)
 - Not done: a snapshot this harness makes under `--cpu` loads to a black picture (the guest idle), with the harness of before
   the rows change too; a cold boot draws (Doom's E1M1, 2,987 colours). Not looked into yet.
