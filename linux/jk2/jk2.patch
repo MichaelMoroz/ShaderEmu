@@ -1781,8 +1781,24 @@ index d245590d..08623df2 100644
 +	se_mix_parts.helpers = 0;	// (given again for the next mix, or none)
 +#endif
  }
+diff --git a/code/client/vmachine.cpp b/code/client/vmachine.cpp
+index 0ee14644..1b73660d 100644
+--- a/code/client/vmachine.cpp
++++ b/code/client/vmachine.cpp
+@@ -68,7 +68,11 @@ extern intptr_t CL_CgameSystemCalls( intptr_t *args );
+ intptr_t VM_DllSyscall( intptr_t arg, ... ) {
+ #if !id386 || defined __clang__ || defined MACOS_X
+ 	// rcg010206 - see commentary above
++#ifdef SHADEREMU
++	intptr_t args[13];	// (the client game's calls have 9 arguments at most: fewer taken from the list, each call)
++#else
+ 	intptr_t args[16];
++#endif
+ 	va_list ap;
+ 
+ 	args[0] = arg;
 diff --git a/code/game/ghoul2_shared.h b/code/game/ghoul2_shared.h
-index 3427e786..bcd07f54 100644
+index 3427e786..8b9b0049 100644
 --- a/code/game/ghoul2_shared.h
 +++ b/code/game/ghoul2_shared.h
 @@ -403,6 +403,33 @@ struct boltInfo_t{
@@ -1819,6 +1835,28 @@ index 3427e786..bcd07f54 100644
  typedef std::vector <boltInfo_t> boltInfo_v;
  typedef std::vector <mdxaBone_t> mdxaBone_v;
  
+@@ -596,6 +623,21 @@ class CGhoul2Info_v
+ 
+ 	IGhoul2InfoArray &InfoArray() const
+ 	{
++#ifdef SHADEREMU
++		// (the array is made once and never freed, G2_API.cpp: kept, not asked for at every use; some 35 thousand
++		// instructions a frame of the walk on the first core went to the asking)
++		static IGhoul2InfoArray *se_array;
++		if ( se_array )
++			return *se_array;
++#ifdef RENDERER
++		se_array = &TheGhoul2InfoArray();
++#elif _JK2EXE
++		se_array = &_TheGhoul2InfoArray();
++#else
++		se_array = &TheGameGhoul2InfoArray();
++#endif
++		return *se_array;
++#endif
+ #ifdef RENDERER
+ 		return TheGhoul2InfoArray();
+ #elif _JK2EXE
 diff --git a/code/mp3code/towave.c b/code/mp3code/towave.c
 index ff83a002..335fcfe9 100644
 --- a/code/mp3code/towave.c
