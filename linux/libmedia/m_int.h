@@ -22,6 +22,10 @@ int m_wait(volatile uint32_t *count, uint32_t least, volatile uint32_t *failed);
 /* fn over 0..n-1 on this core and up to `workers` more; a piece is whole 16 bytes of an output
  * whose items are out_bytes long (0: no output in rows). */
 void m_for(uint32_t n, mcw_body fn, void *ctx, uint32_t out_bytes, int workers);
+/* m_for in pieces of `grain` items, piece k being items k * grain on: a job's memory may then be its piece's
+ * (from / grain), of m_pieces(n, workers) pieces, not its core's, which may be any of all that are open */
+uint32_t m_grain(uint32_t n, int workers);
+void m_for_grain(uint32_t n, mcw_body fn, void *ctx, uint32_t grain, int workers);
 /* Items 0..n-1 of a pipeline, item i a core's in turn (core 0 has item 0), each run in order on
  * its core: an item may wait for lower ones. Busy workers are stepped round, never posted to. */
 void m_stages(uint32_t n, mcw_fn stage, int workers);

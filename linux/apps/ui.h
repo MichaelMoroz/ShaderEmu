@@ -105,6 +105,18 @@ ui_select_events(GR_WINDOW_ID w, GR_EVENT_MASK mask)
 }
 
 static void ui_seven_face(GR_DRAW_ID w, int x, int y, int width, int height, int state);
+
+/* A Windows 7 face's colour in state s (1 pressed, 2 under the pointer): the accent's, but a button under the
+ * pointer keeps Windows 7's own light blue when the windows' colour is a grey (Graphite: 80, 88, 96), whose pale
+ * mix with white was 2 or 3% from an unlit face, as Windows 7 kept its blue under any glass colour. */
+static unsigned long
+ui_lit_accent(int s, unsigned long look, int k)
+{
+	int r = ui_tint >> 16 & 255, g = ui_tint >> 8 & 255, b = ui_tint & 255;
+	int hi = r > g ? (r > b ? r : b) : (g > b ? g : b), lo = r < g ? (r < b ? r : b) : (g < b ? g : b);
+
+	return s == 2 && ui_tint && hi - lo < 40 ? look : ui_accent(look, k);
+}
 static void ui_text(GR_DRAW_ID w, int x, int y, const char *text, int count, GR_COLOR colour, int fixed);
 
 /* A button's edge: lit (the accent's, under the pointer) or its own, pressed or not. A Windows 7 button with a
@@ -129,9 +141,9 @@ ui_hot_edge(const struct ui_hot *b, int lit)
 		return;
 	}
 	if (lit) {
-		line = ui_accent(MWRGB(60, 127, 177), -48);
-		ring1 = ui_accent(MWRGB(160, 210, 240), 150);
-		ring2top = ring2bottom = ui_accent(MWRGB(214, 238, 252), 210);
+		line = ui_lit_accent(2, MWRGB(60, 127, 177), -48);
+		ring1 = ui_lit_accent(2, MWRGB(160, 210, 240), 150);
+		ring2top = ring2bottom = ui_lit_accent(2, MWRGB(214, 238, 252), 210);
 	} else {
 		line = b->pressed ? ui_accent(MWRGB(44, 98, 139), -64) : MWRGB(112, 112, 112);
 		ring1 = b->pressed ? ui_accent(MWRGB(240, 250, 255), 244) : WHITE;
@@ -600,14 +612,14 @@ ui_seven_face(GR_DRAW_ID w, int x, int y, int width, int height, int state)
 		  { 244, 216, 250, 120, -16 } },
 	};
 	int half = height / 2, s = state < 0 || state > 2 ? 0 : state;
-	GR_COLOR top = s ? ui_accent(faces[s].top, faces[s].k[0]) : faces[0].top;
-	GR_COLOR bottom = s ? ui_accent(faces[s].bottom, faces[s].k[1]) : faces[0].bottom;
+	GR_COLOR top = s ? ui_lit_accent(s, faces[s].top, faces[s].k[0]) : faces[0].top;
+	GR_COLOR bottom = s ? ui_lit_accent(s, faces[s].bottom, faces[s].k[1]) : faces[0].bottom;
 
 	ui_fill(w, x + 1, y + 1, width - 2, half - 1, top);
 	ui_fill(w, x + 1, y + half, width - 2, height - half - 1, bottom);
-	ui_edges(w, x + 1, y + 1, width - 2, height - 2, s ? ui_accent(faces[s].lit, faces[s].k[2]) : faces[0].lit,
-		s ? ui_accent(faces[s].shade, faces[s].k[3]) : faces[0].shade);
-	GrSetGCForeground(ui_gc, s ? ui_accent(faces[s].line, faces[s].k[4]) : faces[0].line);
+	ui_edges(w, x + 1, y + 1, width - 2, height - 2, s ? ui_lit_accent(s, faces[s].lit, faces[s].k[2]) : faces[0].lit,
+		s ? ui_lit_accent(s, faces[s].shade, faces[s].k[3]) : faces[0].shade);
+	GrSetGCForeground(ui_gc, s ? ui_lit_accent(s, faces[s].line, faces[s].k[4]) : faces[0].line);
 	GrLine(w, ui_gc, x + 1, y, x + width - 2, y);
 	GrLine(w, ui_gc, x + 1, y + height - 1, x + width - 2, y + height - 1);
 	GrLine(w, ui_gc, x, y + 1, x, y + height - 2);

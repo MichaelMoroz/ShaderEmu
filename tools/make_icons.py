@@ -148,6 +148,8 @@ LOOK7 = ['min', 'max', 'restore', 'close', 'min-off', 'max-off', 'restore-off', 
 # and after them the Start button in each of Settings' windows' colours (nxsettings.c's tints, the same order; nxbar.c's
 # start_cell), its two cells each: 10 + 2 * i and the pressed one
 LOOK7_TINTS = [0x2858a8, 0x1f8080, 0x2e8040, 0x6c7820, 0xc06010, 0xb02828, 0xb03070, 0x6a3aa8, 0x505860]
+# then the caption's buttons lit under the pointer: min, max, restore, close (LOOK7_HOT in nxpaintnc.c)
+LOOK7_HOT = 10 + 2 * len(LOOK7_TINTS)
 LOOK7_CELL = 24
 BUTTON = 18
 
@@ -217,6 +219,14 @@ def look7_cells(theme):
     cells.append(lit)
     for tint in LOOK7_TINTS:
         cells += [tinted(orb, tint), tinted(lit, tint)]
+    # the caption's four under the pointer (LOOK7_HOT on, nxpaintnc.c): Windows 7's, a deeper blue glass, the close one a
+    # brighter red, in every windows' colour (a lit box is told from the rest by its colour, not 2% of its grey)
+    hot = dict(top=(222, 240, 255), bottom=(120, 182, 236), edge=(36, 92, 160))
+    red_hot = dict(top=(255, 132, 108), bottom=(232, 17, 35), edge=(150, 12, 12))
+    assert len(cells) == LOOK7_HOT
+    for glyph in ('min', 'max', 'restore'):
+        cells.append(rounded(BUTTON, 3, glyph=glyph, glyph_colour=(16, 32, 64), **hot))
+    cells.append(rounded(BUTTON, 3, glyph='close', glyph_colour=(255, 255, 255), **red_hot))
     out = []
     for cell in cells:
         full = Image.new('RGBA', (LOOK7_CELL, LOOK7_CELL), (0, 0, 0, 0))

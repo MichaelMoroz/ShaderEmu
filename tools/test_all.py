@@ -855,6 +855,14 @@ CASES = [
     # a window opened under the pointer (in the middle at the start): no coming is told, the place is asked; Look's Classic
     case('ui-hover-under', 'desktop wm', WM + "export UI_HOVER_PRINT=1; nxsettings & sleep 5; nxkey right 1000 at:300,112 1000", wall=120,
          has=[r'^ui: lit 176,56 160x22']),
+    # the bar's part under the pointer is lit (nxbar.c's bar_hover): Start, a window's button, desktop 2, and none off the bar
+    case('bar-hover', 'desktop wm', WM + "nxwintest plain a & sleep 2; nxkey at:20,587 800 at:250,587 800 at:520,587 800 at:400,300 1000", wall=120,
+         has=[r'^nxbar: hot 0$', r'^nxbar: hot 200$', r'^nxbar: hot 301$', r'^nxbar: hot -1$']),
+    # a caption's box under the host's pointer is lit and put back (wm_caption_hot): the pointer round the boxes of a
+    # window at 40,20 246 wide, so moves into a box are heard through the quiet rectangle and out of it while one is lit
+    case('wm-caption-hover', 'desktop wm', 'export NXWM_HOT_PRINT=1; ' + WM + "nxwintest plain a & sleep 2; nxwintest list; sleep 20", wall=120,
+         more=['--pointer-sweep', '0', '--pointer-circle', '250,12,22'],
+         has=[r'^win 0 a 40,20 246x', r'^nanowm: hot 1$', r'^nanowm: hot 2$', r'^nanowm: hot 3$', r'^nanowm: hot 0$']),
     # the editors' text larger and smaller: Ctrl +, Ctrl and the wheel up, Ctrl 0; kept in the registry
     case('edit-zoom', 'desktop', WM + "echo hello > /tmp/z.c; nxedit /tmp/z.c & sleep 5; nxkey ctrl+= ctrl+= 800; echo Z1 $(nxreg get nxedit.zoom); "
          "nxkey down:ctrl wheel:300,200:1 up:ctrl 800; echo Z2 $(nxreg get nxedit.zoom); nxkey ctrl+- 800; echo Z3 $(nxreg get nxedit.zoom); "
