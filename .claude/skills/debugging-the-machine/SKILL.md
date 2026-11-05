@@ -47,7 +47,7 @@ The kernel prints this to the console (exception-trace is 1; it was run on 31 Oc
 - **There is no memory protection.** Programs share one address space and most wild stores do not fault at all: `*(int *)0x40 = 1` returned 0 with no message, while `*(int *)0x10 = 1` ended with epc, ra and sp all 0. So a crash is often far from its cause, a store over another program's memory is possible, and registers can be nonsense. Suspect a corrupted heap or a smashed stack before the line it died at. Stack is 256 KB, or 1 MB for `BIG` in `linux/nommu/flat.py`.
 - `/proc/PID/maps` shows the program's whole block as `[stack]`, then its mappings. Reading before writing depends on what the program left there before: OpenTTD's `RandomAccessFile` found a header "there" in an unset buffer, and a sound failed.
 - A kill with `code 137` (`Killed`, RC 137) is out of memory: a mapping wants one run of pages. `python linux/nommu/memory.py` checks the large programs fit.
-- No core dumps exist (`CONFIG_COREDUMP` is off). `RVC_TRAP_LOG=N` on `rvc_cpu` prints the first N traps with pc and value; `RVC_CPU_LAST=1` keeps core 0's last instructions for the summary; `--save F` keeps the machine to go on from.
+- No core dumps exist (`CONFIG_COREDUMP` is off). `RVC_TRAP_LOG=N` on `rvc_cpu` prints the first N traps with pc and value (`RVC_TRAP_MASK=f4`: only illegal instructions and misaligned or faulting loads and stores, a bit a cause, so a crash is not lost among the system calls); `RVC_CPU_LAST=1` keeps core 0's last instructions for the summary; `--save F` keeps the machine to go on from.
 - A trap inside musl's `malloc` or `free` is its assert: read it as a heap fault (a kept group reused without clearing crashed Doom, Quake and `cc` so).
 
 ### pc to source

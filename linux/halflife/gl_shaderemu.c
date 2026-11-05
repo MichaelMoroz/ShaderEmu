@@ -79,15 +79,45 @@ typedef struct { uint32_t at, size; int owner; } block;   // of the pool, in ord
 typedef struct { uint32_t at, sum; int refs; } palette;
 #define MAX_PALETTES 2048
 #define PALETTE_OWNER(p) (MAX_NAMES + (p))
-static texture textures[MAX_NAMES];
-static palette palettes[MAX_PALETTES];
-static block blocks[2 * MAX_NAMES + MAX_PALETTES + 8];
-static int block_count;
-static uint8_t* pool;
-static uint32_t pool_size, pool_used, frame = 1, refused, tile_bytes;
+#if defined(SE_DRAW_B) || defined(HLGL_SHARE)
+// (Jedi Outcast's drawing in two copies, linux/jk2/gl_jk2.c, "The drawing on two workers": the textures, their pool and
+// palettes are one, the first copy's (HLGL_SHARE), which the second (SE_DRAW_B) names)
+#ifdef SE_DRAW_B
+#define HLGL_SHARED extern
+#else
+#define HLGL_SHARED
+#endif
+#define textures hlgl_textures
+#define palettes hlgl_palettes
+#define blocks hlgl_blocks
+#define block_count hlgl_block_count
+#define pool hlgl_pool
+#define pool_size hlgl_pool_size
+#define pool_used hlgl_pool_used
+#define refused hlgl_refused
+#define tile_bytes hlgl_tile_bytes
+#define atlas_at hlgl_atlas_at
+#define atlas_block hlgl_atlas_block
+#define atlas_blocks hlgl_atlas_blocks
+#define palette_top hlgl_palette_top
+#define atlas_writer hlgl_atlas_writer
+#else
+#define HLGL_SHARED static
+#endif
+HLGL_SHARED texture textures[MAX_NAMES];
+HLGL_SHARED palette palettes[MAX_PALETTES];
+HLGL_SHARED block blocks[2 * MAX_NAMES + MAX_PALETTES + 8];
+HLGL_SHARED int block_count;
+HLGL_SHARED uint8_t* pool;
+HLGL_SHARED uint32_t pool_size, pool_used, refused, tile_bytes;
+static uint32_t frame = 1;
 // the light maps' atlas (hlglLightAtlas): their blocks one under another, three bytes a texel
-static uint32_t atlas_at = NOWHERE, atlas_block;
-static int atlas_blocks;
+#ifdef SE_DRAW_B
+extern uint32_t atlas_at, atlas_block;
+#else
+HLGL_SHARED uint32_t atlas_at = NOWHERE, atlas_block;
+#endif
+HLGL_SHARED int atlas_blocks;
 #define KEPT_OWNER (MAX_NAMES - 2)
 #define ATLAS_OWNER (MAX_NAMES - 3)
 static int bound, log_uploads, log_frames, log_picsum, log_sum;
@@ -141,7 +171,7 @@ static uint32_t pool_take(uint32_t size, int owner) {
 }
 // A palette of 256 words in GPU memory, the one already there when another texture has it: its
 // number + 1, or 0 when there is no room.
-static int palette_top;   // no palette at or past it has refs
+HLGL_SHARED int palette_top;   // no palette at or past it has refs
 static int palette_take(const uint32_t* colours) {
     uint32_t sum = 2166136261u;
     for (int i = 0; i < 256; i++) sum = (sum ^ colours[i]) * 16777619u;
@@ -319,7 +349,7 @@ static void s_glTexImage2D(unsigned target, int lvl, int internal, int width, in
     }
 }
 // The worker that writes the light maps' atlas now (hlglLightBlock), waited for before this core does.
-static int atlas_writer;
+HLGL_SHARED int atlas_writer;
 unsigned hlglWait(int k);
 void hlglAtlasWriter(int k) { atlas_writer = k; }
 // A light map's block of RGBA bytes written into the atlas, on any one core: whether it was.

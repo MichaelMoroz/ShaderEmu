@@ -1,5 +1,5 @@
 diff --git a/code/client/cl_cgame.cpp b/code/client/cl_cgame.cpp
-index b9d7b6fc..ba92b780 100644
+index b9d7b6fc..bf85f3c4 100644
 --- a/code/client/cl_cgame.cpp
 +++ b/code/client/cl_cgame.cpp
 @@ -422,8 +422,14 @@ CL_ShutdonwCGame
@@ -17,7 +17,7 @@ index b9d7b6fc..ba92b780 100644
  
  	if ( !cgvm.entryPoint) {
  		return;
-@@ -808,7 +814,176 @@ The cgame module is making a system call
+@@ -808,7 +814,181 @@ The cgame module is making a system call
  void CM_SnapPVS(vec3_t origin,byte *buffer);
  extern void		Menu_Paint(menuDef_t *menu, qboolean forcePaint);
  extern menuDef_t *Menus_FindByName(const char *p);
@@ -68,6 +68,7 @@ index b9d7b6fc..ba92b780 100644
 +	r->at += size;
 +}
 +intptr_t CL_CgameSystemCalls( intptr_t *args );
++extern "C" void jk2ServerPoll( void );
 +extern "C" void SE_RecReplay( const void *buf, int bytes )
 +{
 +	const unsigned char *at = (const unsigned char *)buf, *end = at + bytes;
@@ -185,16 +186,20 @@ index b9d7b6fc..ba92b780 100644
 +#endif
  intptr_t CL_CgameSystemCalls( intptr_t *args ) {
 +#ifdef SHADEREMU
++	// (what the game's frame on its worker asks of this core, answered between the client game's calls; not while this core
++	// makes a player ahead, where an allocation ends the player's job and the answer would be lost)
 +	if ( SE_Recording() ) {
 +		intptr_t made;
 +		if ( se_ahead_call( args, &made ) )
 +			return made;
++	} else {
++		jk2ServerPoll();
 +	}
 +#endif
  #ifdef JK2_MODE
  	args[0] = (intptr_t)CL_ConvertJK2SysCall((cgameJK2Import_t)args[0]);
  #endif
-@@ -861,6 +1036,23 @@ intptr_t CL_CgameSystemCalls( intptr_t *args ) {
+@@ -861,6 +1041,23 @@ intptr_t CL_CgameSystemCalls( intptr_t *args ) {
  	case CG_UPDATESCREEN:
  		// this is used during lengthy level loading, so pump message loop
  		Com_EventLoop();	// FIXME: if a server restarts here, BAD THINGS HAPPEN!
@@ -218,7 +223,7 @@ index b9d7b6fc..ba92b780 100644
  		SCR_UpdateScreen();
  		return 0;
  	case CG_RMG_INIT:
-@@ -951,6 +1143,13 @@ intptr_t CL_CgameSystemCalls( intptr_t *args ) {
+@@ -951,6 +1148,13 @@ intptr_t CL_CgameSystemCalls( intptr_t *args ) {
  		S_Respatialize( args[1], (const float *) VMA(2), (float(*)[3]) VMA(3), (qboolean)(args[4] != 0) );
  		return 0;
  	case CG_S_REGISTERSOUND:
@@ -232,7 +237,7 @@ index b9d7b6fc..ba92b780 100644
  		return S_RegisterSound( (const char *) VMA(1) );
  	case CG_S_STARTBACKGROUNDTRACK:
  		S_StartBackgroundTrack( (const char *) VMA(1), (const char *) VMA(2), (qboolean)(args[3] != 0) );
-@@ -962,12 +1161,22 @@ intptr_t CL_CgameSystemCalls( intptr_t *args ) {
+@@ -962,12 +1166,22 @@ intptr_t CL_CgameSystemCalls( intptr_t *args ) {
  		return 0;
  	case CG_R_REGISTERMODEL:
  		return re.RegisterModel( (const char *) VMA(1) );
@@ -255,7 +260,7 @@ index b9d7b6fc..ba92b780 100644
  	case CG_R_REGISTERFONT:
  		return re.RegisterFont( (const char *) VMA(1) );
  	case CG_R_FONTSTRLENPIXELS:
-@@ -1393,6 +1602,9 @@ extern qboolean Sys_LowPhysicalMemory();
+@@ -1393,6 +1607,9 @@ extern qboolean Sys_LowPhysicalMemory();
  void CL_InitCGame( void ) {
  	const char			*info;
  	const char			*mapname;
@@ -335,7 +340,7 @@ index 94051760..57e8ac87 100644
  	if ( cl.viewangles[PITCH] - oldAngles[PITCH] > 90 ) {
  		cl.viewangles[PITCH] = oldAngles[PITCH] + 90;
 diff --git a/code/client/cl_main.cpp b/code/client/cl_main.cpp
-index 1a5c2446..5b7364d4 100644
+index 1a5c2446..490d5a5e 100644
 --- a/code/client/cl_main.cpp
 +++ b/code/client/cl_main.cpp
 @@ -145,6 +145,7 @@ void CL_FlushMemory( void ) {
@@ -354,7 +359,7 @@ index 1a5c2446..5b7364d4 100644
  		// clear nextmap so the cinematic shutdown doesn't execute it
  		Cvar_Set( "nextmap", "" );
  		CL_Disconnect();
-@@ -761,8 +763,128 @@ CL_Frame
+@@ -761,8 +763,133 @@ CL_Frame
  extern cvar_t	*cl_newClock;
  static unsigned int frameCount;
  float avgFrametime=0.0;
@@ -390,6 +395,8 @@ index 1a5c2446..5b7364d4 100644
 +		se_side_hooks[se_side_n].give = give, se_side_hooks[se_side_n++].take = take;
 +}
 +extern "C" int SE_ServerSide( void ) { return se_sv_side || jk2ServerHere(); }
++// (Ghoul2 handed over by the bone: code/game/ghoul2_shared.h's SE_G2BoneTouch; set by the game's give, g_main.cpp)
++extern "C" { int se_g2_gen __attribute__(( aligned( 16 ) )), se_g2_tag; }
 +static int se_sv_msec;
 +static float se_sv_frac;
 +static jmp_buf se_sv_abort;
@@ -438,8 +445,10 @@ index 1a5c2446..5b7364d4 100644
 +}
 +extern unsigned long long SE_Instructions( void );
 +unsigned long long se_split_ins[4];	// (JK2_PARTS: give, game's frame here, take, frames)
++int SE_MixEarly( void );
 +void CL_Frame( int msec, float fractionMsec ) {
-+	SE_MixSettle();
++	if ( SE_MixEarly() )
++		SE_MixSettle();	// (but with JK2_MIX_LATE=1, where the mix runs on into the frame: snd_dma.cpp, se_snd_defer)
 +	unsigned long long se_i0 = SE_Instructions();
 +	if ( se_game_give )
 +		se_game_give();
@@ -478,12 +487,13 @@ index 1a5c2446..5b7364d4 100644
 +#endif
  
 +#ifdef SHADEREMU
-+	SE_MixSettle();	// (the mix painted on a worker during the game's frame: done before the client's sounds)
++	if ( SE_MixEarly() )
++		SE_MixSettle();	// (the mix painted on a worker during the game's frame done before the client's sounds; not with JK2_MIX_LATE=1)
 +#endif
  	if ( !com_cl_running->integer ) {
  		return;
  	}
-@@ -1127,6 +1249,9 @@ void CL_InitRef( void ) {
+@@ -1127,6 +1254,9 @@ void CL_InitRef( void ) {
  	RIT(CM_DeleteCachedMap);
  	RIT(CM_DrawDebugSurface);
  	RIT(CM_PointContents);
@@ -494,10 +504,21 @@ index 1a5c2446..5b7364d4 100644
  	RIT(Cvar_Set);
  	RIT(Cvar_SetValue);
 diff --git a/code/client/cl_mp3.cpp b/code/client/cl_mp3.cpp
-index c397a494..cb2b3632 100644
+index c397a494..8022e00e 100644
 --- a/code/client/cl_mp3.cpp
 +++ b/code/client/cl_mp3.cpp
-@@ -51,6 +51,77 @@ qboolean MP3_IsValid( const char *psLocalFilename, void *pvData, int iDataLen, q
+@@ -28,6 +28,10 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
+ #include "client.h"
+ #include "cl_mp3.h"					// only included directly by a few snd_xxxx.cpp files plus this one
+ #include "../mp3code/mp3struct.h"	// keep this rather awful file secret from the rest of the program
++#ifdef SHADEREMU
++#include "../../shared/qcommon/se_server.h"
++void SE_MixSettle( void );
++#endif
+ 
+ // expects data already loaded, filename arg is for error printing only
+ //
+@@ -51,6 +55,77 @@ qboolean MP3_IsValid( const char *psLocalFilename, void *pvData, int iDataLen, q
  //
  // returns unpacked length, or 0 for errors (which will be printed internally)
  //
@@ -575,7 +596,7 @@ index c397a494..cb2b3632 100644
  int MP3_GetUnpackedSize( const char *psLocalFilename, void *pvData, int iDataLen, qboolean qbIgnoreID3Tag /* = qfalse */
  						, qboolean bStereoDesired /* = qfalse */
  						)
-@@ -61,7 +132,39 @@ int MP3_GetUnpackedSize( const char *psLocalFilename, void *pvData, int iDataLen
+@@ -61,7 +136,39 @@ int MP3_GetUnpackedSize( const char *psLocalFilename, void *pvData, int iDataLen
  	//
  	if (1)//qbIgnoreID3Tag || !MP3_ReadSpecialTagInfo((byte *)pvData, iDataLen, NULL, &iUnpackedSize))
  	{
@@ -615,7 +636,7 @@ index c397a494..cb2b3632 100644
  
  		if (psError)
  		{
-@@ -253,6 +356,52 @@ void MP3_InitCvars(void)
+@@ -253,6 +360,57 @@ void MP3_InitCvars(void)
  //
  // (note: the reason I pass in the unpacked size rather than working it out here is simply because I already have it)
  //
@@ -647,6 +668,11 @@ index c397a494..cb2b3632 100644
 +	MP3STREAM *h = sfx->pMP3StreamHeader;
 +	if ( !h || ( (se_mp3_lazy_t *)h )->magic != SE_MP3_LAZY )
 +		return h;
++	// (the decoder's stream is a global the mix's worker decodes with: the header is made by the first core with the mix
++	// settled; the game's frame on its worker asks it to, RVC_RACES found it making one beside the mix)
++	if ( jk2ServerHere() )
++		return (MP3STREAM *)(uintptr_t)jk2ServerOnCore0( []( void *p ) -> unsigned { return (unsigned)(uintptr_t)SE_MP3Header( (sfx_t *)p ); }, sfx );
++	SE_MixSettle();
 +	se_mp3_lazy_t lazy = *(se_mp3_lazy_t *)h;
 +	static MP3STREAM made;	// (not on the stack: 26.6 KB)
 +	memset( &made, 0, sizeof( made ) );
@@ -668,7 +694,7 @@ index c397a494..cb2b3632 100644
  qboolean MP3Stream_InitFromFile( sfx_t* sfx, byte *pbSrcData, int iSrcDatalen, const char *psSrcDataFilename,
  									int iMP3UnPackedSize, qboolean bStereoDesired /* = qfalse */
  								)
-@@ -317,6 +466,21 @@ qboolean MP3Stream_InitFromFile( sfx_t* sfx, byte *pbSrcData, int iSrcDatalen, c
+@@ -317,6 +475,21 @@ qboolean MP3Stream_InitFromFile( sfx_t* sfx, byte *pbSrcData, int iSrcDatalen, c
  		//
  		// make a copy of the filled-in stream struct and attach to the sfx_t struct...
  		//
@@ -690,7 +716,7 @@ index c397a494..cb2b3632 100644
  				sfx->pMP3StreamHeader = (MP3STREAM *) Z_Malloc( sizeof(MP3STREAM), TAG_SND_MP3STREAMHDR, qfalse );
  		memcpy(	sfx->pMP3StreamHeader, &SFX_MP3Stream,		    sizeof(MP3STREAM) );
  		//
-@@ -474,7 +638,11 @@ qboolean MP3Stream_Rewind( channel_t *ch )
+@@ -474,7 +647,11 @@ qboolean MP3Stream_Rewind( channel_t *ch )
  
  	// speed opt, since I know I already have the right data setup here...
  	//
@@ -717,10 +743,10 @@ index ccdab28d..c2ee9ab7 100644
  qboolean	MP3Stream_SeekTo		( channel_t *ch, float fTimeToSeekTo );
  qboolean	MP3Stream_Rewind		( channel_t *ch );
 diff --git a/code/client/snd_dma.cpp b/code/client/snd_dma.cpp
-index bb539e4c..a336e99e 100644
+index bb539e4c..9002833c 100644
 --- a/code/client/snd_dma.cpp
 +++ b/code/client/snd_dma.cpp
-@@ -51,9 +51,35 @@ void S_StopAllSounds(void);
+@@ -51,9 +51,111 @@ void S_StopAllSounds(void);
  static void S_UpdateBackgroundTrack( void );
  sfx_t *S_FindName( const char *name );
  static int SND_FreeSFXMem(sfx_t *sfx);
@@ -741,6 +767,82 @@ index bb539e4c..a336e99e 100644
 +int SE_MixWorker( void );
 +void SE_MixGive( void ( *fn )( void ) );
 +void SE_MixSettle( void );
++// The sounds started while the mix is out (docs/games/jk2.md, "The mix through the next frame"): the mix paints the
++// channels from the client's frame's end until the next S_Update, and a start picks and fills a channel; so a start
++// made meanwhile is kept, and made in its order where the mix is next settled (se_snd_settle, at S_Update's start before
++// any paint, and where a sound is stopped or cleared), at the painted time it would have had. The game's frame on its
++// worker hands its starts to the first core. Only with JK2_MIX_LATE=1: what the game reads of a sound started (a voice's
++// level, s_entityWavVol, -1 at its start; a script's wait for its sound) is then the frame's end's, and the walk played
++// otherwise (2.8% fewer passes a frame, 231.7 against 238.4, 5 November 2026). The default settles the mix at CL_Frame's
++// start, as before
++extern "C" int jk2MixOut( void );
++extern "C" int jk2ServerHere( void );
++extern "C" unsigned jk2ServerOnCore0( unsigned ( *fn )( void *args ), void *args );
++struct seSndStart_t { int ambient, has_origin, entity, channel, sfx; vec3_t origin; unsigned char volume; };
++static seSndStart_t se_snd_q[256];
++static int se_snd_n, se_snd_replaying;
++static int se_mix_late( void )
++{
++	static int late = -1;
++	if ( late < 0 ) {
++		const char *e = getenv( "JK2_MIX_LATE" );
++		late = e && !strcmp( e, "1" );
++	}
++	return late;
++}
++void S_StartSound( const vec3_t origin, int entityNum, soundChannel_t entchannel, sfxHandle_t sfxHandle );
++void S_StartAmbientSound( const vec3_t origin, int entityNum, unsigned char volume, sfxHandle_t sfxHandle );
++int SE_MixEarly( void ) { return !se_mix_late(); }
++static void se_snd_replay( void )
++{
++	se_snd_replaying = 1;
++	for ( int i = 0 ; i < se_snd_n ; i++ ) {
++		const seSndStart_t *q = &se_snd_q[i];
++		if ( q->ambient )
++			S_StartAmbientSound( q->has_origin ? q->origin : NULL, q->entity, q->volume, q->sfx );
++		else
++			S_StartSound( q->has_origin ? q->origin : NULL, q->entity, (soundChannel_t)q->channel, q->sfx );
++	}
++	se_snd_n = 0;
++	se_snd_replaying = 0;
++}
++static void se_snd_settle( void )
++{
++	SE_MixSettle();
++	if ( se_snd_n && !se_snd_replaying )
++		se_snd_replay();
++}
++// (whether this start is kept for later; the game's worker's is made by the first core)
++static uint32_t se_snd_on_core0( void *p )
++{
++	const seSndStart_t *q = (const seSndStart_t *)p;
++	if ( q->ambient )
++		S_StartAmbientSound( q->has_origin ? q->origin : NULL, q->entity, q->volume, q->sfx );
++	else
++		S_StartSound( q->has_origin ? q->origin : NULL, q->entity, (soundChannel_t)q->channel, q->sfx );
++	return 0;
++}
++static int se_snd_defer( int ambient, const vec3_t origin, int entity, int channel, int sfx, unsigned char volume )
++{
++	if ( se_snd_replaying || !se_mix_late() )
++		return 0;
++	seSndStart_t q;
++	q.ambient = ambient, q.has_origin = origin != NULL, q.entity = entity, q.channel = channel, q.sfx = sfx, q.volume = volume;
++	if ( origin )
++		VectorCopy( origin, q.origin );
++	if ( jk2ServerHere() ) {
++		jk2ServerOnCore0( se_snd_on_core0, &q );
++		return 1;
++	}
++	if ( !jk2MixOut() )
++		return 0;
++	if ( se_snd_n == (int)( sizeof se_snd_q / sizeof se_snd_q[0] ) ) {
++		se_snd_settle();
++		return 0;
++	}
++	se_snd_q[se_snd_n++] = q;
++	return 1;
++}
 +static unsigned se_mix_end;
 +static int se_mix_old;
 +void S_DoLipSynchs( const int s_oldpaintedtime );
@@ -756,7 +858,7 @@ index bb539e4c..a336e99e 100644
  //////////////////////////
  //
  // vars for bgrnd music track...
-@@ -106,15 +132,31 @@ typedef struct
+@@ -106,15 +208,31 @@ typedef struct
  	fileHandle_t s_backgroundFile;	// valid handle, else -1 if an MP3 (so that NZ compares still work)
  	wavinfo_t	s_backgroundInfo;
  	int			s_backgroundSamples;
@@ -788,27 +890,27 @@ index bb539e4c..a336e99e 100644
  		chMP3_Bgrnd.iMP3SlidingDecodeWindowPos = 0;
  		chMP3_Bgrnd.iMP3SlidingDecodeWritePos = 0;
  		MP3Stream_SeekTo( &chMP3_Bgrnd, fTime );
-@@ -668,6 +710,9 @@ void S_ReloadAllUsedSounds(void)
+@@ -668,6 +786,9 @@ void S_ReloadAllUsedSounds(void)
  
  void S_Shutdown( void )
  {
 +#ifdef SHADEREMU
-+	SE_MixSettle();
++	se_snd_settle();
 +#endif
  	if ( !s_soundStarted ) {
  		return;
  	}
-@@ -917,6 +962,9 @@ S_BeginRegistration
+@@ -917,6 +1038,9 @@ S_BeginRegistration
  */
  void S_BeginRegistration( void )
  {
 +#ifdef SHADEREMU
-+	SE_MixSettle();
++	se_snd_settle();
 +#endif
  	s_soundMuted = qfalse;		// we can play again
  
  #ifdef USE_OPENAL
-@@ -1003,6 +1051,30 @@ S_RegisterSound
+@@ -1003,6 +1127,30 @@ S_RegisterSound
  Creates a default buzz sound if the file can't be loaded
  ==================
  */
@@ -839,17 +941,19 @@ index bb539e4c..a336e99e 100644
  sfxHandle_t	S_RegisterSound( const char *name)
  {
  	sfx_t	*sfx;
-@@ -1441,6 +1513,9 @@ Starts an ambient, 'one-shot" sound.
+@@ -1441,6 +1589,11 @@ Starts an ambient, 'one-shot" sound.
  
  void S_StartAmbientSound( const vec3_t origin, int entityNum, unsigned char volume, sfxHandle_t sfxHandle )
  {
 +#ifdef SHADEREMU
++	if ( se_snd_defer( 1, origin, entityNum, CHAN_AMBIENT, sfxHandle, volume ) )
++		return;	// (the mix is out: made at its settle)
 +	S_SE_SoundsFinish();	// (the sounds made on the workers in first: snd_mem.cpp)
 +#endif
  	channel_t	*ch;
  	/*const*/ sfx_t *sfx;
  
-@@ -1498,7 +1573,11 @@ void S_StartAmbientSound( const vec3_t origin, int entityNum, unsigned char volu
+@@ -1498,7 +1651,11 @@ void S_StartAmbientSound( const vec3_t origin, int entityNum, unsigned char volu
  
  	if (sfx->pMP3StreamHeader)
  	{
@@ -861,17 +965,19 @@ index bb539e4c..a336e99e 100644
  		//ch->iMP3SlidingDecodeWritePos = 0; // These will be zero from the memset in S_PickChannel(), but keep them here for reference...
  		//ch->iMP3SlidingDecodeWindowPos= 0; //
  	}
-@@ -1519,6 +1598,9 @@ Entchannel 0 will never override a playing sound
+@@ -1519,6 +1676,11 @@ Entchannel 0 will never override a playing sound
  */
  void S_StartSound(const vec3_t origin, int entityNum, soundChannel_t entchannel, sfxHandle_t sfxHandle )
  {
 +#ifdef SHADEREMU
++	if ( se_snd_defer( 0, origin, entityNum, entchannel, sfxHandle, 0 ) )
++		return;	// (the mix is out: made at its settle)
 +	S_SE_SoundsFinish();	// (the sounds made on the workers in first: snd_mem.cpp)
 +#endif
  	channel_t	*ch;
  	/*const*/ sfx_t *sfx;
  
-@@ -1625,7 +1707,11 @@ void S_StartSound(const vec3_t origin, int entityNum, soundChannel_t entchannel,
+@@ -1625,7 +1787,11 @@ void S_StartSound(const vec3_t origin, int entityNum, soundChannel_t entchannel,
  
  	if (sfx->pMP3StreamHeader)
  	{
@@ -883,7 +989,7 @@ index bb539e4c..a336e99e 100644
  		//ch->iMP3SlidingDecodeWritePos = 0; // These will be zero from the memset in S_PickChannel(), but keep them here for reference...
  		//ch->iMP3SlidingDecodeWindowPos= 0; //
  	}
-@@ -1641,6 +1727,9 @@ S_StartLocalSound
+@@ -1641,6 +1807,9 @@ S_StartLocalSound
  ==================
  */
  void S_StartLocalSound( sfxHandle_t sfxHandle, int channelNum ) {
@@ -893,7 +999,7 @@ index bb539e4c..a336e99e 100644
  	if ( !s_soundStarted || s_soundMuted ) {
  		return;
  	}
-@@ -1658,6 +1747,9 @@ S_StartLocalLoopingSound
+@@ -1658,6 +1827,9 @@ S_StartLocalLoopingSound
  ==================
  */
  void S_StartLocalLoopingSound( sfxHandle_t sfxHandle) {
@@ -903,27 +1009,27 @@ index bb539e4c..a336e99e 100644
  	vec3_t nullVec = {0,0,0};
  
  	if ( !s_soundStarted || s_soundMuted ) {
-@@ -1702,6 +1794,9 @@ so sound doesn't stutter.
+@@ -1702,6 +1874,9 @@ so sound doesn't stutter.
  ==================
  */
  void S_ClearSoundBuffer( void ) {
 +#ifdef SHADEREMU
-+	SE_MixSettle();
++	se_snd_settle();
 +#endif
  	int		clear;
  
  	if ( !s_soundStarted || s_soundMuted ) {
-@@ -1829,6 +1924,9 @@ S_StopAllSounds
+@@ -1829,6 +2004,9 @@ S_StopAllSounds
  ==================
  */
  void S_StopAllSounds(void) {
 +#ifdef SHADEREMU
-+	SE_MixSettle();
++	se_snd_settle();
 +#endif
  	if ( !s_soundStarted ) {
  		return;
  	}
-@@ -1873,6 +1971,9 @@ Include velocity in case I get around to doing doppler...
+@@ -1873,6 +2051,9 @@ Include velocity in case I get around to doing doppler...
  ==================
  */
  void S_AddLoopingSound( int entityNum, const vec3_t origin, const vec3_t velocity, sfxHandle_t sfxHandle, soundChannel_t chan ) {
@@ -933,7 +1039,7 @@ index bb539e4c..a336e99e 100644
  	/*const*/ sfx_t *sfx;
  
    	if ( !s_soundStarted || s_soundMuted ) {
-@@ -2693,9 +2794,16 @@ Called once each time through the main loop
+@@ -2693,9 +2874,16 @@ Called once each time through the main loop
  ============
  */
  void S_Update( void ) {
@@ -944,13 +1050,13 @@ index bb539e4c..a336e99e 100644
  	channel_t	*ch;
  
 +#ifdef SHADEREMU
-+	SE_MixSettle();
++	se_snd_settle();
 +	SE_MusicRound( s_soundtime, !s_soundStarted || s_soundMuted );
 +#endif
  	if ( !s_soundStarted || s_soundMuted ) {
  		return;
  	}
-@@ -2900,7 +3008,11 @@ void S_Update_(void) {
+@@ -2900,7 +3088,11 @@ void S_Update_(void) {
  
  			if (ch->thesfx->pMP3StreamHeader)
  			{
@@ -962,13 +1068,15 @@ index bb539e4c..a336e99e 100644
  				ch->iMP3SlidingDecodeWritePos = 0;
  				ch->iMP3SlidingDecodeWindowPos= 0;
  
-@@ -3063,6 +3175,13 @@ void S_Update_(void) {
+@@ -3063,6 +3255,15 @@ void S_Update_(void) {
  			endtime = s_soundtime + samps;
  
  
 +#ifdef SHADEREMU
 +		if ( SE_MixWorker() ) {
 +			se_mix_end = endtime, se_mix_old = s_oldpaintedtime;
++			void SE_MixPartsGive( int endtime );
++			SE_MixPartsGive( endtime );	// (its 16-bit channels on two helpers: snd_mix.cpp, "The mix in parts")
 +			SE_MixGive( se_mix_job );
 +			return;
 +		}
@@ -976,7 +1084,7 @@ index bb539e4c..a336e99e 100644
  		SNDDMA_BeginPainting ();
  
  		S_PaintChannels (endtime);
-@@ -4062,6 +4181,9 @@ static void FreeMusic( MusicInfo_t *pMusicInfo )
+@@ -4062,6 +4263,9 @@ static void FreeMusic( MusicInfo_t *pMusicInfo )
  {
  	if (pMusicInfo->pLoadedData)
  	{
@@ -986,7 +1094,7 @@ index bb539e4c..a336e99e 100644
  		Z_Free(pMusicInfo->pLoadedData);
  		pMusicInfo->pLoadedData		= NULL;		// these two MUST be kept as valid/invalid together
  		pMusicInfo->sLoadedDataName[0]= '\0';	//
-@@ -4134,7 +4256,13 @@ static qboolean S_StartBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolean
+@@ -4134,7 +4338,13 @@ static qboolean S_StartBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolean
  											// scan up to halfway of it to find floating headers, so don't make it
  											// too small. 8k works fine.
  		qboolean bMusicSucceeded = qfalse;
@@ -1001,7 +1109,7 @@ index bb539e4c..a336e99e 100644
  		{
  			if (!pMusicInfo->pLoadedData)
  			{
-@@ -4177,7 +4305,7 @@ static qboolean S_StartBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolean
+@@ -4177,7 +4387,7 @@ static qboolean S_StartBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolean
  							pMusicInfo->sfxMP3_Bgrnd.pMP3StreamHeader		= &pMusicInfo->streamMP3_Bgrnd;
  				Q_strncpyz( pMusicInfo->sfxMP3_Bgrnd.sSoundName, name, sizeof(pMusicInfo->sfxMP3_Bgrnd.sSoundName) );
  
@@ -1010,7 +1118,7 @@ index bb539e4c..a336e99e 100644
  				{
  					MP3Stream_InitPlayingTimeFields ( &pMusicInfo->streamMP3_Bgrnd, name, pbMP3DataSegment, pMusicInfo->iLoadedDataLen, qtrue);
  				}
-@@ -4193,7 +4321,7 @@ static qboolean S_StartBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolean
+@@ -4193,7 +4403,7 @@ static qboolean S_StartBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolean
  						pMusicInfo->chMP3_Bgrnd.thesfx = &pMusicInfo->sfxMP3_Bgrnd;
  				memcpy(&pMusicInfo->chMP3_Bgrnd.MP3StreamHeader, pMusicInfo->sfxMP3_Bgrnd.pMP3StreamHeader, sizeof(*pMusicInfo->sfxMP3_Bgrnd.pMP3StreamHeader));
  
@@ -1019,7 +1127,7 @@ index bb539e4c..a336e99e 100644
  				{
  					if (pMusicInfo->s_backgroundFile != -1)
  					{
-@@ -4711,6 +4839,54 @@ static qboolean S_UpdateBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolea
+@@ -4711,6 +4921,54 @@ static qboolean S_UpdateBackgroundTrack_Actual( MusicInfo_t *pMusicInfo, qboolea
  		return qfalse;
  	}
  
@@ -1074,7 +1182,7 @@ index bb539e4c..a336e99e 100644
  	// see how many samples should be copied into the raw buffer
  	if ( s_rawend < s_soundtime ) {
  		s_rawend = s_soundtime;
-@@ -4935,6 +5111,9 @@ static void S_UpdateBackgroundTrack( void )
+@@ -4935,6 +5193,9 @@ static void S_UpdateBackgroundTrack( void )
  			if ( pMusicInfoCurrent->s_backgroundFile == -1)
  			{
  				int iRawEnd = s_rawend;
@@ -1084,7 +1192,7 @@ index bb539e4c..a336e99e 100644
  				S_UpdateBackgroundTrack_Actual( pMusicInfoCurrent, qtrue, s_musicVolume->value );
  
  	/*			static int iPrevFrontVol = 0;
-@@ -4947,6 +5126,9 @@ static void S_UpdateBackgroundTrack( void )
+@@ -4947,6 +5208,9 @@ static void S_UpdateBackgroundTrack( void )
  				if (pMusicInfoFadeOut->bActive)
  				{
  					s_rawend = iRawEnd;
@@ -1094,7 +1202,7 @@ index bb539e4c..a336e99e 100644
  					S_UpdateBackgroundTrack_Actual( pMusicInfoFadeOut, qfalse, s_musicVolume->value );	// inactive-checked internally
  	/*
  					static int iPrevFadeVol = 0;
-@@ -5096,6 +5278,9 @@ static int SND_MemUsed(sfx_t *sfx)
+@@ -5096,6 +5360,9 @@ static int SND_MemUsed(sfx_t *sfx)
  //
  static int SND_FreeSFXMem(sfx_t *sfx)
  {
@@ -1104,7 +1212,7 @@ index bb539e4c..a336e99e 100644
  	int iBytesFreed = 0;
  
  #ifdef USE_OPENAL
-@@ -5255,6 +5440,23 @@ int SND_FreeOldestSound(void)
+@@ -5255,6 +5522,23 @@ int SND_FreeOldestSound(void)
  extern qboolean gbInsideLoadSound;
  qboolean SND_RegisterAudio_LevelLoadEnd(qboolean bDeleteEverythingNotUsedThisLevel /* 99% qfalse */)
  {
@@ -1439,7 +1547,7 @@ index 97b4f4b4..d6516fde 100644
  
  		sfx->eSoundCompressionMethod = ct_16;
 diff --git a/code/client/snd_mix.cpp b/code/client/snd_mix.cpp
-index d245590d..aa9de400 100644
+index d245590d..08623df2 100644
 --- a/code/client/snd_mix.cpp
 +++ b/code/client/snd_mix.cpp
 @@ -36,6 +36,22 @@ void S_WriteLinearBlastStereo16 (void)
@@ -1465,6 +1573,252 @@ index d245590d..aa9de400 100644
  	for (i=0 ; i<snd_linear_count ; i+=2)
  	{
  		val = snd_p[i]>>8;
+@@ -168,16 +184,17 @@ CHANNEL MIXING
+ 
+ ===============================================================================
+ */
+-static void S_PaintChannelFrom16( channel_t *ch, const sfx_t *sfx, int count, int sampleOffset, int bufferOffset )
++static void S_PaintChannelFrom16( channel_t *ch, const sfx_t *sfx, int count, int sampleOffset, int bufferOffset,
++	portable_samplepair_t *pb, int vol )
+ {
+ 	portable_samplepair_t	*pSamplesDest;
+ 	int iData;
+ 
+ 
+-	int iLeftVol	= ch->leftvol  * snd_vol;
+-	int iRightVol	= ch->rightvol * snd_vol;
++	int iLeftVol	= ch->leftvol  * vol;
++	int iRightVol	= ch->rightvol * vol;
+ 
+-	pSamplesDest	= &paintbuffer[ bufferOffset ];
++	pSamplesDest	= &pb[ bufferOffset ];
+ 
+ 	for ( int i=0 ; i<count ; i++ )
+ 	{
+@@ -189,7 +206,8 @@ static void S_PaintChannelFrom16( channel_t *ch, const sfx_t *sfx, int count, in
+ }
+ 
+ 
+-void S_PaintChannelFromMP3( channel_t *ch, const sfx_t *sc, int count, int sampleOffset, int bufferOffset )
++void S_PaintChannelFromMP3( channel_t *ch, const sfx_t *sc, int count, int sampleOffset, int bufferOffset,
++	portable_samplepair_t *pb, int vol )
+ {
+ 	int data;
+ 	int leftvol, rightvol;
+@@ -200,11 +218,11 @@ void S_PaintChannelFromMP3( channel_t *ch, const sfx_t *sc, int count, int sampl
+ 
+ 	MP3Stream_GetSamples( ch, sampleOffset, count, tempMP3Buffer, qfalse );	// qfalse = not stereo
+ 
+-	leftvol = ch->leftvol*snd_vol;
+-	rightvol = ch->rightvol*snd_vol;
++	leftvol = ch->leftvol*vol;
++	rightvol = ch->rightvol*vol;
+ 	sfx = tempMP3Buffer;
+ 
+-	samp = &paintbuffer[ bufferOffset ];
++	samp = &pb[ bufferOffset ];
+ 
+ 
+ 	while ( count & 3 ) {
+@@ -239,18 +257,33 @@ void S_PaintChannelFromMP3( channel_t *ch, const sfx_t *sc, int count, int sampl
+ 
+ // subroutinised to save code dup (called twice)	-ste
+ //
+-void ChannelPaint(channel_t *ch, sfx_t *sc, int count, int sampleOffset, int bufferOffset)
++static void ChannelPaintTo(channel_t *ch, sfx_t *sc, int count, int sampleOffset, int bufferOffset, portable_samplepair_t *pb, int vol)
+ {
+ 	switch (sc->eSoundCompressionMethod)
+ 	{
+ 		case ct_16:
+ 
+-			S_PaintChannelFrom16		(ch, sc, count, sampleOffset, bufferOffset);
++			S_PaintChannelFrom16		(ch, sc, count, sampleOffset, bufferOffset, pb, vol);
+ 			break;
+ 
+ 		case ct_MP3:
+ 
+-			S_PaintChannelFromMP3		(ch, sc, count, sampleOffset, bufferOffset);
++			S_PaintChannelFromMP3		(ch, sc, count, sampleOffset, bufferOffset, pb, vol);
++			break;
++
++		default:
++
++			assert(0);
++			break;
++	}
++}
++void ChannelPaint(channel_t *ch, sfx_t *sc, int count, int sampleOffset, int bufferOffset)
++{
++	switch (sc->eSoundCompressionMethod)
++	{
++		case ct_16:
++		case ct_MP3:
++			ChannelPaintTo( ch, sc, count, sampleOffset, bufferOffset, paintbuffer, snd_vol );
+ 			break;
+ 
+ 		default:
+@@ -262,6 +295,87 @@ void ChannelPaint(channel_t *ch, sfx_t *sc, int count, int sampleOffset, int buf
+ 
+ 
+ 
++#ifdef SHADEREMU
++// ---- The mix in parts (docs/games/jk2.md, "The mix in parts"): at S_Update the first core gives the 16-bit channels by
++// turns to two helpers (SE_MixPartsGive), each painting its channels over the whole range into a buffer of its own; the
++// mix's worker paints the raw samples and the MP3 channels (the decoder's stream is one: its channels stay on one core)
++// as before, waits for the helpers once, adds their buffers into each piece it transfers. The sums are integers: the same
++// samples whatever the order. Only with JK2_MIX_PARTS=1: the walk was 243.8 passes a frame with it against 238.2
++// without (5 November 2026; the helpers' posts and the sums cost more than the mix's wait they saved)
++#define SE_MIX_HELPERS 2
++#define SE_MIX_SAMPLES 16384
++static portable_samplepair_t se_mix_pb[SE_MIX_HELPERS][SE_MIX_SAMPLES] __attribute__(( aligned( 16 ) ));	// (each helper's)
++static unsigned char se_mix_owner[MAX_CHANNELS];	// (the first core's: 0 the mix's worker, else the helper's number + 1)
++static struct { int from, end, normal_vol, voice_vol, helpers, unused[3]; } __attribute__(( aligned( 16 ) )) se_mix_parts;	// (the first core's)
++static struct { volatile int done, unused[3]; } __attribute__(( aligned( 16 ) )) se_mix_done[SE_MIX_HELPERS];	// (each helper's)
++extern "C" int jk2MixPartPost( unsigned ( *fn )( unsigned, unsigned ), unsigned a0, unsigned a1 );
++extern "C" void jk2MixPartJoin( void );
++extern "C" void jk2WaitPass( void );
++extern "C" void jk2Touch( void *memory, unsigned bytes );
++static int se_mix_gen;
++static void se_paint_channel( channel_t *ch, int from, int end, portable_samplepair_t *pb, int normal_vol, int voice_vol )
++{
++	const int vol = ( ch->entchannel == CHAN_VOICE || ch->entchannel == CHAN_VOICE_ATTEN || ch->entchannel == CHAN_VOICE_GLOBAL ) ? voice_vol : normal_vol;
++	sfx_t *sc = ch->thesfx;
++	int ltime = from;
++	do {
++		const int sampleOffset = ch->loopSound ? ltime % sc->iSoundLengthInSamples : ltime - ch->startSample;
++		int count = end - ltime;
++		if ( sampleOffset + count > sc->iSoundLengthInSamples )
++			count = sc->iSoundLengthInSamples - sampleOffset;
++		if ( count <= 0 )
++			break;
++		ChannelPaintTo( ch, sc, count, sampleOffset, ltime - from, pb, vol );
++		ltime += count;
++	} while ( ltime < end && ch->loopSound );
++}
++static unsigned se_mix_part_job( unsigned who, unsigned gen )
++{
++	portable_samplepair_t *pb = se_mix_pb[who];
++	const int from = se_mix_parts.from, end = se_mix_parts.end;
++	memset( pb, 0, ( end - from ) * sizeof( portable_samplepair_t ) );
++	channel_t *ch = s_channels;
++	for ( int i = 0 ; i < MAX_CHANNELS ; i++, ch++ )
++		if ( se_mix_owner[i] == who + 1 )
++			se_paint_channel( ch, from, end, pb, se_mix_parts.normal_vol, se_mix_parts.voice_vol );
++	se_mix_done[who].done = (int)gen;
++	return 0;
++}
++// (the first core, at S_Update before the mix is given: the helpers' channels, from s_paintedtime to endtime)
++void SE_MixPartsGive( int endtime )
++{
++	static int on = -1;
++	if ( on < 0 ) {
++		const char *e = getenv( "JK2_MIX_PARTS" );
++		on = e && !strcmp( e, "1" );
++		jk2Touch( se_mix_pb, sizeof se_mix_pb ), jk2Touch( (void *)se_mix_done, sizeof se_mix_done );
++	}
++	jk2MixPartJoin();	// (the frame before's, done with the mix that was settled)
++	memset( se_mix_owner, 0, sizeof se_mix_owner );
++	se_mix_parts.helpers = 0;
++	if ( !on || endtime - s_paintedtime > SE_MIX_SAMPLES || endtime <= s_paintedtime )
++		return;
++	se_mix_parts.from = s_paintedtime, se_mix_parts.end = endtime;
++	se_mix_parts.normal_vol = s_volume->value * 256.0f, se_mix_parts.voice_vol = s_volumeVoice->value * 256.0f;
++	int n = 0;
++	const channel_t *ch = s_channels;
++	for ( int i = 0 ; i < MAX_CHANNELS ; i++, ch++ )
++		if ( ch->thesfx && !( ch->leftvol < 0.25 && ch->rightvol < 0.25 ) && ch->thesfx->eSoundCompressionMethod == ct_16 )
++			se_mix_owner[i] = (unsigned char)( 1 + n++ % SE_MIX_HELPERS );
++	if ( !n )
++		return;
++	se_mix_gen++;
++	int posted = 0;
++	for ( int k = 0 ; k < SE_MIX_HELPERS ; k++ )
++		posted += jk2MixPartPost( se_mix_part_job, (unsigned)k, (unsigned)se_mix_gen ) != 0;
++	if ( posted < SE_MIX_HELPERS ) {	// (too few workers: the mix's worker paints them all; those posted find no channel... joined)
++		memset( se_mix_owner, 0, sizeof se_mix_owner );
++		jk2MixPartJoin();
++		return;
++	}
++	se_mix_parts.helpers = SE_MIX_HELPERS;
++}
++#endif
+ void S_PaintChannels( int endtime ) {
+ 	int 	i;
+ 	int 	end;
+@@ -316,6 +430,10 @@ void S_PaintChannels( int endtime ) {
+ 			if ( !ch->thesfx || (ch->leftvol<0.25 && ch->rightvol<0.25 )) {
+ 				continue;
+ 			}
++#ifdef SHADEREMU
++			if ( se_mix_parts.helpers && se_mix_owner[i] )
++				continue;	// (a helper's)
++#endif
+ 
+ 			if ( ch->entchannel == CHAN_VOICE || ch->entchannel == CHAN_VOICE_ATTEN || ch->entchannel == CHAN_VOICE_GLOBAL )
+ 				snd_vol = voice_vol;
+@@ -385,8 +503,24 @@ void S_PaintChannels( int endtime ) {
+ 			}
+ 		}
+ */
++#ifdef SHADEREMU
++		if ( se_mix_parts.helpers ) {	// (the helpers' buffers added: waited for once)
++			for ( int k = 0 ; k < se_mix_parts.helpers ; k++ )
++				while ( se_mix_done[k].done != se_mix_gen )
++					jk2WaitPass();
++			const int at = s_paintedtime - se_mix_parts.from;
++			for ( int k = 0 ; k < se_mix_parts.helpers ; k++ ) {
++				const portable_samplepair_t *h = se_mix_pb[k] + at;
++				for ( int j = 0 ; j < end - s_paintedtime ; j++ )
++					paintbuffer[j].left += h[j].left, paintbuffer[j].right += h[j].right;
++			}
++		}
++#endif
+ 		// transfer out according to DMA format
+ 		S_TransferPaintBuffer( end );
+ 		s_paintedtime = end;
+ 	}
++#ifdef SHADEREMU
++	se_mix_parts.helpers = 0;	// (given again for the next mix, or none)
++#endif
+ }
+diff --git a/code/game/ghoul2_shared.h b/code/game/ghoul2_shared.h
+index 3427e786..bcd07f54 100644
+--- a/code/game/ghoul2_shared.h
++++ b/code/game/ghoul2_shared.h
+@@ -403,6 +403,33 @@ struct boltInfo_t{
+ 
+ typedef std::vector <surfaceInfo_t> surfaceInfo_v;
+ typedef std::vector <boneInfo_t> boneInfo_v;
++#ifdef SHADEREMU
++// ---- Ghoul2 handed over by the bone (codeJK2/game/g_main.cpp's SE_GameGive and SE_GameTake; docs/games/jk2.md, "The
++// game's frame apart"). Every change to a bone's words before lastTimeUpdated (rd-vanilla's G2_bones.cpp, tr_ghoul2.cpp)
++// marks the bone with the give's number in extraFloat1's bits, so the give copies into the client's copies only the
++// game's bones changed since the give before; and the client's first change to a bone after a give keeps the bone's
++// words as given in its rag doll's matrices from originalTrueBoneMatrix on (Jedi Outcast has no rag dolls: those
++// fields are used under BONE_ANGLES_RAGDOLL alone, and not saved), tagged in extraInt1, so the take compares only those
++// bones. se_g2_tag 0 (no Ghoul2 copies: JK2_SPLIT unset, copy or check): nothing.
++#include <stddef.h>
++#include <string.h>
++extern "C" int se_g2_gen, se_g2_tag;	// (cl_main.cpp's: the give's number, and the tag of the client's frame given)
++extern "C" int SE_ServerSide( void );
++static_assert( offsetof( boneInfo_t, originalOrigin ) + sizeof( vec3_t ) - offsetof( boneInfo_t, originalTrueBoneMatrix ) >=
++	offsetof( boneInfo_t, lastTimeUpdated ), "a bone's words as given fit in its rag doll's matrices" );
++static inline void SE_G2BoneTouch( boneInfo_t &b )
++{
++	if ( !se_g2_tag )
++		return;
++	const int mark = se_g2_gen;
++	memcpy( (void *)&b.extraFloat1, &mark, 4 );
++	if ( b.extraInt1 != se_g2_tag && !SE_ServerSide() ) {
++		memcpy( (void *)&b.originalTrueBoneMatrix, (const void *)&b, offsetof( boneInfo_t, lastTimeUpdated ) );
++		b.extraInt1 = se_g2_tag;
++	}
++}
++static inline int SE_G2BoneMark( const boneInfo_t &b ) { int m; memcpy( &m, (const void *)&b.extraFloat1, 4 ); return m; }
++#endif
+ typedef std::vector <boltInfo_t> boltInfo_v;
+ typedef std::vector <mdxaBone_t> mdxaBone_v;
+ 
 diff --git a/code/mp3code/towave.c b/code/mp3code/towave.c
 index ff83a002..335fcfe9 100644
 --- a/code/mp3code/towave.c
@@ -1558,10 +1912,37 @@ index ff83a002..335fcfe9 100644
  	memset(pMP3Stream,0,sizeof(*pMP3Stream));
  
 diff --git a/code/qcommon/cm_load.cpp b/code/qcommon/cm_load.cpp
-index 5407ffb0..62551e3a 100644
+index 5407ffb0..11e1b610 100644
 --- a/code/qcommon/cm_load.cpp
 +++ b/code/qcommon/cm_load.cpp
-@@ -639,6 +639,11 @@ qboolean CM_DeleteCachedMap(qboolean bGuaranteedOkToDelete)
+@@ -44,10 +44,26 @@ void SetPlaneSignbits (cplane_t *out) {
+ 
+ // to allow boxes to be treated as brush models, we allocate
+ // some extra indexes along with those needed by the map
++#ifdef SHADEREMU
++// (a box a core: the first core's, the game's frame's (on its worker, or on this core: SE_ServerSide), and one a job slot's
++// (se_slot.h), CM_TempBoxModel; RVC_RACES found two frames storing to one box's planes; docs/games/jk2.md, "The game's frame
++// apart". Each box a texel and more after the one before: a brush, two sides and four planes between)
++#include "../../shared/qcommon/se_slot.h"
++#define	SE_BOXES		SE_CORES
++#define	BOX_BRUSHES		( 2 * SE_BOXES )
++#define	BOX_SIDES		( 8 * SE_BOXES )
++#define	BOX_LEAFS		4
++#define	BOX_PLANES		( 16 * SE_BOXES )
++static cmodel_t	se_box_models[SE_BOXES];
++static cplane_t	*se_box_planes[SE_BOXES];
++static cbrush_t	*se_box_brushes[SE_BOXES];
++extern "C" int SE_ServerSide( void );
++#else
+ #define	BOX_BRUSHES		1
+ #define	BOX_SIDES		6
+ #define	BOX_LEAFS		2
+ #define	BOX_PLANES		12
++#endif
+ 
+ #define	LL(x) x=LittleLong(x)
+ 
+@@ -639,6 +655,11 @@ qboolean CM_DeleteCachedMap(qboolean bGuaranteedOkToDelete)
  	return bActuallyFreedSomething;
  }
  
@@ -1573,7 +1954,7 @@ index 5407ffb0..62551e3a 100644
  static void CM_LoadMap_Actual( const char *name, qboolean clientload, int *checksum, clipMap_t &cm ) {
  	const int		*buf;
  	size_t			i;
-@@ -754,6 +759,10 @@ static void CM_LoadMap_Actual( const char *name, qboolean clientload, int *check
+@@ -754,6 +775,10 @@ static void CM_LoadMap_Actual( const char *name, qboolean clientload, int *check
  
  		// carry on as before...
  
@@ -1584,7 +1965,7 @@ index 5407ffb0..62551e3a 100644
  		last_checksum = LittleLong (Com_BlockChecksum (buf, iBSPLen));
  
  		header = *(dheader_t *)buf;
-@@ -785,6 +794,10 @@ static void CM_LoadMap_Actual( const char *name, qboolean clientload, int *check
+@@ -785,6 +810,10 @@ static void CM_LoadMap_Actual( const char *name, qboolean clientload, int *check
  		CMod_LoadEntityString (&header.lumps[LUMP_ENTITIES], cm, name );
  		CMod_LoadVisibility( &header.lumps[LUMP_VISIBILITY], cm );
  		CMod_LoadPatches( &header.lumps[LUMP_SURFACES], &header.lumps[LUMP_DRAWVERTS], cm );
@@ -1595,7 +1976,7 @@ index 5407ffb0..62551e3a 100644
  
  		TotalSubModels += cm.numSubModels;
  
-@@ -835,6 +848,10 @@ static void CM_LoadMap_Actual( const char *name, qboolean clientload, int *check
+@@ -835,6 +864,10 @@ static void CM_LoadMap_Actual( const char *name, qboolean clientload, int *check
  //
  void CM_LoadMap( const char *name, qboolean clientload, int *checksum, qboolean subBSP )
  {
@@ -1606,7 +1987,7 @@ index 5407ffb0..62551e3a 100644
  	if (subBSP)
  	{
  		Com_DPrintf("^5CM_LoadMap->CMLoadSubBSP(%s, %i)\n", name, qfalse);
-@@ -880,6 +897,10 @@ CM_ClearMap
+@@ -880,6 +913,10 @@ CM_ClearMap
  */
  void CM_ClearMap( void )
  {
@@ -1617,21 +1998,125 @@ index 5407ffb0..62551e3a 100644
  	int		i;
  
  	CM_OrOfAllContentsFlagsInMap = CONTENTS_BODY;
-@@ -1061,6 +1082,9 @@ BSP trees instead of being compared directly.
+@@ -922,6 +959,16 @@ cmodel_t	*CM_ClipHandleToModel( clipHandle_t handle, clipMap_t **clipMap )
+ 		}
+ 		return &cmg.cmodels[handle];
+ 	}
++#ifdef SHADEREMU
++	if ( SE_IS_BOX( handle ) )
++	{
++		if (clipMap)
++		{
++			*clipMap = &cmg;
++		}
++		return &se_box_models[BOX_MODEL_HANDLE - handle];
++	}
++#endif
+ 	if ( handle == BOX_MODEL_HANDLE )
+ 	{
+ 		if (clipMap)
+@@ -1005,32 +1052,52 @@ Set up the planes and nodes so that the six floats of a bounding box
+ can just be stored out and get a proper clipping hull structure.
+ ===================
+ */
++#ifdef SHADEREMU
++static void CM_InitBoxHull_( int k, cmodel_t &box_model, cplane_t *&box_planes, cbrush_t *&box_brush );
++void CM_InitBoxHull (void)
++{
++	for ( int k = 0; k < SE_BOXES; k++ )
++		CM_InitBoxHull_( k, se_box_models[k], se_box_planes[k], se_box_brushes[k] );
++	box_model = se_box_models[0], box_planes = se_box_planes[0], box_brush = se_box_brushes[0];
++}
++static void CM_InitBoxHull_( int k, cmodel_t &box_model, cplane_t *&box_planes, cbrush_t *&box_brush )
++{
++	int			i;
++	int			side;
++	cplane_t	*p;
++	cbrushside_t	*s;
++	const int numPlanes = cmg.numPlanes + k * 16, numBrushes = cmg.numBrushes + k * 2, numBrushSides = cmg.numBrushSides + k * 8;
++	const int numLeafBrushes = cmg.numLeafBrushes + k;
++#else
+ void CM_InitBoxHull (void)
+ {
+ 	int			i;
+ 	int			side;
+ 	cplane_t	*p;
+ 	cbrushside_t	*s;
++	const int numPlanes = cmg.numPlanes, numBrushes = cmg.numBrushes, numBrushSides = cmg.numBrushSides;
++	const int numLeafBrushes = cmg.numLeafBrushes;
++#endif
+ 
+-	box_planes = &cmg.planes[cmg.numPlanes];
++	box_planes = &cmg.planes[numPlanes];
+ 
+-	box_brush = &cmg.brushes[cmg.numBrushes];
++	box_brush = &cmg.brushes[numBrushes];
+ 	box_brush->numsides = 6;
+-	box_brush->sides = cmg.brushsides + cmg.numBrushSides;
++	box_brush->sides = cmg.brushsides + numBrushSides;
+ 	box_brush->contents = CONTENTS_BODY;
+ 
+ 	box_model.leaf.numLeafBrushes = 1;
+ //	box_model.leaf.firstLeafBrush = cmg.numBrushes;
+-	box_model.leaf.firstLeafBrush = cmg.numLeafBrushes;
+-	cmg.leafbrushes[cmg.numLeafBrushes] = cmg.numBrushes;
++	box_model.leaf.firstLeafBrush = numLeafBrushes;
++	cmg.leafbrushes[numLeafBrushes] = numBrushes;
+ 
+ 	for (i=0 ; i<6 ; i++)
+ 	{
+ 		side = i&1;
+ 
+ 		// brush sides
+-		s = &cmg.brushsides[cmg.numBrushSides+i];
+-		s->plane = 	cmg.planes + (cmg.numPlanes+i*2+side);
++		s = &cmg.brushsides[numBrushSides+i];
++		s->plane = 	cmg.planes + (numPlanes+i*2+side);
+ 		s->shaderNum = cmg.numShaders;	//not storing flags directly anymore, so be sure to point @ a valid shader
+ 
+ 		// planes
+@@ -1061,6 +1128,11 @@ BSP trees instead of being compared directly.
  ===================
  */
  clipHandle_t CM_TempBoxModel( const vec3_t mins, const vec3_t maxs) {//, const int contents ) {
 +#ifdef SHADEREMU
-+	SE_NOT_AHEAD( SE_WHY_BOX );	// (one box model, its planes this call's: a player made ahead does not make it)
++	const int se_slot = SE_Slot(), se_k = SE_ServerSide() ? 1 : se_slot ? 1 + se_slot : 0;	// (this core's own box)
++	cplane_t *const box_planes = se_box_planes[se_k];
++	cbrush_t *const box_brush = se_box_brushes[se_k];
 +#endif
  	box_planes[0].dist = maxs[0];
  	box_planes[1].dist = -maxs[0];
  	box_planes[2].dist = mins[0];
+@@ -1080,7 +1152,11 @@ clipHandle_t CM_TempBoxModel( const vec3_t mins, const vec3_t maxs) {//, const i
+ 	//FIXME: this is the "correct" way, but not the way JK2 was designed around... fix for further projects
+ 	//box_brush->contents = contents;
+ 
++#ifdef SHADEREMU
++	return BOX_MODEL_HANDLE - se_k;
++#else
+ 	return BOX_MODEL_HANDLE;
++#endif
+ }
+ 
+ 
 diff --git a/code/qcommon/cm_local.h b/code/qcommon/cm_local.h
-index cfd9b106..2fd30e4e 100644
+index cfd9b106..4dea2bf5 100644
 --- a/code/qcommon/cm_local.h
 +++ b/code/qcommon/cm_local.h
-@@ -197,9 +197,48 @@ typedef struct traceWork_s {
+@@ -29,6 +29,12 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
+ #define CM_LOCAL_H
+ 
+ #define	BOX_MODEL_HANDLE	(MAX_SUBMODELS-1)
++#ifdef SHADEREMU
++// (a box a core: cm_load.cpp's CM_TempBoxModel, BOX_MODEL_HANDLE - k for box k of SE_CORES)
++#define	SE_IS_BOX( m )	( ( m ) <= BOX_MODEL_HANDLE && ( m ) > BOX_MODEL_HANDLE - ( SE_SLOTS + 2 ) )
++#else
++#define	SE_IS_BOX( m )	( ( m ) == BOX_MODEL_HANDLE )
++#endif
+ 
+ struct Point
+ {
+@@ -197,9 +203,48 @@ typedef struct traceWork_s {
  	bool			startout;
  	bool			getout;
  
@@ -1701,7 +2186,7 @@ index dbaa19dd..d61bcc5c 100644
  		CM_TracePointThroughPatchCollide( tw, pc );
  		return;
 diff --git a/code/qcommon/cm_public.h b/code/qcommon/cm_public.h
-index efb97b53..83ee931a 100644
+index efb97b53..a7a5de34 100644
 --- a/code/qcommon/cm_public.h
 +++ b/code/qcommon/cm_public.h
 @@ -45,6 +45,10 @@ int			CM_FindSubBSP(int modelIndex);
@@ -1715,8 +2200,25 @@ index efb97b53..83ee931a 100644
  int			CM_TransformedPointContents( const vec3_t p, clipHandle_t model, const vec3_t origin, const vec3_t angles );
  
  void		CM_BoxTrace ( trace_t *results, const vec3_t start, const vec3_t end,
+@@ -54,6 +58,16 @@ void		CM_TransformedBoxTrace( trace_t *results, const vec3_t start, const vec3_t
+ 						  const vec3_t mins, const vec3_t maxs,
+ 						  clipHandle_t model, int brushmask,
+ 						  const vec3_t origin, const vec3_t angles);
++#ifdef SHADEREMU
++// (the same, writing only the result's words before its Ghoul2 records: q_shared.h's SE_TraceHeadCopy)
++void		CM_SE_BoxTraceHead ( trace_t *results, const vec3_t start, const vec3_t end,
++						  const vec3_t mins, const vec3_t maxs,
++						  clipHandle_t model, int brushmask);
++void		CM_SE_TransformedBoxTraceHead( trace_t *results, const vec3_t start, const vec3_t end,
++						  const vec3_t mins, const vec3_t maxs,
++						  clipHandle_t model, int brushmask,
++						  const vec3_t origin, const vec3_t angles);
++#endif
+ 
+ byte		*CM_ClusterPVS (int cluster);
+ 
 diff --git a/code/qcommon/cm_test.cpp b/code/qcommon/cm_test.cpp
-index 77a2265f..e4e5bf18 100644
+index 77a2265f..020583b2 100644
 --- a/code/qcommon/cm_test.cpp
 +++ b/code/qcommon/cm_test.cpp
 @@ -61,14 +61,27 @@ struct PointAndLeaf
@@ -1757,7 +2259,28 @@ index 77a2265f..e4e5bf18 100644
  	c_pointcontents++;		// optimize counter
  
  	return -1 - num;
-@@ -680,4 +696,145 @@ void CM_SnapPVS(vec3_t origin,byte *buffer)
+@@ -237,6 +253,11 @@ CM_BoxLeafnums
+ int	CM_BoxLeafnums( const vec3_t mins, const vec3_t maxs, int *boxList, int listsize, int *lastLeaf) {
+ 	leafList_t	ll;
+ 
++#ifdef SHADEREMU
++	// (the leaves' walk reads no count: the first core's traces own it, and the game's frame on its worker leaves it,
++	// or an increment of one core's is lost and its next trace skips brushes; RVC_RACES found both storing to it)
++	if ( !SE_Core() )
++#endif
+ 	cmg.checkcount++;
+ 
+ 	VectorCopy( mins, ll.bounds[0] );
+@@ -473,7 +494,7 @@ int	CM_TransformedPointContents( const vec3_t p, clipHandle_t model, const vec3_
+ 	VectorSubtract (p, origin, p_l);
+ 
+ 	// rotate start and end into the models frame of reference
+-	if ( model != BOX_MODEL_HANDLE &&
++	if ( !SE_IS_BOX( model ) &&
+ 	(angles[0] || angles[1] || angles[2]) )
+ 	{
+ 		AngleVectors (angles, forward, right, up);
+@@ -680,4 +701,145 @@ void CM_SnapPVS(vec3_t origin,byte *buffer)
  
  }
  
@@ -1811,7 +2334,7 @@ index 77a2265f..e4e5bf18 100644
 +	}
 +	*low = lo, *high = hi;
 +}
-+
+ 
 +static void CM_SE_Grid_r( const seGrid_t *g, int num, const int lo[3], const int hi[3] )
 +{
 +	vec3_t mins, maxs;
@@ -1890,7 +2413,7 @@ index 77a2265f..e4e5bf18 100644
 +	CM_SE_Grid_r( g, num, lo, hi1 );
 +	CM_SE_Grid_r( g, num, lo2, hi );
 +}
- 
++
 +void CM_PointContentsGrid( const vec3_t origin, float step, int nx, int ny, int nz, int mask,
 +	void ( *mark )( void *ctx, int x, int y, int z, int contents ), void *ctx )
 +{
@@ -1904,7 +2427,7 @@ index 77a2265f..e4e5bf18 100644
 +}
 +#endif
 diff --git a/code/qcommon/cm_trace.cpp b/code/qcommon/cm_trace.cpp
-index 7f605324..b026dc69 100644
+index 7f605324..040876ec 100644
 --- a/code/qcommon/cm_trace.cpp
 +++ b/code/qcommon/cm_trace.cpp
 @@ -256,10 +256,16 @@ void CM_TestInLeaf( traceWork_t *tw, cLeaf_t *leaf, clipMap_t *local ) {
@@ -2015,7 +2538,7 @@ index 7f605324..b026dc69 100644
  
  			if ( !(patch->contents & tw->contents) ) {
  				continue;
-@@ -749,9 +782,109 @@ void CM_CalcExtents(const vec3_t start, const vec3_t end, const traceWork_t *tw,
+@@ -749,27 +782,162 @@ void CM_CalcExtents(const vec3_t start, const vec3_t end, const traceWork_t *tw,
  CM_BoxTrace
  ==================
  */
@@ -2043,7 +2566,7 @@ index 7f605324..b026dc69 100644
 +	for ( int s = 1; s < SE_CORES; s++ ) {
 +		if ( se_cm_marks[s] )
 +			free( se_cm_marks[s] );
-+		se_cm_marks[s] = (int *)calloc( cmg.numBrushes + cmg.numSurfaces + 1, sizeof( int ) );
++		se_cm_marks[s] = (int *)calloc( cmg.numBrushes + cmg.numSurfaces + 2 * SE_CORES + 1, sizeof( int ) );	// (and the box brushes after them)
 +		se_cm_count[s][0] = 1;
 +	}
 +	se_cm_marks_for[0] = cmg.numBrushes, se_cm_marks_for[1] = cmg.numSurfaces;
@@ -2074,7 +2597,15 @@ index 7f605324..b026dc69 100644
 +		if ( se_trace_count[c][0] )
 +			Com_Printf( "jk2trace: core slot %d, %u traces, %u kept, %u wrong\n", c, se_trace_count[c][0], se_trace_count[c][1], se_trace_count[c][2] );
 +}
++// (a trace's records are made empty once, in the trace kept: what CM_BoxTrace gave its caller before; docs/games/jk2.md, "The
++// traces' Ghoul2 records")
 +void CM_BoxTrace( trace_t *results, const vec3_t start, const vec3_t end,
++						  const vec3_t mins, const vec3_t maxs,
++						  clipHandle_t model, int brushmask) {
++	CM_SE_BoxTraceHead( results, start, end, mins, maxs, model, brushmask );
++	SE_TraceEmptyRecords( results );
++}
++void CM_SE_BoxTraceHead( trace_t *results, const vec3_t start, const vec3_t end,
 +						  const vec3_t mins, const vec3_t maxs,
 +						  clipHandle_t model, int brushmask) {
 +	if ( se_trace_mode < 0 ) {
@@ -2082,7 +2613,7 @@ index 7f605324..b026dc69 100644
 +		se_trace_mode = !e || !*e ? 1 : !strcmp( e, "check" ) ? 2 : atoi( e ) ? 1 : 0;
 +	}
 +	const int c = SE_CoreSlot();
-+	if ( !se_trace_mode || model == BOX_MODEL_HANDLE || c < 0 ) {
++	if ( !se_trace_mode || SE_IS_BOX( model ) || c < 0 ) {
 +		CM_BoxTrace_Made( results, start, end, mins, maxs, model, brushmask );
 +		return;
 +	}
@@ -2105,8 +2636,6 @@ index 7f605324..b026dc69 100644
 +			return;
 +		}
 +		memcpy( results, m->head, SE_TRACE_HEAD );
-+		for ( int i = 0; i < MAX_G2_COLLISIONS; i++ )
-+			results->G2CollisionMap[i].mEntityNum = -1, results->G2CollisionMap[i].mDistance = 100000;
 +		return;
 +	}
 +	CM_BoxTrace_Made( results, start, end, mins, maxs, model, brushmask );
@@ -2123,9 +2652,16 @@ index 7f605324..b026dc69 100644
  						  clipHandle_t model, int brushmask) {
 +#endif
  	int			i;
++#ifdef SHADEREMU
++	// (raw room: its trace's records are never read, the caller's are made empty once)
++	alignas( 16 ) unsigned char se_tw[sizeof( traceWork_t )];
++	traceWork_t	&tw = *(traceWork_t *)se_tw;
++#else
  	traceWork_t	tw;
++#endif
  	vec3_t		offset;
-@@ -760,13 +893,36 @@ void CM_BoxTrace( trace_t *results, const vec3_t start, const vec3_t end,
+ 	cmodel_t	*cmod;
+ 	clipMap_t	*local = 0;
  
  	cmod = CM_ClipHandleToModel( model, &local );
  
@@ -2161,7 +2697,81 @@ index 7f605324..b026dc69 100644
 +#endif
  
  	if (!local->numNodes) {
- 		*results = tw.trace;
+-		*results = tw.trace;
++		SE_TraceHeadCopy( results, &tw.trace );
+ 		return;	// map not loaded, shouldn't happen
+ 	}
+ 
+@@ -886,7 +1054,7 @@ void CM_BoxTrace( trace_t *results, const vec3_t start, const vec3_t end,
+ 		}
+ 	}
+ 
+-	*results = tw.trace;
++	SE_TraceHeadCopy( results, &tw.trace );
+ }
+ 
+ 
+@@ -898,11 +1066,27 @@ Handles offseting and rotation of the end points for moving and
+ rotating entities
+ ==================
+ */
++#ifdef SHADEREMU
++void CM_TransformedBoxTrace( trace_t *results, const vec3_t start, const vec3_t end,
++						  const vec3_t mins, const vec3_t maxs,
++						  clipHandle_t model, int brushmask,
++						  const vec3_t origin, const vec3_t angles) {
++	CM_SE_TransformedBoxTraceHead( results, start, end, mins, maxs, model, brushmask, origin, angles );
++	SE_TraceEmptyRecords( results );
++}
++void CM_SE_TransformedBoxTraceHead( trace_t *results, const vec3_t start, const vec3_t end,
++						  const vec3_t mins, const vec3_t maxs,
++						  clipHandle_t model, int brushmask,
++						  const vec3_t origin, const vec3_t angles) {
++	alignas( 16 ) unsigned char se_trace[sizeof( trace_t )];	// (its words before the records alone are written)
++	trace_t		&trace = *(trace_t *)se_trace;
++#else
+ void CM_TransformedBoxTrace( trace_t *results, const vec3_t start, const vec3_t end,
+ 						  const vec3_t mins, const vec3_t maxs,
+ 						  clipHandle_t model, int brushmask,
+ 						  const vec3_t origin, const vec3_t angles) {
+ 	trace_t		trace;
++#endif
+ 	vec3_t		start_l, end_l;
+ 	vec3_t		a;
+ 	vec3_t		forward, right, up;
+@@ -935,7 +1119,7 @@ void CM_TransformedBoxTrace( trace_t *results, const vec3_t start, const vec3_t
+ 	VectorSubtract( end_l, origin, end_l );
+ 
+ 	// rotate start and end into the models frame of reference
+-	if ( model != BOX_MODEL_HANDLE &&
++	if ( !SE_IS_BOX( model ) &&
+ 		(angles[0] || angles[1] || angles[2]) ) {
+ 		rotated = qtrue;
+ 	} else {
+@@ -957,7 +1141,11 @@ void CM_TransformedBoxTrace( trace_t *results, const vec3_t start, const vec3_t
+ 	}
+ 
+ 	// sweep the box through the model
++#ifdef SHADEREMU
++	CM_SE_BoxTraceHead( &trace, start_l, end_l, symetricSize[0], symetricSize[1], model, brushmask);
++#else
+ 	CM_BoxTrace( &trace, start_l, end_l, symetricSize[0], symetricSize[1], model, brushmask);
++#endif
+ 
+ 	if ( rotated && trace.fraction != 1.0 ) {
+ 		// FIXME: figure out how to do this with existing angles
+@@ -974,7 +1162,11 @@ void CM_TransformedBoxTrace( trace_t *results, const vec3_t start, const vec3_t
+ 	trace.endpos[1] = start[1] + trace.fraction * (end[1] - start[1]);
+ 	trace.endpos[2] = start[2] + trace.fraction * (end[2] - start[2]);
+ 
++#ifdef SHADEREMU
++	SE_TraceHeadCopy( results, &trace );
++#else
+ 	*results = trace;
++#endif
+ }
+ 
+ /*
 diff --git a/code/qcommon/cmd.cpp b/code/qcommon/cmd.cpp
 index a918cd26..63ac25ce 100644
 --- a/code/qcommon/cmd.cpp
@@ -2214,7 +2824,7 @@ index a918cd26..63ac25ce 100644
  	{
  	case EXEC_NOW:
 diff --git a/code/qcommon/common.cpp b/code/qcommon/common.cpp
-index aeaff246..b6d06978 100644
+index aeaff246..b788bb78 100644
 --- a/code/qcommon/common.cpp
 +++ b/code/qcommon/common.cpp
 @@ -135,14 +135,26 @@ to the apropriate place.
@@ -2286,7 +2896,17 @@ index aeaff246..b6d06978 100644
  int Com_ModifyMsec( int msec, float &fraction )
  {
  	int		clampTime;
-@@ -1449,7 +1481,25 @@ void Com_Frame( void ) {
+@@ -1383,6 +1415,9 @@ void G2Time_ResetTimers(void);
+ void G2Time_ReportTimers(void);
+ #endif
+ 
++#ifdef SHADEREMU
++extern "C" void jk2ServerStats( unsigned *waits, unsigned *asks );
++#endif
+ void Com_Frame( void ) {
+ 	try
+ 	{
+@@ -1449,7 +1484,25 @@ void Com_Frame( void ) {
  			timeBeforeServer = Sys_Milliseconds ();
  		}
  
@@ -2312,7 +2932,7 @@ index aeaff246..b6d06978 100644
  
  
  		//
-@@ -1478,6 +1528,25 @@ void Com_Frame( void ) {
+@@ -1478,6 +1531,27 @@ void Com_Frame( void ) {
  			}
  
  			CL_Frame (msec, fractionMsec);
@@ -2323,10 +2943,12 @@ index aeaff246..b6d06978 100644
 +				se_parts[4] += se_a1 - se_a0, se_parts[5] += se_f1 - se_f0, se_parts[6] += se_allocs[0] - se_a1, se_parts[7] += se_allocs[1] - se_f1;
 +				if ( se_parts[2] == (unsigned long long)se_parts_every ) {
 +					extern unsigned long long se_split_ins[4];
++					unsigned se_sw, se_sa;
++					jk2ServerStats( &se_sw, &se_sa );	// (the game's frame's worker: this core's rests for it, its asks answered)
 +					if ( se_split_ins[3] )
-+						Com_Printf( "jk2parts: the game apart a frame: give %uk, game's frame here %uk, take %uk\n",
++						Com_Printf( "jk2parts: the game apart a frame: give %uk, game's frame here %uk, take %uk; rests for the game's frame %u, asks %u\n",
 +							(unsigned)( se_split_ins[0] / se_split_ins[3] / 1000 ), (unsigned)( se_split_ins[1] / se_split_ins[3] / 1000 ),
-+							(unsigned)( se_split_ins[2] / se_split_ins[3] / 1000 ) );
++							(unsigned)( se_split_ins[2] / se_split_ins[3] / 1000 ), se_sw / (unsigned)se_split_ins[3], se_sa / (unsigned)se_split_ins[3] );
 +					memset( se_split_ins, 0, sizeof se_split_ins );
 +					Com_Printf( "jk2parts: %d frames, core 0 a frame: server %uk, client %uk; allocations and frees: server %u %u, client %u %u\n", se_parts_every,
 +						(unsigned)( se_parts[0] / se_parts[2] / 1000 ), (unsigned)( se_parts[1] / se_parts[2] / 1000 ),
@@ -3567,6 +4189,63 @@ index 6eb1a670..7db52912 100644
  	while ( VALIDSTRING( table[index].name ) )
  	{
  		if ( !Q_stricmp( table[index].name, string ) )
+diff --git a/code/qcommon/q_shared.h b/code/qcommon/q_shared.h
+index 732b9025..12a5a6c5 100644
+--- a/code/qcommon/q_shared.h
++++ b/code/qcommon/q_shared.h
+@@ -565,6 +565,52 @@ Ghoul2 Insert End
+ 		saved_game.read<>(G2CollisionMap);
+ 	}
+ } trace_t;
++#ifdef SHADEREMU
++// ShaderEmu: a trace copied with fewer stores (docs/games/jk2.md, "The traces' Ghoul2 records"). A trace is 1,016 bytes,
++// 960 of them its sixteen Ghoul2 records, and a worker's pass keeps some 192 texels: every trace of the game's frame copied
++// 64 texels two or three times. A record whose mEntityNum is -1 is empty, and of an empty one only mEntityNum and mDistance
++// are ever read (the readers skip it, the collision sort orders by mDistance): so the head is copied, a full record whole, and
++// an empty one's two words only where they differ. What any reader sees is as a whole copy's.
++static inline void SE_TraceCopy( trace_t *to, const trace_t *from )
++{
++	if ( to == from )
++		return;
++	memcpy( to, from, __builtin_offsetof( trace_t, G2CollisionMap ) );
++	for ( int i = 0; i < MAX_G2_COLLISIONS; i++ ) {
++		const CCollisionRecord &f = from->G2CollisionMap[i];
++		CCollisionRecord &t = to->G2CollisionMap[i];
++		if ( f.mEntityNum != -1 ) {
++			memcpy( &t, &f, sizeof( CCollisionRecord ) );
++			continue;
++		}
++		if ( t.mEntityNum != -1 )
++			t.mEntityNum = -1;
++		unsigned fd, td;
++		memcpy( &fd, &f.mDistance, 4 ), memcpy( &td, &t.mDistance, 4 );
++		if ( fd != td )
++			t.mDistance = f.mDistance;
++	}
++}
++#define SE_TRACE_HEAD_BYTES	( __builtin_offsetof( trace_t, G2CollisionMap ) )
++// a trace's words before its records (a trace made without Ghoul2 collision: its records are all empty, written once into the
++// trace its caller keeps, SE_TraceEmptyRecords; the traces made on the way are raw room, their records never read)
++static inline void SE_TraceHeadCopy( trace_t *to, const trace_t *from )
++{
++	if ( to != from )
++		memcpy( to, from, SE_TRACE_HEAD_BYTES );
++}
++// the records of a trace that hit no Ghoul2 model, as a made trace's (100000 and -1), stored where they are not so
++static inline void SE_TraceEmptyRecords( trace_t *to )
++{
++	for ( int i = 0; i < MAX_G2_COLLISIONS; i++ ) {
++		CCollisionRecord &t = to->G2CollisionMap[i];
++		if ( t.mEntityNum != -1 )
++			t.mEntityNum = -1;
++		if ( t.mDistance != 100000 )
++			t.mDistance = 100000;
++	}
++}
++#endif
+ 
+ // trace->entityNum can also be 0 to (MAX_GENTITIES-1)
+ // or ENTITYNUM_NONE, ENTITYNUM_WORLD
 diff --git a/code/qcommon/strip.cpp b/code/qcommon/strip.cpp
 index fdc2d38f..76224399 100644
 --- a/code/qcommon/strip.cpp
@@ -4197,10 +4876,146 @@ index 09bc27ed..3952e297 100644
  		ghlInfo->currentModel = R_GetModelByHandle(ghlInfo->mModel);
  		G2ERROR(ghlInfo->currentModel,va("NULL Model (glm) %s",ghlInfo->mFileName));
 diff --git a/code/rd-vanilla/G2_bones.cpp b/code/rd-vanilla/G2_bones.cpp
-index beb4bb30..efe86b07 100644
+index beb4bb30..3f78d94c 100644
 --- a/code/rd-vanilla/G2_bones.cpp
 +++ b/code/rd-vanilla/G2_bones.cpp
-@@ -3248,7 +3248,14 @@ static inline int G2_RagIndexForBoneNum(int boneNum)
+@@ -147,6 +147,7 @@ int G2_Add_Bone (const model_t *mod, boneInfo_v &blist, const char *boneName)
+ 		else
+ 		{
+ 			// if we found an entry that had a -1 for the bonenumber, then we hit a bone slot that was empty
++			SE_G2BoneTouch( blist[i] );
+ 			blist[i].boneNumber = x;
+ 			blist[i].flags = 0;
+ #if DEBUG_G2_BONES
+@@ -191,6 +192,7 @@ qboolean G2_Remove_Bone_Index ( boneInfo_v &blist, int index)
+ 		if (!blist[index].flags)
+ 		{
+ 			// set this bone to not used
++			SE_G2BoneTouch( blist[index] );
+ 			blist[index].boneNumber = -1;
+ 		}
+ 		return qtrue;
+@@ -218,6 +220,7 @@ qboolean G2_Stop_Bone_Index( boneInfo_v &blist, int index, int flags)
+ 	// did we find it?
+ 	if (index != -1)
+ 	{
++		SE_G2BoneTouch( blist[index] );
+ 		blist[index].flags &= ~(flags);
+ 		// try and remove this bone if we can
+ 		return G2_Remove_Bone_Index(blist, index);
+@@ -459,6 +462,7 @@ qboolean G2_Set_Bone_Angles_Index(CGhoul2Info *ghlInfo, boneInfo_v &blist, const
+ 	}
+ 
+ 	// yes, so set the angles and flags correctly
++	SE_G2BoneTouch( blist[index] );
+ 	blist[index].flags &= ~(BONE_ANGLES_TOTAL);
+ 	blist[index].flags |= flags;
+ 	blist[index].boneBlendStart = currentTime;
+@@ -483,6 +487,7 @@ qboolean G2_Set_Bone_Angles(CGhoul2Info *ghlInfo, boneInfo_v &blist, const char
+ 	}
+ 	if (index != -1)
+ 	{
++		SE_G2BoneTouch( blist[index] );
+ 		blist[index].flags &= ~(BONE_ANGLES_TOTAL);
+ 		blist[index].flags |= flags;
+ 		blist[index].boneBlendStart = currentTime;
+@@ -507,6 +512,7 @@ qboolean G2_Set_Bone_Angles_Matrix_Index(boneInfo_v &blist, const int index,
+ 		return qfalse;
+ 	}
+ 	// yes, so set the angles and flags correctly
++	SE_G2BoneTouch( blist[index] );
+ 	blist[index].flags &= ~(BONE_ANGLES_TOTAL);
+ 	blist[index].flags |= flags;
+ 	blist[index].boneBlendStart = currentTime;
+@@ -529,6 +535,7 @@ qboolean G2_Set_Bone_Angles_Matrix(CGhoul2Info *ghlInfo, boneInfo_v &blist, cons
+ 	}
+ 	if (index != -1)
+ 	{
++		SE_G2BoneTouch( blist[index] );
+ 		blist[index].flags &= ~(BONE_ANGLES_TOTAL);
+ 		blist[index].flags |= flags;
+ 		memcpy(&blist[index].matrix, &matrix, sizeof(mdxaBone_t));
+@@ -567,6 +574,7 @@ qboolean G2_Set_Bone_Anim_Index(boneInfo_v &blist, const int index, const int st
+ 	{
+ 		return qfalse;
+ 	}
++	SE_G2BoneTouch( blist[index] );
+ 
+ 	// sanity check to see if setfram is within animation bounds
+ 	assert((setFrame==-1) || ((setFrame>=startFrame) && (setFrame<endFrame)) || ((setFrame>endFrame) && (setFrame<=(startFrame+1))));
+@@ -646,6 +654,7 @@ qboolean G2_Set_Bone_Anim_Index(boneInfo_v &blist, const int index, const int st
+ 	}
+ 	else
+ 	{
++		SE_G2BoneTouch( blist[index] );
+ 		blist[index].blendFrame = blist[index].blendLerpFrame = 0;
+ 		blist[index].blendTime = blist[index].blendStart = 0;
+ 		// we aren't blending, so remove the option to do so
+@@ -745,6 +754,7 @@ qboolean G2_Set_Bone_Anim(CGhoul2Info *ghlInfo, boneInfo_v &blist, const char *b
+ 	// did we find a free one?
+ 	if (index != -1)
+ 	{
++		SE_G2BoneTouch( blist[index] );
+ 		blist[index].blendFrame = blist[index].blendLerpFrame = 0;
+ 		blist[index].blendTime = 0;
+ 		// we aren't blending, so remove the option to do so
+@@ -933,6 +943,7 @@ qboolean G2_Pause_Bone_Anim_Index( boneInfo_v &blist, const int boneIndex, const
+ {
+ 	if (boneIndex>=0&&boneIndex<(int)blist.size())
+ 	{
++		SE_G2BoneTouch( blist[boneIndex] );
+ 		// are we pausing or un pausing?
+ 		if (blist[boneIndex].pauseTime)
+ 		{
+@@ -1001,6 +1012,7 @@ qboolean G2_Stop_Bone_Anim_Index(boneInfo_v &blist, const int index)
+ 		return qfalse;
+ 	}
+ 
++	SE_G2BoneTouch( blist[index] );
+ 	blist[index].flags &= ~(BONE_ANIM_TOTAL);
+ 	return G2_Remove_Bone_Index(blist, index);
+ }
+@@ -1011,6 +1023,7 @@ qboolean G2_Stop_Bone_Anim(CGhoul2Info *ghlInfo, boneInfo_v &blist, const char *
+ 	int			index = G2_Find_Bone(ghlInfo, blist, boneName);
+ 	if (index != -1)
+ 	{
++		SE_G2BoneTouch( blist[index] );
+ 		blist[index].flags &= ~(BONE_ANIM_TOTAL);
+ 		return G2_Remove_Bone_Index(blist, index);
+ 	}
+@@ -1028,6 +1041,7 @@ qboolean G2_Stop_Bone_Angles_Index(boneInfo_v &blist, const int index)
+ 		assert(0);
+ 		return qfalse;
+ 	}
++	SE_G2BoneTouch( blist[index] );
+ 	blist[index].flags &= ~(BONE_ANGLES_TOTAL);
+ 	return G2_Remove_Bone_Index(blist, index);
+ 
+@@ -1039,6 +1053,7 @@ qboolean G2_Stop_Bone_Angles(CGhoul2Info *ghlInfo, boneInfo_v &blist, const char
+ 	int			index = G2_Find_Bone(ghlInfo, blist, boneName);
+ 	if (index != -1)
+ 	{
++		SE_G2BoneTouch( blist[index] );
+ 		blist[index].flags &= ~(BONE_ANGLES_TOTAL);
+ 		return G2_Remove_Bone_Index(blist, index);
+ 	}
+@@ -1436,6 +1451,7 @@ qboolean G2_Set_Bone_Anim_No_BS(CGhoul2Info &ghoul2, const mdxaHeader_t *mod,bon
+ 
+ 	if (index != -1)
+ 	{
++		SE_G2BoneTouch( blist[index] );
+ 		blist[index].blendFrame = blist[index].blendLerpFrame = 0;
+ 		blist[index].blendTime = blist[index].blendStart = 0;
+ 		modFlags &= ~(BONE_ANIM_BLEND);
+@@ -1456,6 +1472,7 @@ qboolean G2_Set_Bone_Anim_No_BS(CGhoul2Info &ghoul2, const mdxaHeader_t *mod,bon
+ 
+ 	if (index != -1)
+ 	{
++		SE_G2BoneTouch( blist[index] );
+ 		blist[index].blendFrame = blist[index].blendLerpFrame = 0;
+ 		blist[index].blendTime = 0;
+ 		modFlags &= ~(BONE_ANIM_BLEND);
+@@ -3248,7 +3265,14 @@ static inline int G2_RagIndexForBoneNum(int boneNum)
  }
  #endif
  
@@ -4235,6 +5050,27 @@ index bc5ca630..8d36735a 100644
  
  const mdxaBone_t &EvalBoneCache(int index,CBoneCache *boneCache);
  class CTraceSurface
+diff --git a/code/rd-vanilla/G2_surfaces.cpp b/code/rd-vanilla/G2_surfaces.cpp
+index e387baae..3c26fbe4 100644
+--- a/code/rd-vanilla/G2_surfaces.cpp
++++ b/code/rd-vanilla/G2_surfaces.cpp
+@@ -79,7 +79,16 @@ public:
+ 	}
+ };
+ 
++#ifdef SHADEREMU
++// (one a core by SE_Core(): the first core, the job slots and the game's frame's worker, which rebuilt one table with the
++// first core at once (RVC_RACES); the drawing's workers walk no Ghoul2 surfaces: the first core makes them)
++#include "../../shared/qcommon/se_slot.h"
++static CQuickOverride se_quick_override[SE_CORES];
++static inline CQuickOverride &SE_QuickOverride( void ) { return se_quick_override[SE_Core()]; }
++#define QuickOverride SE_QuickOverride()
++#else
+ static CQuickOverride QuickOverride;
++#endif
+ 
+ 
+ // find a particular surface in the surface override list
 diff --git a/code/rd-vanilla/tr_WorldEffects.cpp b/code/rd-vanilla/tr_WorldEffects.cpp
 index 5464b70b..a1f3c8cd 100644
 --- a/code/rd-vanilla/tr_WorldEffects.cpp
@@ -4836,7 +5672,7 @@ index 5464b70b..a1f3c8cd 100644
  	{
  		return;
 diff --git a/code/rd-vanilla/tr_backend.cpp b/code/rd-vanilla/tr_backend.cpp
-index 741bb95b..ccc41b9f 100644
+index 741bb95b..30aaf881 100644
 --- a/code/rd-vanilla/tr_backend.cpp
 +++ b/code/rd-vanilla/tr_backend.cpp
 @@ -27,6 +27,10 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
@@ -4891,7 +5727,350 @@ index 741bb95b..ccc41b9f 100644
  	if ( !( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) && ( r_DynamicGlow->integer && !g_bRenderGlowingObjects ) )
  	{
  		if (tr.world && tr.world->globalFog != -1)
-@@ -966,6 +995,28 @@ RENDER BACK END FUNCTIONS
+@@ -583,11 +612,11 @@ static inline bool R_WorldCoordToScreenCoordFloat(vec3_t worldCoord, float *x, f
+ 	ycenter = glConfig.vidHeight / 2;
+ 
+ 	//AngleVectors (tr.refdef.viewangles, vfwd, vright, vup);
+-	VectorCopy(tr.refdef.viewaxis[0], vfwd);
+-	VectorCopy(tr.refdef.viewaxis[1], vright);
+-	VectorCopy(tr.refdef.viewaxis[2], vup);
++	VectorCopy(backEnd.refdef.viewaxis[0], vfwd);
++	VectorCopy(backEnd.refdef.viewaxis[1], vright);
++	VectorCopy(backEnd.refdef.viewaxis[2], vup);
+ 
+-	VectorSubtract (worldCoord, tr.refdef.vieworg, local);
++	VectorSubtract (worldCoord, backEnd.refdef.vieworg, local);
+ 
+ 	transformed[0] = DotProduct(local,vright);
+ 	transformed[1] = DotProduct(local,vup);
+@@ -599,8 +628,8 @@ static inline bool R_WorldCoordToScreenCoordFloat(vec3_t worldCoord, float *x, f
+ 		return false;
+ 	}
+ 
+-	xzi = xcenter / transformed[2] * (90.0/tr.refdef.fov_x);
+-	yzi = ycenter / transformed[2] * (90.0/tr.refdef.fov_y);
++	xzi = xcenter / transformed[2] * (90.0/backEnd.refdef.fov_x);
++	yzi = ycenter / transformed[2] * (90.0/backEnd.refdef.fov_y);
+ 
+ 	*x = xcenter + xzi * transformed[0];
+ 	*y = ycenter - yzi * transformed[1];
+@@ -641,6 +670,295 @@ typedef struct
+ static postRender_t g_postRenders[MAX_POST_RENDERS];
+ static int g_numPostRenders = 0;
+ 
++#ifdef SHADEREMU
++// ---- the drawing on two workers (docs/games/jk2.md, "The drawing on two workers"; gl_jk2.c) ----
++// The 3D list, most of a frame's drawing, in two parts: the drawing draws the first, and a second copy of the back end
++// (this file, tr_shade, tr_surface and the rest, made by build.sh: its own tess, backEnd, GL state and this list's
++// state, everything loaded the first's) draws the second on a worker of its own beside it into its own part of the
++// frame's list (gpu_shaderemu.c's halves), which the drawing then moves after its own. The part is cut where a sort
++// begins, as near the middle as that falls. Not the glow's pass, a portal's view nor stencil shadows. What the second
++// part leaves to draw last (a distortion) comes back to be drawn after the first's. JK2_HALF=1: two parts (not yet the default).
++glstate_t se_glState_b;		// (the second copy's glState: build.sh points its glState here)
++int se_half_b;			// 1 in the second copy while it draws its part (it makes no kept words then: tr_surface.cpp)
++struct seHalf_t {
++	backEndState_t backEnd;
++	drawSurf_t *drawSurfs;
++	int from, to, numPost, stencilled;
++	float originalTime;
++	dlight_t dlights[MAX_DLIGHTS];
++	postRender_t post[MAX_POST_RENDERS];
++	unsigned char gl[512] __attribute__(( aligned( 16 ) ));	// gl_jk2.c's
++} __attribute__(( aligned( 16 ) ));
++static seHalf_t se_half;
++extern "C" {
++int jk2DrawHalfGive( void *half, void *gl );
++void jk2DrawHalfJoin( void *gl );
++void jk2glHalfInit( const void *gl );
++void jk2glHalfEnd( void *gl );
++}
++static void SE_DrawSurfRange( drawSurf_t *drawSurfs, int numDrawSurfs, float originalTime, int &depthRange_out, bool &didShadowPass )
++{
++	shader_t		*shader, *oldShader;
++	int				fogNum, oldFogNum;
++	int				entityNum, oldEntityNum;
++	int				dlighted, oldDlighted;
++	int				depthRange, oldDepthRange;
++	int				i;
++	drawSurf_t		*drawSurf;
++	unsigned int	oldSort;
++	trRefEntity_t	*curEnt;
++	postRender_t	*pRender;
++
++	oldEntityNum = -1;
++	backEnd.currentEntity = &tr.worldEntity;
++	oldShader = NULL;
++	oldFogNum = -1;
++	oldDepthRange = qfalse;
++	oldDlighted = qfalse;
++	oldSort = (unsigned int) -1;
++	depthRange = qfalse;
++
++	backEnd.pc.c_surfaces += numDrawSurfs;
++
++	for (i = 0, drawSurf = drawSurfs ; i < numDrawSurfs ; i++, drawSurf++) {
++		if ( drawSurf->sort == oldSort ) {
++			// fast path, same as previous sort
++			rb_surfaceTable[ *drawSurf->surface ]( drawSurf->surface );
++			continue;
++		}
++		R_DecomposeSort( drawSurf->sort, &entityNum, &shader, &fogNum, &dlighted );
++
++		// If we're rendering glowing objects, but this shader has no stages with glow, skip it!
++		if ( g_bRenderGlowingObjects && !shader->hasGlow )
++		{
++			shader = oldShader;
++			entityNum = oldEntityNum;
++			fogNum = oldFogNum;
++			dlighted = oldDlighted;
++			continue;
++		}
++
++		oldSort = drawSurf->sort;
++
++		//
++		// change the tess parameters if needed
++		// a "entityMergable" shader is a shader that can have surfaces from seperate
++		// entities merged into a single batch, like smoke and blood puff sprites
++		if (entityNum != REFENTITYNUM_WORLD &&
++			g_numPostRenders < MAX_POST_RENDERS)
++		{
++			if ( (backEnd.refdef.entities[entityNum].e.renderfx & RF_DISTORTION) ||
++				(backEnd.refdef.entities[entityNum].e.renderfx & RF_FORCE_ENT_ALPHA))
++			{ //must render last
++				curEnt = &backEnd.refdef.entities[entityNum];
++				pRender = &g_postRenders[g_numPostRenders];
++
++				g_numPostRenders++;
++
++				depthRange = 0;
++				//figure this stuff out now and store it
++				if ( curEnt->e.renderfx & RF_NODEPTH )
++				{
++					depthRange = 2;
++				}
++				else if ( curEnt->e.renderfx & RF_DEPTHHACK )
++				{
++					depthRange = 1;
++				}
++				pRender->depthRange = depthRange;
++
++				//It is not necessary to update the old* values because
++				//we are not updating now with the current values.
++				depthRange = oldDepthRange;
++
++				//store off the ent num
++				pRender->entNum = entityNum;
++
++				//remember the other values necessary for rendering this surf
++				pRender->drawSurf = drawSurf;
++				pRender->dlighted = dlighted;
++				pRender->fogNum = fogNum;
++				pRender->shader = shader;
++
++				//assure the info is back to the last set state
++				shader = oldShader;
++				entityNum = oldEntityNum;
++				fogNum = oldFogNum;
++				dlighted = oldDlighted;
++
++				oldSort = (unsigned int)-1; //invalidate this thing, cause we may want to postrender more surfs of the same sort
++
++				//continue without bothering to begin a draw surf
++				continue;
++			}
++		}
++
++		if (shader != oldShader || fogNum != oldFogNum || dlighted != oldDlighted
++			|| ( entityNum != oldEntityNum && !shader->entityMergable ) )
++		{
++			if (oldShader != NULL) {
++				RB_EndSurface();
++
++				if (!didShadowPass && shader && shader->sort > SS_BANNER)
++				{
++					RB_ShadowFinish();
++					didShadowPass = true;
++				}
++			}
++			RB_BeginSurface( shader, fogNum );
++			oldShader = shader;
++			oldFogNum = fogNum;
++			oldDlighted = dlighted;
++		}
++
++		//
++		// change the modelview matrix if needed
++		//
++		if ( entityNum != oldEntityNum ) {
++			depthRange = qfalse;
++
++			if ( entityNum != REFENTITYNUM_WORLD ) {
++				backEnd.currentEntity = &backEnd.refdef.entities[entityNum];
++				backEnd.refdef.floatTime = originalTime - backEnd.currentEntity->e.shaderTime;
++
++				// set up the transformation matrix
++				R_RotateForEntity( backEnd.currentEntity, &backEnd.viewParms, &backEnd.ori );
++
++				// set up the dynamic lighting if needed
++				if ( backEnd.currentEntity->needDlights ) {
++					R_TransformDlights( backEnd.refdef.num_dlights, backEnd.refdef.dlights, &backEnd.ori );
++				}
++
++				if ( backEnd.currentEntity->e.renderfx & RF_NODEPTH ) {
++					// No depth at all, very rare but some things for seeing through walls
++					depthRange = 2;
++				}
++				else if ( backEnd.currentEntity->e.renderfx & RF_DEPTHHACK ) {
++					// hack the depth range to prevent view model from poking into walls
++					depthRange = qtrue;
++				}
++			} else {
++				backEnd.currentEntity = &tr.worldEntity;
++				backEnd.refdef.floatTime = originalTime;
++				backEnd.ori = backEnd.viewParms.world;
++				R_TransformDlights( backEnd.refdef.num_dlights, backEnd.refdef.dlights, &backEnd.ori );
++			}
++
++			qglLoadMatrixf( backEnd.ori.modelMatrix );
++
++			//
++			// change depthrange if needed
++			//
++			if ( oldDepthRange != depthRange ) {
++				switch ( depthRange ) {
++					default:
++					case 0:
++						qglDepthRange (0, 1);
++						break;
++
++					case 1:
++						qglDepthRange (0, .3);
++						break;
++
++					case 2:
++						qglDepthRange (0, 0);
++						break;
++				}
++
++				oldDepthRange = depthRange;
++			}
++
++			oldEntityNum = entityNum;
++		}
++
++		// add the triangles for this surface
++		rb_surfaceTable[ *drawSurf->surface ]( drawSurf->surface );
++	}
++
++	// draw the contents of the last shader batch
++	if (oldShader != NULL) {
++		RB_EndSurface();
++	}
++	depthRange_out = depthRange;
++}
++static void SE_DrawList( drawSurf_t *drawSurfs, int numDrawSurfs, float originalTime, int &depthRange, bool &didShadowPass )
++{
++	static int on = -1;
++	if ( on < 0 ) {
++		const char *e = getenv( "JK2_HALF" );
++		on = e && !strcmp( e, "1" );	// (JK2_HALF=1: the second part still drawn wrong, docs/games/jk2.md)
++	}
++	int k = numDrawSurfs;
++	if ( on && !se_half_b && !g_bRenderGlowingObjects && r_shadows->integer != 2 && !backEnd.viewParms.isPortal &&
++		 !( backEnd.refdef.rdflags & RDF_HYPERSPACE ) && numDrawSurfs >= 64 ) {
++		k = numDrawSurfs / 2;
++		while ( k < numDrawSurfs && drawSurfs[k].sort == drawSurfs[k - 1].sort )
++			k++;
++		if ( k < numDrawSurfs ) {
++			seHalf_t *h = &se_half;
++			h->backEnd = backEnd;
++			h->drawSurfs = drawSurfs, h->from = k, h->to = numDrawSurfs, h->originalTime = originalTime;
++			h->numPost = 0, h->stencilled = 0;
++			if ( !jk2DrawHalfGive( h, h->gl ) )
++				k = numDrawSurfs;
++		}
++	}
++	SE_DrawSurfRange( drawSurfs, k, originalTime, depthRange, didShadowPass );
++	if ( k < numDrawSurfs ) {
++		jk2DrawHalfJoin( se_half.gl );
++		for ( int p = 0; p < se_half.numPost && g_numPostRenders < MAX_POST_RENDERS; p++ )
++			g_postRenders[g_numPostRenders++] = se_half.post[p];
++		if ( se_half.stencilled )
++			tr_stencilled = true;
++	}
++}
++// The second copy's: GL as GL_SetDefaultState leaves it, the view's as RB_BeginDrawingView sets it (no clear), its part
++// drawn, and what it left to draw last told back
++extern "C" void SE_DrawHalfB( void *arg )
++{
++	seHalf_t *h = (seHalf_t *)arg;
++	se_half_b = 1;
++	backEnd = h->backEnd;
++	if ( backEnd.refdef.num_dlights > 0 )
++		memcpy( h->dlights, backEnd.refdef.dlights, backEnd.refdef.num_dlights * sizeof( dlight_t ) );
++	backEnd.refdef.dlights = h->dlights;	// (R_TransformDlights writes them: its own)
++	jk2glHalfInit( h->gl );
++	memset( &glState, 0, sizeof( glState ) );
++	qglCullFace( GL_FRONT );
++	qglColor4f( 1, 1, 1, 1 );
++	qglEnable( GL_TEXTURE_2D );
++	GL_TexEnv( GL_MODULATE );
++	qglShadeModel( GL_SMOOTH );
++	qglDepthFunc( GL_LEQUAL );
++	qglEnableClientState( GL_VERTEX_ARRAY );
++	glState.glStateBits = GLS_DEPTHTEST_DISABLE | GLS_DEPTHMASK_TRUE;
++	qglPolygonMode( GL_FRONT_AND_BACK, GL_FILL );
++	qglDepthMask( GL_TRUE );
++	qglDisable( GL_DEPTH_TEST );
++	qglEnable( GL_SCISSOR_TEST );
++	qglDisable( GL_CULL_FACE );
++	qglDisable( GL_BLEND );
++	qglDisable( GL_ALPHA_TEST );
++	qglBlendFunc( GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA );
++	glState.finishCalled = qtrue;
++	backEnd.projection2D = qfalse;
++	SetViewportAndScissor();
++	GL_State( GLS_DEFAULT );
++	glState.faceCulling = -1;
++	qglDisable( GL_CLIP_PLANE0 );
++	g_numPostRenders = 0;
++	tr_stencilled = false;
++	int depthRange = 0;
++	bool didShadowPass = true;
++	SE_DrawSurfRange( h->drawSurfs + h->from, h->to - h->from, h->originalTime, depthRange, didShadowPass );
++	h->numPost = g_numPostRenders;
++	memcpy( h->post, g_postRenders, g_numPostRenders * sizeof( postRender_t ) );
++	h->stencilled = tr_stencilled;
++	g_numPostRenders = 0;
++	jk2glHalfEnd( h->gl );
++	se_half_b = 0;
++}
++#endif
+ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
+ 	shader_t		*shader, *oldShader;
+ 	int				fogNum, oldFogNum;
+@@ -667,6 +985,11 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
+ 	RB_BeginDrawingView ();
+ 
+ 	// draw everything
++#ifdef SHADEREMU
++	SE_DrawList( drawSurfs, numDrawSurfs, originalTime, depthRange, didShadowPass );
++	(void)shader, (void)oldShader, (void)fogNum, (void)oldFogNum, (void)entityNum, (void)oldEntityNum, (void)dlighted;
++	(void)oldDlighted, (void)oldDepthRange, (void)i, (void)drawSurf, (void)oldSort, (void)curEnt;
++#else
+ 	oldEntityNum = -1;
+ 	backEnd.currentEntity = &tr.worldEntity;
+ 	oldShader = NULL;
+@@ -837,6 +1160,7 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
+ 	if (oldShader != NULL) {
+ 		RB_EndSurface();
+ 	}
++#endif
+ 
+ 	if (tr_stencilled && tr_distortionPrePost)
+ 	{ //ok, cap it now
+@@ -966,6 +1290,28 @@ RENDER BACK END FUNCTIONS
  ============================================================================
  */
  
@@ -4920,7 +6099,7 @@ index 741bb95b..ccc41b9f 100644
  /*
  ================
  RB_SetGL2D
-@@ -980,7 +1031,12 @@ void	RB_SetGL2D (void) {
+@@ -980,7 +1326,12 @@ void	RB_SetGL2D (void) {
  	qglScissor( 0, 0, glConfig.vidWidth, glConfig.vidHeight );
  	qglMatrixMode(GL_PROJECTION);
      qglLoadIdentity ();
@@ -4934,7 +6113,7 @@ index 741bb95b..ccc41b9f 100644
  	qglMatrixMode(GL_MODELVIEW);
      qglLoadIdentity ();
  
-@@ -1027,6 +1083,8 @@ const void *RB_StretchPic ( const void *data ) {
+@@ -1027,6 +1378,8 @@ const void *RB_StretchPic ( const void *data ) {
  	int		numVerts, numIndexes;
  
  	cmd = (const stretchPicCommand_t *)data;
@@ -4943,7 +6122,7 @@ index 741bb95b..ccc41b9f 100644
  
  	if ( !backEnd.projection2D ) {
  		RB_SetGL2D();
-@@ -1034,7 +1092,7 @@ const void *RB_StretchPic ( const void *data ) {
+@@ -1034,7 +1387,7 @@ const void *RB_StretchPic ( const void *data ) {
  
  	shader = cmd->shader;
  	if ( shader != tess.shader ) {
@@ -4952,7 +6131,7 @@ index 741bb95b..ccc41b9f 100644
  			RB_EndSurface();
  		}
  		backEnd.currentEntity = &backEnd.entity2D;
-@@ -1061,29 +1119,29 @@ const void *RB_StretchPic ( const void *data ) {
+@@ -1061,29 +1414,29 @@ const void *RB_StretchPic ( const void *data ) {
  	baDest = (byteAlias_t *)&tess.vertexColors[numVerts + 2]; baDest->ui = baSource->ui;
  	baDest = (byteAlias_t *)&tess.vertexColors[numVerts + 3]; baDest->ui = baSource->ui;
  
@@ -4990,7 +6169,7 @@ index 741bb95b..ccc41b9f 100644
  	tess.xyz[ numVerts + 3 ][2] = 0;
  
  	tess.texCoords[ numVerts + 3 ][0][0] = cmd->s1;
-@@ -1113,7 +1171,7 @@ const void *RB_RotatePic ( const void *data )
+@@ -1113,7 +1466,7 @@ const void *RB_RotatePic ( const void *data )
  
  	shader = cmd->shader;
  	if ( shader != tess.shader ) {
@@ -4999,7 +6178,7 @@ index 741bb95b..ccc41b9f 100644
  			RB_EndSurface();
  		}
  		backEnd.currentEntity = &backEnd.entity2D;
-@@ -1204,7 +1262,7 @@ const void *RB_RotatePic2 ( const void *data )
+@@ -1204,7 +1557,7 @@ const void *RB_RotatePic2 ( const void *data )
  
  		shader = cmd->shader;
  		if ( shader != tess.shader ) {
@@ -5008,7 +6187,7 @@ index 741bb95b..ccc41b9f 100644
  				RB_EndSurface();
  			}
  			backEnd.currentEntity = &backEnd.entity2D;
-@@ -1311,7 +1369,7 @@ const void	*RB_DrawSurfs( const void *data ) {
+@@ -1311,7 +1664,7 @@ const void	*RB_DrawSurfs( const void *data ) {
  	const drawSurfsCommand_t	*cmd;
  
  	// finish any 2D drawing if needed
@@ -5017,7 +6196,16 @@ index 741bb95b..ccc41b9f 100644
  		RB_EndSurface();
  	}
  
-@@ -1530,10 +1588,13 @@ RB_SwapBuffers
+@@ -1406,7 +1759,7 @@ const void	*RB_DrawBuffer( const void *data ) {
+ 	qglDrawBuffer( cmd->buffer );
+ 
+ 		// clear screen for debugging
+-	if (!( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) && tr.world && tr.refdef.rdflags & RDF_doLAGoggles)
++	if (!( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) && tr.world && backEnd.refdef.rdflags & RDF_doLAGoggles)
+ 	{
+ 		const fog_t		*fog = &tr.world->fogs[tr.world->numfogs];
+ 
+@@ -1530,10 +1883,13 @@ RB_SwapBuffers
  */
  extern void RB_RenderWorldEffects( void );
  const void	*RB_SwapBuffers( const void *data ) {
@@ -5032,7 +6220,7 @@ index 741bb95b..ccc41b9f 100644
  		RB_EndSurface();
  	}
  
-@@ -1568,6 +1629,9 @@ const void	*RB_SwapBuffers( const void *data ) {
+@@ -1568,6 +1924,9 @@ const void	*RB_SwapBuffers( const void *data ) {
  
      GLimp_LogComment( "***************** RB_SwapBuffers *****************\n\n\n" );
  
@@ -5042,7 +6230,7 @@ index 741bb95b..ccc41b9f 100644
  	ri.WIN_Present(&window);
  
  	backEnd.projection2D = qfalse;
-@@ -1582,7 +1646,7 @@ const void	*RB_WorldEffects( const void *data )
+@@ -1582,7 +1941,7 @@ const void	*RB_WorldEffects( const void *data )
  	cmd = (const setModeCommand_t *)data;
  
  	// Always flush the tess buffer
@@ -5051,7 +6239,7 @@ index 741bb95b..ccc41b9f 100644
  	{
  		RB_EndSurface();
  	}
-@@ -1604,7 +1668,16 @@ RB_ExecuteRenderCommands
+@@ -1604,7 +1963,16 @@ RB_ExecuteRenderCommands
  void RB_ExecuteRenderCommands( const void *data ) {
  	int		t1, t2;
  
@@ -5068,7 +6256,7 @@ index 741bb95b..ccc41b9f 100644
  
  	while ( 1 ) {
  		data = PADP(data, sizeof(void *));
-@@ -1628,6 +1701,13 @@ void RB_ExecuteRenderCommands( const void *data ) {
+@@ -1628,6 +1996,13 @@ void RB_ExecuteRenderCommands( const void *data ) {
  		case RC_DRAW_SURFS:
  			data = RB_DrawSurfs( data );
  			break;
@@ -5082,7 +6270,7 @@ index 741bb95b..ccc41b9f 100644
  		case RC_DRAW_BUFFER:
  			data = RB_DrawBuffer( data );
  			break;
-@@ -1640,7 +1720,11 @@ void RB_ExecuteRenderCommands( const void *data ) {
+@@ -1640,7 +2015,11 @@ void RB_ExecuteRenderCommands( const void *data ) {
  		case RC_END_OF_LIST:
  		default:
  			// stop rendering
@@ -5095,7 +6283,7 @@ index 741bb95b..ccc41b9f 100644
  			return;
  		}
 diff --git a/code/rd-vanilla/tr_bsp.cpp b/code/rd-vanilla/tr_bsp.cpp
-index afbbb175..c402dca7 100644
+index afbbb175..5fec07ac 100644
 --- a/code/rd-vanilla/tr_bsp.cpp
 +++ b/code/rd-vanilla/tr_bsp.cpp
 @@ -171,6 +171,27 @@ R_LoadLightmaps
@@ -5188,6 +6376,15 @@ index afbbb175..c402dca7 100644
  
  	verts += LittleLong( ds->firstVert );
  	for ( i = 0 ; i < numPoints ; i++ ) {
+@@ -560,7 +610,7 @@ static void ParseTriSurf( dsurface_t *ds, mapVert_t *verts, msurface_t *surf, in
+ 	}
+ 
+ 	tri = (srfTriangles_t *) R_Malloc( sizeof( *tri ) + numVerts * sizeof( tri->verts[0] ) + numIndexes * sizeof( tri->indexes[0] ), TAG_HUNKMISCMODELS, qfalse );
+-	tri->dlightBits = 0; //JIC
++	tri->dlightBits[0] = tri->dlightBits[1] = 0; //JIC
+ 	tri->surfaceType = SF_TRIANGLES;
+ 	tri->numVerts = numVerts;
+ 	tri->numIndexes = numIndexes;
 @@ -1435,6 +1485,10 @@ void RE_LoadWorldMap_Actual( const char *name, world_t &worldData, int index ) {
  
  		// only set tr.world now that we know the entire level has loaded properly
@@ -5212,7 +6409,7 @@ index afbbb175..c402dca7 100644
  	else
  	{
 diff --git a/code/rd-vanilla/tr_cmds.cpp b/code/rd-vanilla/tr_cmds.cpp
-index 04ad9bdb..418bf253 100644
+index 04ad9bdb..7fd5bda6 100644
 --- a/code/rd-vanilla/tr_cmds.cpp
 +++ b/code/rd-vanilla/tr_cmds.cpp
 @@ -35,30 +35,37 @@ R_PerformanceCounters
@@ -5269,7 +6466,7 @@ index 04ad9bdb..418bf253 100644
  }
  
  /*
-@@ -89,6 +98,23 @@ void R_PerformanceCounters( void ) {
+@@ -89,6 +98,24 @@ void R_PerformanceCounters( void ) {
  R_IssueRenderCommands
  ====================
  */
@@ -5278,6 +6475,7 @@ index 04ad9bdb..418bf253 100644
 +// are given at its end, the worker draws them while this core makes the next frame into the other backEndData
 +extern "C" int jk2RenderOn( void );
 +extern "C" void jk2RenderSettle( void );
++extern "C" void jk2RenderSettleBack( void );
 +extern "C" void jk2RenderGive( void ( *fn )( const void * ), const void *arg );
 +extern "C" void jk2RenderPresent( void );
 +extern "C" void jk2RenderGo( void );
@@ -5293,12 +6491,12 @@ index 04ad9bdb..418bf253 100644
  void R_IssueRenderCommands( qboolean runPerformanceCounters ) {
  	renderCommandList_t	*cmdList;
  
-@@ -101,6 +127,25 @@ void R_IssueRenderCommands( qboolean runPerformanceCounters ) {
+@@ -101,6 +128,25 @@ void R_IssueRenderCommands( qboolean runPerformanceCounters ) {
  	// clear it out, in case this is a sync and not a buffer flip
  	cmdList->used = 0;
  
 +#ifdef SHADEREMU
-+	jk2RenderSettle();	// (the frame before done, and shown)
++	jk2RenderSettleBack();	// (the frame before done, and shown; not this frame's front end, which the drawing waits for)
 +	unsigned se_from = SE_RSFrom();
 +	if ( runPerformanceCounters && !r_skipBackEnd->integer && jk2RenderOn() && se_backEndData[1] && SE_RSBones() >= 0 ) {
 +		R_PerformanceCounters();
@@ -5319,7 +6517,7 @@ index 04ad9bdb..418bf253 100644
  	// at this point, the back end thread is idle, so it is ok
  	// to look at it's performance counters
  	if ( runPerformanceCounters ) {
-@@ -166,6 +211,9 @@ make sure there is enough command space
+@@ -166,6 +212,9 @@ make sure there is enough command space
  static void *R_GetCommandBuffer( int bytes ) {
  	return R_GetCommandBufferReserved( bytes, PAD( sizeof( swapBuffersCommand_t ), sizeof(void *) ) );
  }
@@ -5329,7 +6527,17 @@ index 04ad9bdb..418bf253 100644
  
  
  /*
-@@ -322,6 +370,9 @@ void RE_LAGoggles( void )
+@@ -309,6 +358,9 @@ void RE_RotatePic2 ( float x, float y, float w, float h,
+ 
+ void RE_LAGoggles( void )
+ {
++#ifdef SHADEREMU
++	jk2FrontSettle();	// (tr's view: tr_main.cpp, "The front end apart")
++#endif
+ 	tr.refdef.rdflags |= (RDF_doLAGoggles|RDF_doFullbright);
+ 	tr.refdef.doLAGoggles = qtrue;
+ 
+@@ -322,6 +374,9 @@ void RE_LAGoggles( void )
  	fog->tcScale = 2.0f / ( fog->parms.depthForOpaque * (1.0f + cos( tr.refdef.floatTime) * 0.1f));
  }
  
@@ -5339,7 +6547,7 @@ index 04ad9bdb..418bf253 100644
  void RE_RenderWorldEffects(void)
  {
  	setModeCommand_t	*cmd;
-@@ -329,6 +380,9 @@ void RE_RenderWorldEffects(void)
+@@ -329,6 +384,9 @@ void RE_RenderWorldEffects(void)
  	if (!tr.registered) {
  		return;
  	}
@@ -5349,7 +6557,7 @@ index 04ad9bdb..418bf253 100644
  
  	cmd = (setModeCommand_t *)R_GetCommandBuffer( sizeof( *cmd ) );
  	if ( !cmd ) {
-@@ -369,12 +423,26 @@ If running in stereo, RE_BeginFrame will be called twice
+@@ -369,12 +427,26 @@ If running in stereo, RE_BeginFrame will be called twice
  for each RE_EndFrame
  ====================
  */
@@ -5376,7 +6584,7 @@ index 04ad9bdb..418bf253 100644
  	glState.finishCalled = qfalse;
  
  	tr.frameCount++;
-@@ -509,7 +577,9 @@ void RE_EndFrame( int *frontEndMsec, int *backEndMsec ) {
+@@ -509,7 +581,9 @@ void RE_EndFrame( int *frontEndMsec, int *backEndMsec ) {
  	if ( backEndMsec ) {
  		*backEndMsec = backEnd.pc.msec;
  	}
@@ -5504,7 +6712,7 @@ index c67c5d0a..0ac08dfc 100644
  		{
  			for ( int x=0; x<*piWidth; x++ )
 diff --git a/code/rd-vanilla/tr_ghoul2.cpp b/code/rd-vanilla/tr_ghoul2.cpp
-index 5062daf5..c49ac623 100644
+index 5062daf5..fe75e249 100644
 --- a/code/rd-vanilla/tr_ghoul2.cpp
 +++ b/code/rd-vanilla/tr_ghoul2.cpp
 @@ -83,8 +83,19 @@ extern	cvar_t	*r_Ghoul2UnSqashAfterSmooth;
@@ -5527,6 +6735,17 @@ index 5062daf5..c49ac623 100644
  #ifdef _G2_GORE
  qhandle_t		goreShader=-1;
  #endif
+@@ -711,8 +722,8 @@ public:
+ };
+ 
+ #define MAX_RENDER_SURFACES (2048)
+-static CRenderableSurface RSStorage[MAX_RENDER_SURFACES];
+-static unsigned int NextRS=0;
++CRenderableSurface RSStorage[MAX_RENDER_SURFACES];	// (not static: shared with the drawing's second copy)
++unsigned int NextRS=0;
+ 
+ CRenderableSurface *AllocRS()
+ {
 @@ -723,6 +734,105 @@ CRenderableSurface *AllocRS()
  	return ret;
  }
@@ -5537,8 +6756,8 @@ index 5062daf5..c49ac623 100644
 +// and flags) while the worker draws. So when a frame is given, this core evaluates the bones each surface of it names,
 +// as the drawing would have at once, and the drawing reads those (two sets: the frame out and the one being made).
 +#define SE_RS_BONES ( 96 * 1024 )		// floats a set: 8,000 matrices
-+static float se_rs_bones[2][SE_RS_BONES];
-+static int se_rs_set, se_rs_from;
++float se_rs_bones[2][SE_RS_BONES];	// (not static: shared with the drawing's second copy)
++int se_rs_set, se_rs_from;
 +// The evaluation itself is the frame's bone transforms (about a tenth of this core's frame): it is shared out to the job
 +// slots (shared/qcommon/se_slot.h), a surface to the slot its bone cache hashes to, so that a cache (its lazily made
 +// bones and its touch marks) is evaluated by one core only. Its place in the pool is this core's, made first.
@@ -5548,7 +6767,7 @@ index 5062daf5..c49ac623 100644
 +extern "C" void SE_SlotJoin( int handle );
 +#define SE_RS_JOBS SE_SLOTS
 +struct seRsJob_t { unsigned from, to; int part, unused; } __attribute__(( aligned( 16 ) ));
-+static seRsJob_t se_rs_jobs[SE_RS_JOBS];
++seRsJob_t se_rs_jobs[SE_RS_JOBS];
 +static inline int SE_RsPart( const CBoneCache *c ) { return (int)( ( (uintptr_t)c >> 4 ) * 2654435761u >> 16 ) % SE_RS_JOBS; }
 +static void SE_RsEval( CRenderableSurface *rs )
 +{
@@ -5652,7 +6871,15 @@ index 5062daf5..c49ac623 100644
  		return CULL_IN;
   	}
  	return CULL_IN;
-@@ -2768,6 +2878,195 @@ void G2_ConstructGhoulSkeleton( CGhoul2Info_v &ghoul2,const int frameNum,bool ch
+@@ -1091,6 +1201,7 @@ void G2_TimingModel(boneInfo_t &bone,int currentTime,int numFramesInFile,int &cu
+ 				}
+ 				else
+ 				{
++					SE_G2BoneTouch( bone );
+ 					bone.flags &= ~(BONE_ANIM_TOTAL);
+ 				}
+ 
+@@ -2768,6 +2879,197 @@ void G2_ConstructGhoulSkeleton( CGhoul2Info_v &ghoul2,const int frameNum,bool ch
  RB_SurfaceGhoul
  ==============
  */
@@ -5766,11 +6993,13 @@ index 5062daf5..c49ac623 100644
 +extern "C" void jk2WaitPass( void );
 +#define SE_SKIN_JOBS 8
 +#define SE_SKIN_FLOATS ( 8 * 48 * 1024 )		// a set: 48 thousand vertices of 8 floats
-+static float se_skin_pool[2][SE_SKIN_FLOATS] __attribute__(( aligned( 16 ) ));
-+static struct __attribute__(( aligned( 16 ) )) { CRenderableSurface *rs[256]; int count; } se_skin_jobs[2][SE_SKIN_JOBS];
-+static struct __attribute__(( aligned( 16 ) )) { volatile unsigned done, unused[3]; } se_skin_done[2][SE_SKIN_JOBS];	// a helper's
-+static unsigned se_skin_stamp[2];
-+static int se_skin_on = -1;
++float se_skin_pool[2][SE_SKIN_FLOATS] __attribute__(( aligned( 16 ) ));	// (not static: shared with the drawing's second copy)
++struct seSkinJob_t { CRenderableSurface *rs[256]; int count; } __attribute__(( aligned( 16 ) ));
++seSkinJob_t se_skin_jobs[2][SE_SKIN_JOBS];
++struct seSkinDone_t { volatile unsigned done, unused[3]; } __attribute__(( aligned( 16 ) ));
++seSkinDone_t se_skin_done[2][SE_SKIN_JOBS];	// a helper's
++unsigned se_skin_stamp[2];
++int se_skin_on = -1;
 +static unsigned se_skin_job( unsigned set_job, unsigned stamp )
 +{
 +	const int set = set_job >> 8, job = set_job & 255;
@@ -5848,7 +7077,7 @@ index 5062daf5..c49ac623 100644
  void RB_SurfaceGhoul( CRenderableSurface *surf )
  {
  #ifdef G2_PERFORMANCE_ANALYSIS
-@@ -2901,6 +3200,24 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
+@@ -2901,6 +3203,24 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
  	mdxmSurface_t	*surface = surf->surfaceData;
  
  	CBoneCache *bones = surf->boneCache;
@@ -5873,7 +7102,7 @@ index 5062daf5..c49ac623 100644
  
  	// first up, sanity check our numbers
  	RB_CheckOverflow( surface->numVerts, surface->numTriangles );
-@@ -2989,10 +3306,32 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
+@@ -2989,10 +3309,32 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
  		float t2;
  		const mdxaBone_t *bone;
  		const mdxaBone_t *bone2;
@@ -5907,7 +7136,7 @@ index 5062daf5..c49ac623 100644
  #else
  			bone = &bones->EvalRender(piBoneReferences[G2_GetVertBoneIndex( v, 0 )]);
  #endif // JK2_MODE
-@@ -3013,7 +3352,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
+@@ -3013,7 +3355,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
  				if (iNumWeights==2)
  				{
  #ifdef JK2_MODE
@@ -5916,7 +7145,7 @@ index 5062daf5..c49ac623 100644
  #else
  					bone2 = &bones->EvalRender(piBoneReferences[G2_GetVertBoneIndex( v, 1 )]);
  #endif // JK2_MODE
-@@ -3046,7 +3385,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
+@@ -3046,7 +3388,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
  					for (k=1; k < iNumWeights-1 ; k++)
  					{
  #ifdef JK2_MODE
@@ -5925,7 +7154,7 @@ index 5062daf5..c49ac623 100644
  #else
  						bone = &bones->EvalRender(piBoneReferences[G2_GetVertBoneIndex( v, k )]);
  #endif // JK2_MODE
-@@ -3060,7 +3399,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
+@@ -3060,7 +3402,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
  					}
  
  #ifdef JK2_MODE
@@ -5934,7 +7163,7 @@ index 5062daf5..c49ac623 100644
  #else
  					bone = &bones->EvalRender(piBoneReferences[G2_GetVertBoneIndex( v, k )]);
  #endif // JK2_MODE
-@@ -3075,6 +3414,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
+@@ -3075,6 +3417,7 @@ void RB_SurfaceGhoul( CRenderableSurface *surf )
  			tess.texCoords[baseVertex][0][0] = pTexCoords[j].texCoords[0];
  			tess.texCoords[baseVertex][0][1] = pTexCoords[j].texCoords[1];
  		}
@@ -6534,10 +7763,20 @@ index a13badd4..48b7b4e3 100644
  	return image;
  }
 diff --git a/code/rd-vanilla/tr_init.cpp b/code/rd-vanilla/tr_init.cpp
-index 13c72e66..c474a255 100644
+index 13c72e66..2320375f 100644
 --- a/code/rd-vanilla/tr_init.cpp
 +++ b/code/rd-vanilla/tr_init.cpp
-@@ -1752,6 +1752,13 @@ void R_Init( void ) {
+@@ -1712,6 +1712,9 @@ void R_Init( void ) {
+ 	memset( &tr, 0, sizeof( tr ) );
+ 	memset( &backEnd, 0, sizeof( backEnd ) );
+ 	memset( &tess, 0, sizeof( tess ) );
++#ifdef SHADEREMU
++	SE_TessStatic();
++#endif
+ 
+ #ifndef FINAL_BUILD
+ 	if ( (intptr_t)tess.xyz & 15 ) {
+@@ -1752,6 +1755,13 @@ void R_Init( void ) {
  	R_Register();
  
  	backEndData = (backEndData_t *) R_Hunk_Alloc( sizeof( backEndData_t ), qtrue );
@@ -6551,11 +7790,46 @@ index 13c72e66..c474a255 100644
  	R_InitNextFrame();
  
  	const color4ub_t color = {0xff, 0xff, 0xff, 0xff};
+diff --git a/code/rd-vanilla/tr_light.cpp b/code/rd-vanilla/tr_light.cpp
+index d176af56..0ded1bff 100644
+--- a/code/rd-vanilla/tr_light.cpp
++++ b/code/rd-vanilla/tr_light.cpp
+@@ -105,11 +105,11 @@ void R_DlightBmodel( bmodel_t *bmodel, qboolean NoLight ) {
+ 		surf = bmodel->firstSurface + i;
+ 
+ 		if ( *surf->data == SF_FACE ) {
+-			((srfSurfaceFace_t *)surf->data)->dlightBits = mask;
++			((srfSurfaceFace_t *)surf->data)->dlightBits[SE_DLW] = mask;
+ 		} else if ( *surf->data == SF_GRID ) {
+-			((srfGridMesh_t *)surf->data)->dlightBits = mask;
++			((srfGridMesh_t *)surf->data)->dlightBits[SE_DLW] = mask;
+ 		} else if ( *surf->data == SF_TRIANGLES ) {
+-			((srfTriangles_t *)surf->data)->dlightBits = mask;
++			((srfTriangles_t *)surf->data)->dlightBits[SE_DLW] = mask;
+ 		}
+ 	}
+ }
 diff --git a/code/rd-vanilla/tr_local.h b/code/rd-vanilla/tr_local.h
-index c9e745aa..9a5d832a 100644
+index c9e745aa..d9f6bac9 100644
 --- a/code/rd-vanilla/tr_local.h
 +++ b/code/rd-vanilla/tr_local.h
-@@ -657,6 +657,9 @@ typedef struct {
+@@ -618,7 +618,7 @@ typedef struct srfGridMesh_s {
+ 	surfaceType_t	surfaceType;
+ 
+ 	// dynamic lighting information
+-	int				dlightBits;
++	int				dlightBits[2];	// (ShaderEmu: by the frame's parity: SE_DLW, SE_DLR)
+ 
+ 	// culling information
+ 	vec3_t			meshBounds[2];
+@@ -651,12 +651,15 @@ typedef struct {
+ 	cplane_t	plane;
+ 
+ 	// dynamic lighting information
+-	int			dlightBits;
++	int			dlightBits[2];	// (ShaderEmu: by the frame's parity)
+ 
+ 	// triangle definitions (no normals at points)
  	int			numPoints;
  	int			numIndices;
  	int			ofsIndices;
@@ -6565,6 +7839,15 @@ index c9e745aa..9a5d832a 100644
  	float		points[1][VERTEXSIZE];	// variable sized
  										// there is a variable length list of indices here also
  } srfSurfaceFace_t;
+@@ -667,7 +670,7 @@ typedef struct {
+ 	surfaceType_t	surfaceType;
+ 
+ 	// dynamic lighting information
+-	int				dlightBits;
++	int				dlightBits[2];	// (ShaderEmu: by the frame's parity)
+ 
+ 	// culling information (FIXME: use this!)
+ 	vec3_t			bounds[2];
 @@ -895,6 +898,16 @@ typedef struct {
  	int		c_dlightSurfaces;
  	int		c_dlightSurfacesCulled;
@@ -6582,10 +7865,18 @@ index c9e745aa..9a5d832a 100644
  
  #define	FOG_TABLE_SIZE		256
  #define FUNCTABLE_SIZE		1024
-@@ -1075,6 +1088,17 @@ void	 R_Images_DeleteImage(image_t *pImage);
+@@ -1075,6 +1088,25 @@ void	 R_Images_DeleteImage(image_t *pImage);
  
  extern backEndState_t	backEnd;
  extern trGlobals_t	tr;
++#ifdef SHADEREMU
++// (a world surface's dynamic lights, one set a frame's parity: the front end of a frame, on a worker of its own, writes
++// them while the drawing's worker draws the frame before from the other; tr_main.cpp, "The front end apart")
++#define SE_DLW ( tr.viewParms.frameCount & 1 )
++#define SE_DLR ( backEnd.viewParms.frameCount & 1 )
++// (the front end's worker done: what writes tr's view or what the front end reads settles it first; gl_jk2.c)
++extern "C" void jk2FrontSettle( void );
++#endif
 +#ifdef SHADEREMU
 +// (JK2_KEPT_COUNT: what of the world's batches could be drawn from kept words; the drawing's, read by the first core)
 +typedef struct { unsigned frames, batches, world, faces, indices, stage, kept, fog, deform, colour, coords, multi, other, ent, unused[2]; } seKeptCount_t;
@@ -6600,7 +7891,7 @@ index c9e745aa..9a5d832a 100644
  extern glconfig_t	glConfig;		// outside of TR since it shouldn't be cleared during ref re-init
  extern glstate_t	glState;		// outside of TR since it shouldn't be cleared during ref re-init
  extern window_t		window;
-@@ -1397,6 +1421,9 @@ TESSELATOR/SHADER DECLARATIONS
+@@ -1397,10 +1429,20 @@ TESSELATOR/SHADER DECLARATIONS
  */
  typedef byte color4ub_t[4];
  
@@ -6609,8 +7900,47 @@ index c9e745aa..9a5d832a 100644
 +#endif
  typedef struct stageVars
  {
++#ifdef SHADEREMU
++	// (where a stage's colours and coordinates are made: this frame's GPU memory, a room a stage, which the draw points at,
++	// or tr_shade.cpp's arrays; docs/games/jk2.md, "The arrays where they are made")
++	color4ub_t	*colors;
++	vec2_t		*texcoords[NUM_TEXTURE_BUNDLES];
++#else
  	color4ub_t	colors[SHADER_MAX_VERTEXES];
-@@ -1587,6 +1614,12 @@ public:
+ 	vec2_t		texcoords[NUM_TEXTURE_BUNDLES][SHADER_MAX_VERTEXES];
++#endif
+ } stageVars_t;
+ 
+ #define	NUM_TEX_COORDS		(MAXLIGHTMAPS+1)
+@@ -1408,7 +1450,11 @@ typedef struct stageVars
+ struct shaderCommands_s
+ {
+ 	glIndex_t	indexes[SHADER_MAX_INDEXES] QALIGN(16);
++#ifdef SHADEREMU
++	vec4_t		*xyz;		// (a batch's room of this frame's GPU memory, or tr_shade.cpp's array: as svars)
++#else
+ 	vec4_t		xyz[SHADER_MAX_VERTEXES] QALIGN(16);
++#endif
+ 	vec4_t		normal[SHADER_MAX_VERTEXES] QALIGN(16);
+ 	vec2_t		texCoords[SHADER_MAX_VERTEXES][NUM_TEX_COORDS] QALIGN(16);
+ 	color4ub_t	vertexColors[SHADER_MAX_VERTEXES] QALIGN(16);
+@@ -1445,6 +1491,15 @@ typedef shaderCommands_s	shaderCommands_t;
+ #endif
+ 
+ extern	shaderCommands_t	tess;
++#ifdef SHADEREMU
++void SE_TessStatic( void );	// (tess's arrays its own: tr_shade.cpp)
++extern "C" {	// (gl_jk2.c's: tess's arrays in the frame's GPU memory)
++void *jk2glTessRoom( unsigned bytes );
++int jk2glTessTrim( void *at, unsigned bytes );
++void jk2glRooms( const void *xyz, const void *colours, const void *tc0, const void *tc1 );
++void jk2glVertexCount( int n );
++}
++#endif
+ 
+ extern	color4ub_t	styleColors[MAX_LIGHT_STYLES];
+ extern	bool		styleUpdated[MAX_LIGHT_STYLES];
+@@ -1587,6 +1642,12 @@ public:
  #endif
   	CBoneCache 		*boneCache;		// pointer to transformed bone list for this surf
  	mdxmSurface_t	*surfaceData;	// pointer to surface data loaded into file - only used by client renderer DO NOT USE IN GAME SIDE - if there is a vid restart this will be out of wack on the game
@@ -6623,7 +7953,7 @@ index c9e745aa..9a5d832a 100644
  #ifdef _G2_GORE
  	float			*alternateTex;		// alternate texture coordinates.
  	void			*goreChain;
-@@ -1604,6 +1637,10 @@ public:
+@@ -1604,6 +1665,10 @@ public:
  		surfaceData = src.surfaceData;
  		alternateTex = src.alternateTex;
  		goreChain = src.goreChain;
@@ -6634,7 +7964,7 @@ index c9e745aa..9a5d832a 100644
  
  		return *this;
  	}
-@@ -1625,6 +1662,10 @@ CRenderableSurface():
+@@ -1625,6 +1690,10 @@ CRenderableSurface():
  	{
  		boneCache=0;
  		surfaceData=0;
@@ -6645,7 +7975,7 @@ index c9e745aa..9a5d832a 100644
  #ifdef _G2_GORE
  		ident = SF_MDX;
  		alternateTex=0;
-@@ -1778,6 +1819,9 @@ typedef enum {
+@@ -1778,6 +1847,9 @@ typedef enum {
  	RC_DRAW_BUFFER,
  	RC_SWAP_BUFFERS,
  	RC_WORLD_EFFECTS,
@@ -6656,7 +7986,7 @@ index c9e745aa..9a5d832a 100644
  
  
 diff --git a/code/rd-vanilla/tr_main.cpp b/code/rd-vanilla/tr_main.cpp
-index da619736..1fc1620d 100644
+index da619736..a5cbe2b3 100644
 --- a/code/rd-vanilla/tr_main.cpp
 +++ b/code/rd-vanilla/tr_main.cpp
 @@ -205,7 +205,15 @@ void R_LocalPointToWorld (const vec3_t local, vec3_t world) {
@@ -6664,10 +7994,10 @@ index da619736..1fc1620d 100644
  }
  
 +#ifdef SHADEREMU
-+// (R_RotateForEntity's scratch, one for this core's front end and one for the drawing's worker: docs/games/jk2.md,
-+// "The drawing on a worker"; RVC_RACES found the two storing to it at once)
-+extern "C" int jk2RenderWorkerHere( void );
-+static float se_preTransEntMatrix[2][16] __attribute__(( aligned( 16 ) ));
++// (R_RotateForEntity's scratch, one for this core's front end, one for the drawing's worker and one for the front end's
++// worker: docs/games/jk2.md, "The drawing on a worker"; RVC_RACES found the first two storing to it at once)
++extern "C" int jk2RenderWorkerHere( void );	// (0 this core, 1 the drawing's worker, 2 the front end's)
++static float se_preTransEntMatrix[4][16] __attribute__(( aligned( 16 ) ));
 +#define preTransEntMatrix ( se_preTransEntMatrix[jk2RenderWorkerHere()] )
 +#else
  float preTransEntMatrix[16];
@@ -6793,7 +8123,7 @@ index da619736..1fc1620d 100644
  
  		ent->needDlights = qfalse;
  
-@@ -1550,4 +1648,207 @@ void R_RenderView (viewParms_t *parms) {
+@@ -1550,4 +1648,259 @@ void R_RenderView (viewParms_t *parms) {
  
  	// draw main system development information (surface outlines, etc)
  	R_DebugGraphics();
@@ -6811,16 +8141,33 @@ index da619736..1fc1620d 100644
 +// makes it this core runs the game's next frame, which changes nothing it reads (a new shader's place settles the
 +// drawing first, tr_shader.cpp); the next frame's RE_BeginFrame waits for it. A world with portals, or a scene with a
 +// portal or no world is made here as before. JK2_FRONT=core: every view made here, as before (SE_FrontOn).
++//
++// The front end apart (docs/games/jk2.md, "The front end apart"): with a worker of its own (gl_jk2.c's jk2FrontOn;
++// JK2_FRONT_WORKER=0 without), the rest of the view is made there as soon as this core has given the command
++// (R_SE_FrontJob), while this core goes on with its frame and the drawing's worker draws the frame before; the drawing
++// waits for it at the command and only draws (R_SE_FrontView). Its sorted surfaces go to one of two buffers by the
++// view's number. The front end writes tr's view (tr.refdef, viewParms, ori, the current entity), so this core waits for
++// it at its next RE_RenderScene (tr_scene.cpp), not at RE_BeginFrame; the back end reads the frame's backEnd.refdef,
++// never tr.refdef, and a world surface's dynamic lights are a pair by the frame's parity (SE_DLW, SE_DLR). One view a
++// frame is made so; another in the same frame is made by the drawing's worker as before.
 +typedef struct {
 +	int commandId, first, count, viewCount;
-+	unsigned seq, check, checkCount, unused;
++	unsigned seq, check, checkCount, front;
 +	trRefdef_t refdef;
 +	viewParms_t viewParms;
 +} seViewCommand_t;
 +void *R_SE_CommandBuffer( int bytes );
 +const void *RB_DrawSurfs( const void *data );
 +extern "C" void SE_FrontRest( void );
-+static drawSurf_t se_front_surfs[MAX_DRAWSURFS];	// (the worker's)
++extern "C" int jk2FrontOn( void );
++extern "C" void jk2FrontGive( void ( *fn )( void * ), void *arg );
++extern "C" void jk2FrontAwait( volatile unsigned *made, unsigned seq );
++void R_SE_FrontJob( void *data );
++static drawSurf_t se_front_surfs[MAX_DRAWSURFS];	// (the drawing's worker's, for a view it makes itself)
++// (the front end's worker's: a view's sorted surfaces, by its number's parity)
++static struct seFrontMade_t { int n, unused[3]; trRefdef_t refdef; viewParms_t viewParms; drawSurf_t surfs[MAX_DRAWSURFS]; } __attribute__(( aligned( 16 ) )) se_front_made[2];
++static struct { volatile unsigned made, unused[3]; } __attribute__(( aligned( 16 ) )) se_front_done;	// (the front end's worker's)
++static struct { int frame, unused[3]; } __attribute__(( aligned( 16 ) )) se_front_core = { -1, { 0, 0, 0 } };	// (this core's)
 +static struct { unsigned seq, last, target, unused; } __attribute__(( aligned( 16 ) )) se_views;	// (this core's)
 +static struct { volatile unsigned made, unused[3]; } __attribute__(( aligned( 16 ) )) se_views_made;	// (the worker's)
 +static const world_t *se_portal_world;
@@ -6926,24 +8273,33 @@ index da619736..1fc1620d 100644
 +
 +	cmd->commandId = RC_SE_VIEW;
 +	cmd->first = first, cmd->count = tr.refdef.numDrawSurfs - first, cmd->viewCount = tr.viewCount;
-+	cmd->seq = se_views.last = ++se_views.seq;
++	cmd->seq = ++se_views.seq;
 +	cmd->check = check, cmd->checkCount = (unsigned)check_count;
 +	cmd->refdef = tr.refdef;
 +	cmd->viewParms = tr.viewParms;
++	// (the rest on the front end's worker at once, one view a frame: JK2_FRONT=check makes it there too; a view the
++	// drawing's worker makes is waited for at the next RE_BeginFrame, one of the front end's at the next RE_RenderScene)
++	cmd->front = 0;
++	if ( se_front_core.frame != tr.frameCount && jk2FrontOn() ) {
++		se_front_core.frame = tr.frameCount;
++		cmd->front = 1;
++		jk2FrontGive( R_SE_FrontJob, cmd );
++	} else {
++		se_views.last = cmd->seq;
++	}
 +	return 1;
 +}
-+// (the drawing's worker, or this core drawing the frame itself: the view made and drawn)
-+const void *R_SE_FrontView( const void *data )
++// (the rest of a view made into out: the world's walk, the polygons, the other entities, the sort; tr's view written)
++static int se_front_make( const seViewCommand_t *cmd, drawSurf_t *out )
 +{
-+	const seViewCommand_t *cmd = (const seViewCommand_t *)data;
 +	tr.refdef = cmd->refdef;
 +	tr.viewParms = cmd->viewParms;
 +	tr.viewCount = cmd->viewCount;
 +	tr.ori = tr.viewParms.world;	// (as R_RotateForViewer leaves it: the world's faces are culled by tr.ori's eye)
 +	int n = cmd->count > MAX_DRAWSURFS ? MAX_DRAWSURFS : cmd->count;
 +	if ( n > 0 )
-+		memcpy( se_front_surfs, cmd->refdef.drawSurfs + cmd->first, n * sizeof( drawSurf_t ) );
-+	tr.refdef.drawSurfs = se_front_surfs;
++		memcpy( out, cmd->refdef.drawSurfs + cmd->first, n * sizeof( drawSurf_t ) );
++	tr.refdef.drawSurfs = out;
 +	tr.refdef.numDrawSurfs = n;
 +	R_AddWorldSurfaces();
 +	R_AddPolygonSurfaces();
@@ -6953,20 +8309,46 @@ index da619736..1fc1620d 100644
 +	se_entity_filter = 0;
 +	n = tr.refdef.numDrawSurfs > MAX_DRAWSURFS ? MAX_DRAWSURFS : tr.refdef.numDrawSurfs;
 +	if ( n > 0 )
-+		R_RadixSort( se_front_surfs, n );
-+	SE_ViewSumNote( se_front_surfs, n, 1 );
++		R_RadixSort( out, n );
++	SE_ViewSumNote( out, n, 1 );
 +	if ( SE_FrontOn() == 2 ) {
 +		se_front_check.views++;
-+		if ( (unsigned)n != cmd->checkCount || ( n > 0 && SE_FrontSum( se_front_surfs, n ) != cmd->check ) )
++		if ( (unsigned)n != cmd->checkCount || ( n > 0 && SE_FrontSum( out, n ) != cmd->check ) )
 +			se_front_check.wrong++;	// (no print here: the first core prints the counts, R_SE_FrontWait)
 +	}
++	return n;
++}
++// (the front end's worker: the view made into its buffer, then told made)
++void R_SE_FrontJob( void *data )
++{
++	const seViewCommand_t *cmd = (const seViewCommand_t *)data;
++	seFrontMade_t *m = &se_front_made[cmd->seq & 1];
++	m->n = se_front_make( cmd, m->surfs );
++	m->refdef = tr.refdef;
++	m->viewParms = tr.viewParms;
++	se_front_done.made = cmd->seq;
++}
++// (the drawing's worker, or this core drawing the frame itself: the view made, or waited for, and drawn)
++const void *R_SE_FrontView( const void *data )
++{
++	const seViewCommand_t *cmd = (const seViewCommand_t *)data;
 +	drawSurfsCommand_t dc;
 +	dc.commandId = RC_DRAW_SURFS;
-+	dc.drawSurfs = se_front_surfs;
-+	dc.numDrawSurfs = n;
-+	dc.refdef = tr.refdef;
-+	dc.viewParms = tr.viewParms;
-+	se_views_made.made = cmd->seq;	// (made: the first core may go on with its frame)
++	if ( cmd->front ) {	// (made by the front end's worker: the drawing writes nothing of tr)
++		jk2FrontAwait( &se_front_done.made, cmd->seq );
++		const seFrontMade_t *m = &se_front_made[cmd->seq & 1];
++		dc.drawSurfs = (drawSurf_t *)m->surfs;
++		dc.numDrawSurfs = m->n;
++		dc.refdef = m->refdef;
++		dc.viewParms = m->viewParms;
++	} else {
++		const int n = se_front_make( cmd, se_front_surfs );
++		dc.drawSurfs = se_front_surfs;
++		dc.numDrawSurfs = n;
++		dc.refdef = tr.refdef;
++		dc.viewParms = tr.viewParms;
++		se_views_made.made = cmd->seq;	// (made: the first core may go on with its frame)
++	}
 +	RB_DrawSurfs( &dc );
 +	return (const void *)( cmd + 1 );
 +}
@@ -7292,10 +8674,38 @@ index a6d5bc7b..d2304e22 100644
  	CachedModels = &singleton;
  
 diff --git a/code/rd-vanilla/tr_scene.cpp b/code/rd-vanilla/tr_scene.cpp
-index d0b6b549..7fcd3869 100644
+index d0b6b549..8e7112d5 100644
 --- a/code/rd-vanilla/tr_scene.cpp
 +++ b/code/rd-vanilla/tr_scene.cpp
-@@ -402,6 +402,10 @@ void RE_RenderScene( const refdef_t *fd ) {
+@@ -77,8 +77,17 @@ void RE_ClearScene( void ) {
+ 	r_firstSceneDlight = r_numdlights;
+ 	r_firstSceneEntity = r_numentities;
+ 	r_firstScenePoly = r_numpolys;
++#ifdef SHADEREMU
++	// (tr's view may be the front end's worker's until the next RE_RenderScene: stored only when it changes, the
++	// front end settled first; tr_main.cpp, "The front end apart")
++	if ( ( tr.refdef.rdflags & ( RDF_doLAGoggles | RDF_doFullbright ) ) || tr.refdef.doLAGoggles ) {
++		jk2FrontSettle();
++#endif
+ 	tr.refdef.rdflags &= ~(RDF_doLAGoggles|RDF_doFullbright);	//probably not needed since it gets copied over in RE_RenderScene
+ 	tr.refdef.doLAGoggles = qfalse;
++#ifdef SHADEREMU
++	}
++#endif
+ }
+ 
+ /*
+@@ -275,6 +284,9 @@ void RE_RenderScene( const refdef_t *fd ) {
+ 	if ( !tr.registered ) {
+ 		return;
+ 	}
++#ifdef SHADEREMU
++	jk2FrontSettle();	// (the front end of the scene before done: it writes tr's view; tr_main.cpp, "The front end apart")
++#endif
+ 	GLimp_LogComment( "====== RE_RenderScene =====\n" );
+ 
+ 	if ( r_norefresh->integer ) {
+@@ -402,6 +414,10 @@ void RE_RenderScene( const refdef_t *fd ) {
  	VectorCopy( fd->vieworg, parms.pvsOrigin );
  
  	recursivePortalCount = 0;
@@ -7307,20 +8717,147 @@ index d0b6b549..7fcd3869 100644
  
  	// the next scene rendered in this frame will tack on after this one
 diff --git a/code/rd-vanilla/tr_shade.cpp b/code/rd-vanilla/tr_shade.cpp
-index 48f3ed13..91cb8fab 100644
+index 48f3ed13..acef44d8 100644
 --- a/code/rd-vanilla/tr_shade.cpp
 +++ b/code/rd-vanilla/tr_shade.cpp
-@@ -442,6 +442,9 @@ void RB_BeginSurface( shader_t *shader, int fogNum ) {
+@@ -234,7 +234,7 @@ void R_BindAnimatedImage( const textureBundle_t *bundle) {
+ 		return;
+ 	}
+ 
+-	if ((r_fullbright->integer || tr.refdef.doLAGoggles || (tr.refdef.rdflags & RDF_doFullbright) ) && bundle->isLightmap)
++	if ((r_fullbright->integer || backEnd.refdef.doLAGoggles || (backEnd.refdef.rdflags & RDF_doFullbright) ) && bundle->isLightmap)
+ 	{
+ 		GL_Bind( tr.whiteImage );
+ 		return;
+@@ -368,6 +368,9 @@ static void DrawTris (shaderCommands_t *input)
+ 		qglDisableClientState (GL_TEXTURE_COORD_ARRAY);
+ 
+ 		qglVertexPointer (3, GL_FLOAT, 16, input->xyz);	// padded for SIMD
++#ifdef SHADEREMU
++	jk2glVertexCount( input->numVertexes );	// (every index names one of them: no search for the range)
++#endif
+ 
+ 		if (qglLockArraysEXT) {
+ 			qglLockArraysEXT(0, input->numVertexes);
+@@ -422,6 +425,96 @@ because a surface may be forced to perform a RB_End due
+ to overflow.
+ ==============
+ */
++#ifdef SHADEREMU
++// ---- tess's arrays where they are drawn from (docs/games/jk2.md, "The arrays where they are made")
++// The GL's arrays drawing copied the positions, a stage's coordinates and its colours into the frame's GPU memory for every
++// stage's draw (gl_jk2.c's fast_triangles: some 4,000 vertices a frame of the walk, two texels of stores each, on the
++// drawing's worker). They are made there instead: a batch's positions in a room of that memory taken when it begins and cut
++// to what it holds when it ends, and each stage's colours and coordinates in rooms of their own, which the draw points at.
++// A room is not written once drawn from: a stage takes new ones (SE_StageRooms), so does the fog's pass, and a batch that
++// writes colours before its stages (Ghoul2's fade) keeps the arrays below. Off the drawing's worker, without room
++// in the frame's memory, and with JK2_ROOMS=0: these arrays, the GL copies them as before.
++static vec4_t se_xyz_static[SHADER_MAX_VERTEXES] QALIGN(16);
++static color4ub_t se_colors_static[SHADER_MAX_VERTEXES] QALIGN(16);
++static vec2_t se_tc_static[NUM_TEXTURE_BUNDLES][SHADER_MAX_VERTEXES] QALIGN(16);
++static void *se_xyz_room;		// this batch's positions' room until it is cut (RB_EndSurface)
++int SE_KeptPoints( void );
++static void SE_SvarsStatic( void )
++{
++	tess.svars.colors = se_colors_static;
++	for ( int b = 0 ; b < NUM_TEXTURE_BUNDLES ; b++ )
++		tess.svars.texcoords[b] = se_tc_static[b];
++}
++void SE_TessStatic( void )
++{
++	tess.xyz = se_xyz_static;
++	SE_SvarsStatic();
++	se_xyz_room = NULL;
++}
++static void SE_TessBegin( void )
++{
++	SE_SvarsStatic();
++	void *r = jk2glTessRoom( SHADER_MAX_VERTEXES * sizeof( vec4_t ) );
++	tess.xyz = r ? (vec4_t *)r : se_xyz_static;
++	se_xyz_room = r;
++	jk2glRooms( r, NULL, NULL, NULL );
++}
++// a batch with nothing in tess about to draw at once (a Ghoul2 surface skinned by the GPU: its draws take the frame's memory
++// after the room, which could then not be cut): its room given back, and taken again after (SE_TessResume)
++static void SE_TessYield( void )
++{
++	if ( se_xyz_room && !tess.numVertexes && !se_kf_n && jk2glTessTrim( se_xyz_room, 0 ) ) {
++		tess.xyz = se_xyz_static;
++		se_xyz_room = NULL;
++		jk2glRooms( NULL, NULL, NULL, NULL );
++	}
++}
++static void SE_TessResume( void )
++{
++	if ( !se_xyz_room && !tess.numVertexes && !se_kf_n && tess.xyz == se_xyz_static )
++		SE_TessBegin();
++}
++// the positions' room cut to what the batch holds, and what may still be made into it: the kept faces made into tess, a
++// text deform's quads (whole: not cut)
++static void SE_TessCut( void )
++{
++	if ( !se_xyz_room )
++		return;
++	int n = tess.numVertexes + ( se_kf_n ? SE_KeptPoints() : 0 );
++	for ( int d = 0 ; d < tess.shader->numDeforms ; d++ )
++		if ( tess.shader->deforms[d]->deformation >= DEFORM_TEXT0 && tess.shader->deforms[d]->deformation <= DEFORM_TEXT7 )
++			n = SHADER_MAX_VERTEXES;
++	if ( tess.currentStageIteratorFunc != RB_StageIteratorGeneric )
++		n = SHADER_MAX_VERTEXES;	// (the sky's makes its clouds into tess as it draws: whole)
++	if ( n > SHADER_MAX_VERTEXES )
++		n = SHADER_MAX_VERTEXES;
++	if ( !jk2glTessTrim( se_xyz_room, (unsigned)n * sizeof( vec4_t ) ) ) {	// (0: something took memory since, which keeps it whole)
++		static int said;
++		if ( getenv( "JK2_ROOMS_LOG" ) && said++ < 40 )
++			Com_Printf( "jk2rooms: not cut: %s, %d vertices, %d indices, kept %d, entity %d\n", tess.shader->name, tess.numVertexes,
++				    tess.numIndexes, se_kf_n, backEnd.currentEntity ? backEnd.currentEntity->e.reType : -1 );
++	}
++	se_xyz_room = NULL;
++}
++// a stage's colours and coordinates (`bundles` of them) in rooms of their own
++static void SE_StageRooms( int bundles )
++{
++	SE_SvarsStatic();
++	if ( tess.xyz == se_xyz_static || tess.fading || !tess.numVertexes ) {
++		jk2glRooms( NULL, NULL, NULL, NULL );
++		return;
++	}
++	const unsigned n = (unsigned)tess.numVertexes;
++	void *c = jk2glTessRoom( n * 4 ), *t0 = c ? jk2glTessRoom( n * 8 ) : NULL, *t1 = t0 && bundles > 1 ? jk2glTessRoom( n * 8 ) : NULL;
++	if ( c )
++		tess.svars.colors = (color4ub_t *)c;
++	if ( t0 )
++		tess.svars.texcoords[0] = (vec2_t *)t0;
++	if ( t1 )
++		tess.svars.texcoords[1] = (vec2_t *)t1;
++	jk2glRooms( tess.xyz, c, t0, t1 );
++}
++#endif
+ void RB_BeginSurface( shader_t *shader, int fogNum ) {
+ //	shader_t *state = (shader->remappedShader) ? shader->remappedShader : shader;
+ 	shader_t *state = shader;
+@@ -442,6 +535,10 @@ void RB_BeginSurface( shader_t *shader, int fogNum ) {
  	tess.fading = false;
  
  	tess.registration++;
 +#ifdef SHADEREMU
 +	se_kf_n = 0, se_kf_ok = -1, se_kf_indices = 0;
++	SE_TessBegin();
 +#endif
  }
  
  /*
-@@ -1798,6 +1801,21 @@ static vec4_t	GLFogOverrideColors[GLFOGOVERRIDE_MAX] =
+@@ -1334,6 +1431,9 @@ static void RB_FogPass( void ) {
+ 	fog_t		*fog;
+ 	int			i;
+ 
++#ifdef SHADEREMU
++	SE_StageRooms( 1 );
++#endif
+ 	qglEnableClientState( GL_COLOR_ARRAY );
+ 	qglColorPointer( 4, GL_UNSIGNED_BYTE, 0, tess.svars.colors );
+ 
+@@ -1798,6 +1898,21 @@ static vec4_t	GLFogOverrideColors[GLFOGOVERRIDE_MAX] =
  static const float logtestExp2 = (sqrt( -log( 1.0 / 255.0 ) ));
  #endif
  extern bool tr_stencilled; //tr_backend.cpp
@@ -7342,7 +8879,14 @@ index 48f3ed13..91cb8fab 100644
  static void RB_IterateStagesGeneric( shaderCommands_t *input )
  {
  	int stage;
-@@ -1946,6 +1964,12 @@ static void RB_IterateStagesGeneric( shaderCommands_t *input )
+@@ -1942,13 +2057,26 @@ static void RB_IterateStagesGeneric( shaderCommands_t *input )
+ 		}
+ #endif
+ 
++#ifdef SHADEREMU
++		SE_StageRooms( pStage->bundle[1].image ? 2 : 1 );
++#endif
+ 		if (!input->fading)
  		{ //this means ignore this, while we do a fade-out
  			ComputeColors( pStage, forceAlphaGen, forceRGBGen );
  		}
@@ -7354,14 +8898,37 @@ index 48f3ed13..91cb8fab 100644
 +#endif
  		ComputeTexCoords( pStage );
  
++#ifdef SHADEREMU
++		if ( 1 )	// (the stage's own room: set whatever setArraysOnce says)
++#else
  		if ( !setArraysOnce )
-@@ -2026,7 +2050,23 @@ static void RB_IterateStagesGeneric( shaderCommands_t *input )
++#endif
+ 		{
+ 			qglEnableClientState( GL_COLOR_ARRAY );
+ 			qglColorPointer( 4, GL_UNSIGNED_BYTE, 0, input->svars.colors );
+@@ -1978,7 +2106,11 @@ static void RB_IterateStagesGeneric( shaderCommands_t *input )
+ 		{
+ 			static bool lStencilled = false;
+ 
++#ifdef SHADEREMU
++			if ( 1 )
++#else
+ 			if ( !setArraysOnce )
++#endif
+ 			{
+ 				qglTexCoordPointer( 2, GL_FLOAT, 0, input->svars.texcoords[0] );
+ 			}
+@@ -2026,7 +2158,27 @@ static void RB_IterateStagesGeneric( shaderCommands_t *input )
  			//
  			// draw
  			//
 +#ifdef SHADEREMU
 +			if ( se_kf_n && !SE_KeptDraw( pStage ) ) {
 +				SE_KeptToTess();	// (and so for this stage and the rest: their colours and coordinates made again)
++				jk2glVertexCount( input->numVertexes );
++				SE_StageRooms( pStage->bundle[1].image ? 2 : 1 );
++				qglColorPointer( 4, GL_UNSIGNED_BYTE, 0, input->svars.colors );
++				qglTexCoordPointer( 2, GL_FLOAT, 0, input->svars.texcoords[0] );
 +				ComputeColors( pStage, forceAlphaGen, forceRGBGen );
 +				ComputeTexCoords( pStage );
 +			}
@@ -7379,7 +8946,7 @@ index 48f3ed13..91cb8fab 100644
  
  			if (lStencilled)
  			{ //re-enable the color buffer, disable stencil test
-@@ -2047,6 +2087,165 @@ static void RB_IterateStagesGeneric( shaderCommands_t *input )
+@@ -2047,6 +2199,168 @@ static void RB_IterateStagesGeneric( shaderCommands_t *input )
  /*
  ** RB_StageIteratorGeneric
  */
@@ -7488,6 +9055,7 @@ index 48f3ed13..91cb8fab 100644
 +		RB_EndSurface();
 +		RB_BeginSurface( s, fog );
 +	}
++	SE_TessYield();
 +	const int *tris = (const int *)( (const byte *)surface + surface->ofsTriangles );
 +	const mdxmVertexTexCoord_t *coords = (const mdxmVertexTexCoord_t *)&verts[surface->numVerts];
 +	// (from where, its colour, the light from everywhere, each with a channel's multiplier: 1, or the entity's colour for
@@ -7534,10 +9102,12 @@ index 48f3ed13..91cb8fab 100644
 +			 stage == 0 )
 +		{
 +			se_gpu_counts[1]++, se_gpu_why[15]++;
++			SE_TessResume();
 +			return qfalse;	// (nothing drawn: the CPU's way; what refuses does so for every stage)
 +		}
 +	}
 +	se_gpu_counts[0]++;
++	SE_TessResume();
 +	return qtrue;
 +}
 +#endif
@@ -7545,7 +9115,17 @@ index 48f3ed13..91cb8fab 100644
  void RB_StageIteratorGeneric( void )
  {
  	shaderCommands_t *input;
-@@ -2197,14 +2396,67 @@ void RB_StageIteratorGeneric( void )
+@@ -2105,6 +2419,9 @@ void RB_StageIteratorGeneric( void )
+ 	// lock XYZ
+ 	//
+ 	qglVertexPointer (3, GL_FLOAT, 16, input->xyz);	// padded for SIMD
++#ifdef SHADEREMU
++	jk2glVertexCount( input->numVertexes );	// (every index names one of them: no search for the range)
++#endif
+ 
+ 	if (qglLockArraysEXT)
+ 	{
+@@ -2197,19 +2514,77 @@ void RB_StageIteratorGeneric( void )
  /*
  ** RB_EndSurface
  */
@@ -7560,6 +9140,7 @@ index 48f3ed13..91cb8fab 100644
  	input = &tess;
  
 +#ifdef SHADEREMU
++	SE_TessCut();
 +	if (input->numIndexes == 0 && !se_kf_n) {
 +#else
  	if (input->numIndexes == 0) {
@@ -7613,7 +9194,16 @@ index 48f3ed13..91cb8fab 100644
  
  	if (input->indexes[SHADER_MAX_INDEXES-1] != 0) {
  		Com_Error (ERR_DROP, "RB_EndSurface() - SHADER_MAX_INDEXES hit");
-@@ -2269,6 +2521,9 @@ void RB_EndSurface( void ) {
+ 	}
++#ifdef SHADEREMU
++	if (se_xyz_static[SHADER_MAX_VERTEXES-1][0] != 0) {	// (a room is never written past what it holds: RB_CHECKOVERFLOW)
++#else
+ 	if (input->xyz[SHADER_MAX_VERTEXES-1][0] != 0) {
++#endif
+ 		Com_Error (ERR_DROP, "RB_EndSurface() - SHADER_MAX_VERTEXES hit");
+ 	}
+ 
+@@ -2269,6 +2644,9 @@ void RB_EndSurface( void ) {
  	// call off to shader specific tess end function
  	//
  	tess.currentStageIteratorFunc();
@@ -7623,7 +9213,7 @@ index 48f3ed13..91cb8fab 100644
  
  	//
  	// draw debugging stuff
-@@ -2284,6 +2539,9 @@ void RB_EndSurface( void ) {
+@@ -2284,6 +2662,9 @@ void RB_EndSurface( void ) {
  
  	// clear shader so we can tell we don't have any unclosed surfaces
  	tess.numIndexes = 0;
@@ -7769,6 +9359,44 @@ index 89910449..117538cc 100644
  }
  
  /*
+diff --git a/code/rd-vanilla/tr_shadows.cpp b/code/rd-vanilla/tr_shadows.cpp
+index c0331e97..1b07af0f 100644
+--- a/code/rd-vanilla/tr_shadows.cpp
++++ b/code/rd-vanilla/tr_shadows.cpp
+@@ -631,14 +631,14 @@ void RB_DistortionFill(void)
+ 	}
+ 	else
+ 	{ //do slow stretchy effect
+-		spost = sin(tr.refdef.time*0.0005f);
++		spost = sin(backEnd.refdef.time*0.0005f);
+ 		if (spost < 0.0f)
+ 		{
+ 			spost = -spost;
+ 		}
+ 		spost *= 0.2f;
+ 
+-		spost2 = sin(tr.refdef.time*0.0005f);
++		spost2 = sin(backEnd.refdef.time*0.0005f);
+ 		if (spost2 < 0.0f)
+ 		{
+ 			spost2 = -spost2;
+@@ -683,14 +683,14 @@ void RB_DistortionFill(void)
+ 			GL_State(GLS_SRCBLEND_SRC_ALPHA|GLS_DSTBLEND_SRC_ALPHA);
+ 		}
+ 
+-		spost = sin(tr.refdef.time*0.0008f);
++		spost = sin(backEnd.refdef.time*0.0008f);
+ 		if (spost < 0.0f)
+ 		{
+ 			spost = -spost;
+ 		}
+ 		spost *= 0.08f;
+ 
+-		spost2 = sin(tr.refdef.time*0.0008f);
++		spost2 = sin(backEnd.refdef.time*0.0008f);
+ 		if (spost2 < 0.0f)
+ 		{
+ 			spost2 = -spost2;
 diff --git a/code/rd-vanilla/tr_sky.cpp b/code/rd-vanilla/tr_sky.cpp
 index 4c4dfcfb..0c670192 100644
 --- a/code/rd-vanilla/tr_sky.cpp
@@ -7977,9 +9605,27 @@ index 8aa032b0..5701e807 100644
  
  	#define ShaderEntryPtrs_Clear()
 diff --git a/code/rd-vanilla/tr_surface.cpp b/code/rd-vanilla/tr_surface.cpp
-index 1e51e71c..e3281aa3 100644
+index 1e51e71c..6fd7ec63 100644
 --- a/code/rd-vanilla/tr_surface.cpp
 +++ b/code/rd-vanilla/tr_surface.cpp
+@@ -837,7 +837,7 @@ static void RB_SurfaceElectricity()
+ 	// see if we should grow from start to end
+ 	if ( e->renderfx & RF_GROW )
+ 	{
+-		perc = 1.0f - ( e->endTime - tr.refdef.time ) / e->angles[1]/*duration*/;
++		perc = 1.0f - ( e->endTime - backEnd.refdef.time ) / e->angles[1]/*duration*/;
+ 
+ 		if ( perc > 1.0f )
+ 		{
+@@ -986,7 +986,7 @@ void RB_SurfaceTriangles( srfTriangles_t *srf ) {
+ 	byte		*color;
+ 	int			dlightBits;
+ 
+-	dlightBits = srf->dlightBits;
++	dlightBits = srf->dlightBits[SE_DLR];
+ 	tess.dlightBits |= dlightBits;
+ 
+ 	RB_CHECKOVERFLOW( srf->numVerts, srf->numIndexes );
 @@ -1196,6 +1196,51 @@ static void LerpMeshVertexes (md3Surface_t *surf, float backlerp)
  
  	numVerts = surf->numVerts;
@@ -8057,7 +9703,7 @@ index 1e51e71c..e3281aa3 100644
  }
  
  
-@@ -1321,6 +1377,149 @@ void RB_SurfaceMesh(md3Surface_t *surface) {
+@@ -1321,6 +1377,160 @@ void RB_SurfaceMesh(md3Surface_t *surface) {
  RB_SurfaceFace
  ==============
  */
@@ -8072,12 +9718,21 @@ index 1e51e71c..e3281aa3 100644
 +#define SE_KF_MAX 1024
 +static srfSurfaceFace_t *se_kf[SE_KF_MAX];
 +int se_kf_n, se_kf_ok = -1, se_kf_indices;
-+static int se_kept_on = -1;
-+static uint32_t *se_kw_pool;				// the words, made by the drawing (this core's at the load)
-+static unsigned se_kw_words, se_kw_used;
-+static uint32_t **se_kw_of;					// a surface's words of each kind (5: the texture's, the light maps')
-+static int se_kw_surfaces;
-+static unsigned se_kw_full;					// (faces the pool had no room for)
++int SE_KeptPoints( void )
++{
++	int n = 0;
++	for ( int i = 0 ; i < se_kf_n ; i++ )
++		n += se_kf[i]->numPoints;
++	return n;
++}
++// (not static: the drawing's second copy shares them, gl_jk2.c's "The drawing on two workers"; it makes no words)
++int se_kept_on = -1;
++uint32_t *se_kw_pool;				// the words, made by the drawing (this core's at the load)
++unsigned se_kw_words, se_kw_used;
++uint32_t **se_kw_of;					// a surface's words of each kind (5: the texture's, the light maps')
++int se_kw_surfaces;
++unsigned se_kw_full;					// (faces the pool had no room for)
++extern int se_half_b;		// (tr_backend.cpp: 1 in the drawing's second copy)
 +extern "C" int jk2glKeptOn( void );
 +extern "C" int jk2glKeptWords( uint32_t *to, const float *points, int stride, int st, const int *idx, int count, int verts );
 +extern "C" int jk2glKeptFaces( uint32_t rgba, const uint32_t *const *words, const int *counts, int faces, int floored );
@@ -8174,6 +9829,8 @@ index 1e51e71c..e3281aa3 100644
 +		const srfSurfaceFace_t *f = se_kf[i];
 +		uint32_t **at = &se_kw_of[f->seIndex * 5 + kind];
 +		if ( !*at ) {
++			if ( se_half_b )
++				return 0;	// (the second copy makes no words: its stage drawn from tess)
 +			const unsigned need = (unsigned)f->numIndices * 4;
 +			if ( se_kw_used + need > se_kw_words ) {
 +				se_kw_full++;
@@ -8207,10 +9864,12 @@ index 1e51e71c..e3281aa3 100644
  void RB_SurfaceFace( srfSurfaceFace_t *surf ) {
  	int			i, j, k;
  	unsigned int *indices;
-@@ -1336,6 +1535,30 @@ void RB_SurfaceFace( srfSurfaceFace_t *surf ) {
+@@ -1335,7 +1545,31 @@ void RB_SurfaceFace( srfSurfaceFace_t *surf ) {
+ 
  	RB_CHECKOVERFLOW( surf->numPoints, surf->numIndices );
  
- 	dlightBits = surf->dlightBits;
+-	dlightBits = surf->dlightBits;
++	dlightBits = surf->dlightBits[SE_DLR];
 +#ifdef SHADEREMU
 +	// (a brush model's faces too, drawn under its entity's matrix as tess's would be, when the entity changes nothing of
 +	// the stages: no renderfx that RB_StageIteratorGeneric or ComputeColors reads; JK2_KEPT_BMODELS=0: the world's only)
@@ -8238,7 +9897,7 @@ index 1e51e71c..e3281aa3 100644
  	tess.dlightBits |= dlightBits;
  
  	indices = ( unsigned * ) ( ( ( char  * ) surf ) + surf->ofsIndices );
-@@ -1386,6 +1609,15 @@ void RB_SurfaceFace( srfSurfaceFace_t *surf ) {
+@@ -1386,6 +1620,15 @@ void RB_SurfaceFace( srfSurfaceFace_t *surf ) {
  
  	tess.numVertexes += surf->numPoints;
  }
@@ -8254,8 +9913,57 @@ index 1e51e71c..e3281aa3 100644
  
  
  static float LodErrorForVolume( vec3_t local, float radius ) {
+@@ -1442,7 +1685,7 @@ void RB_SurfaceGrid( srfGridMesh_t *cv ) {
+ 	int		dlightBits;
+ 	int		*vDlightBits;
+ 
+-	dlightBits = cv->dlightBits;
++	dlightBits = cv->dlightBits[SE_DLR];
+ 	tess.dlightBits |= dlightBits;
+ 
+ 	// determine the allowable discrepance
+diff --git a/code/rd-vanilla/tr_surfacesprites.cpp b/code/rd-vanilla/tr_surfacesprites.cpp
+index f0c210a3..5c5011c4 100644
+--- a/code/rd-vanilla/tr_surfacesprites.cpp
++++ b/code/rd-vanilla/tr_surfacesprites.cpp
+@@ -348,7 +348,7 @@ static void RB_VerticalSurfaceSprite(vec3_t loc, float width, float height, byte
+ 	float points[16];
+ 	color4ub_t color;
+ 
+-	angle = ((loc[0]+loc[1])*0.02+(tr.refdef.time*0.0015));
++	angle = ((loc[0]+loc[1])*0.02+(backEnd.refdef.time*0.0015));
+ 
+ 	if (windidle>0.0)
+ 	{
+@@ -460,7 +460,7 @@ static void RB_VerticalSurfaceSpriteWindPoint(vec3_t loc, float width, float hei
+ 
+ //	wind += 1.0-windforce;
+ 
+-	angle = (loc[0]+loc[1])*0.02+(tr.refdef.time*0.0015);
++	angle = (loc[0]+loc[1])*0.02+(backEnd.refdef.time*0.0015);
+ 
+ 	if (curWindSpeed <80.0)
+ 	{
+@@ -490,7 +490,7 @@ static void RB_VerticalSurfaceSpriteWindPoint(vec3_t loc, float width, float hei
+ 
+ 	loc2[0] += height*winddiff[0]*windforce;
+ 	loc2[1] += height*winddiff[1]*windforce;
+-	loc2[2] -= height*windforce*(0.75 + 0.15*sin((tr.refdef.time + 500*windforce)*0.01));
++	loc2[2] -= height*windforce*(0.75 + 0.15*sin((backEnd.refdef.time + 500*windforce)*0.01));
+ 
+ 	if ( flattened )
+ 	{
+@@ -1340,7 +1340,7 @@ static void RB_DrawEffectSurfaceSprites( shaderStage_t *stage, shaderCommands_t
+ 		{
+ 			for (posj=0; posj<(1.0-posi); posj+=step)
+ 			{
+-				effecttime = (tr.refdef.time+10000.0*randomchart[randomindex])/stage->ss->fxDuration;
++				effecttime = (backEnd.refdef.time+10000.0*randomchart[randomindex])/stage->ss->fxDuration;
+ 				effectpos = (float)effecttime - (int)effecttime;
+ 
+ 				randomindex2 = randomindex+effecttime;
 diff --git a/code/rd-vanilla/tr_world.cpp b/code/rd-vanilla/tr_world.cpp
-index 4a472e24..e7430451 100644
+index 4a472e24..e14c8243 100644
 --- a/code/rd-vanilla/tr_world.cpp
 +++ b/code/rd-vanilla/tr_world.cpp
 @@ -70,33 +70,33 @@ static qboolean	R_CullGrid( srfGridMesh_t *cv ) {
@@ -8298,7 +10006,7 @@ index 4a472e24..e7430451 100644
  	}
  
  	return qfalse;
-@@ -179,7 +179,7 @@ static int R_DlightFace( srfSurfaceFace_t *face, int dlightBits ) {
+@@ -179,10 +179,10 @@ static int R_DlightFace( srfSurfaceFace_t *face, int dlightBits ) {
  	}
  
  	if ( !dlightBits ) {
@@ -8306,8 +10014,12 @@ index 4a472e24..e7430451 100644
 +		SE_PC.c_dlightSurfacesCulled++;
  	}
  
- 	face->dlightBits = dlightBits;
-@@ -207,7 +207,7 @@ static int R_DlightGrid( srfGridMesh_t *grid, int dlightBits ) {
+-	face->dlightBits = dlightBits;
++	face->dlightBits[SE_DLW] = dlightBits;
+ 	return dlightBits;
+ }
+ 
+@@ -207,16 +207,16 @@ static int R_DlightGrid( srfGridMesh_t *grid, int dlightBits ) {
  	}
  
  	if ( !dlightBits ) {
@@ -8315,8 +10027,19 @@ index 4a472e24..e7430451 100644
 +		SE_PC.c_dlightSurfacesCulled++;
  	}
  
- 	grid->dlightBits = dlightBits;
-@@ -239,7 +239,7 @@ static int R_DlightTrisurf( srfTriangles_t *surf, int dlightBits ) {
+-	grid->dlightBits = dlightBits;
++	grid->dlightBits[SE_DLW] = dlightBits;
+ 	return dlightBits;
+ }
+ 
+ static int R_DlightTrisurf( srfTriangles_t *surf, int dlightBits ) {
+ 	// FIXME: more dlight culling to trisurfs...
+-	surf->dlightBits = dlightBits;
++	surf->dlightBits[SE_DLW] = dlightBits;
+ 	return dlightBits;
+ #if 0
+ 	int			i;
+@@ -239,10 +239,10 @@ static int R_DlightTrisurf( srfTriangles_t *surf, int dlightBits ) {
  	}
  
  	if ( !dlightBits ) {
@@ -8324,7 +10047,11 @@ index 4a472e24..e7430451 100644
 +		SE_PC.c_dlightSurfacesCulled++;
  	}
  
- 	grid->dlightBits = dlightBits;
+-	grid->dlightBits = dlightBits;
++	grid->dlightBits[SE_DLW] = dlightBits;
+ 	return dlightBits;
+ #endif
+ }
 @@ -268,7 +268,7 @@ static int R_DlightSurface( msurface_t *surf, int dlightBits ) {
  	}
  
@@ -8334,6 +10061,25 @@ index 4a472e24..e7430451 100644
  	}
  
  	return dlightBits;
+@@ -296,15 +296,15 @@ static void R_AddWorldSurface( msurface_t *surf, int dlightBits, qboolean noView
+ 			// already in this view, but lets make sure all the dlight bits are set
+ 			if ( *surf->data == SF_FACE )
+ 			{
+-				((srfSurfaceFace_t *)surf->data)->dlightBits |= dlightBits;
++				((srfSurfaceFace_t *)surf->data)->dlightBits[SE_DLW] |= dlightBits;
+ 			}
+ 			else if ( *surf->data == SF_GRID )
+ 			{
+-				((srfGridMesh_t *)surf->data)->dlightBits |= dlightBits;
++				((srfGridMesh_t *)surf->data)->dlightBits[SE_DLW] |= dlightBits;
+ 			}
+ 			else if ( *surf->data == SF_TRIANGLES )
+ 			{
+-				((srfTriangles_t *)surf->data)->dlightBits |= dlightBits;
++				((srfTriangles_t *)surf->data)->dlightBits[SE_DLW] |= dlightBits;
+ 			}
+ 			return;
+ 		}
 @@ -597,7 +597,7 @@ static void R_RecursiveWorldNode( mnode_t *node, int planeBits, int dlightBits )
  		int			c;
  		msurface_t	*surf, **mark;
@@ -8543,7 +10289,7 @@ index c9dd4880..139ce40f 100644
  
  
 diff --git a/code/server/sv_world.cpp b/code/server/sv_world.cpp
-index be960b52..cdc4b8af 100644
+index be960b52..556541eb 100644
 --- a/code/server/sv_world.cpp
 +++ b/code/server/sv_world.cpp
 @@ -210,6 +210,9 @@ SV_LinkEntity
@@ -8622,6 +10368,129 @@ index be960b52..cdc4b8af 100644
  
  		if ( ap->count == ap->maxcount ) {
  			Com_DPrintf ("SV_AreaEntities: reached maxcount (%d)\n",ap->maxcount);
+@@ -596,7 +637,15 @@ SV_ClipMoveToEntities
+ void SV_ClipMoveToEntities( moveclip_t *clip ) {
+ 	int			i, num;
+ 	gentity_t		*touchlist[MAX_GENTITIES], *touch, *owner;
++#ifdef SHADEREMU
++	// (without Ghoul2 collision every record is empty and none is read: the traces here are raw room, their words before the
++	// records alone written, and SV_Trace makes its caller's records empty once; q_shared.h's SE_TraceHeadCopy)
++	const bool se_g2 = clip->eG2TraceType != G2_NOCOLLIDE;
++	alignas( 16 ) unsigned char se_traces[2][sizeof( trace_t )];
++	trace_t		&trace = *(trace_t *)se_traces[0], &oldTrace = *(trace_t *)se_traces[1];
++#else
+ 	trace_t		trace, oldTrace;
++#endif
+ 	clipHandle_t	clipHandle;
+ 	const float		*origin, *angles;
+ 
+@@ -681,6 +730,13 @@ void SV_ClipMoveToEntities( moveclip_t *clip ) {
+ 				(float *)clip->mins, (float *)clip->maxs, clipHandle,  clip->contentmask,
+ 				origin, angles);
+ #else
++#ifdef SHADEREMU
++			if ( !se_g2 )
++				CM_SE_TransformedBoxTraceHead ( &trace, clip->start, clip->end,
++					clip->mins, clip->maxs, clipHandle,  clip->contentmask,
++					origin, angles);
++			else
++#endif
+ 			CM_TransformedBoxTrace ( &trace, clip->start, clip->end,
+ 				clip->mins, clip->maxs, clipHandle,  clip->contentmask,
+ 				origin, angles);
+@@ -689,7 +745,12 @@ void SV_ClipMoveToEntities( moveclip_t *clip ) {
+ 		//ALSO: 2 players can be standing next to each other and this function will
+ 		//think they're in each other!!!
+ 		}
++#ifdef SHADEREMU
++		if ( se_g2 )	// (read only by the Ghoul2 collision below)
++			memcpy( &oldTrace, &clip->trace, sizeof( trace_t ) );
++#else
+ 		oldTrace = clip->trace;
++#endif
+ 
+ 		if ( trace.allsolid )
+ 		{
+@@ -718,7 +779,14 @@ void SV_ClipMoveToEntities( moveclip_t *clip ) {
+ 			oldStart = clip->trace.startsolid;
+ 
+ 			trace.entityNum = touch->s.number;
++#ifdef SHADEREMU
++			if ( se_g2 )
++				SE_TraceCopy( &clip->trace, &trace );
++			else
++				SE_TraceHeadCopy( &clip->trace, &trace );
++#else
+ 			clip->trace = trace;
++#endif
+ 			if ( oldStart )
+ 			{
+ 				clip->trace.startsolid = qtrue;
+@@ -797,7 +865,11 @@ Ghoul2 Insert Start
+ 				// did we actually touch this model? If not, lets reset this ent as being hit..
+ 				if (newTraceRecSize == oldTraceRecSize)
+ 				{
++#ifdef SHADEREMU
++					memcpy( &clip->trace, &oldTrace, sizeof( trace_t ) );
++#else
+ 					clip->trace = oldTrace;
++#endif
+ 				}
+ 				else//this trace was valid, so copy the best collision into quake trace place info
+ 				{
+@@ -843,7 +915,13 @@ Ghoul2 Insert End
+ 	assert( !Q_isnan(start[0])&&!Q_isnan(start[1])&&!Q_isnan(start[2])&&!Q_isnan(end[0])&&!Q_isnan(end[1])&&!Q_isnan(end[2]));
+ #endif// _DEBUG
+ 
++#ifdef SHADEREMU
++	const bool se_g2 = eG2TraceType != G2_NOCOLLIDE;
++	alignas( 16 ) unsigned char se_clip[sizeof( moveclip_t )];	// (SV_ClipMoveToEntities: its trace's records unread without Ghoul2)
++	moveclip_t	&clip = *(moveclip_t *)se_clip;
++#else
+ 	moveclip_t	clip;
++#endif
+ 	int			i;
+ //	int			startMS, endMS;
+ 	float		world_frac;
+@@ -866,11 +944,23 @@ Ghoul2 Insert End
+ 	//doors, etc.  This prevents us from being able to shorten the trace so that we can
+ 	//ignore all ents past this endpoint... perhaps need to check the entityNum in this
+ 	//BoxTrace or have it not clip against entity brushes here.
++#ifdef SHADEREMU
++	if ( !se_g2 )
++		CM_SE_BoxTraceHead( &clip.trace, start, end, mins, maxs, 0, contentmask );
++	else
++#endif
+ 	CM_BoxTrace( &clip.trace, start, end, mins, maxs, 0, contentmask );
+ 	clip.trace.entityNum = clip.trace.fraction != 1.0 ? ENTITYNUM_WORLD : ENTITYNUM_NONE;
+ 	if ( clip.trace.fraction == 0 )
+ 	{// blocked immediately by the world
++#ifdef SHADEREMU
++		if ( se_g2 )
++			SE_TraceCopy( results, &clip.trace );
++		else
++			SE_TraceHeadCopy( results, &clip.trace ), SE_TraceEmptyRecords( results );
++#else
+ 		*results = clip.trace;
++#endif
+ //		goto addtime;
+ 		return;
+ 	}
+@@ -935,7 +1025,14 @@ Ghoul2 Insert End
+ 
+ 	//scale the trace back down by the previous fraction
+ 	clip.trace.fraction *= world_frac;
++#ifdef SHADEREMU
++	if ( se_g2 )
++		SE_TraceCopy( results, &clip.trace );
++	else
++		SE_TraceHeadCopy( results, &clip.trace ), SE_TraceEmptyRecords( results );
++#else
+ 	*results = clip.trace;
++#endif
+ 
+ /*
+ addtime:
 diff --git a/code/ui/ui_main.cpp b/code/ui/ui_main.cpp
 index 4a20f0ee..27bb06df 100644
 --- a/code/ui/ui_main.cpp
@@ -8710,7 +10579,7 @@ index 2f5cbdf8..70978752 100644
  }
  
 diff --git a/codeJK2/cgame/FxPrimitives.cpp b/codeJK2/cgame/FxPrimitives.cpp
-index 0b83bc19..6b3b6d7c 100644
+index 0b83bc19..1fa66703 100644
 --- a/codeJK2/cgame/FxPrimitives.cpp
 +++ b/codeJK2/cgame/FxPrimitives.cpp
 @@ -102,7 +102,9 @@ void CParticle::Die()
@@ -8724,6 +10593,186 @@ index 0b83bc19..6b3b6d7c 100644
  		VectorNormalize( norm );
  
  		theFxScheduler.PlayEffect( mDeathFxID, mOrigin1, norm );
+@@ -231,11 +233,63 @@ bool CParticle::Update()
+ //----------------------------
+ // Update Origin
+ //----------------------------
++#ifdef SHADEREMU
++// The velocity and the place a particle moves to, one function for UpdateOrigin and for its collision made ahead (the same
++// words both ways: SE_AheadMake)
++static void __attribute__(( noinline )) se_fx_next( const float *org, float *vel, const float *accel, float *new_origin )
++{
++	VectorMA( vel, theFxHelper.mFloatFrameTime, accel, vel );
++	new_origin[0] = org[0] + theFxHelper.mFloatFrameTime * vel[0];
++	new_origin[1] = org[1] + theFxHelper.mFloatFrameTime * vel[1];
++	new_origin[2] = org[2] + theFxHelper.mFloatFrameTime * vel[2];
++}
++#define SE_FX_TEST	( FX_EXPENSIVE_PHYSICS | FX_USE_BBOX )
++// on a job slot (or the first core): what UpdateOrigin will ask of the world this frame, if its words are as now
++void CParticle::SE_AheadMake( seFxAhead_t *e )
++{
++	vec3_t	vel, to;
++	VectorCopy( mVel, vel );
++	se_fx_next( mOrigin1, vel, mAccel, to );
++	VectorCopy( mOrigin1, e->from );
++	VectorCopy( to, e->to );
++	VectorCopy( mMin, e->mins );
++	VectorCopy( mMax, e->maxs );
++	e->flags = (int)( mFlags & SE_FX_TEST );
++	e->contents = -1;
++	e->traced = 0;
++	bool solid = true;
++	if ( !( mFlags & FX_EXPENSIVE_PHYSICS ) ) {
++		e->contents = CG_PointContents( to, ENTITYNUM_WORLD );
++		solid = !!( e->contents & ( MASK_SHOT | CONTENTS_WATER ) );
++	}
++	if ( solid ) {
++		trace_t	trace;
++		const bool box = !!( mFlags & FX_USE_BBOX );
++		CG_SE_TraceAhead( &trace, e->from, box ? e->mins : NULL, box ? e->maxs : NULL, e->to, -1, ( MASK_SHOT | CONTENTS_WATER ) );
++		memcpy( e->head, &trace, SE_FX_HEAD );
++		e->traced = 1;
++	}
++}
++static int se_fx_check = -1;	// JK2_FX_AHEAD=check: made anyway and compared
++#endif
+ bool CParticle::UpdateOrigin()
+ {
+ 	vec3_t	new_origin;
+ //	float	ftime, time2;
+ 
++#ifdef SHADEREMU
++	se_fx_next( mOrigin1, mVel, mAccel, new_origin );
++	const seFxAhead_t *se_a = FX_SE_AheadFor( this, mSeAhead );
++	if ( se_a && ( se_a->flags != (int)( mFlags & SE_FX_TEST ) || memcmp( se_a->from, mOrigin1, 12 ) || memcmp( se_a->to, new_origin, 12 ) ||
++		 ( ( mFlags & FX_USE_BBOX ) && ( memcmp( se_a->mins, mMin, 12 ) || memcmp( se_a->maxs, mMax, 12 ) ) ) ) ) {
++		se_a = NULL;
++		FX_SE_AheadCount( 2 );	// (made ahead, and moved since)
++	}
++	if ( se_fx_check < 0 ) {
++		const char *e = getenv( "JK2_FX_AHEAD" );
++		se_fx_check = e && !strcmp( e, "check" );
++	}
++#else
+ 	UpdateVelocity();
+ 
+ 	// Calc the time differences
+@@ -247,6 +301,7 @@ bool CParticle::UpdateOrigin()
+ 	new_origin[0] = mOrigin1[0] + theFxHelper.mFloatFrameTime * mVel[0];// + time2 * mVel[0];
+ 	new_origin[1] = mOrigin1[1] + theFxHelper.mFloatFrameTime * mVel[1];// + time2 * mVel[1];
+ 	new_origin[2] = mOrigin1[2] + theFxHelper.mFloatFrameTime * mVel[2];// + time2 * mVel[2];
++#endif
+ 
+ 	// Only perform physics if this object is tagged to do so
+ 	if ( (mFlags & FX_APPLY_PHYSICS) )
+@@ -260,7 +315,18 @@ bool CParticle::UpdateOrigin()
+ 		else
+ 		{
+ 			// if this returns solid, we need to do a trace
++#ifdef SHADEREMU
++			int se_c;
++			if ( se_a && se_a->contents >= 0 ) {
++				se_c = se_a->contents;
++				if ( se_fx_check && CG_PointContents( new_origin, ENTITYNUM_WORLD ) != se_c )
++					FX_SE_AheadCount( 3 );	// (wrong)
++			} else
++				se_c = CG_PointContents( new_origin, ENTITYNUM_WORLD );
++			solid = !!( se_c & ( MASK_SHOT | CONTENTS_WATER ) );
++#else
+ 			solid = !!(CG_PointContents( new_origin, ENTITYNUM_WORLD ) & ( MASK_SHOT | CONTENTS_WATER ));
++#endif
+ 		}
+ 
+ 		if ( solid )
+@@ -268,6 +334,18 @@ bool CParticle::UpdateOrigin()
+ 			trace_t	trace;
+ 			float	dot;
+ 
++#ifdef SHADEREMU
++			if ( se_a && se_a->traced ) {
++				memcpy( &trace, se_a->head, SE_FX_HEAD );	// (the words UpdateOrigin reads are all before the Ghoul2 records)
++				if ( se_fx_check ) {
++					trace_t se_t;
++					theFxHelper.Trace( &se_t, mOrigin1, ( mFlags & FX_USE_BBOX ) ? mMin : NULL, ( mFlags & FX_USE_BBOX ) ? mMax : NULL,
++							   new_origin, -1, ( MASK_SHOT | CONTENTS_WATER ) );
++					if ( memcmp( &se_t, se_a->head, SE_FX_HEAD ) )
++						FX_SE_AheadCount( 3 );	// (wrong)
++				}
++			} else
++#endif
+ 			if ( mFlags & FX_USE_BBOX )
+ 			{
+ 				theFxHelper.Trace( &trace, mOrigin1, mMin, mMax, new_origin, -1, ( MASK_SHOT | CONTENTS_WATER ) );
+diff --git a/codeJK2/cgame/FxPrimitives.h b/codeJK2/cgame/FxPrimitives.h
+index 11738428..2445590c 100644
+--- a/codeJK2/cgame/FxPrimitives.h
++++ b/codeJK2/cgame/FxPrimitives.h
+@@ -107,6 +107,21 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
+ #define FX_GROW				0x04000000		// lightning grows from start point to end point over the course of its life
+ 
+ //------------------------------
++#ifdef SHADEREMU
++// ShaderEmu: a particle's collision made ahead on a job slot (FxUtil.cpp's FX_SE_Ahead; docs/games/jk2.md, "The effects'
++// collision on workers"): kept by its exact words, the place it moves from and to, its box and the flags that choose the
++// test; the trace's words before its Ghoul2 records (which UpdateOrigin does not read)
++#define SE_FX_HEAD	( (int)offsetof( trace_t, G2CollisionMap ) )
++struct seFxAhead_t {
++	class CParticle *fx;
++	int		made, flags, contents;	// made: the frame's mark when made; contents: -1 not asked
++	float	from[3], to[3], mins[3], maxs[3];
++	int		traced, unused[3];
++	unsigned char head[( SE_FX_HEAD + 15 ) & ~15];
++} __attribute__(( aligned( 16 ) ));
++const seFxAhead_t *FX_SE_AheadFor( const class CParticle *fx, int at );
++void FX_SE_AheadCount( int which );
++#endif
+ class CEffect
+ {
+ protected:
+@@ -133,6 +148,11 @@ public:
+ 	CEffect()			{ memset( &mRefEnt, 0, sizeof( refEntity_t )); }
+ 	virtual ~CEffect() {}
+ 	virtual void Die() {}
++#ifdef SHADEREMU
++	virtual class CParticle *SE_Particle() { return NULL; }	// (one whose Update calls CParticle::UpdateOrigin)
++	inline unsigned int SE_Flags() const { return mFlags; }
++	inline int SE_TimeStart() const { return mTimeStart; }
++#endif
+ 
+ 	virtual bool Update()
+ 	{	// Game pausing can cause dumb time things to happen, so kill the effect in this instance
+@@ -305,6 +325,11 @@ public:
+ 
+ 	virtual void Die();
+ 	virtual bool Update();
++#ifdef SHADEREMU
++	int		mSeAhead;		// its entry in FxUtil.cpp's table this frame (or anything: the entry names its particle)
++	virtual CParticle *SE_Particle() { return this; }
++	void	SE_AheadMake( seFxAhead_t *e );
++#endif
+ 
+ 	inline void SetShader( qhandle_t sh )	{ mRefEnt.customShader = sh;				}
+ 
+@@ -348,6 +373,9 @@ public:
+ 	virtual ~CLine() {}
+ 	virtual void Die() {}
+ 	virtual bool Update();
++#ifdef SHADEREMU
++	virtual CParticle *SE_Particle() { return NULL; }
++#endif
+ 	virtual bool Cull();
+ 
+ 
+@@ -479,6 +507,9 @@ public:
+ 	virtual ~CCylinder() {}
+ 
+ 	virtual bool Update();
++#ifdef SHADEREMU
++	virtual CParticle *SE_Particle() { return NULL; }
++#endif
+ 
+ 	inline void SetSize2Start( float sz )	{ mSize2Start = sz;			}
+ 	inline void SetSize2End( float sz )		{ mSize2End = sz;			}
 diff --git a/codeJK2/cgame/FxScheduler.cpp b/codeJK2/cgame/FxScheduler.cpp
 index fd4f9cef..936c579e 100644
 --- a/codeJK2/cgame/FxScheduler.cpp
@@ -8798,6 +10847,133 @@ index fd4f9cef..936c579e 100644
  	char	sfile[MAX_QPATH];
  
  	// Get an extenstion stripped version of the file
+diff --git a/codeJK2/cgame/FxUtil.cpp b/codeJK2/cgame/FxUtil.cpp
+index d0b2386a..87364e22 100644
+--- a/codeJK2/cgame/FxUtil.cpp
++++ b/codeJK2/cgame/FxUtil.cpp
+@@ -195,10 +195,122 @@ bool FX_ActiveFx(void)
+ //
+ // Adds all fx to the view
+ //-------------------------
++#ifdef SHADEREMU
++// ---- the effects' collision made ahead (docs/games/jk2.md, "The effects' collision on workers")
++// A particle with physics asks the world, every frame, the contents where it moves to and, if solid, a trace there: 0.4 to 0.8
++// million instructions a frame of play on the first core (CG_PointContents goes over every brush entity). When FX_Add begins
++// every entity is placed and nothing moves the world or the entities until it ends, so what each particle will ask is made
++// first, on job slots (se_slot.h: each has its own marks, kept traces and box) and on this core, and UpdateOrigin takes it
++// when its words are the same (FxPrimitives.cpp): an effect made or moved since asks for itself. What is asked is only read:
++// the effects, their order, their random numbers and what they spawn are as before.
++// JK2_FX_AHEAD=core: none made ahead; =inline: all on this core; =check: made, and asked again and compared;
++// JK2_FX_LOG=N: a line every N frames (particles listed, taken, moved since, wrong)
++#include <setjmp.h>
++#include "../../shared/qcommon/se_slot.h"
++extern "C" {
++int SE_SlotGive( int slot, void ( *fn )( void * ), void *arg );
++void SE_SlotJoin( int handle );
++int SE_SlotMode( void );
++struct seAbort_t { jmp_buf *jb; int why, unused[2]; } __attribute__(( aligned( 16 ) ));
++extern seAbort_t se_abort[SE_SLOTS + 1];
++}
++#define SE_FX_AHEAD 512
++static seFxAhead_t se_fx_ahead[SE_FX_AHEAD];
++static int se_fx_n, se_fx_mark = 1;
++struct seFxPart_t { int from, to, handle, unused; } __attribute__(( aligned( 16 ) ));
++static seFxPart_t se_fx_parts[SE_SLOTS + 1];
++static int se_fx_mode = -1, se_fx_log, se_fx_frames;
++static unsigned se_fx_counts[4];	// listed, taken, moved since, wrong
++const seFxAhead_t *FX_SE_AheadFor( const CParticle *fx, int at )
++{
++	if ( (unsigned)at >= (unsigned)se_fx_n )
++		return NULL;
++	const seFxAhead_t *e = &se_fx_ahead[at];
++	if ( e->fx != fx || e->made != se_fx_mark )
++		return NULL;
++	se_fx_counts[1]++;
++	return e;
++}
++void FX_SE_AheadCount( int which ) { se_fx_counts[which]++; }
++static void se_fx_part( void *arg )
++{
++	const seFxPart_t *pt = (const seFxPart_t *)arg;
++	const int slot = SE_Slot(), mark = se_fx_mark;
++	volatile int k = pt->from;
++	jmp_buf jb;
++	if ( setjmp( jb ) ) {
++		se_abort[slot].jb = NULL;	// (ended: the rest asked by their particles in their turn)
++		return;
++	}
++	se_abort[slot].jb = &jb;
++	for ( ; k < pt->to; k++ ) {
++		seFxAhead_t *e = &se_fx_ahead[k];
++		e->fx->SE_AheadMake( e );
++		e->made = mark;
++	}
++	se_abort[slot].jb = NULL;
++}
++static void FX_SE_Ahead( void )
++{
++	if ( se_fx_mode < 0 ) {
++		const char *e = getenv( "JK2_FX_AHEAD" );
++		se_fx_mode = e && !strcmp( e, "core" ) ? 0 : e && !strcmp( e, "inline" ) ? 1 : 2;
++		e = getenv( "JK2_FX_LOG" );
++		se_fx_log = e ? atoi( e ) : 0;
++	}
++	if ( se_fx_log > 0 && ++se_fx_frames % se_fx_log == 0 ) {
++		Com_Printf( "jk2fx: %u particles listed, %u taken, %u moved since, %u wrong\n", se_fx_counts[0], se_fx_counts[1],
++			    se_fx_counts[2], se_fx_counts[3] );
++		memset( se_fx_counts, 0, sizeof se_fx_counts );
++	}
++	se_fx_n = 0;
++	se_fx_mark++;
++	if ( !se_fx_mode )
++		return;
++	SEffectList *ef = effectList;
++	for ( int i = 0; i < MAX_EFFECTS && se_fx_n < SE_FX_AHEAD; i++, ef++ ) {
++		if ( !ef->mEffect || theFxHelper.mTime > ef->mKillTime )
++			continue;
++		const unsigned flags = ef->mEffect->SE_Flags();
++		if ( ( flags & ( FX_APPLY_PHYSICS | FX_RELATIVE ) ) != FX_APPLY_PHYSICS || ef->mEffect->SE_TimeStart() >= theFxHelper.mTime )
++			continue;
++		CParticle *p = ef->mEffect->SE_Particle();
++		if ( !p )
++			continue;
++		seFxAhead_t *e = &se_fx_ahead[se_fx_n];
++		e->fx = p;
++		e->made = 0;
++		p->mSeAhead = se_fx_n++;
++	}
++	se_fx_counts[0] += se_fx_n;
++	if ( se_fx_n ) {
++		// (about 6 thousand instructions a particle: a part of 4 or more on each slot, the first part here)
++		int parts = se_fx_mode == 2 && SE_SlotMode() == 2 ? se_fx_n / 4 : 1;
++		if ( parts > SE_SLOTS + 1 )
++			parts = SE_SLOTS + 1;
++		if ( parts < 1 )
++			parts = 1;
++		for ( int k = 0; k < parts; k++ ) {
++			seFxPart_t *pt = &se_fx_parts[k];
++			pt->from = se_fx_n * k / parts, pt->to = se_fx_n * ( k + 1 ) / parts, pt->handle = 0;
++		}
++		for ( int k = 1; k < parts; k++ )
++			if ( !( se_fx_parts[k].handle = SE_SlotGive( k, se_fx_part, &se_fx_parts[k] ) ) )
++				se_fx_part( &se_fx_parts[k] );
++		se_fx_part( &se_fx_parts[0] );
++		for ( int k = 1; k < parts; k++ )
++			if ( se_fx_parts[k].handle )
++				SE_SlotJoin( se_fx_parts[k].handle );
++	}
++}
++#endif
+ void FX_Add( void )
+ {
+ 	int			i;
+ 	SEffectList	*ef;
++#ifdef SHADEREMU
++	FX_SE_Ahead();
++#endif
+ 
+ 	drawnFx = 0;
+ 	mParticles = 0;
 diff --git a/codeJK2/cgame/cg_camera.cpp b/codeJK2/cgame/cg_camera.cpp
 index a2502085..566b64f2 100644
 --- a/codeJK2/cgame/cg_camera.cpp
@@ -9188,6 +11364,21 @@ index bdb72696..0919f611 100644
  	{
  		char	text[1024]={0};
  		cgi_SP_GetStringTextString( "INGAME_ALONGTIME", text, sizeof(text) );
+diff --git a/codeJK2/cgame/cg_local.h b/codeJK2/cgame/cg_local.h
+index 67946c5d..5f32a977 100644
+--- a/codeJK2/cgame/cg_local.h
++++ b/codeJK2/cgame/cg_local.h
+@@ -759,6 +759,10 @@ void CG_GetTagWorldPosition( refEntity_t *model, char *tag, vec3_t pos, vec3_t a
+ // cg_predict.c
+ //
+ int	CG_PointContents( const vec3_t point, int passEntityNum );
++#ifdef SHADEREMU
++void CG_SE_TraceAhead( trace_t *result, const vec3_t start, const vec3_t mins, const vec3_t maxs, const vec3_t end,
++					 const int skipNumber, const int mask );
++#endif
+ void CG_Trace( trace_t *result, const vec3_t start, const vec3_t mins, const vec3_t maxs, const vec3_t end,
+ 					 const int skipNumber, const int mask, const EG2_Collision eG2TraceType=G2_NOCOLLIDE, const int useLod=0 );
+ void CG_PredictPlayerState( void );
 diff --git a/codeJK2/cgame/cg_localents.cpp b/codeJK2/cgame/cg_localents.cpp
 index dd1a72ec..60f4f652 100644
 --- a/codeJK2/cgame/cg_localents.cpp
@@ -9484,13 +11675,20 @@ index ef21d32f..879d98e4 100644
  			if ( chair && chair->gent )
  			{
 diff --git a/codeJK2/cgame/cg_predict.cpp b/codeJK2/cgame/cg_predict.cpp
-index 8c73e521..df8d9ee3 100644
+index 8c73e521..2cded4c6 100644
 --- a/codeJK2/cgame/cg_predict.cpp
 +++ b/codeJK2/cgame/cg_predict.cpp
-@@ -70,6 +70,17 @@ void CG_BuildSolidList( void )
+@@ -70,6 +70,24 @@ void CG_BuildSolidList( void )
  	}
  }
  
++#ifdef SHADEREMU
++// (the engine's, in the same program: cm_public.h)
++void		CM_SE_BoxTraceHead ( trace_t *results, const vec3_t start, const vec3_t end, const vec3_t mins, const vec3_t maxs,
++						  clipHandle_t model, int brushmask);
++void		CM_SE_TransformedBoxTraceHead( trace_t *results, const vec3_t start, const vec3_t end, const vec3_t mins,
++						  const vec3_t maxs, clipHandle_t model, int brushmask, const vec3_t origin, const vec3_t angles);
++#endif
 +#ifdef SHADEREMU
 +static qboolean se_apart( const vec3_t origin, const vec3_t bmins, const vec3_t bmaxs, const vec3_t lo, const vec3_t hi ) {
 +	for ( int k = 0 ; k < 3 ; k++ ) {
@@ -9505,7 +11703,18 @@ index 8c73e521..df8d9ee3 100644
  /*
  ====================
  CG_ClipMoveToEntities
-@@ -85,6 +96,16 @@ void CG_ClipMoveToEntities ( const vec3_t start, const vec3_t mins, const vec3_t
+@@ -79,12 +97,27 @@ CG_ClipMoveToEntities
+ void CG_ClipMoveToEntities ( const vec3_t start, const vec3_t mins, const vec3_t maxs, const vec3_t end,
+ 							int skipNumber, int mask, trace_t *tr ) {
+ 	int			i, x, zd, zu;
++#ifdef SHADEREMU
++	alignas( 16 ) unsigned char se_trace[sizeof( trace_t )];	// (its words before the records alone: they are all empty)
++	trace_t		&trace = *(trace_t *)se_trace;
++#else
+ 	trace_t		trace;
++#endif
+ 	entityState_t	*ent;
+ 	clipHandle_t 	cmodel;
  	vec3_t		bmins, bmaxs;
  	vec3_t		origin, angles;
  	centity_t	*cent;
@@ -9522,7 +11731,7 @@ index 8c73e521..df8d9ee3 100644
  
  	for ( i = 0 ; i < cg_numSolidEntities ; i++ ) {
  		cent = cg_solidEntities[ i ];
-@@ -110,6 +131,17 @@ void CG_ClipMoveToEntities ( const vec3_t start, const vec3_t mins, const vec3_t
+@@ -110,6 +143,17 @@ void CG_ClipMoveToEntities ( const vec3_t start, const vec3_t mins, const vec3_t
  			//Let's use the lerpOrigin for now and see if it breaks anything...
  			//EvaluateTrajectory( &cent->currentState.pos, cg.snap->serverTime, origin );
  			VectorCopy( cent->lerpOrigin, origin );
@@ -9540,7 +11749,7 @@ index 8c73e521..df8d9ee3 100644
  
  		} else {
  			// encoded bbox
-@@ -122,6 +154,11 @@ void CG_ClipMoveToEntities ( const vec3_t start, const vec3_t mins, const vec3_t
+@@ -122,18 +166,32 @@ void CG_ClipMoveToEntities ( const vec3_t start, const vec3_t mins, const vec3_t
  			bmins[2] = -zd;
  			bmaxs[2] = zu;
  
@@ -9552,16 +11761,108 @@ index 8c73e521..df8d9ee3 100644
  			cmodel = cgi_CM_TempBoxModel( bmins, bmaxs );//, cent->gent->contents );
  			VectorCopy( vec3_origin, angles );
  			VectorCopy( cent->lerpOrigin, origin );
-@@ -150,6 +187,9 @@ CG_Trace
+ 		}
+ 
+ 
++#ifdef SHADEREMU
++		CM_SE_TransformedBoxTraceHead ( &trace, start, end,
++			mins, maxs, cmodel,  mask, origin, angles);
++#else
+ 		cgi_CM_TransformedBoxTrace ( &trace, start, end,
+ 			mins, maxs, cmodel,  mask, origin, angles);
++#endif
+ 
+ 		if (trace.allsolid || trace.fraction < tr->fraction) {
+ 			trace.entityNum = ent->number;
++#ifdef SHADEREMU
++			SE_TraceHeadCopy( tr, &trace );
++#else
+ 			*tr = trace;
++#endif
+ 		} else if (trace.startsolid) {
+ 			tr->startsolid = qtrue;
+ 		}
+@@ -150,14 +208,31 @@ CG_Trace
  */
  void	CG_Trace( trace_t *result, const vec3_t start, const vec3_t mins, const vec3_t maxs, const vec3_t end,
  					 const int skipNumber, const int mask, const EG2_Collision eG2TraceType/*=G2_NOCOLLIDE*/, const int useLod/*=0*/) {
 +#ifdef SHADEREMU
 +	SE_NOT_AHEAD( SE_WHY_TRACE );	// (not for a player made ahead: se_slot.h)
-+#endif
++	CG_SE_TraceAhead( result, start, mins, maxs, end, skipNumber, mask );
++}
++// CG_Trace's body, made on a job slot too: by the effects' collision made ahead (FxUtil.cpp), when every entity is placed
++void	CG_SE_TraceAhead( trace_t *result, const vec3_t start, const vec3_t mins, const vec3_t maxs, const vec3_t end,
++					 const int skipNumber, const int mask ) {
++	alignas( 16 ) unsigned char se_t[sizeof( trace_t )];	// (its words before the records alone; the result's made empty once)
++	trace_t	&t = *(trace_t *)se_t;
++	CM_SE_BoxTraceHead ( &t, start, end, mins, maxs, 0, mask);
++#else
  	trace_t	t;
  
  	cgi_CM_BoxTrace ( &t, start, end, mins, maxs, 0, mask);
++#endif
+ 	t.entityNum = t.fraction != 1.0 ? ENTITYNUM_WORLD : ENTITYNUM_NONE;
+ 	// check all other solid models
+ 	CG_ClipMoveToEntities (start, mins, maxs, end, skipNumber, mask, &t);
+ 
++#ifdef SHADEREMU
++	SE_TraceHeadCopy( result, &t );
++	SE_TraceEmptyRecords( result );
++#else
+ 	*result = t;
++#endif
+ }
+ 
+ /*
+diff --git a/codeJK2/cgame/cg_syscalls.cpp b/codeJK2/cgame/cg_syscalls.cpp
+index d1b2d1be..865dcf1d 100644
+--- a/codeJK2/cgame/cg_syscalls.cpp
++++ b/codeJK2/cgame/cg_syscalls.cpp
+@@ -119,6 +119,36 @@ int		cgi_CM_NumInlineModels( void ) {
+ 	return Q_syscall( CG_CM_NUMINLINEMODELS );
+ }
+ 
++#ifdef SHADEREMU
++// (ShaderEmu: the collision questions asked straight of the engine in the same program, not through Q_syscall: its sixteen
++// arguments copied, two switches and the game's frame's poll were some 0.25 million instructions a frame of play on the
++// first core, docs/games/jk2.md, "Fewer instructions". They only read, so a player made ahead asks them as before)
++clipHandle_t CM_InlineModel( int index );
++clipHandle_t CM_TempBoxModel( const vec3_t mins, const vec3_t maxs );
++int			CM_PointContents( const vec3_t p, clipHandle_t model );
++int			CM_TransformedPointContents( const vec3_t p, clipHandle_t model, const vec3_t origin, const vec3_t angles );
++void		CM_BoxTrace ( trace_t *results, const vec3_t start, const vec3_t end, const vec3_t mins, const vec3_t maxs,
++						  clipHandle_t model, int brushmask);
++void		CM_TransformedBoxTrace( trace_t *results, const vec3_t start, const vec3_t end, const vec3_t mins, const vec3_t maxs,
++						  clipHandle_t model, int brushmask, const vec3_t origin, const vec3_t angles);
++clipHandle_t cgi_CM_InlineModel( int index ) { return CM_InlineModel( index ); }
++clipHandle_t cgi_CM_TempBoxModel( const vec3_t mins, const vec3_t maxs ) { return CM_TempBoxModel( mins, maxs ); }
++int		cgi_CM_PointContents( const vec3_t p, clipHandle_t model ) { return CM_PointContents( p, model ); }
++int		cgi_CM_TransformedPointContents( const vec3_t p, clipHandle_t model, const vec3_t origin, const vec3_t angles ) {
++	return CM_TransformedPointContents( p, model, origin, angles );
++}
++void	cgi_CM_BoxTrace( trace_t *results, const vec3_t start, const vec3_t end,
++						  const vec3_t mins, const vec3_t maxs,
++						  clipHandle_t model, int brushmask ) {
++	CM_BoxTrace( results, start, end, mins, maxs, model, brushmask );
++}
++void	cgi_CM_TransformedBoxTrace( trace_t *results, const vec3_t start, const vec3_t end,
++						  const vec3_t mins, const vec3_t maxs,
++						  clipHandle_t model, int brushmask,
++						  const vec3_t origin, const vec3_t angles ) {
++	CM_TransformedBoxTrace( results, start, end, mins, maxs, model, brushmask, origin, angles );
++}
++#else
+ clipHandle_t cgi_CM_InlineModel( int index ) {
+ 	return Q_syscall( CG_CM_INLINEMODEL, index );
+ }
+@@ -147,6 +177,7 @@ void	cgi_CM_TransformedBoxTrace( trace_t *results, const vec3_t start, const vec
+ 						  const vec3_t origin, const vec3_t angles ) {
+ 	Q_syscall( CG_CM_TRANSFORMEDBOXTRACE, results, start, end, mins, maxs, model, brushmask, origin, angles );
+ }
++#endif
+ 
+ int		cgi_CM_MarkFragments( int numPoints, const vec3_t *points,
+ 				const vec3_t projection,
 diff --git a/codeJK2/game/AI_Stormtrooper.cpp b/codeJK2/game/AI_Stormtrooper.cpp
 index 8d4a2d83..17f87529 100644
 --- a/codeJK2/game/AI_Stormtrooper.cpp
@@ -9656,10 +11957,10 @@ index 221cf26d..f87c9246 100644
  void WriteInUseBits(void);
  void ReadInUseBits(void);
 diff --git a/codeJK2/game/g_main.cpp b/codeJK2/game/g_main.cpp
-index 671b309a..6bc7f08a 100644
+index 671b309a..efa57d71 100644
 --- a/codeJK2/game/g_main.cpp
 +++ b/codeJK2/game/g_main.cpp
-@@ -28,6 +28,427 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
+@@ -28,6 +28,626 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
  #include "Q3_Interface.h"
  #include "g_nav.h"
  #include "g_roff.h"
@@ -9705,13 +12006,19 @@ index 671b309a..6bc7f08a 100644
 +// back every word that changed and counts those outside these lists ("not listed")
 +struct seRange_t { unsigned short at, bytes; };
 +#define SE_F( T, f ) { (unsigned short)offsetof( T, f ), (unsigned short)sizeof( ( (T *)0 )->f ) }
-+static const seRange_t se_ent_back[] = { SE_F( gentity_t, disconnectDebounceTime ), SE_F( gentity_t, setTime ),
-+	SE_F( gentity_t, lightLevel ), SE_F( gentity_t, e_clThinkFunc ), SE_F( gentity_t, pushDebounceTime ),
-+	SE_F( gentity_t, painDebounceTime ), SE_F( gentity_t, count ), SE_F( gentity_t, fx_time ), SE_F( gentity_t, delay ),
-+	SE_F( gentity_t, aimDebounceTime ), SE_F( gentity_t, misc_dlight_active ), SE_F( gentity_t, contents ),
-+	SE_F( gentity_t, svFlags ), SE_F( gentity_t, s.loopSound ), SE_F( gentity_t, s.eType ), SE_F( gentity_t, s.eFlags ),
-+	SE_F( gentity_t, s.apos.trBase ), SE_F( gentity_t, s.powerups ) };
-+static const seRange_t se_cl_back[] = { SE_F( gclient_t, ps ), SE_F( gclient_t, facial_blink ), SE_F( gclient_t, facial_frown ),
++// (an entity's: one list, as ranges for the check and as code for the take, SE_TakeEntity)
++#define SE_ENT_FIELDS( X ) X( disconnectDebounceTime ) X( setTime ) X( lightLevel ) X( e_clThinkFunc ) X( pushDebounceTime ) \
++	X( painDebounceTime ) X( count ) X( fx_time ) X( delay ) X( aimDebounceTime ) X( misc_dlight_active ) X( contents ) \
++	X( svFlags ) X( s.loopSound ) X( s.eType ) X( s.eFlags ) X( s.apos.trBase ) X( s.powerups )
++#define SE_ENT_RANGE( f ) SE_F( gentity_t, f ),
++static const seRange_t se_ent_back[] = { SE_ENT_FIELDS( SE_ENT_RANGE ) };
++// (a field the client's frame changed against the copy as given, back to the game's: none of these is a pointer)
++#define SE_TAKE_FIELD( f ) if ( memcmp( &s->f, &v->f, sizeof s->f ) ) memcpy( &g->f, &s->f, sizeof s->f );
++static inline void SE_TakeEntity( const gentity_t *s, const gentity_t *v, gentity_t *g ) { SE_ENT_FIELDS( SE_TAKE_FIELD ) }
++// (of a client's player state only legsYaw: JK2_SPLIT=check over the walk, 5 November 2026, found no other of its words
++// written, at ps's 172nd byte; the whole state was 360 words a client to compare at each take)
++static_assert( offsetof( gclient_t, ps.legsYaw ) == 172, "the word the check found" );
++static const seRange_t se_cl_back[] = { SE_F( gclient_t, ps.legsYaw ), SE_F( gclient_t, facial_blink ), SE_F( gclient_t, facial_frown ),
 +	SE_F( gclient_t, facial_aux ), SE_F( gclient_t, renderInfo ), SE_F( gclient_t, pers.cmd_angles ) };
 +static unsigned se_not_listed;
 +static int se_listed( const seRange_t *r, int n, size_t at )
@@ -9721,22 +12028,74 @@ index 671b309a..6bc7f08a 100644
 +			return 1;
 +	return 0;
 +}
-+// (the listed fields: a word that changed, back to the game's; a pointer field moved back)
-+static void se_give_listed( const void *now, const void *given, void *to, const seRange_t *r, int n, const unsigned short *offs, int np )
++// The listed words as tables made once (se_words_init): their places in the struct, whether each is a pointer field. The
++// give keeps only these words of what it gave (an entity's packed in se_gv_words, a client's at the start of se_gv_cl),
++// and the take compares those alone: before, the whole copy was copied again (1.26 MB) and every range walked a word
++// at once with a search of the pointer fields (269 thousand instructions a frame of the walk)
++static unsigned short se_ent_w[128], se_cl_w[2048];
++static unsigned char se_ent_ptr[128], se_cl_ptr[2048];
++static int se_ent_nw = -1, se_cl_nw, se_unseen;
++static uint32_t *se_gv_words;
++static int se_words_of( const seRange_t *r, int n, const unsigned short *offs, int np, unsigned short *w, unsigned char *ptr, int room )
 +{
-+	for ( int k = 0 ; k < n ; k++ ) {
-+		const uint32_t *a = (const uint32_t *)( (const char *)now + r[k].at ), *b = (const uint32_t *)( (const char *)given + r[k].at );
-+		uint32_t *t = (uint32_t *)( (char *)to + r[k].at );
-+		const int words = ( r[k].bytes + 3 ) / 4;
-+		for ( int w = 0 ; w < words ; w++ ) {
-+			if ( a[w] == b[w] )
-+				continue;
-+			uint32_t v = a[w];
-+			for ( int p = 0 ; p < np ; p++ )
-+				if ( offs[p] == r[k].at + w * 4 )
-+					v = (uint32_t)(uintptr_t)se_to_game( (gentity_t *)(uintptr_t)v );
-+			t[w] = v;
++	int nw = 0;
++	for ( size_t at = 0 ; at < 65536 ; at += 4 ) {
++		int in = 0;
++		for ( int k = 0 ; k < n ; k++ )
++			if ( at + 4 > r[k].at && at < (size_t)r[k].at + r[k].bytes )
++				in = 1;
++		if ( !in )
++			continue;
++		if ( nw == room ) {
++			gi.Printf( "jk2split: more listed words than %d\n", room );
++			break;
 +		}
++		w[nw] = (unsigned short)( at / 4 ), ptr[nw] = 0;
++		for ( int p = 0 ; p < np ; p++ )
++			if ( offs[p] == at )
++				ptr[nw] = 1;
++		nw++;
++	}
++	return nw;
++}
++static void se_words_init( void )
++{
++	if ( se_ent_nw >= 0 )
++		return;
++	for ( size_t k = 0 ; k < SE_COUNT( se_ent_back ) ; k++ )
++		if ( se_ent_back[k].at & 3 )
++			gi.Printf( "jk2split: an entity's listed field at %u is not on a word\n", se_ent_back[k].at );
++	for ( size_t k = 0 ; k < SE_COUNT( se_cl_back ) ; k++ )
++		if ( se_cl_back[k].at & 3 )
++			gi.Printf( "jk2split: a client's listed field at %u is not on a word\n", se_cl_back[k].at );
++	se_ent_nw = se_words_of( se_ent_back, SE_COUNT( se_ent_back ), se_ent_ptrs, SE_COUNT( se_ent_ptrs ), se_ent_w, se_ent_ptr, 128 );
++	se_cl_nw = se_words_of( se_cl_back, SE_COUNT( se_cl_back ), se_cl_ptrs, SE_COUNT( se_cl_ptrs ), se_cl_w, se_cl_ptr, 2048 );
++	for ( int k = 0 ; k < se_ent_nw ; k++ )
++		if ( se_ent_ptr[k] )
++			gi.Printf( "jk2split: an entity's listed word %d is a pointer: SE_TakeEntity gives it back as it is\n", se_ent_w[k] * 4 );
++	gi.Printf( "jk2split: %d words of an entity listed, %d of a client\n", se_ent_nw, se_cl_nw );
++}
++static inline void se_take_words( const uint32_t *now, const uint32_t *given, uint32_t *to, const unsigned short *w, const unsigned char *ptr, int nw )
++{
++	for ( int k = 0 ; k < nw ; k++ ) {
++		const uint32_t x = now[w[k]];
++		if ( x == given[k] )
++			continue;
++		to[w[k]] = ptr[k] ? (uint32_t)(uintptr_t)se_to_game( (gentity_t *)(uintptr_t)x ) : x;
++	}
++}
++// (an entity free at the give and in use in the copy at the take: none in the check's runs; its listed words that differ
++// from the game's are given back, and it is counted)
++static void se_take_unseen( int i )
++{
++	if ( se_unseen++ < 4 )
++		gi.Printf( "jk2split: entity %d in use only in the client's copy\n", i );
++	const uint32_t *s = (const uint32_t *)&se_sh[i];
++	uint32_t *g = (uint32_t *)&g_entities[i];
++	for ( int k = 0 ; k < se_ent_nw ; k++ ) {
++		const uint32_t x = se_ent_ptr[k] ? (uint32_t)(uintptr_t)se_to_game( (gentity_t *)(uintptr_t)s[se_ent_w[k]] ) : s[se_ent_w[k]];
++		if ( g[se_ent_w[k]] != x )
++			g[se_ent_w[k]] = x;
 +	}
 +}
 +// the counts of JK2_SPLIT=check: of each struct, a word's place written by the client's frame
@@ -9779,6 +12138,10 @@ index 671b309a..6bc7f08a 100644
 +// given goes back to the game's instance at the take, a word at once (a bone's flags a bit at once). A bone's words are
 +// those before lastTimeUpdated (the rest is the rag doll's, which Jedi Outcast does not use)
 +static int se_g2_mode = -1;
++// (by the bone, code/game/ghoul2_shared.h's SE_G2BoneTouch: the default with the copies; JK2_G2_BONES=0 every bone of every
++// copy each give, as before. JK2_G2_CHECK=1: each copy compared with the game's after the give, the counts every 100 frames)
++static int se_g2_bones = 1, se_g2_was, se_g2_check_on;
++static unsigned se_g2_copied, se_g2_checked, se_g2_wrong;
 +static int se_g2_clone[MAX_GENTITIES];
 +struct seG2Given_t { unsigned char *buf; int room, used, orig; };
 +static seG2Given_t se_g2_given[MAX_GENTITIES];
@@ -9848,9 +12211,16 @@ index 671b309a..6bc7f08a 100644
 +		const int skel = d.mSkelFrameNum, mesh = d.mMeshFrameNum;
 +		d.mSlist = o.mSlist;
 +		d.mBltlist = o.mBltlist;
-+		d.mBlist.resize( o.mBlist.size() );
-+		for ( size_t j = 0 ; j < o.mBlist.size() ; j++ )
-+			memcpy( (void *)&d.mBlist[j], (const void *)&o.mBlist[j], bw * 4 );
++		if ( !se_g2_bones || !fits || d.mBlist.size() != o.mBlist.size() ) {
++			d.mBlist.resize( o.mBlist.size() );
++			for ( size_t j = 0 ; j < o.mBlist.size() ; j++ )
++				memcpy( (void *)&d.mBlist[j], (const void *)&o.mBlist[j], bw * 4 );
++			se_g2_copied += (unsigned)o.mBlist.size();
++		} else {	// (by the bone: those the game changed since the give before, the copy's others the same)
++			for ( size_t j = 0 ; j < o.mBlist.size() ; j++ )
++				if ( SE_G2BoneMark( o.mBlist[j] ) == se_g2_was )
++					memcpy( (void *)&d.mBlist[j], (const void *)&o.mBlist[j], bw * 4 ), se_g2_copied++;
++		}
 +		memcpy( (char *)&d + at, (const char *)&o + at, sw * 4 );
 +		d.mSkin = o.mSkin, d.mValid = o.mValid, d.currentModel = o.currentModel, d.currentModelSize = o.currentModelSize;
 +		d.animModel = o.animModel, d.currentAnimModelSize = o.currentAnimModelSize, d.aHeader = o.aHeader;
@@ -9865,11 +12235,28 @@ index 671b309a..6bc7f08a 100644
 +		if ( n ) se_put( gv, &o.mBltlist[0], n * (int)sizeof( boltInfo_t ) );
 +		n = (int)o.mBlist.size();
 +		se_put( gv, &n, 4 );
-+		for ( int j = 0 ; j < n ; j++ )
-+			se_put( gv, &o.mBlist[j], (int)bw * 4 );
++		if ( !se_g2_bones )	// (by the bone the client's frame keeps a bone as given itself, at its first change)
++			for ( int j = 0 ; j < n ; j++ )
++				se_put( gv, &o.mBlist[j], (int)bw * 4 );
 +	}
 +	gv->orig = orig;
-+	se_g2_item( s->ghoul2 ) = c;
++	(void)s;	// (the copy's handle is set by SE_GameGive once the helpers are done with the copied entities)
++	if ( se_g2_check_on ) {	// (JK2_G2_CHECK=1: the copy as a whole copy would have made it)
++		CGhoul2Info *z = 0;
++		const size_t skel_w = ( (char *)&z->mSkelFrameNum - (char *)&z->mModelindex ) / 4, mesh_w = ( (char *)&z->mMeshFrameNum - (char *)&z->mModelindex ) / 4;
++		for ( int m = 0 ; m < models ; m++ ) {
++			const CGhoul2Info &d = dst[m], &o = src[m];
++			se_g2_checked++;
++			int wrong = d.mBlist.size() != o.mBlist.size();
++			const uint32_t *dw = (const uint32_t *)( (const char *)&d + at ), *ow = (const uint32_t *)( (const char *)&o + at );
++			for ( size_t w = 0 ; !wrong && w < sw ; w++ )
++				wrong = w != skel_w && w != mesh_w && dw[w] != ow[w];
++			for ( size_t j = 0 ; !wrong && j < o.mBlist.size() ; j++ )
++				wrong = memcmp( (const void *)&d.mBlist[j], (const void *)&o.mBlist[j], bw * 4 ) != 0;
++			if ( wrong && se_g2_wrong++ < 4 )
++				gi.Printf( "jk2split: Ghoul2 copy of entity %d model %d not as the game's\n", i, m );
++		}
++	}
 +}
 +// one list's entries (surfaces, bolts) the client's frame changed or added: into the game's at the same place
 +template <class T> static const unsigned char *se_g2_list_back( const unsigned char *p, const std::vector<T> &cl, std::vector<T> &o )
@@ -9914,7 +12301,7 @@ index 671b309a..6bc7f08a 100644
 +		memcpy( &nb, lists, 4 );
 +		lists += 4 + nb * sizeof( boltInfo_t );
 +		memcpy( &nbones, lists, 4 );
-+		const unsigned char *bones = lists + 4, *next = bones + nbones * bw * 4;
++		const unsigned char *bones = lists + 4, *next = bones + ( se_g2_bones ? 0 : nbones * bw * 4 );
 +		if ( (size_t)m >= cl.size() || (size_t)m >= dst.size() || dst[m].mModelindex != (int)given[0] ) {
 +			if ( (size_t)m < cl.size() )
 +				se_g2_conflicts++;
@@ -9947,6 +12334,11 @@ index 671b309a..6bc7f08a 100644
 +				continue;
 +			}
 +			const uint32_t *g0 = gb + j * bw;
++			if ( se_g2_bones ) {	// (by the bone: only those the client's frame changed, as it kept them at its first change)
++				if ( k.mBlist[j].extraInt1 != se_g2_tag )
++					continue;
++				g0 = (const uint32_t *)&k.mBlist[j].originalTrueBoneMatrix;
++			}
 +			if ( !memcmp( kb, g0, bw * 4 ) )
 +				continue;
 +			if ( j >= o.mBlist.size() || o.mBlist[j].boneNumber != (int)g0[0] ) {
@@ -9971,11 +12363,74 @@ index 671b309a..6bc7f08a 100644
 +void SE_GameDown( void )
 +{
 +	se_game_up = 0, se_given = 0, se_cg_gents = g_entities;
++	se_g2_tag = 0;	// (no bone kept or marked until the next give)
 +	SE_GameHooks( NULL, NULL );
 +	for ( int i = 0 ; i < MAX_GENTITIES ; i++ )
 +		se_g2_clean( se_g2_clone[i] ), se_g2_given[i].orig = 0;
 +}
 +void SE_GameUp( void ) { if ( !se_game_up ) SE_GameHooks( SE_GameGive, SE_GameTake ); se_game_up = 1; }
++// ---- the handover's ranges (docs/games/jk2.md, "The game's frame apart"): an entity's client and NPC copied, its pointers
++// moved and a client's listed words kept as given (se_give_range); its listed words given back (se_take_range). Each on a
++// helper worker (gl_jk2.c's jk2HandPost) or this core; a range stores only to its own entities, clients and NPCs and
++// their copies, a range being whole texels (no texel of another range's). No allocation, no print there
++#define SE_HAND_PARTS 4
++// (a copy's buffer in whole texels: a helper copies a client or NPC whole, and two malloc'd buffers may be closer than one)
++static void *SE_HandAlloc( size_t bytes ) { return aligned_alloc( 16, ( bytes + 15 ) & ~(size_t)15 ); }
++extern "C" int jk2HandPost_( unsigned ( *fn )( unsigned, unsigned ), unsigned a0, unsigned a1 ) __asm__( "jk2HandPost" );
++// (JK2_HAND=core: every range on this core, the helpers' way before)
++static int jk2HandPost( unsigned ( *fn )( unsigned, unsigned ), unsigned a0, unsigned a1 )
++{
++	static int on = -1;
++	if ( on < 0 ) {
++		const char *e = getenv( "JK2_HAND" );
++		on = !( e && !strcmp( e, "core" ) );
++	}
++	return on && jk2HandPost_( fn, a0, a1 );
++}
++extern "C" void jk2HandJoin( void );
++extern "C" void jk2WaitPass( void );
++static_assert( ( MAX_GENTITIES / SE_HAND_PARTS ) * sizeof( gentity_t ) % 16 == 0, "a range in whole texels" );	// (the arrays start on 16 bytes: se_sh aligned, g_entities in a section of its own on 16, build.sh)
++static unsigned se_give_range( unsigned first, unsigned last )
++{
++	for ( unsigned i = first ; i < last ; i++ ) {
++		gentity_t *g = &g_entities[i], *s = &se_sh[i];
++		if ( g->client ) {
++			se_copy( (void *)se_sh_cl[i], (const void *)g->client, sizeof( gclient_t ) );
++			se_move_ptrs( se_sh_cl[i], se_cl_ptrs, SE_COUNT( se_cl_ptrs ) );
++			s->client = se_sh_cl[i];
++			if ( se_split != 2 ) {	// (the client's listed words as given, packed at its start)
++				const uint32_t *c = (const uint32_t *)se_sh_cl[i];
++				uint32_t *cv = (uint32_t *)se_gv_cl[i];
++				for ( int k = 0 ; k < se_cl_nw ; k++ )
++					cv[k] = c[se_cl_w[k]];
++			}
++		}
++		if ( g->NPC ) {
++			se_copy( (void *)se_sh_npc[i], (const void *)g->NPC, sizeof( gNPC_t ) );
++			se_move_ptrs( se_sh_npc[i], se_npc_ptrs, SE_COUNT( se_npc_ptrs ) );
++			s->NPC = se_sh_npc[i];
++		}
++		if ( se_was_used[i] || se_split == 2 )	// (a free entity's pointers are left the game's: nothing of the client's reads them)
++			se_move_ptrs( s, se_ent_ptrs, SE_COUNT( se_ent_ptrs ) );
++	}
++	return 0;
++}
++static unsigned se_take_range( unsigned first, unsigned last )
++{
++	for ( unsigned i = first ; i < last ; i++ ) {
++		if ( !se_was_used[i] )
++			continue;
++		// (the client given still the entity's: the game's frame may have freed it meanwhile, an NPC that died, and its
++		// words would go into freed memory)
++		if ( se_live_cl[i] && g_entities[i].client == se_live_cl[i] )
++			se_take_words( (const uint32_t *)se_sh_cl[i], (const uint32_t *)se_gv_cl[i], (uint32_t *)se_live_cl[i], se_cl_w, se_cl_ptr, se_cl_nw );
++		SE_TakeEntity( &se_sh[i], &se_gv[i], &g_entities[i] );
++	}
++	return 0;
++}
++// (JK2_PARTS: the give's and the take's parts, instructions summed; printed with the Ghoul2 counts every 100 frames)
++extern unsigned long long SE_Instructions( void );
++static unsigned long long se_hp[6];
 +void SE_GameGive( void )
 +{
 +	if ( se_split < 0 ) {
@@ -9987,41 +12442,71 @@ index 671b309a..6bc7f08a 100644
 +	if ( se_g2_mode < 0 ) {
 +		const char *e = getenv( "JK2_SPLIT" ), *c = getenv( "JK2_G2_COPY" );
 +		se_g2_mode = e && ( !strcmp( e, "ahead" ) || !strcmp( e, "worker" ) ) && !( c && !strcmp( c, "0" ) );
++		const char *b = getenv( "JK2_G2_BONES" ), *k = getenv( "JK2_G2_CHECK" );
++		se_g2_bones = !( b && !strcmp( b, "0" ) );
++		se_g2_check_on = k && !strcmp( k, "1" );
 +	}
++	if ( se_g2_mode && se_g2_bones ) {	// (the bones changed since the give before carry its number; the client's frame tags its own)
++		se_g2_was = se_g2_gen;
++		se_g2_tag = ++se_g2_gen;
++	}
++	unsigned long long se_t = SE_Instructions(), se_u;
 +	se_copy( se_sh, g_entities, sizeof( gentity_t ) * MAX_GENTITIES );
++	se_u = SE_Instructions(), se_hp[0] += se_u - se_t, se_t = se_u;
++	// (this core: what each entity has, and the buffers of a new client or NPC, made and touched here)
++	se_words_init();
 +	for ( int i = 0 ; i < MAX_GENTITIES ; i++ ) {
-+		gentity_t *g = &g_entities[i], *s = &se_sh[i];
++		gentity_t *g = &g_entities[i];
 +		se_live_cl[i] = g->client, se_live_npc[i] = g->NPC;
 +		se_was_used[i] = g->inuse || g->client || g->NPC;
-+		if ( g->client ) {
-+			if ( !se_sh_cl[i] ) {
-+				se_sh_cl[i] = (gclient_t *)malloc( sizeof( gclient_t ) );
-+				se_gv_cl[i] = (gclient_t *)malloc( sizeof( gclient_t ) );
-+			}
-+			se_copy( (void *)se_sh_cl[i], (const void *)g->client, sizeof( gclient_t ) );
-+			se_move_ptrs( se_sh_cl[i], se_cl_ptrs, SE_COUNT( se_cl_ptrs ) );
-+			s->client = se_sh_cl[i];
++		if ( g->client && !se_sh_cl[i] ) {
++			se_sh_cl[i] = (gclient_t *)SE_HandAlloc( sizeof( gclient_t ) );
++			se_gv_cl[i] = (gclient_t *)SE_HandAlloc( sizeof( gclient_t ) );
++			memset( (void *)se_sh_cl[i], 0, sizeof( gclient_t ) ), memset( (void *)se_gv_cl[i], 0, sizeof( gclient_t ) );
 +		}
-+		if ( g->NPC ) {
-+			if ( !se_sh_npc[i] ) {
-+				se_sh_npc[i] = (gNPC_t *)malloc( sizeof( gNPC_t ) );
-+				se_gv_npc[i] = (gNPC_t *)malloc( sizeof( gNPC_t ) );
-+			}
-+			se_copy( (void *)se_sh_npc[i], (const void *)g->NPC, sizeof( gNPC_t ) );
-+			se_move_ptrs( se_sh_npc[i], se_npc_ptrs, SE_COUNT( se_npc_ptrs ) );
-+			s->NPC = se_sh_npc[i];
++		if ( g->NPC && !se_sh_npc[i] ) {
++			se_sh_npc[i] = (gNPC_t *)SE_HandAlloc( sizeof( gNPC_t ) );
++			se_gv_npc[i] = (gNPC_t *)SE_HandAlloc( sizeof( gNPC_t ) );
++			memset( (void *)se_sh_npc[i], 0, sizeof( gNPC_t ) ), memset( (void *)se_gv_npc[i], 0, sizeof( gNPC_t ) );
 +		}
-+		se_move_ptrs( s, se_ent_ptrs, SE_COUNT( se_ent_ptrs ) );
-+		if ( se_g2_mode && g->inuse )
-+			se_g2_give( i, g, s );
 +	}
-+	se_copy( se_gv, se_sh, sizeof( gentity_t ) * MAX_GENTITIES );
-+	for ( int i = 0 ; i < MAX_GENTITIES ; i++ ) {
-+		if ( se_live_cl[i] )
-+			se_copy( (void *)se_gv_cl[i], (const void *)se_sh_cl[i], sizeof( gclient_t ) );
-+		if ( se_live_npc[i] )
-+			se_copy( (void *)se_gv_npc[i], (const void *)se_sh_npc[i], sizeof( gNPC_t ) );
++	// (the entities' clients, NPCs and pointers in ranges on helper workers, a range here when none is free; the check's
++	// all here. Meanwhile this core makes the Ghoul2 copies, which store nothing of the copied entities)
++	int se_parts = 0;
++	jk2WaitPass();	// (this core's stores of the pass, the new buffers and the arrays above, made before a helper reads them)
++	if ( se_split != 2 )
++		for ( int r = 0 ; r < SE_HAND_PARTS ; r++ )
++			if ( !jk2HandPost( se_give_range, r * ( MAX_GENTITIES / SE_HAND_PARTS ), ( r + 1 ) * ( MAX_GENTITIES / SE_HAND_PARTS ) ) )
++				se_give_range( r * ( MAX_GENTITIES / SE_HAND_PARTS ), ( r + 1 ) * ( MAX_GENTITIES / SE_HAND_PARTS ) );
++			else
++				se_parts++;
++	else
++		se_give_range( 0, MAX_GENTITIES );
++	if ( se_g2_mode ) {
++		const unsigned long long se_g0 = SE_Instructions();
++		for ( int i = 0 ; i < MAX_GENTITIES ; i++ )
++			if ( g_entities[i].inuse )
++				se_g2_give( i, &g_entities[i], &se_sh[i] );
++		se_hp[5] += SE_Instructions() - se_g0;
 +	}
++	jk2HandJoin();
++	if ( se_g2_mode )
++		for ( int i = 0 ; i < MAX_GENTITIES ; i++ )
++			if ( se_g2_given[i].orig )
++				se_g2_item( se_sh[i].ghoul2 ) = se_g2_clone[i];
++	se_u = SE_Instructions(), se_hp[1] += se_u - se_t, se_t = se_u;
++	if ( se_split == 2 ) {	// (=check: every word as given, for the difference)
++		se_copy( se_gv, se_sh, sizeof( gentity_t ) * MAX_GENTITIES );
++		for ( int i = 0 ; i < MAX_GENTITIES ; i++ ) {
++			if ( se_live_cl[i] )
++				se_copy( (void *)se_gv_cl[i], (const void *)se_sh_cl[i], sizeof( gclient_t ) );
++			if ( se_live_npc[i] )
++				se_copy( (void *)se_gv_npc[i], (const void *)se_sh_npc[i], sizeof( gNPC_t ) );
++		}
++	} else {	// (the copy as given whole, by the machine's copy; of a client only its listed words, by the helpers)
++		se_copy( se_gv, se_sh, sizeof( gentity_t ) * MAX_GENTITIES );
++	}
++	se_hp[2] += SE_Instructions() - se_t;
 +	se_cg_gents = se_sh;
 +	SE_CGEntitiesAt( se_sh );
 +	se_given = 1;
@@ -10034,24 +12519,39 @@ index 671b309a..6bc7f08a 100644
 +	se_cg_gents = g_entities;
 +	SE_CGEntitiesAt( g_entities );
 +	const int check = se_split == 2;
++	unsigned long long se_t = SE_Instructions();
++	if ( !check )	// (the listed words given back in ranges on helper workers, this core giving back the Ghoul2 copies)
++		jk2WaitPass();	// (the client's frame's last stores made before a helper reads them)
++	if ( !check )
++		for ( int r = 0 ; r < SE_HAND_PARTS ; r++ )
++			if ( !jk2HandPost( se_take_range, r * ( MAX_GENTITIES / SE_HAND_PARTS ), ( r + 1 ) * ( MAX_GENTITIES / SE_HAND_PARTS ) ) )
++				se_take_range( r * ( MAX_GENTITIES / SE_HAND_PARTS ), ( r + 1 ) * ( MAX_GENTITIES / SE_HAND_PARTS ) );
 +	if ( se_g2_mode > 0 ) {
 +		for ( int i = 0 ; i < MAX_GENTITIES ; i++ )
 +			se_g2_take( i );
-+		if ( ( se_g2_conflicts || se_g2_remade ) && ++se_frames % 100 == 0 ) {
-+			gi.Printf( "jk2split: Ghoul2 copies: %u given back over the game's own change, %u made again\n", se_g2_conflicts, se_g2_remade );
-+			se_g2_conflicts = se_g2_remade = 0;
++		se_hp[3] += SE_Instructions() - se_t, se_t = SE_Instructions();
++		if ( ++se_frames % 100 == 0 ) {
++			gi.Printf( "jk2split: Ghoul2 copies: %u given back over the game's own change, %u made again, %u bones copied%s\n",
++				se_g2_conflicts, se_g2_remade, se_g2_copied, se_g2_bones ? " (by the bone)" : "" );
++			if ( se_g2_check_on )
++				gi.Printf( "jk2split: Ghoul2 copies checked %u, %u not as the game's\n", se_g2_checked, se_g2_wrong );
++			gi.Printf( "jk2split: a frame: give: copy %uk, structs and Ghoul2 %uk (Ghoul2 %uk), words %uk; take: Ghoul2 %uk, words %uk\n",
++				(unsigned)( se_hp[0] / 100000 ), (unsigned)( se_hp[1] / 100000 ), (unsigned)( se_hp[5] / 100000 ), (unsigned)( se_hp[2] / 100000 ), (unsigned)( se_hp[3] / 100000 ),
++				(unsigned)( se_hp[4] / 100000 ) );
++			memset( se_hp, 0, sizeof se_hp );
++			se_g2_conflicts = se_g2_remade = se_g2_copied = se_g2_checked = se_g2_wrong = 0;
 +		}
++	}
++	if ( !check ) {	// (the helpers done; an entity free at the give and in use in the copy, here)
++		jk2HandJoin();
++		for ( int i = 0 ; i < MAX_GENTITIES ; i++ )
++			if ( !se_was_used[i] && se_sh[i].inuse )
++				se_take_unseen( i );
++		se_hp[4] += SE_Instructions() - se_t;
++		return;
 +	}
 +	for ( int i = 0 ; i < MAX_GENTITIES ; i++ ) {
 +		gentity_t *s = &se_sh[i], *v = &se_gv[i], *g = &g_entities[i];
-+		if ( !check && !se_was_used[i] && !s->inuse )
-+			continue;	// (free at the give and still free in the copy: nothing of the client's frame there)
-+		if ( !check ) {
-+			if ( se_live_cl[i] )
-+				se_give_listed( se_sh_cl[i], se_gv_cl[i], se_live_cl[i], se_cl_back, SE_COUNT( se_cl_back ), se_cl_ptrs, SE_COUNT( se_cl_ptrs ) );
-+			se_give_listed( s, v, g, se_ent_back, SE_COUNT( se_ent_back ), se_ent_ptrs, SE_COUNT( se_ent_ptrs ) );
-+			continue;
-+		}
 +		if ( se_live_cl[i] ) {
 +			se_give_back( se_sh_cl[i], se_gv_cl[i], se_live_cl[i], sizeof( gclient_t ), se_cl_ptrs, SE_COUNT( se_cl_ptrs ), se_cl_at,
 +				se_cl_back, SE_COUNT( se_cl_back ) );
@@ -10087,7 +12587,7 @@ index 671b309a..6bc7f08a 100644
  #include "g_navigator.h"
  #include "b_local.h"
  #include "anims.h"
-@@ -74,12 +495,14 @@ void ClearInUse(gentity_t *ent)
+@@ -74,12 +694,14 @@ void ClearInUse(gentity_t *ent)
  	g_entityInUseBits[entNum/32]&=~(((unsigned int)1)<<(entNum&0x1f));
  }
  
@@ -10102,7 +12602,7 @@ index 671b309a..6bc7f08a 100644
  
  qboolean PInUse2(gentity_t *ent)
  {
-@@ -736,6 +1159,10 @@ ShutdownGame
+@@ -736,6 +1358,10 @@ ShutdownGame
  =================
  */
  void ShutdownGame( void ) {
@@ -10113,7 +12613,7 @@ index 671b309a..6bc7f08a 100644
  	gi.Printf ("==== ShutdownGame ====\n");
  
  	gi.Printf ("... ICARUS_Shutdown\n");
-@@ -1256,6 +1683,9 @@ void G_RunFrame( int levelTime ) {
+@@ -1256,6 +1882,9 @@ void G_RunFrame( int levelTime ) {
  	int			i;
  	gentity_t	*ent;
  	int			ents_inuse=0; // someone's gonna be pissed I put this here...
@@ -10123,7 +12623,7 @@ index 671b309a..6bc7f08a 100644
  #if	AI_TIMERS
  	AITime = 0;
  	navTime = 0;
-@@ -1482,8 +1912,84 @@ void G_RunFrame( int levelTime ) {
+@@ -1482,8 +2111,84 @@ void G_RunFrame( int levelTime ) {
  		ValidateInUseBits();
  	}
  #endif
@@ -11330,6 +13830,25 @@ index e7652fb3..731695b2 100644
  
  		/**
  		Conversion using std::istream's operator>>
+diff --git a/shared/qcommon/se_server.h b/shared/qcommon/se_server.h
+new file mode 100644
+index 00000000..dd1246a3
+--- /dev/null
++++ b/shared/qcommon/se_server.h
+@@ -0,0 +1,13 @@
++// ShaderEmu: the game's frame on a worker of its own beside the client's (JK2_SPLIT=worker; linux/jk2/gl_jk2.c, cl_main.cpp's
++// CL_Frame; docs/games/jk2.md, "The game's frame apart"). What only the first core may do (the command buffer, cvars, the
++// zone, files) the worker asks the first core for and waits: jk2ServerOnCore0 calls fn(args) directly anywhere else.
++#pragma once
++#include <stdint.h>
++#ifdef __cplusplus
++extern "C" {
++#endif
++int jk2ServerHere( void );	// whether the code that asks runs in the game's frame on its worker
++unsigned jk2ServerOnCore0( unsigned ( *fn )( void *args ), void *args );
++#ifdef __cplusplus
++}
++#endif
 diff --git a/shared/qcommon/se_slot.h b/shared/qcommon/se_slot.h
 new file mode 100755
 index 00000000..4911072a
@@ -11462,3 +13981,19 @@ index 16be5458..d88df943 100644
  	SDL_version compiled;
  	SDL_version linked;
  
+diff --git a/shared/sys/sys_unix.cpp b/shared/sys/sys_unix.cpp
+index 3f0d544e..91d38b8d 100644
+--- a/shared/sys/sys_unix.cpp
++++ b/shared/sys/sys_unix.cpp
+@@ -114,6 +114,11 @@ int Sys_Milliseconds (bool baseTime)
+ 		return tp.tv_usec/1000;
+ 	}
+ 
++#ifdef SHADEREMU
++	// (a value of the call's own: the drawing's worker and the game's frame's both ask, and RVC_RACES found their stores
++	// to the global at once)
++	int curtime;
++#endif
+ 	curtime = (tp.tv_sec - sys_timeBase)*1000 + tp.tv_usec/1000;
+ 
+     static int sys_timeBase = curtime;

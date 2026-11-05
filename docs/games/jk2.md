@@ -905,10 +905,162 @@ The first stage, on one core (`JK2_SPLIT=copy`, `=check`; unset is as before):
 - **Checked**: `test_all.py jk2-split` (the sums with `JK2_SPLIT=copy`) gives `jk2-sums`'s sums at frames 3200 and 3600,
   and so did `JK2_SPLIT=check`.
 
-Still to come, in order: the Ghoul2 instances the client's game poses, which the game traces against and animates; the
-engine's zone, console and snapshot ring used by both; then the game's next frame on a worker beside the client's,
-what the client wrote given back a frame later on both computers. Even so core 0 stays at about the game's frame, 1.0
-million a frame (about 4.5 frames a second at most), and the drawing's worker, 1.3 to 1.5 million, is then the bound.
+### The game's frame on a worker (5 November 2026, work in progress)
+
+`JK2_SPLIT=ahead` makes the game's next frame in `CL_Frame` after the client's game has its copy (in order, on core 0);
+`JK2_SPLIT=worker` makes it on a worker of its own (`gl_jk2.c`, `jk2ServerGive`) while core 0 makes the client's frame,
+and gives back what the client wrote when both are done. Unset, the game runs as before; `test_all.py jk2-split` and
+`jk2-ahead` give the build computer's sums.
+
+- **The handover** (`SE_GameGive`, `SE_GameTake` in `g_main.cpp`; the walk, core 0 a frame): give 278 to 99 thousand
+  instructions, take 408 to 106 thousand.
+  - The copy as given is the machine's copy of the whole copy (no gather); a client's listed words are gathered.
+  - The take compares each entity's listed fields by code made from one list (`SE_ENT_FIELDS`, `SE_TakeEntity`), not
+    a table of ranges a word at once with a search of the pointer fields (the old `se_give_listed`: 269 thousand).
+  - A client's listed words are its player state's `legsYaw` alone, not the whole state (360 words a client):
+    `JK2_SPLIT=check` over the walk found no other word of the state written (`static_assert` on its place, 172).
+  - The entities' clients, NPCs and pointers are copied, and the listed words given back, in four ranges on helper
+    workers (`se_give_range`, `se_take_range`; `jk2HandPost`), core 0 meanwhile making the Ghoul2 copies; a range is
+    whole texels (256 entities). Core 0 ends its pass before posting them (`jk2WaitPass`): under `RVC_RACES` a helper
+    otherwise read a new NPC's buffer before core 0's stores of the pass, and the walk died at 13:52 of the guest's.
+    `JK2_HAND=core`: the ranges on core 0.
+  - A client is given back only to the entity that still has it (the game's frame may free it meanwhile).
+- **Ghoul2 by the bone** (`ghoul2_shared.h`'s `SE_G2BoneTouch`, 18 places in `G2_bones.cpp` and `tr_ghoul2.cpp`): a
+  change to a bone's words marks it with the give's number, so the give copies only the game's bones changed since (106
+  bones in 100 frames, not every bone of every copy); the client's first change to a bone after a give keeps its words as
+  given in the bone's rag doll's matrices (unused: no rag dolls in Jedi Outcast, and not saved), and the take compares
+  only those. `JK2_G2_CHECK=1` compares every copy with the game's after the give: 4,100 copies of the walk, 0 not as
+  the game's. `JK2_G2_BONES=0` is every bone each give, as before.
+- **The game's frame's allocations** (`sys_shaderemu.cpp`, "The game's frame's own allocations"): its paths' and combat
+  points' containers come from a 4 MB arena of the worker's own (blocks of a power of two after a 16-byte head, whole
+  texels, a free list a size); another core's free of one is queued and done at the worker's frame's start. Before,
+  each was asked of core 0, which answered when it next looked: the worker waited, and the heap's addresses went by the
+  cores' timing. `JK2_ARENA=0`: asked, as before. What it still asks (`jk2ServerPoll` at the client game's calls into
+  the engine; the zone, cvars, files, commands) is answered at once; an ask is not answered while core 0 makes a player
+  ahead (an allocation ends that job: the answer would be lost and the worker wait for ever).
+- **Races** (`RVC_RACES`, `RVC_RACES_NEAR=4`): two box hulls a texel and more apart (`CM_TempBoxModel`, `SE_BOX2_HANDLE`
+  the game's), `CM_BoxLeafnums` leaves the trace count alone off core 0, `G2_FindOverrideSurface`'s table one a core
+  (`SE_Core()`), the allocation counters core 0's, an MP3's header made by core 0 with the mix settled (`SE_MP3Header`:
+  the decoder's stream is a global the mix's worker uses). Left: libmedia's `second_jobs`, two parts' shared texel,
+  which the inflate repairs from each part's head and tail by design.
+
+### The front end apart (5 November 2026)
+
+The front end of a view (the world's walk, the polygons, the entities but Ghoul2's, the sort) is made on a worker of its
+own as soon as core 0 has the scene (`R_SE_RenderViewSplit` posts `R_SE_FrontJob`; `jk2FrontOn`), while core 0 goes on
+with its frame and the drawing's worker draws the frame before; the drawing waits for it at the view's command and only
+draws (`R_SE_FrontView`). Its sorted surfaces go to one of two buffers by the view's number. The front end writes tr's
+view, so core 0 waits for it at its next `RE_RenderScene`, not at `RE_BeginFrame`; `RE_ClearScene` stores its flags only
+when they change; the back end reads `backEnd.refdef`, never `tr.refdef` (`tr_backend.cpp`, `tr_shade.cpp`,
+`tr_surface.cpp`, `tr_surfacesprites.cpp`, `tr_shadows.cpp`), and a world surface's dynamic lights are a pair by the
+frame's parity (`SE_DLW`, `SE_DLR`). `jk2RenderWorkerHere()` is 2 on its stack (`R_RotateForEntity`'s scratch, a third).
+One view a frame is made so. `JK2_FRONT_WORKER=0`: the drawing's worker makes it, as before. The walk without the split:
+2.5 to 2.7 frames a second, 279.7 to 258.4 passes a frame, the drawing's worker 1.43 to 1.07 million a frame.
+
+**A large draw's indices** (`gl_jk2.c`, `exp_server`): `fast_triangles` makes a draw of 96 indices or more's vertices'
+words into the frame's memory and two helpers core 0 posts with the frame write the indices' words (`gpuDrawsRoom`,
+`gpuDrawPut`); the drawing waits for them at its frame's end. `JK2_EXPAND=0`: the drawing makes them. Only 112 thousand
+instructions a frame moved: most of `fast_triangles` (394 thousand) is its vertices'. Since the arrays below, the
+draws it would take go there.
+
+### The drawing's stores (5 November 2026)
+
+The shim no longer makes a vertex's words on a core: `fast_triangles` copies the vertices' positions, coordinates and
+colours and the indices into the frame's memory as they are, in the one pass that finds their range and whether they
+are of one colour, and the GPU makes each vertex from them (`docs/machine/gpu.md`, "A renderer's arrays"; `VERTEX_ARRAYS`
+in `shader_vm/src/gpu.h`, and the holodeck's `volume_vertex` too). A memo's draw (600 indices and more, kept as it was)
+is as before. `JK2_ARRAYS=0` is the way before. Captured (`rvc_harness --cpu --warp`, `JK2_HOLD=1450`, the walk): the
+same pixels as `JK2_ARRAYS=0` but the HUD's two dials (995 and 994 pixels) and the window's title with its frames a
+second; two captures of `JK2_ARRAYS=0` itself differed in 61,111 pixels, as the game is not always where it was at a
+held frame. The drawing's worker on the walk: 1,022 to 949 thousand instructions a frame; the frame did not move (237 to
+238 passes): it is the waits on core 0 now.
+
+**The mix through the next frame** (`snd_dma.cpp`, `se_snd_defer`; only with `JK2_MIX_LATE=1`): the mix paints from
+the client's frame's end until the next `S_Update`, a sound started meanwhile kept and made in its order where the mix
+is next settled. 231.7 passes a frame against 238.4 on one build; but what the game reads of a sound just started (a
+voice's level, `s_entityWavVol`, -1 at its start; a script's wait for its sound) is then the frame's end's, and the walk
+played otherwise: not the default.
+
+**The mix in parts** (`snd_mix.cpp`, `SE_MixPartsGive`; only with `JK2_MIX_PARTS=1`): the 16-bit channels painted by two
+helpers into buffers of their own, the mix's worker painting the MP3 channels (the decoder's stream is one) and adding
+theirs; the same samples (integer sums). The walk: 243.8 passes a frame against 238.2 without: not the default.
+
+**Races since**: `Sys_Milliseconds` keeps its time in a variable of its own (`sys_unix.cpp`): the drawing's worker and
+the game's both stored to the global `curtime`.
+
+**Checked** (the build of 5 November 2026, 04:56): `test_all.py jk2 jk2-sums jk2-split jk2-ahead` on a private image,
+9 of 9 (the seat's, the window's and the pointer's cases with them).
+
+**Measured** (the walk, frames 1,500 to 1,700, calibrated, `JK2_SPLIT=worker`; each row adds to the one above):
+
+| Change | Passes a frame | fps | Core 0 a frame |
+|---|---|---|---|
+| The split as committed (62c2cd86) | 345.5 | 2.0 | 1.44 million |
+| The handover narrowed and unrolled, Ghoul2 by the bone | 307.4 | 2.4 | 1.15 million |
+| The handover's ranges on helpers, the arena | 245.1 | 3.1 | 0.98 million |
+| A large draw's indices on helpers | 237.3 | 3.2 | 0.98 million |
+| The arrays drawn by the GPU | 238.1 | 3.2 | 0.95 million |
+
+The walks of the builds between those last rows went by other game states (asks answered by timing moved the heap);
+since the arena the game's worker asks for nothing in the walk.
+
+**Where the frame goes now** (`RVC_PROF_CORES=1`, frames 1,500 to 1,600; a frame at 5 per second is 134 passes): the
+drawing's worker 1.40 million a frame in 219 passes (52% full: its write cache ends them), core 0 1.20 million in 277
+(it rests for the drawing, the players' jobs and the mix), the game's worker 1.03 million in 172, the front end's 0.55
+million in 73. Even a drawing of no cost leaves core 0 and the game's frame at about 4 frames a second: each chain is
+to come down by about a quarter.
+
+### Traces, the effects, the arrays where they are made (5 November 2026)
+
+**The traces' Ghoul2 records** (`q_shared.h`'s `SE_TraceCopy`, `SE_TraceHeadCopy`, `SE_TraceEmptyRecords`): a `trace_t` is
+1,016 bytes, 960 of them its sixteen Ghoul2 records, and the game's worker made and copied several a trace (the work
+traces, `*results = clip.trace`, `oldTrace = clip->trace` for every entity touched): about 63% of its new texels in the
+walk, more than a worker's pass holds. A record whose `mEntityNum` is -1 is empty and of an empty one only `mEntityNum`
+and `mDistance` are read (the readers skip it, the collision sort orders by `mDistance`), and records are filled only by
+`G2API_CollisionDetect`. So a trace without Ghoul2 collision is made and copied head only (`CM_SE_BoxTraceHead`,
+`CM_SE_TransformedBoxTraceHead`, the work traces raw room on the stack), and the caller's trace gets its records made empty
+once, stored only where they are not already; a trace with Ghoul2 collision is copied as before. The client's traces
+never collide with Ghoul2. `jk2-sums` and `jk2-split` pass (the game's state as it was).
+
+**The client's collision asked directly** (`cg_syscalls.cpp`): `cgi_CM_*` calls the engine's `CM_*`, not `Q_syscall`
+(sixteen arguments copied, two switches and the game's frame's poll each).
+
+**The effects' collision made ahead** (`FxUtil.cpp`'s `FX_SE_Ahead`): what each particle with physics will ask at
+`FX_Add` (the contents where it moves to, a trace if solid) is made first on the players' job slots, each with its own box
+now (`cm_load.cpp`: a box hull a core slot, `BOX_MODEL_HANDLE - k`), and `UpdateOrigin` takes it when its words are the
+same. `JK2_FX_AHEAD=check` said 0 wrong; `=core` is the way before. The walk has about 5 such particles a frame, so it
+gains nothing there; a fight has more.
+
+**The arrays where they are made** (`tr_shade.cpp`'s `SE_TessBegin`, `SE_StageRooms`; `gl_jk2.c`'s `jk2glTessRoom`,
+`fast_triangles`): `tess.xyz` and each stage's colours and coordinates are pointers now, to rooms of the frame's GPU
+memory (a batch's positions reserved at `RB_BeginSurface` and cut at `RB_EndSurface`, `gpuFrameTrim`), and the draw
+points at them instead of copying them; rd-vanilla says how many vertices its arrays hold (`jk2glVertexCount`), which
+spares the search of the indices. A room is never written once drawn from: each stage and the fog's pass take new ones;
+a fading batch keeps the static arrays; a Ghoul2 surface skinned by the GPU gives its batch's room back before it draws
+(its draws take frame memory, which would leave the room uncut); the sky's iterator, which makes its clouds into tess as
+it draws, keeps its room whole. `JK2_ROOMS=0` is the way before, `=check` searches the indices too and says an index past
+the count, `JK2_ROOMS_LOG=N` counts rooms given, refused and not cut. The drawing's worker on the walk (profiled, frames
+1,500 to 1,600): 1,229 to 1,201 thousand instructions and 207 to 190 passes a frame. Captured: the picture as without.
+
+**The drawing on two workers** (`tr_backend.cpp`'s `SE_DrawList` and `SE_DrawHalfB`, `gl_jk2.c`'s `jk2DrawHalfGive`,
+`gpu_shaderemu.c`'s halves, `build.sh`'s second copy; only with `JK2_HALF=1`, as it does not draw right yet). The 3D
+list is 91% of the drawing (1.07 of 1.17 million instructions a frame). A second copy of the back end (`tr_shade`,
+`tr_shade_calc`, `tr_surface`, `tr_backend`, `tr_sky`, `tr_shadows`, `tr_surfacesprites`, `tr_quicksprite`,
+`tr_ghoul2`) and of the GL (`gl_jk2.c` and `gpu_shaderemu.c` built with `SE_DRAW_B`) is linked in: its functions and its
+own state (`tess`, `backEnd`, `glState`, the surface sprites') renamed `b_`, everything else of its data weak, so the
+first copy's (`tr`, the shaders, the kept faces' words, Ghoul2's handed bones, the textures: `gl_shaderemu.c`'s
+`HLGL_SHARE`). The drawing hands it the list's second part (cut where a sort begins) with a copy of `backEnd` and the
+upper half of what is left of the frame's list (`gpuHalfSplit`: commands, matrix blocks, vertex memory, mesh; `gles.c`'s
+`GLES_*_END`), draws the first part, waits, and moves its commands after its own (`gpuHalfMerge`). On `rvc_cpu` it runs:
+the walk 219.6 passes a frame against 229.9 one part, core 0's waits for the drawing a fifth fewer. But the picture is
+wrong (streaks, no sky, no HUD): at the merge the frame's 288 KB of vertex memory was used up (287 KB), so the draws
+after it found none; with 1 MB sets (800 KB of vertices) nothing was refused, but `rvc_harness --cpu --warp` then
+stopped at frame 400. To find: what in the second part draws wrong, and room enough for two parts.
+
+**Measured** (the walk, frames 1,500 to 1,700, calibrated, `JK2_SPLIT=worker`): 238.2 passes a frame (3.2 a second) when
+this round began, 226.1 (3.4) with all of the above but the two workers; core 0 916 thousand instructions a frame.
+Runs of different builds or switches play other game states (one build repeated gives the same numbers to the last
+digit): a row's passes are the game's as much as the change's.
 
 ### What bounds it
 

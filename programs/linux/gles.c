@@ -35,6 +35,14 @@
 #endif
 #define REG_VOLUME 0x300           // the last whole frame: list address, command count, frames so far, picture size
 #define MAX_MESH 196608            // vertices the device's mesh has for one list
+// (where a list being built ends: a program that builds one list in parts on two cores gives each part its own; Jedi
+// Outcast's drawing, linux/quake3/gpu_shaderemu.c's SE_HALVES)
+#ifndef GLES_VERTEX_END
+#define GLES_VERTEX_END (set_at + SET_SIZE)
+#define GLES_COMMANDS_END MAX_COMMANDS
+#define GLES_BLOCKS_END MAX_BLOCKS
+#define GLES_MESH_END MAX_MESH
+#endif
 #define REG_PALETTE 0x400
 #define REG_SUBMIT 0x10            // submit, list address, command count
 #define REG_INTO 0x50              // where the picture is copied: address, width, height, row
@@ -418,7 +426,7 @@ void seglSwapHand(void) {
 // ---- frame ----
 
 static uint32_t* command(uint32_t op, uint32_t mesh) {
-    if (commands == MAX_COMMANDS || mesh_vertices + mesh > MAX_MESH) return 0;
+    if (commands == GLES_COMMANDS_END || mesh_vertices + mesh > GLES_MESH_END) return 0;
     uint32_t* c = (uint32_t*)(gpu + set_at) + 16 * commands++;
     c[0] = op;
     c[3] = mesh_vertices;
@@ -765,7 +773,7 @@ void glColorTableEXT(GLenum target, GLenum internal, GLsizei count, GLenum forma
 // The block of vectors a draw reads its matrices from: the projection with the viewport folded
 // in (rows 0-3), then the modelview (rows 4-6), which the device applies first.
 static void matrix_block_write(void) {
-    if (matrices_dirty && blocks < MAX_BLOCKS) {
+    if (matrices_dirty && blocks < GLES_BLOCKS_END) {
         num* u = (num*)(gpu + set_at + UNIFORMS_IN) + 32 * blocks++;
         const matrix* p = &projection[projection_top];
         const matrix* m = &modelview[modelview_top];
@@ -844,7 +852,7 @@ void glDrawArrays(GLenum mode, GLint first, GLsizei count) {
                       mode == GL_TRIANGLES ? (uint32_t)count - count % 3 : ((uint32_t)count - 2) * 3;
     uint32_t mesh = quads ? stored / 4 * 6 : stored;
     uint32_t vertex = VERTEX_CLIP | VERTEX_MODELVIEW | VERTEX_COMPACT | NUM_FORMAT | (quads ? VERTEX_QUADS : 0);
-    if (vertex_top + stored * 16 > set_at + SET_SIZE || mesh_vertices + mesh > MAX_MESH) return;
+    if (vertex_top + stored * 16 > GLES_VERTEX_END || mesh_vertices + mesh > GLES_MESH_END) return;
     uint32_t block = matrix_block();
     uint32_t state[6] = {vertex, fragment, block, x->address, colour, (uint32_t)key_index};
     uint32_t* to = (uint32_t*)(gpu + vertex_top);
@@ -909,7 +917,7 @@ static uint32_t* compact_begin(GLenum mode, GLsizei count, uint32_t* stored_out,
     if (points) stored = (uint32_t)count;
     uint32_t mesh = quads ? stored / 4 * 6 : points ? stored * 3 : stored;
     uint32_t vertex = VERTEX_CLIP | VERTEX_MODELVIEW | VERTEX_COMPACT | NUM_FORMAT | (quads ? VERTEX_QUADS : 0) | flags;
-    if ((!at && vertex_top + stored * 16 > set_at + SET_SIZE) || mesh_vertices + mesh > MAX_MESH) return 0;
+    if ((!at && vertex_top + stored * 16 > GLES_VERTEX_END) || mesh_vertices + mesh > GLES_MESH_END) return 0;
     uint32_t block = matrix_block();
     uint32_t tint = table ? GPU_PHYS + (uint32_t)((const uint8_t*)table - gpu) : colour;
     uint32_t state[6] = {vertex, fragment, block, x->address, tint, (uint32_t)key_index};
@@ -1028,7 +1036,7 @@ void seglQuad(const GLfixed* xyz, const GLfixed* uv, GLuint name, unsigned grey,
     uint32_t fragment = (x->indexed == 3 ? 5u : (x->indexed == 4 ? 6u : x->indexed ? FRAGMENT_INDEXED : FRAGMENT_TEXTURE) | x->smooth) | (keyed ? FRAGMENT_KEYED : 0) | pass << 16;
     uint32_t vertex = VERTEX_CLIP | VERTEX_MODELVIEW | VERTEX_COMPACT | VERTEX_QUADS | NUM_FORMAT;
     uint32_t tint = (uint32_t)(255 - alpha) << 24 | grey << 16 | grey << 8 | grey;
-    if (!gpu || vertex_top + 64 > set_at + SET_SIZE || mesh_vertices + 6 > MAX_MESH) return;
+    if (!gpu || vertex_top + 64 > GLES_VERTEX_END || mesh_vertices + 6 > GLES_MESH_END) return;
     uint32_t block = matrices_dirty || !blocks ? matrix_block() : GPU_PHYS + set_at + UNIFORMS_IN + 128 * (blocks - 1);
     uint32_t* restrict to = (uint32_t*)(gpu + vertex_top);
     if (last_draw && last_draw == (uint32_t*)(gpu + set_at) + 16 * (commands - 1) && last_state[0] == vertex &&
@@ -1086,7 +1094,7 @@ void seglSprite(const GLfixed* box, const int* texels, GLuint name, unsigned col
         last_state[0] == (VERTEX_CLIP | VERTEX_MODELVIEW | VERTEX_COMPACT | VERTEX_QUADS | NUM_FORMAT) && last_state[1] == fragment &&
         last_state[2] == GPU_PHYS + set_at + UNIFORMS_IN + 128 * (blocks - 1) && last_state[3] == x->address &&
         last_state[4] == colour && last_state[5] == (uint32_t)key_index &&
-        vertex_top + 64 <= set_at + SET_SIZE && mesh_vertices + 6 <= MAX_MESH) {
+        vertex_top + 64 <= GLES_VERTEX_END && mesh_vertices + 6 <= GLES_MESH_END) {
         last_draw[2] += 6;
         mesh_vertices += 6;
         sprite_corners((uint32_t*)(gpu + vertex_top), box, texels);
@@ -1102,7 +1110,7 @@ static __attribute__((noinline)) void sprite_command(const GLfixed* box, const i
     uint32_t fragment = (x->indexed == 2 ? 3u : x->indexed == 3 ? 5u : (x->indexed == 4 ? 6u : x->indexed ? FRAGMENT_INDEXED : FRAGMENT_TEXTURE) | x->smooth) |
                         (keyed ? FRAGMENT_KEYED : 0) | 5u << 16;
     uint32_t vertex = VERTEX_CLIP | VERTEX_MODELVIEW | VERTEX_COMPACT | VERTEX_QUADS | NUM_FORMAT;
-    if (!gpu || vertex_top + 64 > set_at + SET_SIZE || mesh_vertices + 6 > MAX_MESH) return;
+    if (!gpu || vertex_top + 64 > GLES_VERTEX_END || mesh_vertices + 6 > GLES_MESH_END) return;
     uint32_t block = matrices_dirty || !blocks ? matrix_block() : GPU_PHYS + set_at + UNIFORMS_IN + 128 * (blocks - 1);
     uint32_t* restrict to = (uint32_t*)(gpu + vertex_top);
     if (last_draw && last_draw == (uint32_t*)(gpu + set_at) + 16 * (commands - 1) && last_state[0] == vertex &&
@@ -1136,7 +1144,7 @@ void seglSprites(const SEGLsprite* s, int count) {
     if (!gpu || count <= 0) return;
     const uint32_t vertex = VERTEX_CLIP | VERTEX_MODELVIEW | VERTEX_COMPACT | VERTEX_QUADS | NUM_FORMAT;
     uint32_t block = matrices_dirty || !blocks ? matrix_block() : GPU_PHYS + set_at + UNIFORMS_IN + 128 * (blocks - 1);
-    uint32_t top = vertex_top, mesh = mesh_vertices, made = commands, end = set_at + SET_SIZE;
+    uint32_t top = vertex_top, mesh = mesh_vertices, made = commands, end = GLES_VERTEX_END;
     uint32_t *first = (uint32_t*)(gpu + set_at), *draw = last_draw;
     int joins = draw && draw == first + 16 * (made - 1) && last_state[0] == vertex && last_state[2] == block &&
                 last_state[5] == (uint32_t)key_index;
@@ -1144,7 +1152,7 @@ void seglSprites(const SEGLsprite* s, int count) {
     uint32_t base = 0, address = 0, width = 0, height = 0;
     int any = 0;
     for (; count > 0; count--, s++) {
-        if (top + 64 > end || mesh + 6 > MAX_MESH) break;   // (no sprite fits after this one)
+        if (top + 64 > end || mesh + 6 > GLES_MESH_END) break;   // (no sprite fits after this one)
         if (s->name != name_was) {
             const texture* x = &textures[s->name < MAX_TEXTURES ? s->name : 0];
             base = (x->indexed == 2 ? 3u : x->indexed == 3 ? 5u : (x->indexed == 4 ? 6u : x->indexed ? FRAGMENT_INDEXED : FRAGMENT_TEXTURE) | x->smooth) | 5u << 16;
@@ -1155,7 +1163,7 @@ void seglSprites(const SEGLsprite* s, int count) {
             draw[2] += 6;
             mesh += 6;
         } else {
-            if (made == MAX_COMMANDS) continue;   // (as command() fails: this one is left out)
+            if (made == GLES_COMMANDS_END) continue;   // (as command() fails: this one is left out)
             uint32_t* c = first + 16 * made++;
             c[0] = CMD_DRAW;
             c[1] = GPU_PHYS + top;
@@ -1186,7 +1194,7 @@ void seglSprites(const SEGLsprite* s, int count) {
 
 // Sprites a program writes itself (segl.h): the room for them, and the command for those written.
 unsigned int* seglSpriteSpace(GLsizei* room) {
-    uint32_t fit = gpu ? (set_at + SET_SIZE - vertex_top) / 64 : 0, mesh = (MAX_MESH - mesh_vertices) / 6;
+    uint32_t fit = gpu ? (GLES_VERTEX_END - vertex_top) / 64 : 0, mesh = (GLES_MESH_END - mesh_vertices) / 6;
     *room = (GLsizei)(fit < mesh ? fit : mesh);
     return gpu ? (unsigned int*)(gpu + vertex_top) : 0;
 }
@@ -1231,7 +1239,7 @@ void seglSpritesUsed(GLsizei quads, GLuint name, unsigned colour, int keyed) {
 
 // Whole vertices in screen pixels (segl.h): the frame's room is what compact vertices use too.
 void* seglScreenSpace(GLsizei* room) {
-    uint32_t fit = gpu ? (set_at + SET_SIZE - vertex_top) / 64 : 0, mesh = MAX_MESH - mesh_vertices;
+    uint32_t fit = gpu ? (GLES_VERTEX_END - vertex_top) / 64 : 0, mesh = GLES_MESH_END - mesh_vertices;
     *room = (GLsizei)((fit < mesh ? fit : mesh) / 3 * 3);
     return gpu ? gpu + vertex_top : 0;
 }
@@ -1257,13 +1265,13 @@ void seglWorldUp(int axis) { world_up = axis >= 1 && axis <= 3 ? (uint32_t)axis 
 void seglWorldFlat(int flat) { world_flat = flat ? 1u << 31 : 0; }
 
 unsigned int* seglScreenTable(void) {
-    if (!gpu || vertex_top + 1024 > set_at + SET_SIZE) return 0;
+    if (!gpu || vertex_top + 1024 > GLES_VERTEX_END) return 0;
     unsigned int* table = (unsigned int*)(gpu + vertex_top);
     vertex_top += 1024;
     return table;
 }
 unsigned int* seglScreenCompactSpace(GLsizei* room) {
-    uint32_t fit = gpu ? (set_at + SET_SIZE - vertex_top) / 16 : 0, mesh = (MAX_MESH - mesh_vertices) / 6 * 4;
+    uint32_t fit = gpu ? (GLES_VERTEX_END - vertex_top) / 16 : 0, mesh = (GLES_MESH_END - mesh_vertices) / 6 * 4;
     *room = (GLsizei)(fit < mesh ? fit : mesh);
     return gpu ? (unsigned int*)(gpu + vertex_top) : 0;
 }
@@ -1291,13 +1299,13 @@ void seglScreenCompactUsed(GLsizei count, int quads, GLuint name, const unsigned
 // tagged vertices in screen pixels that are in it already (segl.h).
 void* seglFrameSpace(unsigned int bytes) {
     bytes = (bytes + 15) & ~15u;
-    if (!gpu || bytes > set_at + SET_SIZE - vertex_top) return 0;
+    if (!gpu || bytes > GLES_VERTEX_END - vertex_top) return 0;
     void* at = gpu + vertex_top;
     vertex_top += bytes;
     last_draw = 0;
     return at;
 }
-unsigned int seglFrameLeft(void) { return gpu ? set_at + SET_SIZE - vertex_top : 0; }
+unsigned int seglFrameLeft(void) { return gpu ? GLES_VERTEX_END - vertex_top : 0; }
 void seglScreenCompactAt(const unsigned int* vertices, GLsizei count, int quads, GLuint name, const unsigned int* table) {
     const texture* x = &textures[name < MAX_TEXTURES ? name : 0];
     uint32_t mesh = quads ? (uint32_t)count / 4 * 6 : (uint32_t)count;
