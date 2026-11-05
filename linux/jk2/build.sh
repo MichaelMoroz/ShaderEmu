@@ -37,13 +37,43 @@ else
     CC=ottd-cc; CXX=ottd-c++; T=riscv32-linux-musl
     LD=$CXXTC/bin/$T-ld; OBJCOPY=$CXXTC/bin/$T-objcopy; NM=$CXXTC/bin/$T-nm; ARCH=riscv32
     # Quake's flags (linux/quake/build.sh): floats only, a variable a section of its own on 16 bytes
-    OPT="-O2 -fno-strict-aliasing -fno-math-errno -fsingle-precision-constant -fno-common -fdata-sections ${JK2_CFLAGS:-}"
+    # (-O3: on one game, JK2_SOUND=client, the walk 216.44 to 192.54 passes a frame and the march 332.33 to 313.94 against -O2,
+    # the same sums; docs/games/jk2.md, "The compiler's level")
+    OPT="-O3 -fno-strict-aliasing -fno-math-errno -fsingle-precision-constant -fno-common -fdata-sections ${JK2_CFLAGS:-}"
     LIBS="-lm ${JK2_LINK:-}"
     BUILD=$WORK/src/jk2-build
     OUT=${JK2_OUT:-$REPO/build/jk2/out}
+    # What a played walk ran, for the compiler (linux/userland/pgo/gcov.c; docs/games/tdawn.md, "What the compiler is
+    # told"; docs/games/jk2.md, "Played counts"): JK2_PROFILE=count builds the program that counts, in a folder of its own
+    # (its counts written to stderr at SIGUSR2 or the end); otherwise jk2.profile's counts, JK2_PROFILE=off without
+    if [ "${JK2_PROFILE:-}" = count ]; then
+        BUILD=$WORK/src/jk2-count-build
+        mkdir -p "$BUILD" "$WORK/src/nogcov" && "$CXXTC/bin/$T-ar" rc "$WORK/src/nogcov/libgcov.a"
+        $CC -O2 -D__thread= -DGCOV_ONCE -w -c "$REPO/linux/userland/pgo/gcov.c" -o "$BUILD/gcov.o"
+        OPT="$OPT -fprofile-generate -fprofile-update=single"
+        LIBS="$LIBS -L$WORK/src/nogcov $BUILD/gcov.o"
+    elif [ -f "$HERE/jk2.profile" ] && [ "${JK2_PROFILE:-}" != off ]; then
+        mkdir -p "$BUILD"
+        python3 "$REPO/linux/tdawn/profile.py" put "$HERE/jk2.profile" "$BUILD"
+        # (the counts' sum in the flags: make knows nothing of the .gcda files, and a part whose flags change is built again)
+        OPT="$OPT -fprofile-use -fprofile-partial-training -fprofile-correction -Wno-missing-profile -Wno-coverage-mismatch -DSE_COUNTS=$(sha1sum "$HERE/jk2.profile" | cut -c1-12)"
+    fi
 fi
 SRC=${JK2_SRC:-$WORK/src/openjk}
 mkdir -p "$WORK/src" "$BUILD"
+# Every compile from $WORK/src with that folder's paths relative (Tiberian Dawn's tdawn-relative): GCC knows a function that
+# is not public, in the played counts (jk2.profile), by a sum with its source's path in it, and the counts were otherwise
+# kept only in the home they were made in
+mkdir -p "$WORK/bin"
+cat > "$WORK/bin/jk2-relative.new" <<EOF
+#!/usr/bin/env bash
+top=$WORK/src
+cd "\$top" || exit 1
+exec "\${@//\$top\//}"
+EOF
+chmod +x "$WORK/bin/jk2-relative.new"
+cmp -s "$WORK/bin/jk2-relative.new" "$WORK/bin/jk2-relative" && rm "$WORK/bin/jk2-relative.new" || mv "$WORK/bin/jk2-relative.new" "$WORK/bin/jk2-relative"
+REL=$WORK/bin/jk2-relative
 
 if [ ! -d "$SRC/.git" ]; then
     step "OpenJK ${COMMIT:0:8}"
@@ -141,7 +171,7 @@ compile() {   # part, then lines "source object compiler flags..."
         set -- {}; src=$1; obj=$2; shift 2
         if [ "$obj" -nt "$src" ] && [ "$obj" -nt "'"$HERE"'/build.sh" ] && [ "$obj" -nt "'"$HERE"'/jk2.patch" ] &&
            [ "$obj" -nt "'"$HERE"'/sys_shaderemu.cpp" ] && [ "$obj" -nt "'"$HERE"'/nullgl.c" ] && [ "$obj" -nt "'"$HERE"'/se_rand.c" ] && [ "$obj" -nt "'"$HERE"'/cg_rand.c" ]; then exit 0; fi
-        "$@" -c "$src" -o "$obj" || { echo "failed: $src"; exit 255; }'
+        "'"$REL"'" "$@" -c "$src" -o "$obj" || { echo "failed: $src"; exit 255; }'
 }
 lines() {   # part, compiler and flags, then sources (with their extension)
     local part=$1 cc=$2; shift 2

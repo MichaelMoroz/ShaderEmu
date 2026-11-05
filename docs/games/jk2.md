@@ -1358,6 +1358,44 @@ behind read the next frame's; it is kept with the frame's commands now (`backEnd
 but runs the mix by the client's clock: the same game in every build, for comparing two builds' frames. test_all jk2 jk2-sums
 9 of 9.
 
+**The compiler's level**: the machine's build is `-O3` (`linux/jk2/build.sh`'s OPT; the build computer's stays `-O2`). On one
+game (`JK2_SOUND=client`: `JK2_SUM=100` gave the same sums frame by frame from both builds) the walk went from 216.44 to
+192.54 passes a frame and the march from 332.33 to 313.94; all cores' instructions a frame of the walk 7,655 to 6,776
+thousand. On the card's pace each build plays another game (the walk 201.87 against about 160, core 0 979 against about
+760 thousand a frame: a heavier stretch, not a slower program), the march 157.69. test_all jk2 jk2-sums 9 of 9.
+**Effects from the game's frame** (`FxScheduler.cpp`'s `PlayEffect`, `FxUtil.cpp`'s `FX_AddPrimitive`): the game's frame on its
+worker reaches the client game's effects (one module), and `RVC_RACES` had it adding a primitive beside core 0's `FX_Add`
+(2 undone); an effect it plays is now made by core 0, the worker waiting (`jk2ServerOnCore0`), as its registrations are:
+`RVC_RACES` the inflate's 1 again.
+
+**Played counts** (`linux/jk2/jk2.profile`, the build's `-fprofile-use`; `JK2_PROFILE=off` without, `JK2_PROFILE=count` the
+counting program in `jk2-count-build`): the counts of a played march and walk (frames 1,250 to 1,700, `JK2_SPLIT=worker`, on
+`rvc_cpu`), made by the counting program run in the foreground with its stderr to a file: `JK2_COUNTS_AT_MARK=1` raises
+SIGUSR2 at the mark's end (the game's quit ends the program without its exit's handlers), then the file is packed and
+carried over the console in base64, and `python3 linux/tdawn/profile.py make linux/jk2/jk2.profile FILE`. `gcov.c` lists
+the files it was given in a table: the game's module is made fresh at each load and gave its infos again with their links
+reset. On one game (the same sums) the walk 192.38 to 184.16 passes a frame, the march 314.07 to 294.46. A function not
+public is known by a sum with its source's path in it: every compile now runs from `$WORK/src` with that folder's paths
+relative (`$WORK/bin/jk2-relative`, as Tiberian Dawn's), and the counts were made again so: they hold in any home. A build
+in `~/nm` with them: the walk 183.82 passes a frame on one game (the counts of the public functions alone had given 184.16),
+the march on the card's pace 151.54, 5.0 frames a second.
+
+**A timer's name made once** (`G_Timer.cpp`): `TIMER_Done`, `_Get`, `_Exists` and `_Set` compared each timer of an entity's
+list with the name as a char pointer, which made an `hstring` (a hash, a `strlen` and a `memcmp`) at every timer: some
+20,700 a hundred frames of the walk, about 40 thousand instructions a frame of the game's frame. The handle is made once a
+call, and only where the list has a timer, as before. The fixed game (`JK2_SOUND=client`) is not as fixed as it seemed: the
+d29 build with `JK2_HAND_PARTS=4`, a change of timing alone, plays from frame 1,100 on as this build does (sums 8498a08c,
+484d6777) and not as itself with 8 parts (0369f435): compare a build against a run of the same game. On that game the walk
+203.33 to 200.14 passes a frame; `test_all jk2 jk2-sums` 9 of 9, `RVC_RACES` the inflate's 1.
+
+**The walk's chain** (6 November 2026, d29, `prof.py` with `RVC_PROF_CORES`): 3.7 frames a second on the card's pace
+(196.93 passes a frame); 5 needs about 134. A frame of the profile is 171 passes: the game's frame on its worker about 145
+nearly full ones (1.0 million instructions: the NPCs' behaviours 0.35, their and the player's `ClientThink` 0.28, traces
+about 0.45 of it), then core 0's handover in series with it, about 22: the take, the mix's end waited for, the player's
+move (`SV_UserMove`, 56 thousand), the entities' copy (about 770 KB by the commit's copy, 3 passes) and the give's ranges.
+The client's frame and the mix after it (245 thousand a frame on one worker, given at the client's end) are about 150 too:
+all three must come down for 5 frames a second.
+
 ### What bounds it
 
 After both rounds (3 November 2026, calibrated, `game_par.py`): the walk 655 passes a frame (1.1 frames a second), the

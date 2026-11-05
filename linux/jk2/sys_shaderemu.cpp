@@ -13,6 +13,7 @@
 //   (the engine's own +set fixedtime N makes every frame N ms of the game's time: two runs, and the build computer's
 //   and the machine's, then play the same game)
 //   JK2_SOUND=off     no sound at all (the game then loads none); otherwise mixed into nothing at 22 kHz
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -315,6 +316,10 @@ void WIN_Present( window_t *window )
 	if ( mark_from > 0 && se_frames == mark_to ) {
 		Com_Printf( "jk2mark: ends, %d frames in %d ms\n", mark_to - mark_from, Sys_Milliseconds() - mark_ms );
 		se_stop_at = se_frames;
+		// (JK2_COUNTS_AT_MARK=1, a counting build's run: its counts written now, linux/userland/pgo/gcov.c's SIGUSR2; the
+		// game's quit ends the program without its exit's handlers)
+		if ( getenv( "JK2_COUNTS_AT_MARK" ) )
+			raise( SIGUSR2 );
 	}
 	bool stop = se_stop_at > 0 && se_frames >= se_stop_at;
 	if ( stop || ( se_stats_every > 0 && se_window_frames >= se_stats_every ) ) {

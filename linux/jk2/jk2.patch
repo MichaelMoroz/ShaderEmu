@@ -12479,7 +12479,7 @@ index 11738428..2445590c 100644
  	inline void SetSize2Start( float sz )	{ mSize2Start = sz;			}
  	inline void SetSize2End( float sz )		{ mSize2End = sz;			}
 diff --git a/codeJK2/cgame/FxScheduler.cpp b/codeJK2/cgame/FxScheduler.cpp
-index fd4f9cef..936c579e 100644
+index fd4f9cef..a14b3ba0 100644
 --- a/codeJK2/cgame/FxScheduler.cpp
 +++ b/codeJK2/cgame/FxScheduler.cpp
 @@ -491,6 +491,9 @@ static void ReportPlayEffectError(int id)
@@ -12512,27 +12512,54 @@ index fd4f9cef..936c579e 100644
  	char	sfile[MAX_QPATH];
  
  	// Get an extenstion stripped version of the file
-@@ -576,6 +585,9 @@ void CFxScheduler::PlayEffect( const char *file, vec3_t origin, vec3_t axis[3],
+@@ -574,8 +583,24 @@ void CFxScheduler::PlayEffect( const char *file, vec3_t origin, vec3_t axis[3],
+ // Return:
+ //	none
  //------------------------------------------------------
++#ifdef SHADEREMU
++#include "../../shared/qcommon/se_server.h"
++// (docs/games/jk2.md, "Effects from the game's frame": the effects' lists are the first core's, and the game's frame on its
++// worker reaches them (the client's game is in its module): an effect it plays is made by the first core, the worker
++// waiting, as its registrations are. RVC_RACES had FX_AddPrimitive on the worker and FX_Add on core 0 at one texel)
++struct seFxFile_t { CFxScheduler *s; const char *file; int client; };
++struct seFxId_t { CFxScheduler *s; int id, bolt, ent, axis; vec3_t origin, ax[3]; };
++#endif
  void CFxScheduler::PlayEffect( const char *file, int clientID )
  {
 +#ifdef SHADEREMU
++	if ( jk2ServerHere() ) {
++		seFxFile_t a = { this, file, clientID };
++		jk2ServerOnCore0( []( void *p ) -> unsigned { seFxFile_t *f = (seFxFile_t *)p; f->s->PlayEffect( f->file, f->client ); return 0; }, &a );
++		return;
++	}
 +	SE_NOT_AHEAD( SE_WHY_FX );	// (not for a player made ahead: se_slot.h)
 +#endif
  	char	sfile[MAX_QPATH];
  	int		id;
  
-@@ -840,6 +852,9 @@ void CFxScheduler::CreateEffect( CPrimitiveTemplate *fx, int clientID, int delay
+@@ -840,6 +865,21 @@ void CFxScheduler::CreateEffect( CPrimitiveTemplate *fx, int clientID, int delay
  //------------------------------------------------------
  void CFxScheduler::PlayEffect( int id, vec3_t origin, vec3_t axis[3], const int boltInfo, const int entNum )
  {
 +#ifdef SHADEREMU
++	if ( jk2ServerHere() ) {
++		seFxId_t a;
++		a.s = this, a.id = id, a.bolt = boltInfo, a.ent = entNum, a.axis = axis != NULL;
++		VectorCopy( origin, a.origin );
++		if ( axis )
++			VectorCopy( axis[0], a.ax[0] ), VectorCopy( axis[1], a.ax[1] ), VectorCopy( axis[2], a.ax[2] );
++		jk2ServerOnCore0( []( void *p ) -> unsigned {
++			seFxId_t *f = (seFxId_t *)p;
++			f->s->PlayEffect( f->id, f->origin, f->axis ? f->ax : NULL, f->bolt, f->ent );
++			return 0; }, &a );
++		return;
++	}
 +	SE_NOT_AHEAD( SE_WHY_FX );	// (not for a player made ahead: se_slot.h)
 +#endif
  	SEffectTemplate			*fx;
  	CPrimitiveTemplate		*prim;
  	int						i = 0;
-@@ -1012,6 +1027,9 @@ void CFxScheduler::PlayEffect( int id, vec3_t origin, vec3_t axis[3], const int
+@@ -1012,6 +1052,9 @@ void CFxScheduler::PlayEffect( int id, vec3_t origin, vec3_t axis[3], const int
  //------------------------------------------------------
  void CFxScheduler::PlayEffect( const char *file, vec3_t origin )
  {
@@ -12542,7 +12569,7 @@ index fd4f9cef..936c579e 100644
  	char	sfile[MAX_QPATH];
  
  	// Get an extenstion stripped version of the file
-@@ -1041,6 +1059,9 @@ void CFxScheduler::PlayEffect( const char *file, vec3_t origin )
+@@ -1041,6 +1084,9 @@ void CFxScheduler::PlayEffect( const char *file, vec3_t origin )
  //------------------------------------------------------
  void CFxScheduler::PlayEffect( const char *file, vec3_t origin, vec3_t forward )
  {
@@ -12553,7 +12580,7 @@ index fd4f9cef..936c579e 100644
  
  	// Get an extenstion stripped version of the file
 diff --git a/codeJK2/cgame/FxUtil.cpp b/codeJK2/cgame/FxUtil.cpp
-index d0b2386a..099d35dc 100644
+index d0b2386a..81e77b8c 100644
 --- a/codeJK2/cgame/FxUtil.cpp
 +++ b/codeJK2/cgame/FxUtil.cpp
 @@ -195,10 +195,122 @@ bool FX_ActiveFx(void)
@@ -12679,11 +12706,22 @@ index d0b2386a..099d35dc 100644
  
  	drawnFx = 0;
  	mParticles = 0;
-@@ -369,6 +481,9 @@ void FX_Add( void )
+@@ -367,8 +479,20 @@ void FX_Add( void )
+ // Note - in the editor, this function may change *pEffect to NULL, indicating that
+ // all effects are being stopped.
  //-------------------------
++#ifdef SHADEREMU
++#include "../../shared/qcommon/se_server.h"
++struct seFxPrim_t { CEffect *e; int kill; };
++#endif
  void FX_AddPrimitive( CEffect *pEffect, int killTime )
  {
 +#ifdef SHADEREMU
++	if ( jk2ServerHere() ) {	// (from the game's frame on its worker: the first core adds it, FxScheduler.cpp)
++		seFxPrim_t a = { pEffect, killTime };
++		jk2ServerOnCore0( []( void *p ) -> unsigned { seFxPrim_t *f = (seFxPrim_t *)p; FX_AddPrimitive( f->e, f->kill ); return 0; }, &a );
++		return;
++	}
 +	SE_NOT_AHEAD( SE_WHY_FX );	// (the effects' lists are the first core's: a job that adds one is made in its turn)
 +#endif
  	SEffectList *item = FX_GetValidEffect();
@@ -13812,6 +13850,93 @@ index 62e0c45c..a48c4b74 100644
  			memset( &level.groups[i], 0, sizeof( level.groups[i] ) );
  		}
  	}
+diff --git a/codeJK2/game/G_Timer.cpp b/codeJK2/game/G_Timer.cpp
+index 068db56a..3d33364e 100644
+--- a/codeJK2/game/G_Timer.cpp
++++ b/codeJK2/game/G_Timer.cpp
+@@ -286,6 +286,16 @@ static gtimer_t *TIMER_GetNew(int num, const char *identifier)
+ 	assert(num < ENTITYNUM_MAX_NORMAL);//don't want timers on NONE or the WORLD
+ 	gtimer_t *p = g_timers[num];
+ 
++#ifdef SHADEREMU
++	// (the name's handle made once, not at every timer of the list: hstring's constructor hashed and compared the name
++	// each time, some 1,700 instructions a TIMER_Done of a stormtrooper's; made only where the list has a timer, as before)
++	if ( p ) {
++		const hstring h( identifier );
++		for ( ; p ; p = p->next )
++			if ( p->id == h )
++				return p;
++	}
++#else
+ 	// Search for an existing timer with this name
+ 	while (p)
+ 	{
+@@ -296,6 +306,7 @@ static gtimer_t *TIMER_GetNew(int num, const char *identifier)
+ 
+ 		p = p->next;
+ 	}
++#endif
+ 
+ 	// No existing timer with this name was found, so grab one from the free list
+ 	if (!g_timerFreeList)
+@@ -316,6 +327,14 @@ gtimer_t *TIMER_GetExisting(int num, const char *identifier)
+ {
+ 	gtimer_t *p = g_timers[num];
+ 
++#ifdef SHADEREMU
++	if ( p ) {	// (the name's handle made once: TIMER_GetNew)
++		const hstring h( identifier );
++		for ( ; p ; p = p->next )
++			if ( p->id == h )
++				return p;
++	}
++#else
+ 	while (p)
+ 	{
+ 		if (p->id == identifier)
+@@ -325,6 +344,7 @@ gtimer_t *TIMER_GetExisting(int num, const char *identifier)
+ 
+ 		p = p->next;
+ 	}
++#endif
+ 
+ 	return NULL;
+ }
+@@ -340,6 +360,26 @@ TIMER_Set
+ void TIMER_Set( gentity_t *ent, const char *identifier, int duration )
+ {
+ 	assert(ent->inuse);
++#ifdef SHADEREMU
++	// (the name's handle made once: TIMER_GetNew's search and the assignment each made it again)
++	const hstring h( identifier );
++	gtimer_t *timer = g_timers[ent->s.number];
++	assert(ent->s.number < ENTITYNUM_MAX_NORMAL);
++	while ( timer && !( timer->id == h ) )
++		timer = timer->next;
++	if ( !timer && g_timerFreeList ) {
++		timer = g_timerFreeList;
++		g_timerFreeList = g_timerFreeList->next;
++		timer->next = g_timers[ent->s.number];
++		g_timers[ent->s.number] = timer;
++	}
++	assert( timer );
++	if (timer)
++	{
++		timer->id	= h;
++		timer->time = level.time + duration;
++	}
++#else
+ 	gtimer_t *timer = TIMER_GetNew(ent->s.number, identifier);
+ 
+ 	if (timer)
+@@ -347,6 +387,7 @@ void TIMER_Set( gentity_t *ent, const char *identifier, int duration )
+ 		timer->id	= identifier;
+ 		timer->time = level.time + duration;
+ 	}
++#endif
+ }
+ 
+ /*
 diff --git a/codeJK2/game/NPC.cpp b/codeJK2/game/NPC.cpp
 index b57d6347..52e98d9e 100644
 --- a/codeJK2/game/NPC.cpp
