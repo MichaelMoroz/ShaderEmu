@@ -50,8 +50,15 @@ cp "$SRC"/include/*.h "$STAGE/usr/lib/tcc/include/"
 # TinyCC links its runtime last, after the C library, which is where the C library's own needs
 # (64-bit division, soft float) must come from: compiler-rt's builtins go into that archive
 cp "$SYSROOT/lib/libcompiler_rt.a" "$STAGE/usr/lib/tcc/libtcc1.a"
+# (the cross compiler names each object's source by its whole path, a FILE symbol that every linked program keeps: it is
+# named as the drivers' -ffile-prefix-map names the rest, or cc-bytes moved with the build home, f29737a1 against 25995171)
 (mkdir -p "$WORK/build/tcc1" && cd "$WORK/build/tcc1" && rm -f ./*.o && riscv32-linux-ar x "$WORK/build/tcc-cross/libtcc1.a" &&
-    for o in *.o; do mv "$o" "tcc1_$o"; done && riscv32-linux-ar rs "$STAGE/usr/lib/tcc/libtcc1.a" tcc1_*.o)
+    for o in *.o; do
+        mv "$o" "tcc1_$o"
+        for f in $(riscv32-linux-readelf -sW "tcc1_$o" | awk '$4 == "FILE" {print $8}'); do
+            case "$f" in "$WORK"/*) riscv32-linux-objcopy --redefine-sym "$f=/nm/work${f#"$WORK"}" "tcc1_$o" ;; esac
+        done
+    done && riscv32-linux-ar rs "$STAGE/usr/lib/tcc/libtcc1.a" tcc1_*.o)
 cp "$SYSROOT"/lib/crt1.o "$SYSROOT"/lib/crti.o "$SYSROOT"/lib/crtn.o "$SYSROOT"/lib/libc.a "$SYSROOT"/lib/libm.a \
     "$STAGE/usr/lib/"
 # the window system's client library, and our OpenGL ES on the machine's GPU
