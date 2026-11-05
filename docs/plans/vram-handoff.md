@@ -55,10 +55,13 @@ how it was checked, and what is left, in the order it is worth doing.
    of the GPU's draw in every gpubench mode (9: 0.142 to 0.122 ms, 2: 0.299 to 0.278, 8: 0.170 to 0.149): not the 3x
    hoped for, as what is left is 13 x 196,608 vertex invocations a frame that each load their claim and stop. The next
    cut is fewer invocations: a draw of only the list's vertices (its last command's end), which the host does not know
-   without a readback a frame late, or the passes' draws limited by an indirect count (not in VRChat). Left: **Unity** has the search still
-   (`GpuDrawPass.cginc` does not define `GPU_CLAIMS`): it wants a `GPUClaims` pass in `GpuDrawBlit.shader` blitted into a
-   512 x 384 RGInt render texture before the upload pass (read as `int2`, `asuint`), `_GpuClaims` set globally, and
-   `GPU_CLAIMS` in the draw and upload passes; the volume and holodeck passes too. A float VRAM of transformed vertices
+   without a readback a frame late, or the passes' draws limited by an indirect count (not in VRChat). **Unity** is wired,
+   not run: `GpuDrawBlit.shader`'s pass 14 `GPUClaims` blitted by `EmuMachine.GpuDraw` into `claims`
+   (`GpuClaims.renderTexture`, 512 x 384 RGInt, `ShaderEmuBuilder.Claims()`) before the uploads, and `GPU_CLAIMS` with
+   `GPU_CLAIMS_TEXEL int2` in the blit passes (`GpuDrawPass.cginc`); the camera's mesh (`GpuDraw.shader`), the volume and
+   the holodeck's HUD keep the search. `python tools/unity_fxc.py GpuDrawBlit.shader GPUClaims GPUUpload GPU0` compiles
+   them with the editor's fxc2 outside the editor: all of GpuDrawBlit's, GpuDraw's, GpuVolume's and GpuHolodeckHud's
+   passes tried compile. Rebuild the world for the new texture. A float VRAM of transformed vertices
    was the first plan; with the claims a vertex is transformed once a frame already (in its own pass), so it would save
    only the passes' few loads of a drawn vertex and cost 96 bytes a vertex written and read: not done.
 3. **Other games into the VRAM** with `seglVram` and `seglTextureChanged` where they write a texture's pixels: Quake III
@@ -67,7 +70,9 @@ how it was checked, and what is left, in the order it is worth doing.
    Each game keeps a switch for the way before and its sums (`test_all.py` and its captures), as Doom's do.
 4. **The hand path's uploads** in `gles.c` (`seglSwapHand`): an upload a worker's list asks for and one of core 0's can
    race; check with `RVC_RACES` on a program that uses both.
-5. **Tools**: `tools/gpu_reference.py` does not know `CMD_UPLOAD` or slots; the D3D12 backend has no VRAM.
+5. **Tools.** Done: `tools/gpu_reference.py` skips uploads and draws a slot's texture from the VRAM beside the snapshot
+   (`SNAPSHOT.vram`, `--vram FILE`), level 0 only (gpubench 8 on the card: 90.6% of the picture within 2 levels, what
+   differs the card's levels). The D3D12 backend needs no VRAM: it is `--dxc`'s, which `shader_vm` refuses.
 6. **The shared math library** for games and graphics (vector and matrix types, special functions), not started.
 7. **`shader_vm/src` trim**: the `PASS_TICK` part of `types.h` that only Unity's Unpack pass and `mc.h` reach, and the
    other files of the folder; check by compiling every pass in the harness (a short `--warp` run), the stamp, and Unity.

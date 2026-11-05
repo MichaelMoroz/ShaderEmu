@@ -12,6 +12,7 @@ Shader "ShaderEmu/GpuDrawBlit"
         _Data_ROM ("ROM, a 16-byte texel a pixel (RGBAFloat, read by its bits)", 2D) = "black" {}
         _AmpRank ("Each patch point's place in the card's order (BlitOrder.shader)", 2D) = "black" {}
         _GpuVram ("The VRAM: textures the guest uploaded, with mip levels (4096 x 4096 RGBA8)", 2D) = "black" {}
+        _GpuClaims ("Each mesh vertex's command and passes (pass 14 writes it, 512 x 384 RGInt)", 2D) = "black" {}
     }
     SubShader
     {
@@ -267,6 +268,23 @@ Shader "ShaderEmu/GpuDrawBlit"
             #pragma fragment frag
             #define GPU_AMP
             #define GPU_UPLOAD_PASS
+            #define _GpuPass 0
+            #include "GpuDrawPass.cginc"
+            ENDCG
+        }
+        Pass
+        {
+            // 14: each mesh vertex's command and passes (docs/machine/gpu.md, "Claims"), a blit into EmuMachine.claims
+            // before the uploads, every frame a list is drawn; the uploads and the 12 passes read it
+            Name "GPUClaims"
+            Blend One Zero
+            ZTest Always
+            ZWrite Off
+            CGPROGRAM
+            #pragma target 5.0
+            #pragma vertex vert
+            #pragma fragment frag
+            #define GPU_CLAIMS_PASS
             #define _GpuPass 0
             #include "GpuDrawPass.cginc"
             ENDCG

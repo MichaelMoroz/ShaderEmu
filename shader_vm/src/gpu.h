@@ -363,7 +363,12 @@ float4 place_pixels(float2 p, float depth) {
 #define GPU_CLAIMS_H 384u   // (65,536 triangles' vertices)
 #define GPU_CLAIM_UPLOAD 0x10000u
 #ifdef GPU_CLAIMS
-Texture2D<uint2> _GpuClaims;
+// (a host whose integer target is signed, Unity's RGInt, defines GPU_CLAIMS_TEXEL int2: the bits are the same)
+#ifndef GPU_CLAIMS_TEXEL
+#define GPU_CLAIMS_TEXEL uint2
+#endif
+Texture2D<GPU_CLAIMS_TEXEL> _GpuClaims;
+uint2 gpu_claim(uint id) { return asuint(_GpuClaims.Load(int3(id % GPU_CLAIMS_W, id / GPU_CLAIMS_W, 0))); }
 #endif
 
 // The command whose vertex range holds mesh vertex `id`, whatever its pass: its first texel and
@@ -443,7 +448,7 @@ bool gpu_command(uint id, uint span, out uint base, out uint4 head) {
 #ifdef GPU_CLAIMS
     base = 0;
     head = 0;
-    uint2 c = _GpuClaims.Load(int3(id % GPU_CLAIMS_W, id / GPU_CLAIMS_W, 0));
+    uint2 c = gpu_claim(id);
 #ifdef GPU_UPLOAD_PASS
     if ((c.g & GPU_CLAIM_UPLOAD) == 0) return false;
 #else
@@ -451,7 +456,7 @@ bool gpu_command(uint id, uint span, out uint base, out uint4 head) {
 #endif
     if (span > 1) {
         uint last = id + span - 1;
-        if (_GpuClaims.Load(int3(last % GPU_CLAIMS_W, last / GPU_CLAIMS_W, 0)).r != c.r) return false;
+        if (gpu_claim(last).r != c.r) return false;
     }
     base = c.r;
     head = ram(base);
