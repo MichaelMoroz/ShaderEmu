@@ -455,6 +455,17 @@ void jk2MixPartJoin(void) {
     for (int i = 0; i < mixpart_count; i++) mcw_join(mixpart_jobs[i]);
     mixpart_count = 0;
 }
+// The voices decoded ahead (snd_dma.cpp's SE_VoiceAheadGive): one job a frame on any free worker, joined before
+// anything else decodes
+static mcw_handle voice_job;
+int jk2VoicePost(uint32_t (*fn)(uint32_t, uint32_t), uint32_t a0, uint32_t a1) {
+    if (voice_job || !rw0.mode) return 0;
+    voice_job = mcw_try_call(fn, a0, a1);
+    return voice_job != 0;
+}
+void jk2VoiceJoin(void) {
+    if (voice_job) mcw_join(voice_job), voice_job = 0;
+}
 void jk2Touch(void* memory, unsigned bytes) { mcw_touch(memory, bytes); }
 void jk2WaitPass(void) { mc_end_pass(); }
 // The worker's RB_SwapBuffers: whether the swap is left to this core (the worker draws); else the window's own

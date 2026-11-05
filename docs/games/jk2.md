@@ -1202,6 +1202,39 @@ pc at each pass's end.
 | The entities copied up to the last ever used, `Pmove`'s locals | 207.61 | 185.36 |
 | The given words packed, the game's registrations by core 0 | 206.16 | 219.34 |
 | The packing by the fields' list, unrolled | 199.99 | 185.24 |
+| The area walk, the clients' list, the groups' zeros | 199.11 | 185.25 |
+| The voices decoded ahead, the Ghoul2 surfaces on the front end's worker | 163.23 | 177.00 |
+
+On the last build the walk is 233.12 with `JK2_VOICE_AHEAD=0` (another state: core 0 1,083 thousand instructions a
+frame against 833) and 169.33 with `JK2_G2_FRONT=0`. 163.23 passes a frame is 4.5 frames a second.
+
+**The game's frame's queries** (`sv_world.cpp`'s `SE_AreaEntitiesWalk`; `JK2_AREA_CHECK` the recursion): the sectors
+walked by a stack of their own in the recursion's order (a node's list, its first child's tree, its second's; a node's
+children left when the list is full), the box in locals: the recursion saved twelve registers at each of some 590 nodes
+a frame. **The clients' list** (`AI_Stormtrooper.cpp`'s `NPC_CheckPlayerTeamStealth`): the entities in use with a
+client, in order, made again when `se_ent_gen` moved (`SetInUse`, `ClearInUse`, `ClearAllInUse` and every place a
+client is given), each tested as before, instead of all 1,023 at every call. **An empty group's zeros** read eight words
+a turn. The walk 199.11, the march 185.25: the game's frame is not what bounds these frames (below).
+
+**Frames 1,600 to 1,700 of the walk** (profiled, `RVC_PROF_PCS=1`): 184.9 passes a frame against 163.7 for 1,500 to
+1,600. A character speaks there: the mix's worker waits for its voices' helper, which decodes one voice's MP3 about 150
+passes a frame, and core 0 waits for the mix about 100.
+
+**The voices decoded ahead** (`snd_dma.cpp`'s `SE_VoiceAheadGive`, `cl_mp3.cpp`'s `MP3Stream_SE_DecodeTo`;
+`JK2_VOICE_AHEAD=0` the way before): when the mix has settled at a frame's start, one worker decodes each audible MP3
+channel's stream as far as the last mix painted past where this one ends (at most 8,000 samples: the window keeps
+18,750 behind what is decoded, so what the next mix paints and its lips' levels read stay in it), with the same loop as
+`MP3Stream_GetSamples` (the same frames decoded, the same scrolls), so the next mix finds its samples there. The decoder
+works through globals: the sound system's entries join the job first, but those that only move the entities, the
+listener and the loops (`S_UpdateEntityPosition`, `S_Respatialize`, the loops' three, `S_RawSamples`), which the
+client game calls all frame; `SE_MP3Header` and `S_RegisterSound` join it too.
+
+**The Ghoul2 entities' surfaces on the front end's worker** (`tr_main.cpp`'s `R_SE_RenderViewSplit`, `se_front_make`,
+`R_SE_G2Wait`; `JK2_G2_FRONT=0` the way before): the view given to the front end's worker has its Ghoul2 entities'
+surfaces made there first (`RenderSurfaces`, the bones' transforms: about 100 thousand instructions a frame of core 0),
+then the world's; core 0 waits for that part only before it evaluates the frame's bones (`SE_RSBonesGive`), and a second
+scene waits for the whole front end as before: the renderable surfaces' ring, the bone caches and the skins' table have
+one maker at a time. The skins' table is the front end's worker's too (`jk2RenderWorkerHere() == 2`).
 
 The packing as first written (a loop over a table of the fields, about 170 instructions an entity) cost the march 30
 passes a frame (219.34 against 189.44 with `JK2_GV_PACK=0` on the same build): in the march the give's and the take's
