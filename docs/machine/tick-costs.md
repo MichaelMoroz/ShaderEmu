@@ -859,6 +859,15 @@ frame):
 | Each kept part out alone: the fused arithmetic only for op-imm; no fused branch after arithmetic; no branch after a load | +1.4%; -0.75%; +0.2% | +4.3%; +0.2%; +0.8% | +0.1%; +0.2%; 0.0% | the parts are kept together |
 | lui or auipc as the fused second word; the second word's fields read before the first's result | +1.2%; +0.9% | +2.1%; +0.9% | +1.9%; +0.5% | lost |
 
+On the tree with M before the atomics:
+
+| What | Quake | Tiberian Dawn | Shell | Verdict |
+|---|---|---|---|---|
+| The CSRs before the atomics; mul in the second group, before the branches | +0.6%; +1.7% | +1.2%; +0.6% | +0.7%; +0.85% | lost |
+| st2 (a sw into the texel remembered last, fused after a sw); an op-imm word fused after a load | +1.9%; +1.4% | +2.6%; +2.4% | +1.7%; 0.0% | lost |
+| fb1; fp1 | -0.8%; -0.4% | +0.7%; -0.1% | +0.5%; 0.0% | level |
+| Another first hash of the write cache | | | | not run: `src/fb.h` and `src/types.h` find texels in the cores' caches by the same hash (`L1_H1`), so the tick's alone cannot change |
+
 **What was learnt.** Nothing of the fast loop's shape gave more than 1% on every load: f2 + fp1 (+ ffma) about 1%, at the
 noise's edge; the kept fusion 2% of Tiberian Dawn, a little of the shell, level on Quake. fp1 changes what fdiv makes (the card's quotient, which `rvc_cpu` does not make: a model of the card's
 division is owed first), and ffma's `mad` is fused where the general step rounds twice: neither is in the tree. The ways
