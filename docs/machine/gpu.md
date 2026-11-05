@@ -495,9 +495,12 @@ atlas's, in GPU memory, and its corridor's textures are near).
 A texture from the VRAM costs what a colour does; what is left, 0.055 ms, is the vertex shader's: every pass runs all
 196,608 vertices, each finding its command by a binary search (until the draw IDs, next).
 
-In the world the memory screen's VRAM button shows it (`EmuScope.ShowVram`, `Scope.shader`'s mode 4; 5 November 2026):
-the whole 4096 x 4096 square, row 0 at the top as `VRAM_X` and `VRAM_Y` address it, level 0 only, a texel's alpha over
-a checker of 64 texels and a grid of 512.
+In the world the memory screen's VRAM button shows the GPU's memory (`EmuScope.ShowVram`, `Scope.shader`'s mode 4,
+`gpu_memory`; 5 November 2026): at the left the VRAM, the whole 4096 x 4096 square (the slots and the rows `gles.c` streams
+into), row 0 at the top as `VRAM_X` and `VRAM_Y` address it, level 0 only, a texel's alpha over a checker of 64 texels and a
+grid of 512; at the top right the frame buffer (`GpuTarget`, 1280 x 720, as the display reads it); under it the draw IDs (a
+texel a vertex, a colour of its command's texel, dim where no pass draws it; written every frame, zeros where no list is
+drawn, so it shows only while one is: Quake's, a frame in a few dozen).
 
 ## Draw IDs
 

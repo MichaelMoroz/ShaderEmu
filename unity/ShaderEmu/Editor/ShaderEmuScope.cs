@@ -20,7 +20,7 @@ public static partial class ShaderEmuBuilder
 
     static void Scope(Transform world, Transform computer, RectTransform panel, EmuMachine machine)
     {
-        foreach (string old in new[] { "Scope", "Memory legend", "CPU screen", "CPU sign" })
+        foreach (string old in new[] { "Scope", "Memory legend", "GPU legend", "CPU screen", "CPU sign" })
         {
             Transform found = old == "Scope" ? world.Find(old) : computer.Find(old);
             if (found != null) Object.DestroyImmediate(found.gameObject);
@@ -37,7 +37,10 @@ public static partial class ShaderEmuBuilder
         Material cpu = ScopeMaterial("ScopeCpu", 1), rom = ScopeMaterial("ScopeRom", 2), wave = ScopeMaterial("ScopeSound", 3);
         Material vram = ScopeMaterial("ScopeVram", 4);
         vram.SetTexture("_GpuVram", Vram());   // the GPU's (MachineCameras gives the machine the same one)
-        vram.SetFloat("_Aspect", screen.localScale.x / screen.localScale.y);
+        vram.SetTexture("_GpuTarget", AssetDatabase.LoadAssetAtPath<RenderTexture>(Generated + "/GpuTarget.renderTexture"));
+        vram.SetTexture("_GpuDrawIds", DrawIds());
+        float aspect = screen.localScale.x / screen.localScale.y;
+        vram.SetFloat("_Aspect", aspect);
         RenderTexture mix = AssetDatabase.LoadAssetAtPath<RenderTexture>(Generated + "/SoundMix.renderTexture");
         if (mix != null) wave.SetTexture("_Mix", mix);
 
@@ -59,6 +62,24 @@ public static partial class ShaderEmuBuilder
             RectTransform plate = Child(legend, "Name " + i, x, Mathf.Clamp(y - 13f, 2f, high - 28f), w, 26f);
             Plate(plate, new Color(0, 0, 0, 0.62f)).raycastTarget = false;
             Label(plate, "Text", names[i], 6, 0, w - 8f, 26f, 18, TextAnchor.MiddleLeft, Color.white);
+        }
+
+        // The GPU's memory's legend (Scope.shader's gpu_memory): the VRAM a square at the left, the frame buffer at the
+        // top right, the draw IDs under it.
+        RectTransform gpuLegend = Panel(computer, "GPU legend", screen.localPosition + new Vector3(0, 0, -0.004f), Vector3.zero,
+                                        wide, high, new Color(0, 0, 0, 0));
+        Object.DestroyImmediate(gpuLegend.GetComponent<VRC.SDK3.Components.VRCUiShape>());
+        Object.DestroyImmediate(gpuLegend.GetComponent<BoxCollider>());
+        Object.DestroyImmediate(gpuLegend.GetComponent<GraphicRaycaster>());
+        float fbHigh = (aspect - 1.02f) * 720f / 1280f;
+        string[] gpuNames = { "textures, streams (4096 x 4096)", "frame buffer (1280 x 720)", "draw IDs, a texel a vertex (while a list draws)" };
+        Vector2[] gpuAt = { new Vector2(8f, 6f), new Vector2(wide * 1.02f / aspect + 8f, 6f), new Vector2(wide * 1.02f / aspect + 8f, high * (fbHigh + 0.02f) + 6f) };
+        for (int i = 0; i < gpuNames.Length; i++)
+        {
+            float w = gpuNames[i].Length * 11f + 16f;
+            RectTransform plate = Child(gpuLegend, "Name " + i, gpuAt[i].x, gpuAt[i].y, w, 26f);
+            Plate(plate, new Color(0, 0, 0, 0.62f)).raycastTarget = false;
+            Label(plate, "Text", gpuNames[i], 6, 0, w - 8f, 26f, 18, TextAnchor.MiddleLeft, Color.white);
         }
 
         // The CPU's state texels are few: a small square screen of their own, always on, in
@@ -83,6 +104,7 @@ public static partial class ShaderEmuBuilder
         scope.screen = renderer;
         scope.views = new[] { ram, rom, wave, vram };
         scope.legend = legend.gameObject;
+        scope.gpuLegend = gpuLegend.gameObject;
         GameObject signs = GameObject.Find("Signs");
         if (signs != null && signs.transform.Find("Memory") != null) scope.sign = signs.transform.Find("Memory").GetComponent<TextMeshProUGUI>();
         scope.plain = KeyColour;
@@ -131,7 +153,7 @@ public static partial class ShaderEmuBuilder
         // the room's look for what Scope made again, as Retro gives it, without new plates
         RetroInPlace(GameObject.Find("ShaderEmu").transform, new System.Collections.Generic.List<Canvas> { panel.GetComponent<Canvas>() });
         TMP_FontAsset monoBold = RetroFont("IBMPlexMono-Bold");
-        foreach (string over in new[] { "Memory legend", "CPU sign" })
+        foreach (string over in new[] { "Memory legend", "GPU legend", "CPU sign" })
             foreach (TextMeshProUGUI label in Den().Find(over).GetComponentsInChildren<TextMeshProUGUI>(true))
             { label.font = monoBold; label.fontSharedMaterial = monoBold.material; EditorUtility.SetDirty(label); }
         EmuScope scope = Object.FindObjectOfType<EmuScope>();

@@ -4,15 +4,16 @@ using UnityEngine;
 using UnityEngine.UI;
 
 // What the memory screen shows: all of RAM with a legend of whose it is, the ROM, the sound
-// card's ring of samples, or the GPU's VRAM (the textures programs uploaded). The panel's four
-// buttons call this. (The CPU's state texels have a
+// card's ring of samples, or the GPU's memory (the VRAM's textures and streams, the frame buffer and
+// the vertices' draw IDs). The panel's four buttons call this. (The CPU's state texels have a
 // small screen of their own beside it.)
 [UdonBehaviourSyncMode(BehaviourSyncMode.None)]
 public class EmuScope : UdonSharpBehaviour
 {
     public Renderer screen;
-    public Material[] views;           // RAM, ROM, sound, VRAM
+    public Material[] views;           // RAM, ROM, sound, the GPU's memory
     public GameObject legend;          // the RAM view's labels, over the screen
+    public GameObject gpuLegend;       // the GPU view's (which picture is which)
     public TextMeshProUGUI sign;       // the name above the screen
     public Image[] plates;             // the four buttons
     public Color plain, picked;
@@ -55,8 +56,9 @@ public class EmuScope : UdonSharpBehaviour
         shown = which;
         screen.sharedMaterial = views[which];
         legend.SetActive(which == 0);
+        if (gpuLegend != null) gpuLegend.SetActive(which == 3);
         if (sign != null)
-            sign.text = which == 0 ? "MEMORY (writes glow)" : which == 1 ? "ROM (the disk)" : which == 2 ? "SOUND (left, right)" : "VRAM (the GPU's textures)";
+            sign.text = which == 0 ? "MEMORY (writes glow)" : which == 1 ? "ROM (the disk)" : which == 2 ? "SOUND (left, right)" : "VRAM (textures, frame buffer, draw IDs)";
         for (int i = 0; i < plates.Length; i++) plates[i].color = i == which ? picked : plain;
     }
 }
