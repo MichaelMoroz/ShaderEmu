@@ -792,6 +792,27 @@ Where core 0's passes end with a budget of 32,768 (`--frame-log`, `python tools/
 - 12,288 is where the gain of fewer rounds' fixed costs (about 6% of a round at 8,192) meets the write cache and the waits:
   +3.7 to +4.7% on all three. Not taken: it is the machine's setting for every program and every world, measured on two.
 
+**What a round is made of on this card** (`RVC_PASS_PROF=1`, 600 frames from each snapshot, ms a round):
+
+| Load | tick | unpack | gather | commit rows | commit points | devices | devices with `RVC_LIST_LAZY=1` |
+|---|---|---|---|---|---|---|---|
+| Shell loop | 1.55 | 0.03 | 0.006 | 0.005 | 0.015 | 0.110 | 0.008 |
+| Tiberian Dawn | 1.39 | 0.03 | 0.006 | 0.005 | 0.015 | 0.111 | 0.009 |
+
+The devices' 0.11 ms is the GPU device's list pass, drawn every round whether a list is due or not: 6.6 to 7.4% of a
+round in the harness, which draws the devices every round. The world draws them once a Unity frame (about 8 rounds), so
+there they are under 1% of a frame. `RVC_LIST_LAZY` (opt-in, `a4ff4d46`) still has the bug `riscv-backport-plan.md` names:
+a list submitted in a frame where none was drawn is never drawn; its fix is gpu_vm's, under `GVM_RAM` in `src/gpu.h`. It
+also means the pass's length is worth less in the world than in the harness: of a round's fixed 0.17 ms here only about
+0.056 (unpack, gather, the commit's rows and points) is a round's in the world, so 12,288 there would gain a third of 3.5%
+and the tick's own fixed part, not the harness's 4 to 6%.
+
+| Variant (changes no result) | Quake | Tiberian Dawn | Shell | |
+|---|---|---|---|---|
+| k3c (f2 + fmadd rounded twice) with `LOAD_UP` by selects (lu1) and no budget test on the fused word (nb): k4 | +0.1% | -1.25% | -0.45% | one run: to be run again |
+| lu1 alone (on k3c); mh1 (mulh by `mulhi`); id1 (a texel's word by masks) | -0.8%, -0.05%; -0.1%; +0.2% | -0.5%, -0.4%; +0.3%; +0.6% | -0.2%, -0.1%; +0.4%; +0.8% | level |
+| aui1: an addi of lui's or auipc's register fused into the jumps' block | +1.2% | +0.3% | +1.2% | lost |
+
 **What was learnt.** Nothing of the fast loop's shape gave more than 1% on every load: f2 + fp1 (+ ffma) about 1%, at the
 noise's edge. fp1 changes what fdiv makes (the card's quotient, which `rvc_cpu` does not make: a model of the card's
 division is owed first), and ffma's `mad` is fused where the general step rounds twice: neither is in the tree. The ways
