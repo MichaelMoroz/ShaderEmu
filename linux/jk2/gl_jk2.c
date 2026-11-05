@@ -373,9 +373,12 @@ void jk2ServerStats(unsigned* waits, unsigned* asks) {
 }
 
 // (the front end's worker: its job, chosen and given; "the front end of a frame's view" above)
+static void world_give(void);
+static void world_say_none(void);
 static uint32_t front_body(uint32_t unused) {
     (void)unused;
     front_job.fn(front_job.arg);
+    world_say_none();   // (the world's walk's helper let go if the view did not use it)
     return 0;
 }
 static uint32_t front_post(uint32_t a0, uint32_t a1) {
@@ -400,6 +403,7 @@ int jk2FrontOn(void) {
 }
 void jk2FrontGive(void (*fn)(void*), void* arg) {
     jk2FrontSettle();
+    world_give();   // (its helper first: the front end reads what this core set for it)
     front_job.fn = fn, front_job.arg = arg;
     mcw_post(fw0.worker, front_post, 0, 0);
     fw0.out = 1;
@@ -454,6 +458,59 @@ int jk2MixPartPost(uint32_t (*fn)(uint32_t, uint32_t), uint32_t a0, uint32_t a1)
 void jk2MixPartJoin(void) {
     for (int i = 0; i < mixpart_count; i++) mcw_join(mixpart_jobs[i]);
     mixpart_count = 0;
+}
+// The world's walk in two parts (tr_world.cpp): a helper on a worker of its own, given by this core with the front end's
+// job (jk2FrontGive: a worker may not post, mcw_try_call's table is this core's), waits for the front end's word: the
+// last tasks' trees to walk (jk2WorldPost), or none (front_body, at the job's end). The front end waits for it, counting
+// the passes it waited (the cut moves by them)
+static struct __attribute__((aligned(16))) { int worker, given, tried, unused; } ww0;   // this core's
+static struct __attribute__((aligned(16))) { volatile uint32_t gen, walk; uint32_t (*fn)(uint32_t, uint32_t); uint32_t unused; } world_word;   // the front end's
+static struct __attribute__((aligned(16))) { volatile uint32_t gen, unused[3]; } world_done;   // the helper's
+static struct __attribute__((aligned(16))) { uint32_t gen, said, unused[2]; } world_front;   // the front end's: the helper given its job, its word given
+static uint32_t world_helper(uint32_t gen, uint32_t a1) {
+    (void)a1;
+    while (world_word.gen != gen) mc_end_pass();
+    if (world_word.walk) world_word.fn(0, 0);
+    world_done.gen = gen;
+    return 0;
+}
+static void world_give(void) {   // (this core, with the front end's job)
+    if (!ww0.tried) {
+        const char* e = getenv("JK2_WORLD_HALF");
+        ww0.tried = 1, ww0.worker = -1;
+        if (e && (!strcmp(e, "1") || !strcmp(e, "check")))
+            for (int k = mcw_count(); k >= 1; k--)
+                if (k != rw0.worker && k != mw0.worker && k != sw0.worker && k != fw0.worker && k != HALF_WORKER && mcw_fast(k)) { ww0.worker = k; break; }
+        if (ww0.worker > 0) printf("jk2: the world's walk's helper on worker %d\n", ww0.worker);
+    }
+    if (ww0.worker <= 0) return;
+    while (!mcw_done(ww0.worker)) mcw_rest_for(&ww0.worker, 1);   // (the last one done: the front end always gives its word)
+    ww0.given++;
+    world_front.gen = ww0.given, world_front.said = 0;
+    mcw_post(ww0.worker, world_helper, ww0.given, 0);
+}
+static void world_say(int walk, uint32_t (*fn)(uint32_t, uint32_t)) {   // (the front end)
+    world_word.fn = fn, world_word.walk = (uint32_t)walk;
+    mc_publish();
+    world_word.gen = world_front.gen;
+    world_front.said = 1;
+}
+static void world_say_none(void) {
+    if (world_front.gen && !world_front.said) world_say(0, 0);
+}
+int jk2WorldPost(uint32_t (*fn)(uint32_t, uint32_t), uint32_t a0, uint32_t a1) {
+    (void)a0, (void)a1;
+    if (!world_front.gen || world_front.said) return 0;
+    world_say(1, fn);
+    return 1;
+}
+int jk2WorldJoin(void) {
+    int waited = 0;
+    while (world_done.gen != world_front.gen) {
+        mc_end_pass();
+        waited++;
+    }
+    return waited;
 }
 // The voices decoded ahead (snd_dma.cpp's SE_VoiceAheadGive): one job a frame on any free worker, joined before
 // anything else decodes

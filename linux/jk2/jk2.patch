@@ -350,7 +350,7 @@ index 94051760..57e8ac87 100644
  	if ( cl.viewangles[PITCH] - oldAngles[PITCH] > 90 ) {
  		cl.viewangles[PITCH] = oldAngles[PITCH] + 90;
 diff --git a/code/client/cl_main.cpp b/code/client/cl_main.cpp
-index 1a5c2446..17921e55 100644
+index 1a5c2446..2a55a73f 100644
 --- a/code/client/cl_main.cpp
 +++ b/code/client/cl_main.cpp
 @@ -145,6 +145,7 @@ void CL_FlushMemory( void ) {
@@ -526,7 +526,41 @@ index 1a5c2446..17921e55 100644
  	if ( !com_cl_running->integer ) {
  		return;
  	}
-@@ -1127,6 +1277,9 @@ void CL_InitRef( void ) {
+@@ -871,10 +1021,33 @@ void CL_Frame ( int msec,float fractionMsec ) {
+ 		}
+ 	} else {
+ 		// update the screen
++#ifdef SHADEREMU
++		extern int se_sound_in_screen, se_sound_updated;
++		int SE_MixWorker( void );
++		static int se_early = -1;
++		if ( se_early < 0 ) {
++			const char *e = getenv( "JK2_SOUND_EARLY" );
++			se_early = e && !strcmp( e, "1" );	// (not the default: the march 188.39 passes a frame with it, 178.59 without)
++		}
++		se_sound_in_screen = se_early && SE_MixWorker();	// (the sound updated before the renderer's frame ends: cl_scrn.cpp)
++		se_sound_updated = 0;
++#endif
+ 		SCR_UpdateScreen();
++#ifdef SHADEREMU
++		se_sound_in_screen = 0;
++#endif
+ 	}
+ 	// update audio
++#ifdef SHADEREMU
++	{
++		extern int se_sound_updated;
++		if ( !se_sound_updated )
++			S_Update();
++		se_sound_updated = 0;
++	}
++#else
+ 	S_Update();
++#endif
+ 
+ 	// advance local effects for next frame
+ 	SCR_RunCinematic();
+@@ -1127,6 +1300,9 @@ void CL_InitRef( void ) {
  	RIT(CM_DeleteCachedMap);
  	RIT(CM_DrawDebugSurface);
  	RIT(CM_PointContents);
@@ -812,6 +846,37 @@ index ccdab28d..c2ee9ab7 100644
  int			MP3Stream_Decode		( LP_MP3STREAM lpMP3Stream,  qboolean bDoingMusic );
  qboolean	MP3Stream_SeekTo		( channel_t *ch, float fTimeToSeekTo );
  qboolean	MP3Stream_Rewind		( channel_t *ch );
+diff --git a/code/client/cl_scrn.cpp b/code/client/cl_scrn.cpp
+index f2990bba..e7022d12 100644
+--- a/code/client/cl_scrn.cpp
++++ b/code/client/cl_scrn.cpp
+@@ -479,6 +479,12 @@ This is called every frame, and can also be called explicitly to flush
+ text to the screen.
+ ==================
+ */
++#ifdef SHADEREMU
++// (docs/games/jk2.md, "The mix given before the frame's end": the frame's own screen update gives the mix before the
++// renderer's frame ends, where this core waits for the drawing before, so the two overlap; cl_main.cpp's CL_Frame_ asks
++// for it and does not update the sound again. Only with the mix on a worker; JK2_SOUND_EARLY=0 the way before)
++int se_sound_in_screen, se_sound_updated;
++#endif
+ void SCR_UpdateScreen( void ) {
+ 	static int	recursive;
+ 
+@@ -506,6 +512,13 @@ void SCR_UpdateScreen( void ) {
+ 			SCR_DrawScreenField( STEREO_CENTER );
+ 		}
+ 
++#ifdef SHADEREMU
++		if ( se_sound_in_screen ) {
++			se_sound_in_screen = 0;
++			S_Update();
++			se_sound_updated = 1;
++		}
++#endif
+ 		if ( com_speeds->integer ) {
+ 			re.EndFrame( &time_frontend, &time_backend );
+ 		} else {
 diff --git a/code/client/snd_dma.cpp b/code/client/snd_dma.cpp
 index bb539e4c..6c29f9f5 100644
 --- a/code/client/snd_dma.cpp
@@ -7289,7 +7354,7 @@ index c67c5d0a..0ac08dfc 100644
  		{
  			for ( int x=0; x<*piWidth; x++ )
 diff --git a/code/rd-vanilla/tr_ghoul2.cpp b/code/rd-vanilla/tr_ghoul2.cpp
-index 5062daf5..70587a25 100644
+index 5062daf5..3bcbef33 100644
 --- a/code/rd-vanilla/tr_ghoul2.cpp
 +++ b/code/rd-vanilla/tr_ghoul2.cpp
 @@ -83,8 +83,19 @@ extern	cvar_t	*r_Ghoul2UnSqashAfterSmooth;
@@ -7543,12 +7608,12 @@ index 5062daf5..70587a25 100644
 +			return skin->surfaces[j]->shader;
 +	return R_GetShaderByHandle( surfInfo->shaderIndex );
 +}
-+extern "C" int jk2RenderWorkerHere( void );
++int se_skin_front;	// (set by the front end's worker while it makes a view's Ghoul2 surfaces: tr_main.cpp's se_front_make)
 +static const shader_t *SE_SkinShader( const skin_t *skin, const mdxmSurfHierarchy_t *surfInfo )
 +{
 +	// (the first core's, or the front end's worker's, which makes the view's Ghoul2 surfaces while this core waits for them
 +	// before it makes any: tr_main.cpp's R_SE_G2Wait)
-+	if ( !SE_OnFirstCore() && jk2RenderWorkerHere() != 2 )
++	if ( !se_skin_front && !SE_OnFirstCore() )
 +		return SE_SkinMatch( skin, surfInfo );
 +	seSkinHit_t *e = &se_skin_hits[( ( (uintptr_t)skin >> 3 ) * 2654435761u ^ ( (uintptr_t)surfInfo >> 2 ) ) % SE_SKIN_HITS];
 +	if ( e->skin != skin || e->surf != surfInfo )
@@ -8679,7 +8744,7 @@ index c9e745aa..d9f6bac9 100644
  
  
 diff --git a/code/rd-vanilla/tr_main.cpp b/code/rd-vanilla/tr_main.cpp
-index da619736..0bb826bc 100644
+index da619736..a939b765 100644
 --- a/code/rd-vanilla/tr_main.cpp
 +++ b/code/rd-vanilla/tr_main.cpp
 @@ -205,7 +205,15 @@ void R_LocalPointToWorld (const vec3_t local, vec3_t world) {
@@ -8816,7 +8881,7 @@ index da619736..0bb826bc 100644
  
  		ent->needDlights = qfalse;
  
-@@ -1550,4 +1648,298 @@ void R_RenderView (viewParms_t *parms) {
+@@ -1550,4 +1648,307 @@ void R_RenderView (viewParms_t *parms) {
  
  	// draw main system development information (surface outlines, etc)
  	R_DebugGraphics();
@@ -9027,9 +9092,12 @@ index da619736..0bb826bc 100644
 +	tr.refdef.drawSurfs = out;
 +	tr.refdef.numDrawSurfs = n;
 +	if ( cmd->g2 ) {	// (the Ghoul2 entities first, as this core made them at the scene: R_SE_RenderViewSplit)
++		extern int se_skin_front;
 +		R_SetupProjection();
 +		se_entity_filter = 1;
++		se_skin_front = 1;	// (the skins' table is this worker's meanwhile: tr_ghoul2.cpp)
 +		R_AddEntitySurfaces();
++		se_skin_front = 0;
 +		se_entity_filter = 0;
 +		se_g2_made.made = cmd->seq;
 +	}
@@ -9091,8 +9159,14 @@ index da619736..0bb826bc 100644
 +	se_views.last = 0;
 +}
 +seKeptCount_t se_kept_stats __attribute__(( aligned( 16 ) ));
++int se_world_checked, se_world_wrong;	// (JK2_WORLD_HALF=check: tr_world.cpp)
 +void R_SE_FrontWait( void )
 +{
++	{
++		static int printed;
++		if ( se_world_checked >= printed + 100 )
++			printed = se_world_checked, ri.Printf( PRINT_ALL, "jk2world: %d views walked in two parts and in one, %d not the same\n", se_world_checked, se_world_wrong );
++	}
 +	static int count_on = -1;
 +	if ( count_on < 0 )
 +		count_on = getenv( "JK2_KEPT_COUNT" ) != NULL;
@@ -10719,7 +10793,7 @@ index f0c210a3..5c5011c4 100644
  
  				randomindex2 = randomindex+effecttime;
 diff --git a/code/rd-vanilla/tr_world.cpp b/code/rd-vanilla/tr_world.cpp
-index 4a472e24..e14c8243 100644
+index 4a472e24..94579542 100644
 --- a/code/rd-vanilla/tr_world.cpp
 +++ b/code/rd-vanilla/tr_world.cpp
 @@ -70,33 +70,33 @@ static qboolean	R_CullGrid( srfGridMesh_t *cv ) {
@@ -10836,7 +10910,199 @@ index 4a472e24..e14c8243 100644
  			}
  			return;
  		}
-@@ -597,7 +597,7 @@ static void R_RecursiveWorldNode( mnode_t *node, int planeBits, int dlightBits )
+@@ -480,6 +480,146 @@ void RE_GetBModelVerts( int bmodelIndex, vec3_t *verts, vec3_t normal )
+ R_RecursiveWorldNode
+ ================
+ */
++#ifdef SHADEREMU
++// (q_math.c's BoxOnPlaneSide written out here, a call and a loop over the axes into an array on the stack less: the same
++// sums in the same order, axis by axis; the world's walk asked it some 4,000 times a frame of the walk)
++static inline int SE_BoxOnPlaneSide( const float *emins, const float *emaxs, const cplane_t *p )
++{
++	if ( p->type < 3 ) {
++		if ( p->dist <= emins[p->type] )
++			return 1;
++		if ( p->dist >= emaxs[p->type] )
++			return 2;
++		return 3;
++	}
++	float d0 = 0, d1 = 0;
++	const int s = p->signbits;
++	if ( s < 8 ) {
++		d0 += p->normal[0] * ( s & 1 ? emins[0] : emaxs[0] );
++		d1 += p->normal[0] * ( s & 1 ? emaxs[0] : emins[0] );
++		d0 += p->normal[1] * ( s & 2 ? emins[1] : emaxs[1] );
++		d1 += p->normal[1] * ( s & 2 ? emaxs[1] : emins[1] );
++		d0 += p->normal[2] * ( s & 4 ? emins[2] : emaxs[2] );
++		d1 += p->normal[2] * ( s & 4 ? emaxs[2] : emins[2] );
++	}
++	int sides = 0;
++	if ( d0 >= p->dist )
++		sides = 1;
++	if ( d1 < p->dist )
++		sides |= 2;
++	return sides;
++}
++#define SE_BOPS SE_BoxOnPlaneSide
++#else
++#define SE_BOPS BoxOnPlaneSide
++#endif
++#ifdef SHADEREMU
++// ---- the world's walk in two parts (docs/games/jk2.md, "The world's walk in two parts"): the front end's worker walks
++// the tree's top into tasks in the walk's own order (each a node and the bits it is reached with), a helper walks the
++// last tasks' trees and keeps only the leaves they come to, in order, with their light bits and bounds (it touches no
++// surface: a surface's mark and lights are the first visit's), and the front end's worker walks the first tasks as
++// before, then adds the helper's leaves' surfaces as the walk would have: the same surfaces in the same order. The cut
++// moves with who waited at the join. JK2_WORLD_HALF=0: one walk
++struct seWorldTask_t { mnode_t *node; int planeBits, dlightBits, unused; };
++struct seLeafRec_t { mnode_t *leaf; int dlightBits; };
++#define SE_WT_MAX 64
++#define SE_LR_MAX 8192
++static seWorldTask_t se_wt[SE_WT_MAX];	// (the front end's)
++static int se_wt_n;
++static struct { seLeafRec_t at[SE_LR_MAX]; int n, leafs, over, unused; vec3_t mins, maxs; } __attribute__(( aligned( 16 ) )) se_lr;	// (the helper's)
++static struct { int from, to, unused[2]; } __attribute__(( aligned( 16 ) )) se_wjob;	// (the front end's, before the post)
++// (a node's own tests, as R_RecursiveWorldNode makes them: 0 culled, else its plane bits)
++static inline int SE_NodeIn( mnode_t *node, int *planeBits )
++{
++	if ( node->visframe != tr.visCount )
++		return 0;
++	if ( r_nocull->integer != 1 ) {
++		for ( int p = 0; p < 5; p++ ) {
++			if ( *planeBits & ( 1 << p ) ) {
++				const int r = SE_BOPS( node->mins, node->maxs, &tr.viewParms.frustum[p] );
++				if ( r == 2 )
++					return 0;
++				if ( r == 1 )
++					*planeBits &= ~( 1 << p );
++			}
++		}
++	}
++	return 1;
++}
++static inline void SE_NodeLights( mnode_t *node, int dlightBits, int newDlights[2] )
++{
++	if ( r_nocull->integer != 2 ) {
++		newDlights[0] = 0;
++		newDlights[1] = 0;
++		if ( dlightBits ) {
++			for ( int i = 0 ; i < tr.refdef.num_dlights ; i++ ) {
++				if ( dlightBits & ( 1 << i ) ) {
++					const dlight_t *dl = &tr.refdef.dlights[i];
++					const float dist = DotProduct( dl->origin, node->plane->normal ) - node->plane->dist;
++					if ( dist > -dl->radius )
++						newDlights[0] |= ( 1 << i );
++					if ( dist < dl->radius )
++						newDlights[1] |= ( 1 << i );
++				}
++			}
++		}
++	} else {
++		newDlights[0] = dlightBits;
++		newDlights[1] = dlightBits;
++	}
++}
++// (the tree's top into tasks: a node at depth 4 or a leaf before it, in the order the walk comes to them)
++static void SE_WorldTasks( mnode_t *node, int planeBits, int dlightBits, int depth )
++{
++	if ( depth == 4 || node->contents != -1 ) {
++		if ( se_wt_n < SE_WT_MAX )
++			se_wt[se_wt_n].node = node, se_wt[se_wt_n].planeBits = planeBits, se_wt[se_wt_n++].dlightBits = dlightBits;
++		else
++			se_wt_n = SE_WT_MAX + 1;	// (too many: one walk)
++		return;
++	}
++	if ( !SE_NodeIn( node, &planeBits ) )
++		return;
++	int newDlights[2];
++	SE_NodeLights( node, dlightBits, newDlights );
++	SE_WorldTasks( node->children[0], planeBits, newDlights[0], depth + 1 );
++	SE_WorldTasks( node->children[1], planeBits, newDlights[1], depth + 1 );
++}
++// (the helper: the walk of a task's tree, its leaves kept)
++static void SE_WorldWalkKeep( mnode_t *node, int planeBits, int dlightBits )
++{
++	for ( ;; ) {
++		if ( !SE_NodeIn( node, &planeBits ) )
++			return;
++		if ( node->contents != -1 )
++			break;
++		int newDlights[2];
++		SE_NodeLights( node, dlightBits, newDlights );
++		SE_WorldWalkKeep( node->children[0], planeBits, newDlights[0] );
++		node = node->children[1];
++		dlightBits = newDlights[1];
++	}
++	se_lr.leafs++;
++	for ( int k = 0; k < 3; k++ ) {
++		if ( node->mins[k] < se_lr.mins[k] )
++			se_lr.mins[k] = node->mins[k];
++		if ( node->maxs[k] > se_lr.maxs[k] )
++			se_lr.maxs[k] = node->maxs[k];
++	}
++	if ( se_lr.n < SE_LR_MAX )
++		se_lr.at[se_lr.n].leaf = node, se_lr.at[se_lr.n++].dlightBits = dlightBits;
++	else
++		se_lr.over = 1;
++}
++static unsigned SE_WorldHelperJob( unsigned, unsigned )
++{
++	se_lr.n = 0, se_lr.leafs = 0, se_lr.over = 0;
++	ClearBounds( se_lr.mins, se_lr.maxs );
++	for ( int t = se_wjob.from; t < se_wjob.to; t++ )
++		SE_WorldWalkKeep( se_wt[t].node, se_wt[t].planeBits, se_wt[t].dlightBits );
++	return 0;
++}
++#endif
+ static void R_RecursiveWorldNode( mnode_t *node, int planeBits, int dlightBits ) {
+ 
+ 	do {
+@@ -497,7 +637,7 @@ static void R_RecursiveWorldNode( mnode_t *node, int planeBits, int dlightBits )
+ 			int		r;
+ 
+ 			if ( planeBits & 1 ) {
+-				r = BoxOnPlaneSide(node->mins, node->maxs, &tr.viewParms.frustum[0]);
++				r = SE_BOPS(node->mins, node->maxs, &tr.viewParms.frustum[0]);
+ 				if (r == 2) {
+ 					return;						// culled
+ 				}
+@@ -507,7 +647,7 @@ static void R_RecursiveWorldNode( mnode_t *node, int planeBits, int dlightBits )
+ 			}
+ 
+ 			if ( planeBits & 2 ) {
+-				r = BoxOnPlaneSide(node->mins, node->maxs, &tr.viewParms.frustum[1]);
++				r = SE_BOPS(node->mins, node->maxs, &tr.viewParms.frustum[1]);
+ 				if (r == 2) {
+ 					return;						// culled
+ 				}
+@@ -517,7 +657,7 @@ static void R_RecursiveWorldNode( mnode_t *node, int planeBits, int dlightBits )
+ 			}
+ 
+ 			if ( planeBits & 4 ) {
+-				r = BoxOnPlaneSide(node->mins, node->maxs, &tr.viewParms.frustum[2]);
++				r = SE_BOPS(node->mins, node->maxs, &tr.viewParms.frustum[2]);
+ 				if (r == 2) {
+ 					return;						// culled
+ 				}
+@@ -527,7 +667,7 @@ static void R_RecursiveWorldNode( mnode_t *node, int planeBits, int dlightBits )
+ 			}
+ 
+ 			if ( planeBits & 8 ) {
+-				r = BoxOnPlaneSide(node->mins, node->maxs, &tr.viewParms.frustum[3]);
++				r = SE_BOPS(node->mins, node->maxs, &tr.viewParms.frustum[3]);
+ 				if (r == 2) {
+ 					return;						// culled
+ 				}
+@@ -537,7 +677,7 @@ static void R_RecursiveWorldNode( mnode_t *node, int planeBits, int dlightBits )
+ 			}
+ 
+ 			if ( planeBits & 16 ) {
+-				r = BoxOnPlaneSide(node->mins, node->maxs, &tr.viewParms.frustum[4]);
++				r = SE_BOPS(node->mins, node->maxs, &tr.viewParms.frustum[4]);
+ 				if (r == 2) {
+ 					return;						// culled
+ 				}
+@@ -597,7 +737,7 @@ static void R_RecursiveWorldNode( mnode_t *node, int planeBits, int dlightBits )
  		int			c;
  		msurface_t	*surf, **mark;
  
@@ -10845,7 +11111,7 @@ index 4a472e24..e14c8243 100644
  
  		// add to z buffer bounds
  		if ( node->mins[0] < tr.viewParms.visBounds[0][0] ) {
-@@ -679,6 +679,59 @@ static const byte *R_ClusterPVS (int cluster) {
+@@ -679,6 +819,59 @@ static const byte *R_ClusterPVS (int cluster) {
  	return tr.world->vis + cluster * tr.world->clusterBytes;
  }
  
@@ -10905,6 +11171,100 @@ index 4a472e24..e14c8243 100644
  /*
  =================
  R_inPVS
+@@ -784,6 +977,11 @@ static void R_MarkLeaves (void) {
+ R_AddWorldSurfaces
+ =============
+ */
++#ifdef SHADEREMU
++extern "C" int jk2RenderWorkerHere( void );
++extern "C" int jk2WorldPost( unsigned ( *fn )( unsigned, unsigned ), unsigned a0, unsigned a1 );
++extern "C" int jk2WorldJoin( void );
++#endif
+ void R_AddWorldSurfaces (void) {
+ 	if ( !r_drawworld->integer ) {
+ 		return;
+@@ -807,5 +1005,81 @@ void R_AddWorldSurfaces (void) {
+ 		tr.refdef.num_dlights = 32 ;
+ 	}
+ 
++#ifdef SHADEREMU
++	{
++		static int on = -1, share = 128;	// (the share of the tasks the front end's worker walks itself, in 1/256ths)
++		extern int se_world_checked, se_world_wrong;
++		if ( on < 0 ) {
++			const char *e = getenv( "JK2_WORLD_HALF" );
++			// (not the default: the helper is posted by the front end's worker, whose mcw_try_call writes the calls' table
++			// beside the first core's and may take a worker the first core is about to give the drawing: the walk hung.
++			// JK2_WORLD_HALF=1 to try, =check to compare; it wants a worker of its own given by the first core)
++			on = e && !strcmp( e, "1" ) ? 1 : e && !strcmp( e, "check" ) ? 2 : 0;
++		}
++		if ( on == 2 && jk2RenderWorkerHere() == 2 ) {	// (JK2_WORLD_HALF=check: in two parts, then once again in one walk, compared)
++			static drawSurf_t made[MAX_DRAWSURFS];
++			const int first = tr.refdef.numDrawSurfs;
++			on = 1;
++			R_AddWorldSurfaces();
++			on = 2;
++			const int n = tr.refdef.numDrawSurfs - first;
++			vec3_t b0, b1;
++			VectorCopy( tr.viewParms.visBounds[0], b0 ), VectorCopy( tr.viewParms.visBounds[1], b1 );
++			for ( int k = 0; k < n && k < MAX_DRAWSURFS; k++ )
++				made[k] = tr.refdef.drawSurfs[( first + k ) & DRAWSURF_MASK];
++			tr.refdef.numDrawSurfs = first;
++			tr.viewCount++;	// (every surface new to the view again)
++			ClearBounds( tr.viewParms.visBounds[0], tr.viewParms.visBounds[1] );
++			R_RecursiveWorldNode( tr.world->nodes, 31, ( 1 << tr.refdef.num_dlights ) - 1 );
++			int bad = tr.refdef.numDrawSurfs - first != n || !VectorCompare( b0, tr.viewParms.visBounds[0] ) || !VectorCompare( b1, tr.viewParms.visBounds[1] );
++			for ( int k = 0; !bad && k < n && k < MAX_DRAWSURFS; k++ ) {
++				const drawSurf_t *d = &tr.refdef.drawSurfs[( first + k ) & DRAWSURF_MASK];
++				bad = d->sort != made[k].sort || d->surface != made[k].surface;
++			}
++			se_world_wrong += bad;
++			se_world_checked++;	// (printed by the first core: tr_main.cpp's R_SE_FrontWait)
++			return;
++		}
++		if ( on == 1 && jk2RenderWorkerHere() == 2 ) {
++			se_wt_n = 0;
++			SE_WorldTasks( tr.world->nodes, 31, ( 1 << tr.refdef.num_dlights ) - 1, 0 );
++			int k = se_wt_n * share >> 8;
++			if ( se_wt_n <= SE_WT_MAX && se_wt_n >= 2 && k >= 1 && k < se_wt_n ) {
++				se_wjob.from = k, se_wjob.to = se_wt_n;
++				if ( jk2WorldPost( SE_WorldHelperJob, 0, 0 ) ) {
++					for ( int t = 0; t < k; t++ )
++						R_RecursiveWorldNode( se_wt[t].node, se_wt[t].planeBits, se_wt[t].dlightBits );
++					const int waited = jk2WorldJoin();
++					share += waited > 1 ? 8 : waited == 0 ? -4 : 0;
++					share = share < 32 ? 32 : share > 224 ? 224 : share;
++					if ( !se_lr.over ) {
++						SE_PC.c_leafs += se_lr.leafs;
++						for ( int c = 0; c < 3; c++ ) {
++							if ( se_lr.mins[c] < tr.viewParms.visBounds[0][c] )
++								tr.viewParms.visBounds[0][c] = se_lr.mins[c];
++							if ( se_lr.maxs[c] > tr.viewParms.visBounds[1][c] )
++								tr.viewParms.visBounds[1][c] = se_lr.maxs[c];
++						}
++						for ( int r = 0; r < se_lr.n; r++ ) {
++							const mnode_t *leaf = se_lr.at[r].leaf;
++							msurface_t **mark = leaf->firstmarksurface;
++							for ( int c = leaf->nummarksurfaces; c--; mark++ )
++								R_AddWorldSurface( *mark, se_lr.at[r].dlightBits );
++						}
++					} else {	// (more leaves than kept: the helper's tasks walked here)
++						for ( int t = k; t < se_wt_n; t++ )
++							R_RecursiveWorldNode( se_wt[t].node, se_wt[t].planeBits, se_wt[t].dlightBits );
++					}
++					return;
++				}
++			}
++			if ( se_wt_n <= SE_WT_MAX ) {	// (the tasks walked here in order: the same walk)
++				for ( int t = 0; t < se_wt_n; t++ )
++					R_RecursiveWorldNode( se_wt[t].node, se_wt[t].planeBits, se_wt[t].dlightBits );
++				return;
++			}
++		}
++	}
++#endif
+ 	R_RecursiveWorldNode( tr.world->nodes, 31, ( 1 << tr.refdef.num_dlights ) - 1 );
+ }
 diff --git a/code/server/server.h b/code/server/server.h
 index 71b7ed2a..3e701db8 100644
 --- a/code/server/server.h
@@ -11709,7 +12069,7 @@ index fd4f9cef..936c579e 100644
  
  	// Get an extenstion stripped version of the file
 diff --git a/codeJK2/cgame/FxUtil.cpp b/codeJK2/cgame/FxUtil.cpp
-index d0b2386a..87364e22 100644
+index d0b2386a..099d35dc 100644
 --- a/codeJK2/cgame/FxUtil.cpp
 +++ b/codeJK2/cgame/FxUtil.cpp
 @@ -195,10 +195,122 @@ bool FX_ActiveFx(void)
@@ -11835,6 +12195,16 @@ index d0b2386a..87364e22 100644
  
  	drawnFx = 0;
  	mParticles = 0;
+@@ -369,6 +481,9 @@ void FX_Add( void )
+ //-------------------------
+ void FX_AddPrimitive( CEffect *pEffect, int killTime )
+ {
++#ifdef SHADEREMU
++	SE_NOT_AHEAD( SE_WHY_FX );	// (the effects' lists are the first core's: a job that adds one is made in its turn)
++#endif
+ 	SEffectList *item = FX_GetValidEffect();
+ 
+ 	item->mEffect = pEffect;
 diff --git a/codeJK2/cgame/cg_camera.cpp b/codeJK2/cgame/cg_camera.cpp
 index a2502085..566b64f2 100644
 --- a/codeJK2/cgame/cg_camera.cpp
@@ -13144,10 +13514,10 @@ index 221cf26d..f87c9246 100644
  void WriteInUseBits(void);
  void ReadInUseBits(void);
 diff --git a/codeJK2/game/g_main.cpp b/codeJK2/game/g_main.cpp
-index 671b309a..ee837b82 100644
+index 671b309a..20c38b26 100644
 --- a/codeJK2/game/g_main.cpp
 +++ b/codeJK2/game/g_main.cpp
-@@ -28,6 +28,690 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
+@@ -28,6 +28,716 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
  #include "Q3_Interface.h"
  #include "g_nav.h"
  #include "g_roff.h"
@@ -13604,6 +13974,7 @@ index 671b309a..ee837b82 100644
 +// helper worker (gl_jk2.c's jk2HandPost) or this core; a range stores only to its own entities, clients and NPCs and
 +// their copies, a range being whole texels (no texel of another range's). No allocation, no print there
 +#define SE_HAND_PARTS 4
++static unsigned se_cut[SE_HAND_PARTS + 1];	// (the ranges' ends: SE_GameGive's, used by the take too)
 +// (a copy's buffer in whole texels: a helper copies a client or NPC whole, and two malloc'd buffers may be closer than one)
 +static void *SE_HandAlloc( size_t bytes ) { return aligned_alloc( 16, ( bytes + 15 ) & ~(size_t)15 ); }
 +extern "C" int jk2HandPost_( unsigned ( *fn )( unsigned, unsigned ), unsigned a0, unsigned a1 ) __asm__( "jk2HandPost" );
@@ -13715,14 +14086,37 @@ index 671b309a..ee837b82 100644
 +			memset( (void *)se_sh_npc[i], 0, sizeof( gNPC_t ) ), memset( (void *)se_gv_npc[i], 0, sizeof( gNPC_t ) );
 +		}
 +	}
-+	// (the entities' clients, NPCs and pointers in ranges on helper workers, a range here when none is free; the check's
-+	// all here. Meanwhile this core makes the Ghoul2 copies, which store nothing of the copied entities)
++	// (the ranges cut by their work, each starting on an even entity, so that a range's entities are whole texels of the
++	// copy: a client's copy and its words weigh most, then an NPC's, then an entity's pointers; the cuts by number put
++	// every client and NPC in the first range, and this core waited for it about six passes a frame. JK2_HAND_CUTS=even:
++	// by number. The take uses the give's cuts)
++	{
++		static int by_number = -1;
++		if ( by_number < 0 ) {
++			const char *e = getenv( "JK2_HAND_CUTS" );
++			by_number = e && !strcmp( e, "even" );
++		}
++		int total = 0;
++		for ( int i = 0 ; i < MAX_GENTITIES ; i++ )
++			total += se_was_used[i] + ( se_live_cl[i] ? 40 : 0 ) + ( se_live_npc[i] ? 16 : 0 );
++		se_cut[0] = 0, se_cut[SE_HAND_PARTS] = MAX_GENTITIES;
++		int r = 1, acc = 0;
++		for ( int i = 0 ; i < MAX_GENTITIES && r < SE_HAND_PARTS ; i++ ) {
++			acc += se_was_used[i] + ( se_live_cl[i] ? 40 : 0 ) + ( se_live_npc[i] ? 16 : 0 );
++			if ( !by_number && ( i & 1 ) && acc * SE_HAND_PARTS >= total * r )
++				se_cut[r++] = i + 1;
++		}
++		for ( ; r < SE_HAND_PARTS ; r++ )	// (by number, or what is left)
++			se_cut[r] = se_cut[r - 1] > r * ( MAX_GENTITIES / SE_HAND_PARTS ) ? se_cut[r - 1] : r * ( MAX_GENTITIES / SE_HAND_PARTS );
++	}
 +	int se_parts = 0;
 +	jk2WaitPass();	// (this core's stores of the pass, the new buffers and the arrays above, made before a helper reads them)
 +	if ( se_split != 2 )
 +		for ( int r = 0 ; r < SE_HAND_PARTS ; r++ )
-+			if ( !jk2HandPost( se_give_range, r * ( MAX_GENTITIES / SE_HAND_PARTS ), ( r + 1 ) * ( MAX_GENTITIES / SE_HAND_PARTS ) ) )
-+				se_give_range( r * ( MAX_GENTITIES / SE_HAND_PARTS ), ( r + 1 ) * ( MAX_GENTITIES / SE_HAND_PARTS ) );
++			if ( se_cut[r] == se_cut[r + 1] )
++				continue;
++			else if ( !jk2HandPost( se_give_range, se_cut[r], se_cut[r + 1] ) )
++				se_give_range( se_cut[r], se_cut[r + 1] );
 +			else
 +				se_parts++;
 +	else
@@ -13774,8 +14168,10 @@ index 671b309a..ee837b82 100644
 +		jk2WaitPass();	// (the client's frame's last stores made before a helper reads them)
 +	if ( !check )
 +		for ( int r = 0 ; r < SE_HAND_PARTS ; r++ )
-+			if ( !jk2HandPost( se_take_range, r * ( MAX_GENTITIES / SE_HAND_PARTS ), ( r + 1 ) * ( MAX_GENTITIES / SE_HAND_PARTS ) ) )
-+				se_take_range( r * ( MAX_GENTITIES / SE_HAND_PARTS ), ( r + 1 ) * ( MAX_GENTITIES / SE_HAND_PARTS ) );
++			if ( se_cut[r] == se_cut[r + 1] )
++				continue;
++			else if ( !jk2HandPost( se_take_range, se_cut[r], se_cut[r + 1] ) )
++				se_take_range( se_cut[r], se_cut[r + 1] );
 +	if ( se_g2_mode > 0 ) {
 +		for ( int k = 0 ; k < se_g2_n ; k++ )
 +			se_g2_take( se_g2_list[k] );
@@ -13838,7 +14234,7 @@ index 671b309a..ee837b82 100644
  #include "g_navigator.h"
  #include "b_local.h"
  #include "anims.h"
-@@ -55,11 +739,20 @@ void G_ASPreCacheFree(void);
+@@ -55,11 +765,20 @@ void G_ASPreCacheFree(void);
  
  void ClearAllInUse(void)
  {
@@ -13859,7 +14255,7 @@ index 671b309a..ee837b82 100644
  	assert(((uintptr_t)ent)>=(uintptr_t)g_entities);
  	assert(((uintptr_t)ent)<=(uintptr_t)(g_entities+MAX_GENTITIES-1));
  	unsigned int entNum=ent-g_entities;
-@@ -68,18 +761,23 @@ void SetInUse(gentity_t *ent)
+@@ -68,18 +787,23 @@ void SetInUse(gentity_t *ent)
  
  void ClearInUse(gentity_t *ent)
  {
@@ -13883,7 +14279,7 @@ index 671b309a..ee837b82 100644
  
  qboolean PInUse2(gentity_t *ent)
  {
-@@ -736,6 +1434,10 @@ ShutdownGame
+@@ -736,6 +1460,10 @@ ShutdownGame
  =================
  */
  void ShutdownGame( void ) {
@@ -13894,7 +14290,7 @@ index 671b309a..ee837b82 100644
  	gi.Printf ("==== ShutdownGame ====\n");
  
  	gi.Printf ("... ICARUS_Shutdown\n");
-@@ -1256,6 +1958,9 @@ void G_RunFrame( int levelTime ) {
+@@ -1256,6 +1984,9 @@ void G_RunFrame( int levelTime ) {
  	int			i;
  	gentity_t	*ent;
  	int			ents_inuse=0; // someone's gonna be pissed I put this here...
@@ -13904,7 +14300,7 @@ index 671b309a..ee837b82 100644
  #if	AI_TIMERS
  	AITime = 0;
  	navTime = 0;
-@@ -1482,8 +2187,84 @@ void G_RunFrame( int levelTime ) {
+@@ -1482,8 +2213,84 @@ void G_RunFrame( int levelTime ) {
  		ValidateInUseBits();
  	}
  #endif
@@ -13989,7 +14385,7 @@ index 671b309a..ee837b82 100644
  
  
  extern qboolean player_locked;
-@@ -1518,5 +2299,14 @@ void PrintEntClassname( int gentNum )
+@@ -1518,5 +2325,14 @@ void PrintEntClassname( int gentNum )
  
  IGhoul2InfoArray &TheGameGhoul2InfoArray()
  {

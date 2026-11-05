@@ -17,6 +17,8 @@ static cg_rand_t cg_r[SE_SLOTS + 2] = { { 0x89abcdef, 1, 0, 0 } };  /* [0] the c
 static cg_rand_t *cg_now(void)
 {
     const int s = SE_Slot();
+    if (s && !cg_r[1 + s].on)   /* (a job's draw outside a player's state: the client game's, the first core's alone) */
+        SE_SlotAbort(SE_WHY_RAND);
     return cg_r[1 + s].on ? &cg_r[1 + s] : &cg_r[0];
 }
 

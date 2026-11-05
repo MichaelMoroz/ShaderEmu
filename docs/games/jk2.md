@@ -1204,8 +1204,10 @@ pc at each pass's end.
 | The packing by the fields' list, unrolled | 199.99 | 185.24 |
 | The area walk, the clients' list, the groups' zeros | 199.11 | 185.25 |
 | The voices decoded ahead, the Ghoul2 surfaces on the front end's worker | 163.23 | 177.00 |
+| The ranges cut by their work, the skins' table by a flag, a job ends at an effect or a draw | 165.59 | 177.71 |
+| The world's walk asks its planes' sides inline (`SE_BoxOnPlaneSide`) | 164.30 | 174.59 |
 
-On the last build the walk is 233.12 with `JK2_VOICE_AHEAD=0` (another state: core 0 1,083 thousand instructions a
+On the build of the voices decoded ahead the walk is 233.12 with `JK2_VOICE_AHEAD=0` (another state: core 0 1,083 thousand instructions a
 frame against 833) and 169.33 with `JK2_G2_FRONT=0`. 163.23 passes a frame is 4.5 frames a second.
 
 **The game's frame's queries** (`sv_world.cpp`'s `SE_AreaEntitiesWalk`; `JK2_AREA_CHECK` the recursion): the sectors
@@ -1236,10 +1238,45 @@ then the world's; core 0 waits for that part only before it evaluates the frame'
 scene waits for the whole front end as before: the renderable surfaces' ring, the bone caches and the skins' table have
 one maker at a time. The skins' table is the front end's worker's too (`jk2RenderWorkerHere() == 2`).
 
+**The handover's ranges cut by their work** (`g_main.cpp`'s `se_cut`; `JK2_HAND_CUTS=even` the way before): the cuts by
+number put every client and NPC in the first range; now each range has about a quarter of the work (a client 40, an NPC
+16, an entity in use 1), each starting on an even entity so its entities are whole texels of the copy; the take uses
+the give's cuts. The walk 165.10, the march 178.87: level.
+
+**What the front end's worker spends** (profiled after the above, frames 1,500 to 1,600, 167.1 passes a frame): core 0
+rests about 23 passes a frame for the drawing, 12 for the mix, 15 in helpers' joins, 5 for the game's frame. The front
+end grew from 473 to 655 thousand instructions a frame with the Ghoul2 surfaces, more than core 0 saved: about 1,350
+skin lookups a frame each asked `jk2RenderWorkerHere()`. **The skins' table by a flag** the front end's job sets while it
+makes its Ghoul2 part (`se_skin_front`). **The world's walk in two parts** (`tr_world.cpp`'s `SE_WorldTasks`,
+`SE_WorldWalkKeep`; `JK2_WORLD_HALF=0` the way before): the front end's worker walks the tree's top into tasks in the
+walk's order (a node at depth 4, or a leaf before it, with its plane and light bits), a helper walks the last tasks'
+trees keeping only their leaves (with their light bits, bounds and count: it touches no surface), the front end walks
+the first tasks as before, then adds the helper's leaves' surfaces in order: the same surfaces in the same order, a
+surface's mark and lights the first visit's. The share the front end walks moves by who waited at the join. First the
+helper was posted by the front end's worker, and `mcw_try_call` there (`mcw_self()` reads 0 on that worker's own stack)
+wrote the calls' table beside core 0's posts (`RVC_RACES`) and could take a worker core 0 was about to give the drawing
+or the front end: the walk and the march hung. Now core 0 gives the helper a worker of its own with the front end's job
+(`gl_jk2.c`'s `world_give`), and the helper waits for the front end's word, the tasks or none (`front_body` says none
+if the view did not ask). `JK2_WORLD_HALF=check` walked 1,200 views of the walk both ways: 0 not the same. **Not the
+default** (`JK2_WORLD_HALF=1`): the walk 165.03 against 165.59 without.
+
+**The mix given before the frame's end** (`cl_scrn.cpp`'s `SCR_UpdateScreen`, `cl_main.cpp`'s `CL_Frame_`;
+`JK2_SOUND_EARLY=0` the way before): the frame's own screen update calls `S_Update` before `re.EndFrame`, where core 0
+waits for the drawing before, so the mix's worker paints through that wait instead of after it; only with the mix on a
+worker (the sums' runs mix on core 0 as before). **Not the default** (`JK2_SOUND_EARLY=1`): the walk 166.76 against
+165.38 without, the march 188.39 against 178.59; and its timing brought up a march where a job on a worker added an
+effect and drew the client game's random numbers beside core 0 (`RVC_RACES`: 4 undone in `FX_AddPrimitive`,
+`CG_flrand`). **So a job ends where it would**: `FX_AddPrimitive` ends a job made ahead (`SE_WHY_FX`, as the effects'
+scheduler's entries did) and a job's draw outside a player's own state ends it (`cg_rand.c`, `SE_WHY_RAND`).
+
 The packing as first written (a loop over a table of the fields, about 170 instructions an entity) cost the march 30
 passes a frame (219.34 against 189.44 with `JK2_GV_PACK=0` on the same build): in the march the give's and the take's
 ranges often find no free worker and run on core 0. By the fields' list, each copy and compare of its own size, about
 45 instructions an entity.
+
+**The planes' sides inline** (`tr_world.cpp`'s `SE_BoxOnPlaneSide`): `q_math.c`'s `BoxOnPlaneSide` written out where
+the world's walk asks it (some 4,000 times a frame of the walk), the same sums per axis in the same order without the
+call and the arrays on the stack. The walk 164.30, the march 174.59 (`RVC_RACES` the inflate's one undone, as always).
 
 ### What bounds it
 
