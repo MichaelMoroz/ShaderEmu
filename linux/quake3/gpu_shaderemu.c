@@ -225,7 +225,10 @@ void gpuSwap(int wait) {
 // next frame goes to the other set), gpuShow by the first core later. e: set, commands, passes.
 void gpuEnd(unsigned* e) {
     joined_command = 0;
-    e[0] = set_at, e[1] = commands, e[2] = passes_used;
+    // (the VRAM's uploads waiting go into this list: bit 0 of the passes, which is no pass, says one has levels)
+    uint32_t levels = commands ? uploads_put() : 0;
+    uploads_done();
+    e[0] = set_at, e[1] = commands, e[2] = passes_used | (levels ? 1u : 0u);
     set_at = set_at == SETS_AT ? SETS_AT + SET_SIZE : SETS_AT;
     commands = kept;
     mesh_vertices = kept_mesh;
@@ -255,9 +258,9 @@ void gpuShow(const unsigned* e) {
     regs[REG_INTO / 4 + 3] = window_info.surface_row;
     regs[REG_SUBMIT / 4 + 1] = GPU_PHYS + e[0];
     regs[REG_SUBMIT / 4 + 2] = e[1];
-    regs[REG_SUBMIT / 4] = 1 | 4 | e[2] << 8;
+    regs[REG_SUBMIT / 4] = 1 | 4 | (e[2] & 1u ? 8u : 0u) | (e[2] & ~1u) << 8;   // (SUBMIT_UPLOADS when its uploads have levels)
     shown_set = e[0];
-    shown_commands = e[1] | e[2] << 16;
+    shown_commands = e[1] | (e[2] & ~1u) << 16;
     __atomic_store_n(&regs[REG_LOCK / 4], 0, __ATOMIC_RELEASE);
     unsettled = 1;
     unsettled_set = e[0];

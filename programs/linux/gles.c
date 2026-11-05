@@ -701,6 +701,10 @@ static int vram_frees;
 static uint32_t shelf_x, shelf_y, shelf_h;
 static uint16_t uploads[MAX_UPLOADS];
 static int upload_count, uploads_left;
+// Uploads by slot (seglVramUpload), for textures that are not the library's: where, how large, of what kind, into which slot.
+typedef struct { uint32_t address, width, height, kind, slot, key, palette; } slot_upload;
+static slot_upload slot_uploads[MAX_UPLOADS];
+static int slot_upload_count, slot_uploads_left;
 static uint32_t vram_palette;   // seglVramPalette: the palette a paletted texture is uploaded with (0: the display's)
 
 void seglVram(int lod) {
@@ -715,12 +719,41 @@ static void vram_size(uint32_t w, uint32_t h, uint32_t lod, uint32_t* bw, uint32
     *bw = (w + 2 * pad + mask) & ~mask;
     *bh = (h + 2 * pad + mask) & ~mask;
 }
+// The block of a slot of a w x h texture given back, for the next of its size.
+static void vram_block_give(uint32_t slot, uint32_t w, uint32_t h) {
+    uint32_t lod = slot >> 24 & 7, pad = 1u << lod, bw, bh;
+    vram_size(w, h, lod, &bw, &bh);
+    if (vram_frees < MAX_TEXTURES)
+        vram_free[vram_frees++] = (vram_block){(uint16_t)((slot & 0xfff) - pad), (uint16_t)((slot >> 12 & 0xfff) - pad), (uint16_t)bw, (uint16_t)bh};
+}
+// A block for a w x h texture of at most `levels` levels: its slot (without flags), or 0 when the VRAM is full.
+static uint32_t vram_block_take(uint32_t w, uint32_t h, int levels) {
+    if (!w || !h || w > 2048 || h > 2048 || levels < 0) return 0;
+    uint32_t lod = (uint32_t)(levels > 4 ? 4 : levels), bw, bh, at_x = 0, at_y = 0;
+    while (lod && ((w >> lod) < 1 || (h >> lod) < 1)) lod--;   // (no smaller than a texel)
+    vram_size(w, h, lod, &bw, &bh);
+    int found = 0;
+    for (int i = 0; i < vram_frees && !found; i++)
+        if (vram_free[i].w == bw && vram_free[i].h == bh) {
+            at_x = vram_free[i].x, at_y = vram_free[i].y;
+            vram_free[i] = vram_free[--vram_frees];
+            found = 1;
+        }
+    if (!found) {
+        // shelves of whole 16 texels: the corner of a block of any L up to 4 a whole 2^L
+        uint32_t sw = (bw + 15) & ~15u, sh = (bh + 15) & ~15u;
+        if (shelf_x + sw > VRAM_SIDE) shelf_x = 0, shelf_y += shelf_h, shelf_h = 0;
+        if (shelf_y + sh > VRAM_SIDE) return 0;   // (full: drawn from GPU memory)
+        at_x = shelf_x, at_y = shelf_y;
+        shelf_x += sw;
+        if (sh > shelf_h) shelf_h = sh;
+    }
+    uint32_t pad = 1u << lod;
+    return (at_x + pad) | (at_y + pad) << 12 | lod << 24;
+}
 static void vram_drop(texture* x) {
     if (!x->slot) return;
-    uint32_t lod = x->slot >> 24 & 7, pad = 1u << lod, bw, bh;
-    vram_size(x->width, x->height, lod, &bw, &bh);
-    if (vram_frees < MAX_TEXTURES)
-        vram_free[vram_frees++] = (vram_block){(uint16_t)((x->slot & 0xfff) - pad), (uint16_t)((x->slot >> 12 & 0xfff) - pad), (uint16_t)bw, (uint16_t)bh};
+    vram_block_give(x->slot, x->width, x->height);
     for (int i = 0; i < upload_count; i++)
         if (&textures[uploads[i]] == x) uploads[i] = uploads[--upload_count], i--;
     x->slot = 0;
@@ -733,33 +766,40 @@ static void vram_upload(texture* x) {
 // A texture into the VRAM with at most `levels` mip levels: a block for it, and its upload in the next list. Paletted and
 // word textures only.
 static void vram_take(texture* x, int levels) {
-    if (x->indexed > 1 || !x->width || !x->height || x->width > 2048 || x->height > 2048 || levels < 0) return;
-    uint32_t lod = (uint32_t)(levels > 4 ? 4 : levels), bw, bh, at_x = 0, at_y = 0;
-    while (lod && ((x->width >> lod) < 1 || (x->height >> lod) < 1)) lod--;   // (no smaller than a texel)
-    vram_size(x->width, x->height, lod, &bw, &bh);
-    int found = 0;
-    for (int i = 0; i < vram_frees && !found; i++)
-        if (vram_free[i].w == bw && vram_free[i].h == bh) {
-            at_x = vram_free[i].x, at_y = vram_free[i].y;
-            vram_free[i] = vram_free[--vram_frees];
-            found = 1;
-        }
-    if (!found) {
-        // shelves of whole 16 texels: the corner of a block of any L up to 4 a whole 2^L
-        uint32_t w = (bw + 15) & ~15u, h = (bh + 15) & ~15u;
-        if (shelf_x + w > VRAM_SIDE) shelf_x = 0, shelf_y += shelf_h, shelf_h = 0;
-        if (shelf_y + h > VRAM_SIDE) return;   // (full: drawn from GPU memory)
-        at_x = shelf_x, at_y = shelf_y;
-        shelf_x += w;
-        if (h > shelf_h) shelf_h = h;
-    }
-    uint32_t pad = 1u << lod, keyed = 0;
+    if (x->indexed > 1) return;
+    uint32_t slot = vram_block_take(x->width, x->height, levels), keyed = 0;
+    if (!slot) return;
     if (x->indexed == 1 && key_index >= 0 && key_index < 256) {
         const uint8_t* b = gpu + x->address;
         for (uint32_t n = 0; n < x->width * x->height && !keyed; n++) keyed = b[n] == (uint8_t)key_index;
     }
-    x->slot = (at_x + pad) | (at_y + pad) << 12 | lod << 24 | (keyed ? VRAM_PREMULTIPLIED : 0);
+    x->slot = slot | (keyed ? VRAM_PREMULTIPLIED : 0);
     vram_upload(x);
+}
+// The VRAM by slot (segl.h), for a program whose textures are not the library's.
+#define VRAM_CLAMPED 0x10000000u
+unsigned seglVramTake(unsigned w, unsigned h, int levels, int flags) {
+    if (vram_lod == -2) seglVram(-1);
+    if (vram_lod < 0) return 0;
+    uint32_t slot = vram_block_take(w, h, levels);
+    return slot ? slot | (flags & 1 ? VRAM_CLAMPED : 0) | (flags & 2 ? VRAM_PREMULTIPLIED : 0) : 0;
+}
+void seglVramGive(unsigned slot, unsigned w, unsigned h) {
+    if (!slot) return;
+    for (int i = 0; i < slot_upload_count; i++)
+        if (slot_uploads[i].slot == slot) slot_uploads[i] = slot_uploads[--slot_upload_count], i--;
+    vram_block_give(slot, w, h);
+}
+void seglVramUpload(unsigned slot, unsigned address, unsigned w, unsigned h, unsigned kind, unsigned key, unsigned palette) {
+    if (!slot) return;
+    // (keyed: a premultiplied slot's key texels are 0)
+    slot_upload u = {address, w, h, kind | (slot & VRAM_PREMULTIPLIED ? FRAGMENT_KEYED : 0), slot, key, palette};
+    for (int i = 0; i < slot_upload_count; i++)
+        if (slot_uploads[i].slot == slot) {
+            slot_uploads[i] = u;
+            return;
+        }
+    if (slot_upload_count < MAX_UPLOADS) slot_uploads[slot_upload_count++] = u;
 }
 void seglVramPalette(const unsigned int* words) { vram_palette = words ? (uint32_t)(uintptr_t)words : 0; }
 void seglTextureChanged(void) {
@@ -795,6 +835,21 @@ static uint32_t uploads_put(void) {
         levels |= x->slot >> 24 & 7;
     }
     uploads_left = n;
+    for (n = 0; n < slot_upload_count; n++) {
+        const slot_upload* u = &slot_uploads[n];
+        uint32_t* c = command(CMD_UPLOAD, 6);
+        if (!c) break;
+        c[1] = u->address;
+        c[2] = u->kind;
+        c[4] = u->width;
+        c[5] = u->height;
+        c[6] = u->slot;
+        c[7] = u->key;
+        c[8] = u->palette;
+        c[9] = 0;
+        levels |= u->slot >> 24 & 7;
+    }
+    slot_uploads_left = n;
     return levels ? 8u : 0u;
 }
 // Those put in the list just submitted are done.
@@ -802,6 +857,9 @@ static void uploads_done(void) {
     for (int i = uploads_left; i < upload_count; i++) uploads[i - uploads_left] = uploads[i];
     upload_count -= uploads_left;
     uploads_left = 0;
+    for (int i = slot_uploads_left; i < slot_upload_count; i++) slot_uploads[i - slot_uploads_left] = slot_uploads[i];
+    slot_upload_count -= slot_uploads_left;
+    slot_uploads_left = 0;
 }
 
 // `top` raised to the end of `bytes` at a physical address, if that is texture memory.
