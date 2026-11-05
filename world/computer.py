@@ -353,7 +353,7 @@ def clutter(b):
     b.asset("alarm_clock_01", (-1.3, top, 5.2), rot=(0, 190, 0), size=(None, 0.13, None), parts=("=alarm_clock_01",),
             hands=((0, 0, 0.065), ("hour", "houd_hand"), ("minute", "minute_hand"), ("second", "second_hand")))
     # (clear of the console, whose cheek is at -3.10)
-    furniture.pile(b, ["byte_1993_03", "pc_computing_magazine_v10i6", "computer_gaming_world_issue_140"], (-3.29, top, 4.80), (-10, 4, -3))
+    furniture.pile(b, ["byte_1993_03", "pc_computing_magazine_v10i6", "computer_gaming_world_issue_140"], (-3.29, top, 4.80), [furniture.TOP_AWAY + t for t in (-10, 4, -3)])
     # at its right end, behind the controllers: games in their boxes
     for i, (x, turn, game) in enumerate(((0.87, -9, "doom"), (1.08, 6, "quake"))):
         furniture.leaning_box(b, x, top, HALF_D - 0.04, turn, 11 + 3 * i, game)

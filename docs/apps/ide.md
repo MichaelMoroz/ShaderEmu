@@ -26,11 +26,15 @@ a `.c`, `.h`, `.js`, `.py` or `.hlsl` file opened anywhere is its (`/usr/share/n
   functions, which keep what they did: Ctrl+Z takes a command back and Ctrl+Y makes it
   again, 1,024 changes deep; letters typed one after another are one change. A tab is
   spaces to the next fourth column, in the file too.
-- `syntax.h`: the colours. A lexer, a line at a time, for C, JavaScript and Python: keywords,
+- `syntax.h` (in `linux/apps`, shared with the editor `nxedit`, which picks the language by the
+  file's ending with `sx_lang_of` and carries a line's state with `sx_carry`): the colours. A
+  lexer, a line at a time, for C and C++, JavaScript, Python and HLSL: keywords,
   types (in the scripts, the built-in names), numbers, strings, comments, the preprocessor's
   lines and Python's decorators, and a name before a bracket. The one thing a line needs from
   those above it is the state it begins in (inside a comment, a JavaScript template, a Python
   string of three quotes), which is kept for every line and worked out again from the line that changed.
+  Ctrl +, Ctrl - and Ctrl 0, and Ctrl with the wheel over the text, make the editor's text larger
+  or smaller (`ui_zoom_set` in `ui.h`: the ROM's Liberation Mono from 10 to 32), kept as `nxide.zoom`.
 - `pydbg.py`: the debugger for Python, run by MicroPython (below).
 - `debug.h`: the debugger (below).
 

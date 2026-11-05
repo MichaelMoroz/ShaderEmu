@@ -482,7 +482,9 @@ def clutter(b, room, desk_x, desk_z, sofa_z, side, rng):
     if number == 14:
         b.asset("chess_set", (side[0], st, side[2]), rot=(0, rng.uniform(0, 30), 0), size=(0.36, None, None), limit=30000, loose=True)
     else:
-        pile(b, rng.sample(MAGAZINES, 2), (side[0] - 0.03, st, side[2] + 0.03), [rng.uniform(0, 360) for _ in range(2)], drift=0.02)
+        # (a print's top out from the room's middle, give or take 50 degrees: read from the room, world/check_placement.py's "reads")
+        out = lambda x, z: math.degrees(math.atan2(x - (x0 + x1) / 2, z - (Z0 + Z1) / 2))
+        pile(b, rng.sample(MAGAZINES, 2), (side[0] - 0.03, st, side[2] + 0.03), [out(side[0], side[2]) + rng.uniform(-50, 50) for _ in range(2)], drift=0.02)
         if number == 13:
             toys.soda_can(b, (side[0] + 0.12, st, side[2] - 0.12), "diet")
         else:
@@ -492,7 +494,8 @@ def clutter(b, room, desk_x, desk_z, sofa_z, side, rng):
     b.obj("Room floor things")
     couch_x = (x1 if couch_side > 0 else x0) - couch_side * COUCH_OFF[room[0]]   # (where its back would be)
     couch_front = couch_x - couch_side * 0.95
-    pile(b, rng.sample(MAGAZINES, 4), (couch_x - couch_side * 0.85, 0.0, side[2]), [rng.uniform(0, 360) for _ in range(4)], drift=0.04)
+    out = lambda x, z: math.degrees(math.atan2(x - (x0 + x1) / 2, z - (Z0 + Z1) / 2))   # (read from the room, as on the side table)
+    pile(b, rng.sample(MAGAZINES, 4), (couch_x - couch_side * 0.85, 0.0, side[2]), [out(couch_x - couch_side * 0.85, side[2]) + rng.uniform(-50, 50) for _ in range(4)], drift=0.04)
     lying(b, games[1], (couch_front - couch_side * 0.25, 0.009, sofa_z + 0.2), rng.uniform(0, 360))
     lying(b, games[2], (couch_front - couch_side * 0.35, 0.009, sofa_z - 0.15), rng.uniform(0, 360))
     corner = ((x0 + 0.25) if couch_side > 0 else (x1 - 0.25), Z1 - 0.3)

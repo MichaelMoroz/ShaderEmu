@@ -156,6 +156,22 @@ def check(world, pose, everything):
         wrong.append("its top is %.0f degrees off up" % tilt)
     if kind == "leaning" and tilt > LEANING:
         wrong.append("it leans %.0f degrees" % tilt)
+    if kind == "reads":   # read from the room: where a wall is near, its print's top points to it
+        walled = lambda piece, point: not any(w in world.objects[world.pieces[piece][0]].name.lower() for w in ("wall", "trim", "wainscot"))
+        start, best = pose.at(0, 1, 0) + UP * 0.03, None
+        for k in range(16):
+            way = Vector((math.cos(k * math.pi / 8), 0, math.sin(k * math.pi / 8)))
+            hit = world.ray(start, way, c["near"], walled)
+            if hit and (best is None or hit[0] < best[0]):
+                best = (hit[0], way, world.objects[world.pieces[hit[1]][0]].name)
+        top = Vector((pose.front.x, 0, pose.front.z)).normalized()
+        if best is None:
+            seen.append("no wall within %.2f m: any way round" % c["near"])
+        else:
+            off = math.degrees(math.acos(max(-1.0, min(1.0, top.dot(best[1])))))
+            seen.append("%s %.0f mm away; its print's top %.0f degrees off it" % (best[2], best[0] * 1000, off))
+            if off > 120:   # (sideways, as magazines stacked across a shelf with their spines out, is how they lie)
+                wrong.append("its print is upside down from the room: its top is %.0f degrees off %s, %.0f mm away" % (off, best[2], best[0] * 1000))
     depth = (pose.hi.z - pose.lo.z)
     flat_front = Vector((pose.front.x, 0, pose.front.z))
     if "back" in c:   # its back against something within back

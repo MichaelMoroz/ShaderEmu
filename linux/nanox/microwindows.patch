@@ -4499,7 +4499,7 @@ index fae5bfa..cfe3a3f 100644
  
  /*
 diff --git a/src/nanox/wmaction.c b/src/nanox/wmaction.c
-index 27dcbe8..bacbf87 100644
+index 27dcbe8..f2d4194 100644
 --- a/src/nanox/wmaction.c
 +++ b/src/nanox/wmaction.c
 @@ -4,6 +4,7 @@
@@ -4581,27 +4581,35 @@ index 27dcbe8..bacbf87 100644
  	wm_redraw_ncarea(window);
  }
  
-@@ -96,6 +137,19 @@ PtInRect(GR_RECT *prc, GR_SIZE x, GR_SIZE y)
+@@ -96,6 +137,27 @@ PtInRect(GR_RECT *prc, GR_SIZE x, GR_SIZE y)
  		y >= prc->y && y < (prc->y+prc->height));
  }
  
 +/* Whether x, y of a frame `info` is on the caption's box `box` (1 close, 2 maximise, 3 minimise). A box's
 + * picture is 18 pixels with 2 between, but a press need not be on it: the close box takes the frame's corner,
-+ * each box the caption's whole height and the gap on its left. A beam in VR or a pad's pointer shakes, so a
-+ * press's release counts `slack` pixels round its box. */
++ * each box the caption's whole height and the gap on its left, and the close box the maximise box's place too
++ * on a window that has none (it is left empty). A beam in VR turns as the trigger is pulled, a pad's pointer
++ * shakes: a press's release counts `slack` pixels round its box (WM_BOX_SLACK). */
++#define WM_BOX_SLACK	20
 +static GR_BOOL
 +wm_on_caption_box(GR_WINDOW_INFO *info, GR_COORD cxborder, GR_COORD cyborder, int box, int x, int y, int slack)
 +{
 +	int left = info->width - CXCLOSEBOX - cxborder - 2 - (box - 1) * (CXCLOSEBOX + 2) - 2;
 +	int right = box == 1 ? info->width : left + CXCLOSEBOX + 2;
 +
++	if (info->props & GR_WM_PROPS_NOMAXIMIZE) {
++		if (box == 2)
++			return GR_FALSE;
++		if (box == 1)
++			left -= CXCLOSEBOX + 2;
++	}
 +	return x >= left - slack && x < right + slack && y >= -slack && y < cyborder + CYCAPTION + slack;
 +}
 +
  void wm_container_buttondown(win *window, GR_EVENT_BUTTON *event)
  {
  	struct pos_size *pos;
-@@ -126,18 +180,21 @@ void wm_container_buttondown(win *window, GR_EVENT_BUTTON *event)
+@@ -126,18 +188,21 @@ void wm_container_buttondown(win *window, GR_EVENT_BUTTON *event)
  	if ((info.props & (GR_WM_PROPS_CAPTION|GR_WM_PROPS_CLOSEBOX)) ==
  	    (GR_WM_PROPS_CAPTION|GR_WM_PROPS_CLOSEBOX)) {
  
@@ -4632,7 +4640,7 @@ index 27dcbe8..bacbf87 100644
  	}
  
  	/* 
-@@ -149,8 +206,8 @@ void wm_container_buttondown(win *window, GR_EVENT_BUTTON *event)
+@@ -149,8 +214,8 @@ void wm_container_buttondown(win *window, GR_EVENT_BUTTON *event)
  	 * the focus themself.
  	 * -- Amit Kulkarni
  	 */
@@ -4643,7 +4651,7 @@ index 27dcbe8..bacbf87 100644
  
  	/* check for corner resize */
  	r.x = info.width - 5;
-@@ -158,7 +215,7 @@ void wm_container_buttondown(win *window, GR_EVENT_BUTTON *event)
+@@ -158,7 +223,7 @@ void wm_container_buttondown(win *window, GR_EVENT_BUTTON *event)
  	r.width = 5;
  	r.height = 5;
  
@@ -4652,7 +4660,7 @@ index 27dcbe8..bacbf87 100644
  	   && !(info.props & GR_WM_PROPS_NORESIZE) && !(cinfo.props & GR_WM_PROPS_NORESIZE)) {
  #if !NO_CORNER_RESIZE
  	  struct pos_size * pos;
-@@ -215,6 +272,26 @@ void wm_container_buttondown(win *window, GR_EVENT_BUTTON *event)
+@@ -215,6 +280,26 @@ void wm_container_buttondown(win *window, GR_EVENT_BUTTON *event)
  	/* Check for mousedn in caption box*/
  	if (!PtInRect(&r, event->x, event->y))
  		return;
@@ -4679,7 +4687,7 @@ index 27dcbe8..bacbf87 100644
  	
  	/*
  	 * Now we have a click on the caption. 
-@@ -231,6 +308,9 @@ void wm_container_buttondown(win *window, GR_EVENT_BUTTON *event)
+@@ -231,6 +316,9 @@ void wm_container_buttondown(win *window, GR_EVENT_BUTTON *event)
  	/* Don't allow window move if NOMOVE property set*/
  	if ((info.props & GR_WM_PROPS_NOMOVE) || (cinfo.props & GR_WM_PROPS_NOMOVE))
  		return;
@@ -4689,7 +4697,7 @@ index 27dcbe8..bacbf87 100644
  
  	if(!window->data)
  		if(!(window->data = malloc(sizeof(struct pos_size))))
-@@ -252,9 +332,298 @@ void wm_container_buttondown(win *window, GR_EVENT_BUTTON *event)
+@@ -252,9 +340,298 @@ void wm_container_buttondown(win *window, GR_EVENT_BUTTON *event)
  	GrRect(GR_ROOT_WINDOW_ID, gc,info.x, info.y, info.width, info.height);
  	GrDestroyGC(gc);
  #endif	
@@ -4988,7 +4996,7 @@ index 27dcbe8..bacbf87 100644
  void wm_container_buttonup(win *window, GR_EVENT_BUTTON *event)
  {
  	GR_RECT		r;
-@@ -279,14 +648,8 @@ void wm_container_buttonup(win *window, GR_EVENT_BUTTON *event)
+@@ -279,14 +656,8 @@ void wm_container_buttonup(win *window, GR_EVENT_BUTTON *event)
  			cyborder = CYBORDER;
  		}
  
@@ -5001,11 +5009,11 @@ index 27dcbe8..bacbf87 100644
 -		/* Check mouseup in close box*/
 -		if (PtInRect(&r, event->x, event->y)) {
 +		/* Check mouseup in close box, or near it*/
-+		if (wm_on_caption_box(&info, cxborder, cyborder, 1, event->x, event->y, 8)) {
++		if (wm_on_caption_box(&info, cxborder, cyborder, 1, event->x, event->y, WM_BOX_SLACK)) {
  			if(window->close == GR_TRUE) {
  				/*
  				 * This sends a CLOSE_REQ event to the window.
-@@ -295,12 +658,28 @@ void wm_container_buttonup(win *window, GR_EVENT_BUTTON *event)
+@@ -295,12 +666,28 @@ void wm_container_buttonup(win *window, GR_EVENT_BUTTON *event)
  				 * atom, causing the window to close.
  				 */
  				GrCloseWindow(window->clientid);
@@ -5015,14 +5023,14 @@ index 27dcbe8..bacbf87 100644
        		}
  		}
 +		/* the maximise box: fill the screen above the bar, or go back to where it was */
-+		if (window->maximize && wm_on_caption_box(&info, cxborder, cyborder, 2, event->x, event->y, 8)) {
++		if (window->maximize && wm_on_caption_box(&info, cxborder, cyborder, 2, event->x, event->y, WM_BOX_SLACK)) {
 +			window->maximize = GR_FALSE;
 +			wm_toggle_maximize(window);
 +			wm_place_save(window);
 +			return;
 +		}
 +		/* the minimise box: the window goes away until something maps it again (the bar's button) */
-+		if (window->minimize && wm_on_caption_box(&info, cxborder, cyborder, 3, event->x, event->y, 8)) {
++		if (window->minimize && wm_on_caption_box(&info, cxborder, cyborder, 3, event->x, event->y, WM_BOX_SLACK)) {
 +			window->minimize = GR_FALSE;
 +			GrUnmapWindow(window->wid);
 +			return;
@@ -5034,7 +5042,7 @@ index 27dcbe8..bacbf87 100644
  
  	if(window->active) {
  #if OUTLINE_MOVE
-@@ -312,6 +691,38 @@ void wm_container_buttonup(win *window, GR_EVENT_BUTTON *event)
+@@ -312,6 +699,38 @@ void wm_container_buttonup(win *window, GR_EVENT_BUTTON *event)
  	  GrMoveWindow(window->wid, pos->xorig, pos->yorig);
  	  GrDestroyGC(gc);
  #endif
@@ -5073,7 +5081,7 @@ index 27dcbe8..bacbf87 100644
  	  free(window->data);
  	  window->active = GR_FALSE;
  	  window->data = 0;
-@@ -330,8 +741,18 @@ void wm_container_buttonup(win *window, GR_EVENT_BUTTON *event)
+@@ -330,8 +749,18 @@ void wm_container_buttonup(win *window, GR_EVENT_BUTTON *event)
  
  	  w = info.width + (event->x - pos->xorig);
  	  h = info.height + (event->y - pos->yorig);
@@ -5092,7 +5100,7 @@ index 27dcbe8..bacbf87 100644
  
  	  free(window->data);
  	  window->sizing = GR_FALSE;
-@@ -397,7 +818,13 @@ void wm_container_mousemoved(win *window, GR_EVENT_MOUSE *event)
+@@ -397,7 +826,13 @@ void wm_container_mousemoved(win *window, GR_EVENT_MOUSE *event)
  	
  	GrDestroyGC(gc);
  #else	

@@ -71,9 +71,40 @@ After a change to `world/pc.py`, `blender -b --python world/bake_pc.py` comes be
 `build.py` (`docs/world/stations.md`).
 
 After a build, `blender -b build/world.blend --python world/check_shell.py` must print
-`SHELL ok` (below), and `blender -b build/world.blend --python world/check_overlap.py` lists faces
-that lie in one plane, face one way and overlap: those flicker. Most of what it lists is pressed
-against a wall and never seen; a pair in the open is a fault.
+`SHELL ok` (below), and the overlap check must say `OVERLAP 0 faults` (a whole build runs it at its
+end; alone: `blender -b build/world.blend --python world/check_overlap.py -- [--list N] [WORD ...]`,
+which exits 1 when anything is left).
+
+## Faces that fight, parts that cross
+
+`world/check_overlap.py` takes every triangle of the built world (1.29 million on 4 November 2026)
+and the parts they belong to: a piece of one of our meshes that hangs together (a box, a lathe), or
+the whole of one of Poly Haven's models. Between two parts it finds
+
+- **FIGHT**: two triangles within 0.2 mm of one plane, facing one way, overlapping by more than
+  0.5 mm inside it: they flicker. A pair whose faces both lie against a third part's face that looks
+  the other way (two feet on the floor, two backs on a wall) is out of sight and left out. A fight is
+  always a fault: there are none.
+- **CROSS**: two triangles through each other, the line where they cross longer than 1 mm and each
+  with corners more than 0.2 mm on both sides of the other's plane. Touching is not crossing: a box
+  on a table, two bars end to end. A crossing is a seam, not a flicker; the joins that are hidden
+  inside a made thing (a chair's spokes in its hub, leads in their plugs, the city's towers through
+  their roofs) are listed with their reasons in `world/overlap_allowed.txt`, and anything else is a fault.
+
+It prints each fault with both objects, their parts' middles and sizes and the place where they
+meet, in Unity's coordinates. The pairs come from a grid in levels: a triangle goes into the level
+whose cells are as large as its box's middle side, into every cell of that level its box meets (a
+long thin bar into a row of at most 9, not into a cell as long as it), and asks the coarser levels'
+cells; a cell with one part alone is dropped before any pair is made. Sorting the cells' keys is
+the N log N; the tests are numpy's over all pairs at once: about 15 s for the world, 2 million
+pairs of boxes. On the world as it was before it (4 November 2026) it says 6,152 faults, 3,206
+fights and 2,946 crossings not allowed: the holodecks' grid (480 fights, 2,528 crossings: the edge bars were centred on the edges, so the
+three at a corner and every line's end went into each other in one plane), the doors' rails
+through their stiles, the panelling's runs crossing in the corners, the beams through the cove,
+the city's parapets and roof clutter, the screen wall's ledge and shelf through its uprights, the
+lift's frame, the bookshelf's back and shelves through its sides, the alarm clock's hands in the
+planes of its hubs, the low table's magazines over the game beside them. They are remodelled: what
+meets ends against the other's face (`wainscot(butt=)`, `round_room`, `less` in `annex.py`).
 
 ## Things as they would stand
 
@@ -235,10 +266,16 @@ lightmap, which shows a line wherever two pieces of a wall meet and at every cor
   ray every 4 mm). A cardboard box's top is its flaps, under its bounds' top. A game's box leans till its top meets the wall (`leaning_box`).
 - Small printed things are one atlas, `Details.png`; `world/atlas.json` says where each is, and
   `quad(..., decal=NAME)` uses it. The packer stops if the atlas is full.
-- The shelf's books are boxes and magazines (`world/gameboxes.py`): games and software stand
-  spine out (`shelf_row` in `furniture.py`), magazines lie in piles (`pile`), and the same lie on the
-  low table, the desk, seven of the classroom's towers (`ON_TOWERS`; not the hubs') and in the
-  holodecks' corridor. The drawn spines of `Books.png` (`world/bookdesigns.py`) are no longer used.
+- The shelf's books are boxes and magazines (`world/gameboxes.py`), most of them showing their
+  fronts: games face out on two shelves, leaning on its back (`faceout_row`, `leaning_box` in
+  `furniture.py`), one shelf of games and the software spine out (`shelf_row`), three games lying in
+  a pile, magazines in piles (`pile`). The games the shelf has no room for are about the den
+  (`scatter`: a pile on the floor by the sofa's end); boxes and magazines lie on the low table, the
+  desk, seven of the classroom's towers (`ON_TOWERS`; not the hubs') and on the holodecks' corridor's
+  table and bench. A thing lying face up is turned so that its top is away from whoever stands
+  before it (`TOP_AWAY`, the turn at which its top points to +z: the bench's had read upside down
+  from the corridor); the low table's read from the sofa. The drawn spines of `Books.png`
+  (`world/bookdesigns.py`) are no longer used.
 - The screens, keyboards, panels and lights are still the builder's own. `world/computer.py`
   repeats their rectangles at its top: a screen moved in the builder must be moved there too.
 - The builder's boxes stay where they stop a player, without their renderers (`StripBoxes`):

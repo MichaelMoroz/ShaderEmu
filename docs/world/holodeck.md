@@ -15,9 +15,14 @@ doorway (1.2 by 2.4 m) cut out, its floor and its ceiling, every face a whole pa
 is the strip unrolled from the door wall's corner at +x, so three of its four upright corners are
 inside a chart, and the floor and the ceiling are charts under it (`check_shell.py` checks it). The
 doorway's reveal is the corridor's plaster. The lines between the panels are lit bars
-(`grid_bars` in `world/annex.py`, `HoloLine`): 8 mm proud on the walls (7 across them, so no two
-faces of a crossing lie in one plane), 3 on the floor, and a 30 mm bar along each of the room's
-twelve edges. The mask is 20 mm inside the panels (`MASK_IN`), in front of every bar, so the
+(`grid_bars` in `world/annex.py`, `HoloLine`): 8 mm proud on the walls (7 across them), 3 and 2 on
+the floor, 8 and 7 on the ceiling, and a bar 15 mm square in each of the room's twelve edges, lying
+in the corner against both faces. No two bars go into each other or share a face's plane where they
+meet (the corners had flickered where three edge bars and the lines' ends met in one plane): the
+upright edge bars are the room's height and the level ones end against them, the walls' upright lines
+end against the edge bars and the level ones against the upright lines (`less`), the floor's and the
+ceiling's across lines against those along, and the floor's stop 3 mm short of the seat's foot and
+the console's base (`feet`, `cut_line`). `world/check_overlap.py` holds it (`docs/world/world.md`). The mask is 20 mm inside the panels (`MASK_IN`), in front of every bar, so the
 program's world is not crossed by them. The corridor's furniture is in `holodeck.json`
 (`furniture`), which `ShaderEmuHolodeck.cs` makes colliders of.
 

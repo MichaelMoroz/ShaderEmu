@@ -414,8 +414,46 @@ public static partial class ShaderEmuBuilder
     static readonly string[] ProbeLit = { "wicker_basket", "korean_public_payphone", "ornate_mirror", "boombox", "industrial_wall_sconce",
                                           "korean_fire_extinguisher", "desk_lamp_arm", "modern_ceiling_lamp", "alarm_clock", "fire_alarm" };
 
+    const float BakeTexels = 20f;   // Bakery's texels a metre (its settings' Texels per unit), before a renderer's scale
+    const float TinyChart = 9f;     // texels: a chart under 3 x 3 holds no light of its own
+    const float TinyShare = 0.3f;   // of a model's surface in such charts: lit by the volume instead
+    static readonly List<string> probeLitByCharts = new List<string>();
+
+    // The share of a mesh's surface whose lightmap chart (the triangles joined by shared vertices
+    // in its second coordinates, as Unity's unwrap and ours split them) is under TinyChart texels.
+    static float TinyChartShare(Mesh mesh, Transform t, float texelsPerMetre)
+    {
+        if (mesh == null || mesh.uv2 == null || mesh.uv2.Length == 0) return 0f;
+        int[] tris = mesh.triangles;
+        Vector3[] v = mesh.vertices;
+        int[] parent = new int[v.Length];
+        for (int i = 0; i < parent.Length; i++) parent[i] = i;
+        System.Func<int, int> find = null;
+        find = i => { while (parent[i] != i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
+        for (int k = 0; k < tris.Length; k += 3)
+        {
+            int a = find(tris[k]), b = find(tris[k + 1]), c = find(tris[k + 2]);
+            parent[b] = a; parent[find(c)] = a;
+        }
+        var area = new Dictionary<int, float>();
+        float total = 0f;
+        for (int k = 0; k < tris.Length; k += 3)
+        {
+            Vector3 p = t.TransformPoint(v[tris[k]]), q = t.TransformPoint(v[tris[k + 1]]), r = t.TransformPoint(v[tris[k + 2]]);
+            float s = Vector3.Cross(q - p, r - p).magnitude / 2f;
+            int root = find(tris[k]);
+            area[root] = (area.TryGetValue(root, out float was) ? was : 0f) + s;
+            total += s;
+        }
+        if (total <= 0f) return 0f;
+        float small = 0f, texel = 1f / (texelsPerMetre * texelsPerMetre);
+        foreach (float a in area.Values) if (a / texel < TinyChart) small += a;
+        return small / total;
+    }
+
     static void Remodel(Transform world)
     {
+        probeLitByCharts.Clear();
         Dictionary<string, Material> materials = ModelMaterials();
         Transform room = world.Find("Room"), decor = world.Find("Decor"), computer = world.Find("Computer");
         Transform oldCity = decor.Find("City");
@@ -483,6 +521,20 @@ public static partial class ShaderEmuBuilder
                 // the bake, and throws its shadow, but is lit by the room's volume: its own
                 // lightmap came out specked.
                 bool plant = go.name.StartsWith("pachira") || go.name.StartsWith("potted_plant");
+                // What lies about (a die, a can, a tape, a magazine) is smaller than the bake's texel
+                // (20 a metre): its few texels took the dark under it or of a neighbour, a die's face
+                // half black. It throws its shadow into the bake and is lit by the volume, as a plant is.
+                if (go.name.EndsWith(" things") && go.name != "Wall things") plant = true;
+                // And so is a model whose lightmap is mostly charts too small to hold light: a share of
+                // its surface in charts under TinyChart texels (a lightmap's seams at every chart's edge, its
+                // texels the dark of what is under or beside them).
+                MeshFilter filter = go.GetComponent<MeshFilter>();
+                float tiny = filter != null ? TinyChartShare(filter.sharedMesh, go.transform, BakeTexels * renderer.scaleInLightmap) : 0f;
+                if (!plant && tiny > TinyShare)
+                {
+                    plant = true;
+                    probeLitByCharts.Add(go.name + string.Format(" ({0:0}% in charts under {1} texels)", tiny * 100f, TinyChart));
+                }
 #if BAKERY_INCLUDED
                 if (plant) renderer.receiveGI = ReceiveGI.LightProbes;   // Bakery lays out a lightmap of its own for the rest
 #else
@@ -491,6 +543,7 @@ public static partial class ShaderEmuBuilder
             }
         }
 
+        Debug.Log("[ShaderEmu] lit by the volume for their tiny lightmap charts: " + (probeLitByCharts.Count == 0 ? "none" : string.Join(", ", probeLitByCharts)));
         if (decor.Find("Desk lamp light") == null)
             BakedLight(decor, "Desk lamp light", new Vector3(-3.3f, 1.25f, 5.1f), new Color(1f, 0.78f, 0.5f), 1f, 2.5f);
         Mood(decor);

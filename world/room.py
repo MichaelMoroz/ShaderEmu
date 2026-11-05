@@ -104,6 +104,23 @@ def shell(b):
                     [(-0.08, 0.09), (0.08, 0.09), (0.08, -0.09), (-0.08, 0.05)], 0.12, "WoodDark", plane='xy', bevel=0.006, grain=1)
 
 
+BEAMS_Z, BEAM_THICK, BRACKET_THICK = (-4.3, 0.0, 4.3), 0.22, 0.12
+
+
+def round_room(y, half):
+    """Paths round the den at height y, the way the walls go (front, right, back, left), broken
+    where each beam meets the side walls (`half` either side of its middle)."""
+    W, D = HALF_W, HALF_D
+    cuts = sorted(BEAMS_Z)
+    right = [D] + [v for z in reversed(cuts) for v in (z + half, z - half)] + [-D]    # along the right wall, z falling
+    left = [-D] + [v for z in cuts for v in (z - half, z + half)] + [D]              # along the left wall, z rising
+    paths = [[(-W, y, left[-2]), (-W, y, D), (W, y, D), (W, y, right[1])],              # the front, round both corners
+             [(W, y, right[-2]), (W, y, -D), (-W, y, -D), (-W, y, left[1])]]            # the back
+    paths += [[(W, y, right[i]), (W, y, right[i + 1])] for i in range(2, len(right) - 2, 2)]
+    paths += [[(-W, y, left[i]), (-W, y, left[i + 1])] for i in range(2, len(left) - 2, 2)]
+    return paths
+
+
 def lamps(b):
     b.obj("Ceiling lamps")
     for z in (-2.2, 2.3):
@@ -154,7 +171,7 @@ def window(b):
             b.box((0, 0.285, 0.005), (1.8, 0.02, 0.07), "TrimWhite", bevel=0.006)
             for k in (-1, 1):
                 b.tube([(k * 0.84, -0.26, 0), (k * 0.84, -0.44, 0)], 0.011, "MetalSteel")
-                b.box((k * 0.6, 0.15, 0.05), (0.03, 0.05, 0.04), "TrimWhite")
+                b.box((k * 0.6, 0.15, 0.038), (0.03, 0.05, 0.016), "TrimWhite")   # a bracket, to the panelling's face
             b.cyl((0.92, -0.2, 0), 0.022, 0.05, "TrimWhite", segs=12, bevel=0.004, rot=(0, 0, 90))
             b.tube([(0.84, -0.2, 0), (0.9, -0.2, 0)], 0.009, "MetalSteel")
 
