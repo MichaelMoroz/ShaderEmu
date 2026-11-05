@@ -129,6 +129,15 @@ public:
             fprintf(stderr, "[harness] GPU device disabled: %s\n", gpuErr.c_str());
             gpuPasses_.clear();
         }
+        // the picture's depth at far over a target at the near plane (docs/machine/gpu.md, "The picture's rectangle"); a
+        // gpu.shader of before has no GPUClear, and its depth is all far as it was
+        std::string clearErr;
+        if (opt.gpuShader && !gpuPasses_.empty() && !buildPasses(gpu_, *opt.gpuShader, {"GPUClear"}, bo, gpuClear_, clearErr)) {
+            if (clearErr.find("not found") == std::string::npos) fprintf(stderr, "[harness] GPUClear: %s\n", clearErr.c_str());
+            gpuClear_.clear();
+        }
+        if (getenv("RVC_GPU_READS"))
+            fprintf(stderr, "[harness] the GPU's depth: %s\n", gpuClear_.empty() ? "the whole target far" : "far over the picture, near past it (GPUClear)");
         if (!gpuPasses_.empty() && getenv("RVC_GPU_READS")) {
             // (docs/machine/gpu.md, "Streams") whether the draw pass's compiled stages bind the state texture, RAM, at all:
             // the compiler keeps a texture only where something reads it
@@ -755,6 +764,13 @@ private:
             dd.DepthFunc = D3D11_COMPARISON_LESS_EQUAL;
             hr = gpu_.device->CreateDepthStencilState(&dd, &gpuDepthState_[k]);
         }
+        if (SUCCEEDED(hr)) {   // GPUClear's: written whatever is there
+            D3D11_DEPTH_STENCIL_DESC dd{};
+            dd.DepthEnable = TRUE;
+            dd.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
+            dd.DepthFunc = D3D11_COMPARISON_ALWAYS;
+            hr = gpu_.device->CreateDepthStencilState(&dd, &gpuDepthClear_);
+        }
         for (int k = 0; k < kGpuBlendings && SUCCEEDED(hr); ++k) {
             D3D11_BLEND_DESC bd{};
             auto& rt = bd.RenderTarget[0];
@@ -1093,12 +1109,31 @@ private:
         if (gpuPasses_.size() > 2 && !comparing_) gpuUpload(mat, (gpuPasses & 0x10000u) != 0);   // (the levels made on GPU_UPLOADED)
         mat.setTexture("_GpuVram", vramSrv_.Get(), kVramSide, kVramSide);
         GpuPass& pass = amp ? gpuAmp_[0] : gpuPasses_[0];
-        ctx->OMSetRenderTargets(1, gpuRtv_.GetAddressOf(), gpuDsv_.Get());
-        ctx->ClearDepthStencilView(gpuDsv_.Get(), D3D11_CLEAR_DEPTH, 1.0f, 0);
         D3D11_VIEWPORT vp{0, 0, (float)kGpuTarget, (float)kGpuTarget, 0, 1};
         ctx->RSSetViewports(1, &vp);
         ctx->RSSetState(gpu_.rasterNoCull.Get());
         ctx->IASetInputLayout(nullptr);
+        // The depth: the whole target's at the near plane, then the picture's at far (GPUClear), so that nothing
+        // depth-tested is drawn or shaded past the picture (docs/machine/gpu.md, "The picture's rectangle"; a shader of
+        // before has no GPUClear, and all of it is far as it was).
+        static const bool wholeDepth = getenv("RVC_GPU_WHOLE_DEPTH") != nullptr;   // (the way before, for timing)
+        bool bounded = !gpuClear_.empty() && !wholeDepth;   // (both ways under RVC_GPU_COMPARE: it counts the whole target)
+        ctx->ClearDepthStencilView(gpuDsv_.Get(), D3D11_CLEAR_DEPTH, bounded ? 0.0f : 1.0f, 0);
+        if (bounded) {
+            GpuPass& clear = gpuClear_[0];
+            ctx->OMSetRenderTargets(0, nullptr, gpuDsv_.Get());
+            ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            mat.bind(ctx, clear, gpu_);
+            ID3D11ShaderResourceView* st = stateSrv();
+            for (auto& t : clear.vsLayout.textures)
+                if (t.name == "_State") ctx->VSSetShaderResources(t.slot, 1, &st);
+            ctx->OMSetDepthStencilState(gpuDepthClear_.Get(), 0);
+            ctx->Draw(6, 0);
+            ID3D11ShaderResourceView* none = nullptr;
+            for (auto& t : clear.vsLayout.textures)
+                if (t.name == "_State") ctx->VSSetShaderResources(t.slot, 1, &none);
+        }
+        ctx->OMSetRenderTargets(1, gpuRtv_.GetAddressOf(), gpuDsv_.Get());
         ctx->IASetPrimitiveTopology(amp ? D3D11_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST : D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         ID3D11ShaderResourceView* state = stateSrv();
         // one draw per pass in use, in order: each has its own blending and depth use
@@ -1746,6 +1781,8 @@ private:
     ComPtr<ID3D11ShaderResourceView> streamsSrv_;
     bool vramUsed_ = false;   // something was uploaded: a snapshot keeps the VRAM
     ComPtr<ID3D11DepthStencilState> gpuDepthState_[3];
+    ComPtr<ID3D11DepthStencilState> gpuDepthClear_;   // GPUClear's
+    std::vector<GpuPass> gpuClear_;   // GPUClear, when gpu.shader has it
     ComPtr<ID3D11BlendState> gpuBlend_[kGpuBlendings];
     std::vector<ComPtr<ID3D11ShaderResourceView>> keep_;
     CustomRenderTexture crt_;
