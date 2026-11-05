@@ -2885,12 +2885,9 @@ static void count_mark() {
     if (opt.untilTimes > 1 && script_at >= opt.script.size()) expect_from = console_text.size();
 }
 
-#ifndef RVC_CPU_LIBRARY
-#include "run_lock.h"
-
 // --save FILE / --load FILE: the whole machine between two passes (RAM, every core and worker, the devices' counts
 // and the console's state, the script's place in it), so that a run goes on in another call with the same arguments
-// and image (test_all.py --sections: every call under a minute). Not kept: RVC_RACES', RVC_PROF's and RVC_CALLS'
+// and image (test_all.py --sections: every call under a minute); rvc_harness --cpu keeps one beside its snapshot (SNAP.cpu). Not kept: RVC_RACES', RVC_PROF's and RVC_CALLS'
 // tables (each call reports its own part), the write cache's lines (empty at a pass's start), the network.
 static const char SNAP_MAGIC[8] = {'R', 'V', 'C', 'S', 'N', 'A', 'P', '2'};   // 2: the layout of 28 October 2026 (rvc_layout.h); 1 is refused
 template <class T> static void snap_put(FILE* f, const T& v) { fwrite(&v, sizeof v, 1, f); }
@@ -2957,6 +2954,9 @@ static bool machine_load(const std::string& path) {
     dirty_bands = ~0ull;
     return true;
 }
+
+#ifndef RVC_CPU_LIBRARY
+#include "run_lock.h"
 
 // What RVC_RACES and RVC_CALLS found, into their files and a few lines here.
 static void races_report(const char* file) {

@@ -253,7 +253,8 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
   --input-event S,HEX  at second S, the key ring's event HEX (bit 31 a press)
   --uart-log FILE      append all UART output to FILE
   --dump-state FILE    write the 64x64 state area (raw uint32 RGBA) at exit
-  --save-state FILE    write a snapshot of the whole machine (290 MB) at exit
+  --save-state FILE    write a snapshot of the whole machine (290 MB) at exit; with --cpu the processor's own
+                       state too, in FILE.cpu, which --cpu --load-state needs (docs/machine/cpu-harness.md)
   --record-input FILE  write the window's keys, pointer and typing to FILE, each with its second of the run
   --replay-input FILE  play FILE's input at its seconds instead of the window's (Ctrl+] still quits)
   --stamp              print the processor folder's WARP stamp (its sources hashed) and exit: the card runs
@@ -1805,6 +1806,19 @@ int main(int argc, char** argv) {
                 if (const char* d = getenv("RVC_PROF"); d && *d) prof::ticks = 8192, prof::init(d, cores.size(), true);   // (a profile up to --save-state)
                 backend.cpuMode = true;
                 cpuT0 = wall;
+                if (!opt.loadState.empty()) {
+                    // the processor as --cpu --save-state left it (SNAP.cpu), its clock going on from there: the
+                    // state texture holds what the shader machine resumes from, not all the processor keeps
+                    // (a worker's job, the devices' counts), and without it the processor booted anew
+                    if (!machine_load(opt.loadState + ".cpu")) {
+                        fprintf(stderr, "[harness] --cpu: %s.cpu is missing or not of this machine (%d cores): a snapshot resumed on the "
+                                "processor is made with --cpu --save-state and the same --cores\n", opt.loadState.c_str(), opt.cores);
+                        exitCode = 1;
+                        break;
+                    }
+                    cpuT0 = wall - guest_seconds;
+                    fprintf(stderr, "[harness] --cpu: the processor from %s.cpu, %.1f s of guest time\n", opt.loadState.c_str(), guest_seconds);
+                }
             }
             {
                 std::lock_guard<std::mutex> lock(g_inputMutex);
@@ -2424,6 +2438,11 @@ int main(int argc, char** argv) {
             ok = writeFileBinary(opt.saveState, data.data(), data.size());
         }
         // the VRAM's textures beside it (docs/machine/gpu.md, "VRAM"), or no file: a machine that uploaded nothing
+        // --cpu: the processor's own state beside it (rvc_cpu's --save), which --cpu --load-state goes on from; a
+        // snapshot of the card has none
+        std::string cpuFile = opt.saveState + ".cpu";
+        if (ok && cpuRunning) ok = cpuemu::machine_save(cpuFile);
+        else if (ok) std::remove(cpuFile.c_str());
         std::vector<uint8_t> vram;
         std::string vramFile = opt.saveState + ".vram";
         if (ok && backend.readVram(vram)) ok = writeFileBinary(vramFile, vram.data(), vram.size());
