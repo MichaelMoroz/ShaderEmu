@@ -1207,6 +1207,8 @@ pc at each pass's end.
 | The ranges cut by their work, the skins' table by a flag, a job ends at an effect or a draw | 165.59 | 177.71 |
 | The world's walk asks its planes' sides inline (`SE_BoxOnPlaneSide`) | 164.30 | 174.59 |
 | The Ghoul2 copies in the handover's ranges, eight of them, the HUD's menus found by name once, light styles and cvars told only when changed, the loops to the most entities used | 160.99 | 172.01 |
+| The front end's sort, the game's entities' empty calls, the cuts by halves, the client's packets after the give | 161.31 | 172.37 |
+| The drawing in three parts, the copies' counters defined | 158.46 | 168.45 |
 
 On the build of the voices decoded ahead the walk is 233.12 with `JK2_VOICE_AHEAD=0` (another state: core 0 1,083 thousand instructions a
 frame against 833) and 169.33 with `JK2_G2_FRONT=0`. 163.23 passes a frame is 4.5 frames a second.
@@ -1293,6 +1295,39 @@ a frame, each a `Q_stricmp` of every menu's name until its own) are remembered b
 when the menus' count moves; **the light styles** (`cg_lights.cpp`) are told the renderer only when one changed (64 system
 calls a frame told it the same), and **the client game's cvars** (`CG_UpdateCvars`, 80 calls a frame) are looked at only
 when `cvar.cpp`'s count of changes (`se_cvar_gen`) moved. Core 0 840 to 770 thousand instructions a frame of the walk.
+
+**The front end's sort** (`tr_main.cpp`'s `R_RadixSort`; `JK2_RADIX=4` the four passes as before): the four bytes'
+counts in one walk of the keys, and a byte every surface has the same is no pass (a stable pass moves nothing then): the
+same order. **The game's frame's entities** (`G_RunFrame`): each of the 645 entities in use called `CheckFailedNodes`,
+`G_CheckTasksCompleted` and `G_Roff`, which do nothing unless a field says otherwise; that field is tested first. **The
+handover's cuts** found by halves in sums kept by the give's loop, not by two more walks of the entities: the same cuts.
+**The client's packets after the give** (`cl_main.cpp`'s `SE_ClientPacketsRead`; `JK2_PACKETS_LATE=0` in the event loop
+as before): the game's messages of the frame before are parsed once the game's next frame is out, up to where the
+sender was before the give (the same messages in the same frame); the loopback's reader and sender in texels of their
+own and room for three messages (`net_chan.cpp`). Level: the parse was beside the mix's wait.
+
+**The drawing in three parts** (`gl_jk2.c`'s `jk2DrawPartGive`, `jk2DrawPartJoin`; `tr_backend.cpp`'s `SE_DrawList`;
+`JK2_DRAW_PARTS=2` two parts as before): a third worker draws the 3D list's middle with third copies of the back end and
+of the GL (`c_`, `build.sh`'s loop over `b c`), in the room the first part leaves between its own and the second's
+(`gpu_shaderemu.c`'s `gpuHalfSplitAt`: the second takes the last third of what is left, the third the upper half of the
+first's; a split keeps the ends it replaced and its merge puts them back, and a part's copy builds up to them). The
+drawing merges the third's commands first, then the second's: the list's order. The cut between the first and the third
+moves by how long the drawing waited for the third, as the second's by the second's. **The copies' counters**: the
+second copy's `se_kept_stats` was renamed `b_se_kept_stats` and defined nowhere, a weak reference to address 0: it
+counted into the program's first words, unseen with one copy; two copies at once stored to one texel (`RVC_RACES` 14
+undone). `tr_main.cpp` defines `b_se_kept_stats` and `c_se_kept_stats` now.
+
+The walk of the last row's build came out 173.44 in one run, its march 168.45: the walk's state moves by more than ten
+passes a frame between two builds (core 0 812 against 757 thousand instructions a frame on the same code), so a row's
+walk alone says little. `JK2_SOUND=mix` makes the state the same, but core 0 then decodes the music (346 passes a frame
+for every build): no use for this.
+
+**The front end's missing surfaces** (open, found 5 November 2026 from a picture in the world): with the front end on its
+worker the picture misses far buildings and the mirror floor's reflection, and blinks: `JK2_FRONT=check` (each view made
+whole on core 0 too, the counts now printed where a frame of the worker's views passes) says 1,005 of 1,200 views of the walk
+not as made whole, the worker's with 20 to 85 surfaces fewer (688 against 773). `JK2_FRONT=core` draws them. Images of the
+day: the 04:11 build right, the floor's reflection gone by 10:58 (the front end moved to its worker at 08:46). Every view
+to the worker (`JK2_FRONT_VIEWS=all`) left it so: not the default.
 
 ### What bounds it
 

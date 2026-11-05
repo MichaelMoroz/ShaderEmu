@@ -350,7 +350,7 @@ index 94051760..57e8ac87 100644
  	if ( cl.viewangles[PITCH] - oldAngles[PITCH] > 90 ) {
  		cl.viewangles[PITCH] = oldAngles[PITCH] + 90;
 diff --git a/code/client/cl_main.cpp b/code/client/cl_main.cpp
-index 1a5c2446..2a55a73f 100644
+index 1a5c2446..d80b3351 100644
 --- a/code/client/cl_main.cpp
 +++ b/code/client/cl_main.cpp
 @@ -145,6 +145,7 @@ void CL_FlushMemory( void ) {
@@ -369,7 +369,7 @@ index 1a5c2446..2a55a73f 100644
  		// clear nextmap so the cinematic shutdown doesn't execute it
  		Cvar_Set( "nextmap", "" );
  		CL_Disconnect();
-@@ -761,8 +763,156 @@ CL_Frame
+@@ -761,8 +763,190 @@ CL_Frame
  extern cvar_t	*cl_newClock;
  static unsigned int frameCount;
  float avgFrametime=0.0;
@@ -459,6 +459,36 @@ index 1a5c2446..2a55a73f 100644
 +}
 +extern unsigned long long SE_Instructions( void );
 +unsigned long long se_split_ins[4];	// (JK2_PARTS: give, game's frame here, take, frames)
++// ---- the client's packets read once the game's next frame is out (docs/games/jk2.md, "The client's packets after the
++// give"): the game's messages of the frame before are parsed by this core while the game's worker makes the next frame,
++// not before it is given; read up to where the sender was before the give, so the same messages in the same frame.
++// JK2_PACKETS_LATE=0: in the event loop, as before
++int SE_LoopSend( netsrc_t sock );
++qboolean SE_GetLoopPacketUpTo( netsrc_t sock, netadr_t *net_from, msg_t *net_message, int upto );
++static int se_packets_later;	// (the event loop's last answer)
++int SE_ClientPacketsLater( void )
++{
++	static int on = -1;
++	if ( on < 0 ) {
++		const char *e = getenv( "JK2_PACKETS_LATE" );
++		on = !( e && !strcmp( e, "0" ) );
++	}
++	se_packets_later = on && com_cl_running && com_cl_running->integer && SE_SplitAhead() == 2 && se_game_give &&
++		cls.state == CA_ACTIVE && com_sv_running && com_sv_running->integer && jk2ServerOn();
++	return se_packets_later;
++}
++static void SE_ClientPacketsRead( int upto )
++{
++	if ( !se_packets_later )
++		return;
++	se_packets_later = 0;
++	static byte data[MAX_MSGLEN];
++	msg_t buf;
++	netadr_t from;
++	MSG_Init( &buf, data, sizeof( data ) );
++	while ( SE_GetLoopPacketUpTo( NS_CLIENT, &from, &buf, upto ) )
++		CL_PacketEvent( from, &buf );
++}
 +int SE_MixEarly( void );
 +static int se_mix_lazy = -1;	// JK2_MIX_LAZY=0: settled at the frame's start, as before
 +static int se_mix_lazy_frame;	// this frame's mix waited for by the game's worker and this core's first sound call
@@ -481,6 +511,7 @@ index 1a5c2446..2a55a73f 100644
 +	se_mix_gen = 0;	// (the game's frame reads the levels a frame behind: it waits for no mix)
 +	{ void SE_LipGive( int lagged ); SE_LipGive( se_mix_lazy_frame ); }
 +	unsigned long long se_i0 = SE_Instructions();
++	const int se_upto = SE_LoopSend( NS_CLIENT );	// (the game's messages so far: the server is settled here)
 +	if ( se_game_give )
 +		se_game_give();
 +	int se_out = 0;
@@ -494,7 +525,9 @@ index 1a5c2446..2a55a73f 100644
 +			se_sv_msec = msec, se_sv_frac = fractionMsec;
 +			jk2ServerGive( SE_ServerJob, NULL );
 +			se_out = 1;
++			SE_ClientPacketsRead( se_upto );
 +		} else {
++			SE_ClientPacketsRead( se_upto );
 +			if ( se_mix_lazy_frame )
 +				SE_MixSettle(), se_mix_lazy_frame = 0, se_mix_gen = 0;
 +			se_sv_side = 1;
@@ -503,6 +536,7 @@ index 1a5c2446..2a55a73f 100644
 +		}
 +		se_split_ins[1] += SE_Instructions() - se_i0;
 +	}
++	SE_ClientPacketsRead( se_upto );	// (no split this frame: before the client's, as the event loop did)
 +	CL_Frame_( msec, fractionMsec );
 +	if ( se_out )
 +		SE_ServerSettleAll();
@@ -526,7 +560,7 @@ index 1a5c2446..2a55a73f 100644
  	if ( !com_cl_running->integer ) {
  		return;
  	}
-@@ -871,10 +1021,33 @@ void CL_Frame ( int msec,float fractionMsec ) {
+@@ -871,10 +1055,33 @@ void CL_Frame ( int msec,float fractionMsec ) {
  		}
  	} else {
  		// update the screen
@@ -560,7 +594,7 @@ index 1a5c2446..2a55a73f 100644
  
  	// advance local effects for next frame
  	SCR_RunCinematic();
-@@ -1127,6 +1300,9 @@ void CL_InitRef( void ) {
+@@ -1127,6 +1334,9 @@ void CL_InitRef( void ) {
  	RIT(CM_DeleteCachedMap);
  	RIT(CM_DrawDebugSurface);
  	RIT(CM_PointContents);
@@ -3419,7 +3453,7 @@ index a918cd26..63ac25ce 100644
  	{
  	case EXEC_NOW:
 diff --git a/code/qcommon/common.cpp b/code/qcommon/common.cpp
-index aeaff246..1e2e1394 100644
+index aeaff246..bc0d733d 100644
 --- a/code/qcommon/common.cpp
 +++ b/code/qcommon/common.cpp
 @@ -135,14 +135,26 @@ to the apropriate place.
@@ -3488,7 +3522,18 @@ index aeaff246..1e2e1394 100644
  		throw code;
  	} else {
  		SV_Shutdown (va("Server fatal crashed: %s\n", com_errorMessage));
-@@ -1133,7 +1164,14 @@ void Com_Init( char *commandLine ) {
+@@ -874,6 +905,10 @@ int Com_EventLoop( void ) {
+ 		// if no more events are available
+ 		if ( ev.evType == SE_NONE ) {
+ 			// manually send packet events for the loopback channel
++#ifdef SHADEREMU
++			int SE_ClientPacketsLater( void );
++			if ( !SE_ClientPacketsLater() )	// (cl_main.cpp: read by CL_Frame once the game's next frame is out)
++#endif
+ 			while ( NET_GetLoopPacket( NS_CLIENT, &evFrom, &buf ) ) {
+ 				CL_PacketEvent( evFrom, &buf );
+ 			}
+@@ -1133,7 +1168,14 @@ void Com_Init( char *commandLine ) {
  		com_speedslog = Cvar_Get ("speedslog", "0", CVAR_TEMP );
  
  		com_timescale = Cvar_Get ("timescale", "1", CVAR_CHEAT );
@@ -3503,7 +3548,7 @@ index aeaff246..1e2e1394 100644
  		com_showtrace = Cvar_Get ("com_showtrace", "0", CVAR_CHEAT);
  		com_speeds = Cvar_Get ("com_speeds", "0", 0);
  
-@@ -1298,6 +1336,9 @@ Com_ModifyMsec
+@@ -1298,6 +1340,9 @@ Com_ModifyMsec
  */
  
  
@@ -3513,7 +3558,7 @@ index aeaff246..1e2e1394 100644
  int Com_ModifyMsec( int msec, float &fraction )
  {
  	int		clampTime;
-@@ -1383,6 +1424,9 @@ void G2Time_ResetTimers(void);
+@@ -1383,6 +1428,9 @@ void G2Time_ResetTimers(void);
  void G2Time_ReportTimers(void);
  #endif
  
@@ -3523,7 +3568,7 @@ index aeaff246..1e2e1394 100644
  void Com_Frame( void ) {
  	try
  	{
-@@ -1449,7 +1493,25 @@ void Com_Frame( void ) {
+@@ -1449,7 +1497,25 @@ void Com_Frame( void ) {
  			timeBeforeServer = Sys_Milliseconds ();
  		}
  
@@ -3549,7 +3594,7 @@ index aeaff246..1e2e1394 100644
  
  
  		//
-@@ -1478,6 +1540,27 @@ void Com_Frame( void ) {
+@@ -1478,6 +1544,27 @@ void Com_Frame( void ) {
  			}
  
  			CL_Frame (msec, fractionMsec);
@@ -4556,6 +4601,87 @@ index 8740abe3..b4337507 100644
  	while ( valueBits < bits ) {
  		if ( msg->bit == 0 ) {
  			msg->readcount++;
+diff --git a/code/qcommon/net_chan.cpp b/code/qcommon/net_chan.cpp
+index 79bc3336..e065442b 100644
+--- a/code/qcommon/net_chan.cpp
++++ b/code/qcommon/net_chan.cpp
+@@ -50,12 +50,18 @@ to the new value before sending out any replies.
+ 
+ 
+ #define	MAX_PACKETLEN			(MAX_MSGLEN)	//(1400)		// max size of a network packet
++#ifdef SHADEREMU
++// (cl_main.cpp's SE_ClientPacketsRead: the client reads the game's last messages while the game's worker may send its
++// next frame's: room for three messages of the most a message is)
++#define MAX_LOOPDATA            48 * 1024
++#else
+ #define MAX_LOOPDATA            16 * 1024
++#endif
+ 
+ #if (MAX_PACKETLEN > MAX_MSGLEN)
+ #error MAX_PACKETLEN must be <= MAX_MSGLEN
+ #endif
+-#if (MAX_LOOPDATA > MAX_MSGLEN)
++#if (MAX_LOOPDATA > MAX_MSGLEN) && !defined( SHADEREMU )
+ #error MAX_LOOPDATA must be <= MAX_MSGLEN
+ #endif
+ 
+@@ -73,12 +79,33 @@ static const char *netsrcString[2] = {
+ 	"server"
+ };
+ 
++#ifdef SHADEREMU
++// (the reader's get and the sender's send in texels of their own: the game's worker sends while the first core reads)
++typedef struct {
++	char loopData[MAX_LOOPDATA];
++	int			get, unused_get[3];
++	int			send, unused_send[3];
++} __attribute__(( aligned( 16 ) )) loopback_t;
++static loopback_t se_loopbacks[2];
++#else
+ typedef struct {
+ 	char loopData[MAX_LOOPDATA];
+ 	int			get, send;
+ } loopback_t;
++#endif
+ 
+ static loopback_t	*loopbacks = NULL;
++#ifdef SHADEREMU
++int SE_LoopSend( netsrc_t sock ) { return loopbacks ? loopbacks[sock].send : 0; }
++qboolean NET_GetLoopPacket (netsrc_t sock, netadr_t *net_from, msg_t *net_message);
++// (a packet up to the place the sender had reached when the reader looked: not one the game's worker sends meanwhile)
++qboolean SE_GetLoopPacketUpTo( netsrc_t sock, netadr_t *net_from, msg_t *net_message, int upto )
++{
++	if ( !loopbacks || loopbacks[sock].get == upto )
++		return qfalse;
++	return NET_GetLoopPacket( sock, net_from, net_message );
++}
++#endif
+ 
+ 
+ /*
+@@ -90,7 +117,12 @@ Netchan_Init
+ void Netchan_Init( int port ) {
+ 	if (!loopbacks)
+ 	{
++#ifdef SHADEREMU
++		memset( se_loopbacks, 0, sizeof( se_loopbacks ) );
++		loopbacks = se_loopbacks;
++#else
+ 		loopbacks = (loopback_t*) Z_Malloc(sizeof(loopback_t) * 2, TAG_NEWDEL, qtrue);
++#endif
+ 	}
+ 
+ 	port &= 0xffff;
+@@ -103,7 +135,9 @@ void Netchan_Shutdown()
+ {
+ 	if (loopbacks)
+ 	{
++#ifndef SHADEREMU
+ 		Z_Free(loopbacks);
++#endif
+ 		loopbacks = 0;
+ 	}
+ }
 diff --git a/code/qcommon/ojk_saved_game.cpp b/code/qcommon/ojk_saved_game.cpp
 index d58e2322..cab2c6ae 100644
 --- a/code/qcommon/ojk_saved_game.cpp
@@ -6333,7 +6459,7 @@ index 5464b70b..a1f3c8cd 100644
  	{
  		return;
 diff --git a/code/rd-vanilla/tr_backend.cpp b/code/rd-vanilla/tr_backend.cpp
-index 741bb95b..537bcecb 100644
+index 741bb95b..70001a46 100644
 --- a/code/rd-vanilla/tr_backend.cpp
 +++ b/code/rd-vanilla/tr_backend.cpp
 @@ -27,6 +27,10 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
@@ -6426,7 +6552,7 @@ index 741bb95b..537bcecb 100644
  
  	*x = xcenter + xzi * transformed[0];
  	*y = ycenter - yzi * transformed[1];
-@@ -641,6 +674,302 @@ typedef struct
+@@ -641,6 +674,341 @@ typedef struct
  static postRender_t g_postRenders[MAX_POST_RENDERS];
  static int g_numPostRenders = 0;
  
@@ -6450,9 +6576,13 @@ index 741bb95b..537bcecb 100644
 +	unsigned char gl[512] __attribute__(( aligned( 16 ) ));	// gl_jk2.c's
 +} __attribute__(( aligned( 16 ) ));
 +static seHalf_t se_half;
++static seHalf_t se_half_c;	// (the third part's: gl_jk2.c's JK2_DRAW_PARTS=3)
 +extern "C" {
 +int jk2DrawHalfGive( void *half, void *gl );
 +int jk2DrawHalfJoin( void *gl );
++int jk2DrawParts( void );
++int jk2DrawPartGive( int part, void *half, void *gl );
++int jk2DrawPartJoin( int part, void *gl );
 +void jk2glHalfInit( const void *gl );
 +void jk2glHalfEnd( void *gl );
 +}
@@ -6668,6 +6798,41 @@ index 741bb95b..537bcecb 100644
 +				k = numDrawSurfs;
 +		}
 +	}
++	if ( on && !se_half_b && k < numDrawSurfs && jk2DrawParts() > 1 ) {
++		// (the drawing in three parts: the first keeps [0, k1), the third draws [k1, k), the second [k, n) as given above;
++		// the third's commands merged first, then the second's: the list's order. Its cut moves by how long the drawing
++		// waited for the third part, as the second's by the second's)
++		static int share3 = 128;	// (of the first part's surfaces, in 256ths: where the third part begins)
++		int k1 = k * share3 >> 8;
++		if ( k1 < 1 )
++			k1 = 1;
++		while ( k1 < k && drawSurfs[k1].sort == drawSurfs[k1 - 1].sort )
++			k1++;
++		if ( k1 < k ) {
++			seHalf_t *h = &se_half_c;
++			h->backEnd = backEnd;
++			h->drawSurfs = drawSurfs, h->from = k1, h->to = k, h->originalTime = originalTime;
++			h->numPost = 0, h->stencilled = 0;
++			if ( jk2DrawPartGive( 1, h, h->gl ) ) {
++				SE_DrawSurfRange( drawSurfs, k1, originalTime, depthRange, didShadowPass );
++				const int waited3 = jk2DrawPartJoin( 1, se_half_c.gl );
++				share3 += waited3 > 2 ? 4 : waited3 == 0 ? -2 : 0;
++				share3 = share3 < 32 ? 32 : share3 > 224 ? 224 : share3;
++				for ( int p = 0; p < se_half_c.numPost && g_numPostRenders < MAX_POST_RENDERS; p++ )
++					g_postRenders[g_numPostRenders++] = se_half_c.post[p];
++				if ( se_half_c.stencilled )
++					tr_stencilled = true;
++				const int waited = jk2DrawPartJoin( 0, se_half.gl );
++				share += waited > 2 ? 4 : waited == 0 ? -2 : 0;
++				share = share < 32 ? 32 : share > 240 ? 240 : share;
++				for ( int p = 0; p < se_half.numPost && g_numPostRenders < MAX_POST_RENDERS; p++ )
++					g_postRenders[g_numPostRenders++] = se_half.post[p];
++				if ( se_half.stencilled )
++					tr_stencilled = true;
++				return;
++			}
++		}
++	}
 +	SE_DrawSurfRange( drawSurfs, k, originalTime, depthRange, didShadowPass );
 +	if ( k < numDrawSurfs ) {
 +		const int waited = jk2DrawHalfJoin( se_half.gl );
@@ -6729,7 +6894,7 @@ index 741bb95b..537bcecb 100644
  void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
  	shader_t		*shader, *oldShader;
  	int				fogNum, oldFogNum;
-@@ -667,6 +996,11 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
+@@ -667,6 +1035,11 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
  	RB_BeginDrawingView ();
  
  	// draw everything
@@ -6741,7 +6906,7 @@ index 741bb95b..537bcecb 100644
  	oldEntityNum = -1;
  	backEnd.currentEntity = &tr.worldEntity;
  	oldShader = NULL;
-@@ -837,6 +1171,7 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
+@@ -837,6 +1210,7 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
  	if (oldShader != NULL) {
  		RB_EndSurface();
  	}
@@ -6749,7 +6914,7 @@ index 741bb95b..537bcecb 100644
  
  	if (tr_stencilled && tr_distortionPrePost)
  	{ //ok, cap it now
-@@ -966,6 +1301,28 @@ RENDER BACK END FUNCTIONS
+@@ -966,6 +1340,28 @@ RENDER BACK END FUNCTIONS
  ============================================================================
  */
  
@@ -6778,7 +6943,7 @@ index 741bb95b..537bcecb 100644
  /*
  ================
  RB_SetGL2D
-@@ -980,7 +1337,12 @@ void	RB_SetGL2D (void) {
+@@ -980,7 +1376,12 @@ void	RB_SetGL2D (void) {
  	qglScissor( 0, 0, glConfig.vidWidth, glConfig.vidHeight );
  	qglMatrixMode(GL_PROJECTION);
      qglLoadIdentity ();
@@ -6792,7 +6957,7 @@ index 741bb95b..537bcecb 100644
  	qglMatrixMode(GL_MODELVIEW);
      qglLoadIdentity ();
  
-@@ -1027,6 +1389,8 @@ const void *RB_StretchPic ( const void *data ) {
+@@ -1027,6 +1428,8 @@ const void *RB_StretchPic ( const void *data ) {
  	int		numVerts, numIndexes;
  
  	cmd = (const stretchPicCommand_t *)data;
@@ -6801,7 +6966,7 @@ index 741bb95b..537bcecb 100644
  
  	if ( !backEnd.projection2D ) {
  		RB_SetGL2D();
-@@ -1034,7 +1398,7 @@ const void *RB_StretchPic ( const void *data ) {
+@@ -1034,7 +1437,7 @@ const void *RB_StretchPic ( const void *data ) {
  
  	shader = cmd->shader;
  	if ( shader != tess.shader ) {
@@ -6810,7 +6975,7 @@ index 741bb95b..537bcecb 100644
  			RB_EndSurface();
  		}
  		backEnd.currentEntity = &backEnd.entity2D;
-@@ -1061,29 +1425,29 @@ const void *RB_StretchPic ( const void *data ) {
+@@ -1061,29 +1464,29 @@ const void *RB_StretchPic ( const void *data ) {
  	baDest = (byteAlias_t *)&tess.vertexColors[numVerts + 2]; baDest->ui = baSource->ui;
  	baDest = (byteAlias_t *)&tess.vertexColors[numVerts + 3]; baDest->ui = baSource->ui;
  
@@ -6848,7 +7013,7 @@ index 741bb95b..537bcecb 100644
  	tess.xyz[ numVerts + 3 ][2] = 0;
  
  	tess.texCoords[ numVerts + 3 ][0][0] = cmd->s1;
-@@ -1113,7 +1477,7 @@ const void *RB_RotatePic ( const void *data )
+@@ -1113,7 +1516,7 @@ const void *RB_RotatePic ( const void *data )
  
  	shader = cmd->shader;
  	if ( shader != tess.shader ) {
@@ -6857,7 +7022,7 @@ index 741bb95b..537bcecb 100644
  			RB_EndSurface();
  		}
  		backEnd.currentEntity = &backEnd.entity2D;
-@@ -1204,7 +1568,7 @@ const void *RB_RotatePic2 ( const void *data )
+@@ -1204,7 +1607,7 @@ const void *RB_RotatePic2 ( const void *data )
  
  		shader = cmd->shader;
  		if ( shader != tess.shader ) {
@@ -6866,7 +7031,7 @@ index 741bb95b..537bcecb 100644
  				RB_EndSurface();
  			}
  			backEnd.currentEntity = &backEnd.entity2D;
-@@ -1311,7 +1675,7 @@ const void	*RB_DrawSurfs( const void *data ) {
+@@ -1311,7 +1714,7 @@ const void	*RB_DrawSurfs( const void *data ) {
  	const drawSurfsCommand_t	*cmd;
  
  	// finish any 2D drawing if needed
@@ -6875,7 +7040,7 @@ index 741bb95b..537bcecb 100644
  		RB_EndSurface();
  	}
  
-@@ -1406,7 +1770,7 @@ const void	*RB_DrawBuffer( const void *data ) {
+@@ -1406,7 +1809,7 @@ const void	*RB_DrawBuffer( const void *data ) {
  	qglDrawBuffer( cmd->buffer );
  
  		// clear screen for debugging
@@ -6884,7 +7049,7 @@ index 741bb95b..537bcecb 100644
  	{
  		const fog_t		*fog = &tr.world->fogs[tr.world->numfogs];
  
-@@ -1530,10 +1894,13 @@ RB_SwapBuffers
+@@ -1530,10 +1933,13 @@ RB_SwapBuffers
  */
  extern void RB_RenderWorldEffects( void );
  const void	*RB_SwapBuffers( const void *data ) {
@@ -6899,7 +7064,7 @@ index 741bb95b..537bcecb 100644
  		RB_EndSurface();
  	}
  
-@@ -1568,6 +1935,9 @@ const void	*RB_SwapBuffers( const void *data ) {
+@@ -1568,6 +1974,9 @@ const void	*RB_SwapBuffers( const void *data ) {
  
      GLimp_LogComment( "***************** RB_SwapBuffers *****************\n\n\n" );
  
@@ -6909,7 +7074,7 @@ index 741bb95b..537bcecb 100644
  	ri.WIN_Present(&window);
  
  	backEnd.projection2D = qfalse;
-@@ -1582,7 +1952,7 @@ const void	*RB_WorldEffects( const void *data )
+@@ -1582,7 +1991,7 @@ const void	*RB_WorldEffects( const void *data )
  	cmd = (const setModeCommand_t *)data;
  
  	// Always flush the tess buffer
@@ -6918,7 +7083,7 @@ index 741bb95b..537bcecb 100644
  	{
  		RB_EndSurface();
  	}
-@@ -1604,7 +1974,16 @@ RB_ExecuteRenderCommands
+@@ -1604,7 +2013,16 @@ RB_ExecuteRenderCommands
  void RB_ExecuteRenderCommands( const void *data ) {
  	int		t1, t2;
  
@@ -6935,7 +7100,7 @@ index 741bb95b..537bcecb 100644
  
  	while ( 1 ) {
  		data = PADP(data, sizeof(void *));
-@@ -1628,6 +2007,13 @@ void RB_ExecuteRenderCommands( const void *data ) {
+@@ -1628,6 +2046,13 @@ void RB_ExecuteRenderCommands( const void *data ) {
  		case RC_DRAW_SURFS:
  			data = RB_DrawSurfs( data );
  			break;
@@ -6949,7 +7114,7 @@ index 741bb95b..537bcecb 100644
  		case RC_DRAW_BUFFER:
  			data = RB_DrawBuffer( data );
  			break;
-@@ -1640,7 +2026,11 @@ void RB_ExecuteRenderCommands( const void *data ) {
+@@ -1640,7 +2065,11 @@ void RB_ExecuteRenderCommands( const void *data ) {
  		case RC_END_OF_LIST:
  		default:
  			// stop rendering
@@ -8788,7 +8953,7 @@ index c9e745aa..d9f6bac9 100644
  
  
 diff --git a/code/rd-vanilla/tr_main.cpp b/code/rd-vanilla/tr_main.cpp
-index da619736..a939b765 100644
+index da619736..6d9a8a99 100644
 --- a/code/rd-vanilla/tr_main.cpp
 +++ b/code/rd-vanilla/tr_main.cpp
 @@ -205,7 +205,15 @@ void R_LocalPointToWorld (const vec3_t local, vec3_t world) {
@@ -8799,7 +8964,7 @@ index da619736..a939b765 100644
 +// (R_RotateForEntity's scratch, one for this core's front end, one for the drawing's worker and one for the front end's
 +// worker: docs/games/jk2.md, "The drawing on a worker"; RVC_RACES found the first two storing to it at once)
 +extern "C" int jk2RenderWorkerHere( void );	// (0 this core, 1 the drawing's worker, 2 the front end's)
-+static float se_preTransEntMatrix[4][16] __attribute__(( aligned( 16 ) ));
++static float se_preTransEntMatrix[5][16] __attribute__(( aligned( 16 ) ));	// (3 and 4: the drawing's second and third parts)
 +#define preTransEntMatrix ( se_preTransEntMatrix[jk2RenderWorkerHere()] )
 +#else
  float preTransEntMatrix[16];
@@ -8807,7 +8972,46 @@ index da619736..a939b765 100644
  
  void R_InvertMatrix(float *sourcemat, float *destmat)
  {
-@@ -1203,6 +1211,74 @@ void R_DecomposeSort( unsigned sort, int *entityNum, shader_t **shader,
+@@ -1139,6 +1147,38 @@ Radix sort with 4 byte size buckets
+ static void R_RadixSort( drawSurf_t *source, int size )
+ {
+   static drawSurf_t scratch[ MAX_DRAWSURFS ];
++#if defined( SHADEREMU ) && defined( Q3_LITTLE_ENDIAN )
++  // (docs/games/jk2.md, "The front end's sort": the four bytes' counts in one walk of the keys, and a byte every surface
++  // has the same is no pass: a pass moves nothing then, being stable. The same order as the four passes. JK2_RADIX=4: the
++  // four passes as before)
++  static int se_four = -1;
++  if ( se_four < 0 )
++    se_four = getenv( "JK2_RADIX" ) && !strcmp( getenv( "JK2_RADIX" ), "4" );
++  if ( !se_four ) {
++    static int count[ 4 ][ 256 ];
++    memset( count, 0, sizeof( count ) );
++    for ( int i = 0; i < size; i++ ) {
++      const unsigned k = source[ i ].sort;
++      count[ 0 ][ k & 255 ]++, count[ 1 ][ k >> 8 & 255 ]++, count[ 2 ][ k >> 16 & 255 ]++, count[ 3 ][ k >> 24 ]++;
++    }
++    drawSurf_t *from = source, *to = scratch;
++    for ( int b = 0; b < 4; b++ ) {
++      const int *c = count[ b ];
++      if ( size && c[ ( from[ 0 ].sort >> ( 8 * b ) ) & 255 ] == size )
++        continue;
++      int index[ 256 ];
++      index[ 0 ] = 0;
++      for ( int i = 1; i < 256; ++i )
++        index[ i ] = index[ i - 1 ] + c[ i - 1 ];
++      for ( int i = 0; i < size; ++i )
++        to[ index[ ( from[ i ].sort >> ( 8 * b ) ) & 255 ]++ ] = from[ i ];
++      drawSurf_t *t = from; from = to; to = t;
++    }
++    if ( from != source )
++      memcpy( source, from, size * sizeof( drawSurf_t ) );
++    return;
++  }
++#endif
+ #ifdef Q3_LITTLE_ENDIAN
+   R_Radix( 0, size, source, scratch );
+   R_Radix( 1, size, scratch, source );
+@@ -1203,6 +1243,74 @@ void R_DecomposeSort( unsigned sort, int *entityNum, shader_t **shader,
  R_SortDrawSurfs
  =================
  */
@@ -8882,7 +9086,7 @@ index da619736..a939b765 100644
  void R_SortDrawSurfs( drawSurf_t *drawSurfs, int numDrawSurfs ) {
  	shader_t		*shader;
  	int				fogNum;
-@@ -1225,6 +1301,9 @@ void R_SortDrawSurfs( drawSurf_t *drawSurfs, int numDrawSurfs ) {
+@@ -1225,6 +1333,9 @@ void R_SortDrawSurfs( drawSurf_t *drawSurfs, int numDrawSurfs ) {
  
  	// sort the drawsurfs by sort type, then orientation, then shader
  	R_RadixSort( drawSurfs, numDrawSurfs );
@@ -8892,7 +9096,7 @@ index da619736..a939b765 100644
  
  	// check for any pass through drawing, which
  	// may cause another view to be rendered first
-@@ -1258,6 +1337,21 @@ void R_SortDrawSurfs( drawSurf_t *drawSurfs, int numDrawSurfs ) {
+@@ -1258,6 +1369,21 @@ void R_SortDrawSurfs( drawSurf_t *drawSurfs, int numDrawSurfs ) {
  R_AddEntitySurfaces
  =============
  */
@@ -8914,7 +9118,7 @@ index da619736..a939b765 100644
  void R_AddEntitySurfaces (void) {
  	trRefEntity_t	*ent;
  	shader_t		*shader;
-@@ -1270,6 +1364,10 @@ void R_AddEntitySurfaces (void) {
+@@ -1270,6 +1396,10 @@ void R_AddEntitySurfaces (void) {
  	      tr.currentEntityNum < tr.refdef.num_entities;
  		  tr.currentEntityNum++ ) {
  		ent = tr.currentEntity = &tr.refdef.entities[tr.currentEntityNum];
@@ -8925,7 +9129,7 @@ index da619736..a939b765 100644
  
  		ent->needDlights = qfalse;
  
-@@ -1550,4 +1648,307 @@ void R_RenderView (viewParms_t *parms) {
+@@ -1550,4 +1680,335 @@ void R_RenderView (viewParms_t *parms) {
  
  	// draw main system development information (surface outlines, etc)
  	R_DebugGraphics();
@@ -8992,7 +9196,7 @@ index da619736..a939b765 100644
 +void R_SE_FrontJob( void *data );
 +static drawSurf_t se_front_surfs[MAX_DRAWSURFS];	// (the drawing's worker's, for a view it makes itself)
 +// (the front end's worker's: a view's sorted surfaces, by its number's parity)
-+static struct seFrontMade_t { int n, unused[3]; trRefdef_t refdef; viewParms_t viewParms; drawSurf_t surfs[MAX_DRAWSURFS]; } __attribute__(( aligned( 16 ) )) se_front_made[2];
++static struct seFrontMade_t { int n, unused[3]; trRefdef_t refdef; viewParms_t viewParms; drawSurf_t surfs[MAX_DRAWSURFS]; } __attribute__(( aligned( 16 ) )) se_front_made[4];	// (by the view's number: a frame's views and the frame before's, read by the drawing a frame behind)
 +static struct { volatile unsigned made, unused[3]; } __attribute__(( aligned( 16 ) )) se_front_done;	// (the front end's worker's)
 +static struct { int frame, unused[3]; } __attribute__(( aligned( 16 ) )) se_front_core = { -1, { 0, 0, 0 } };	// (this core's)
 +static struct { unsigned seq, last, target, unused; } __attribute__(( aligned( 16 ) )) se_views;	// (this core's)
@@ -9027,7 +9231,8 @@ index da619736..a939b765 100644
 +	}
 +	return h;
 +}
-+static struct { unsigned views, wrong, unused[2]; } __attribute__(( aligned( 16 ) )) se_front_check;	// (the worker's)
++static struct { unsigned views, wrong, unused[2], world, whole_world, polys, whole_polys; } __attribute__(( aligned( 16 ) )) se_front_check;	// (the worker's)
++static unsigned se_check_world, se_check_polys;	// (this core's: JK2_FRONT=check's whole view, its world's surfaces and polygons')
 +static int SE_FrontNot( int why )	// (JK2_FRONT_LOG=1: why a view is made here, the first 8 times)
 +{
 +	static int log = -1, logged;
@@ -9073,7 +9278,12 @@ index da619736..a939b765 100644
 +		R_RotateForViewer();
 +		R_SetupFrustum();
 +		R_SetViewFogIndex();
-+		R_GenerateDrawSurfs();
++		R_AddWorldSurfaces();
++		se_check_world = (unsigned)( tr.refdef.numDrawSurfs - was );
++		R_AddPolygonSurfaces();
++		se_check_polys = (unsigned)( tr.refdef.numDrawSurfs - was ) - se_check_world;
++		R_SetupProjection();
++		R_AddEntitySurfaces();
 +		check_count = tr.refdef.numDrawSurfs - was;
 +		if ( check_count > 0 ) {
 +			R_RadixSort( tr.refdef.drawSurfs + was, check_count );
@@ -9093,7 +9303,17 @@ index da619736..a939b765 100644
 +	R_SetupFrustum();
 +	R_SetViewFogIndex();
 +	// (the Ghoul2 entities: a model's level of detail goes by the projection's terms of the field of view, not its far plane)
-+	const int se_to_front = se_front_core.frame != tr.frameCount && jk2FrontOn();
++	// (JK2_FRONT_VIEWS=all: every view of a frame to the front end's worker, one after another, this core waiting for the one
++	// before at the next scene; by default a frame's second view, a sky portal's scene's main view, is the drawing's worker's a
++	// frame later, while the front end's worker may walk the next frame's first: two walks of the world at once on one set of
++	// marks. Tried for the surfaces the worker's views miss (docs/games/jk2.md, "The front end's missing surfaces"): they were
++	// missed as often with it)
++	static int se_one_view = -1;
++	if ( se_one_view < 0 ) {
++		const char *e = getenv( "JK2_FRONT_VIEWS" );
++		se_one_view = !( e && !strcmp( e, "all" ) );
++	}
++	const int se_to_front = ( !se_one_view || se_front_core.frame != tr.frameCount ) && jk2FrontOn();
 +	const int se_g2_there = se_to_front && SE_G2FrontOn();
 +	R_SetupProjection();
 +	if ( !se_g2_there ) {
@@ -9106,6 +9326,7 @@ index da619736..a939b765 100644
 +	cmd->first = first, cmd->count = tr.refdef.numDrawSurfs - first, cmd->viewCount = tr.viewCount;
 +	cmd->seq = ++se_views.seq;
 +	cmd->check = check, cmd->checkCount = (unsigned)check_count;
++	cmd->unused[0] = (int)se_check_world, cmd->unused[1] = (int)se_check_polys;
 +	cmd->refdef = tr.refdef;
 +	cmd->viewParms = tr.viewParms;
 +	// (the rest on the front end's worker at once, one view a frame: JK2_FRONT=check makes it there too; a view the
@@ -9145,8 +9366,11 @@ index da619736..a939b765 100644
 +		se_entity_filter = 0;
 +		se_g2_made.made = cmd->seq;
 +	}
++	const int se_w0 = tr.refdef.numDrawSurfs;
 +	R_AddWorldSurfaces();
++	const int se_w1 = tr.refdef.numDrawSurfs;
 +	R_AddPolygonSurfaces();
++	const int se_w2 = tr.refdef.numDrawSurfs;
 +	R_SetupProjection();
 +	se_entity_filter = 2;
 +	R_AddEntitySurfaces();
@@ -9158,7 +9382,9 @@ index da619736..a939b765 100644
 +	if ( SE_FrontOn() == 2 ) {
 +		se_front_check.views++;
 +		if ( (unsigned)n != cmd->checkCount || ( n > 0 && SE_FrontSum( out, n ) != cmd->check ) )
-+			se_front_check.wrong++;	// (no print here: the first core prints the counts, R_SE_FrontWait)
++			se_front_check.wrong++, se_front_check.unused[0] = (unsigned)n, se_front_check.unused[1] = cmd->checkCount,
++			se_front_check.world = (unsigned)( se_w1 - se_w0 ), se_front_check.whole_world = (unsigned)cmd->unused[0],
++			se_front_check.polys = (unsigned)( se_w2 - se_w1 ), se_front_check.whole_polys = (unsigned)cmd->unused[1];	// (no print here: the first core prints the counts, R_SE_FrontWait)
 +	}
 +	return n;
 +}
@@ -9166,7 +9392,7 @@ index da619736..a939b765 100644
 +void R_SE_FrontJob( void *data )
 +{
 +	const seViewCommand_t *cmd = (const seViewCommand_t *)data;
-+	seFrontMade_t *m = &se_front_made[cmd->seq & 1];
++	seFrontMade_t *m = &se_front_made[cmd->seq & 3];
 +	m->n = se_front_make( cmd, m->surfs );
 +	m->refdef = tr.refdef;
 +	m->viewParms = tr.viewParms;
@@ -9180,7 +9406,7 @@ index da619736..a939b765 100644
 +	dc.commandId = RC_DRAW_SURFS;
 +	if ( cmd->front ) {	// (made by the front end's worker: the drawing writes nothing of tr)
 +		jk2FrontAwait( &se_front_done.made, cmd->seq );
-+		const seFrontMade_t *m = &se_front_made[cmd->seq & 1];
++		const seFrontMade_t *m = &se_front_made[cmd->seq & 3];
 +		dc.drawSurfs = (drawSurf_t *)m->surfs;
 +		dc.numDrawSurfs = m->n;
 +		dc.refdef = m->refdef;
@@ -9203,9 +9429,18 @@ index da619736..a939b765 100644
 +	se_views.last = 0;
 +}
 +seKeptCount_t se_kept_stats __attribute__(( aligned( 16 ) ));
++// (the drawing's second and third copies' own, which build.sh names b_ and c_ in them: defined here, where the first's is,
++// or their references were weak and nothing: each copy counted into the program's first words, and two copies at once
++// stored to one texel, RVC_RACES)
++seKeptCount_t b_se_kept_stats __attribute__(( aligned( 16 ) )), c_se_kept_stats __attribute__(( aligned( 16 ) ));
 +int se_world_checked, se_world_wrong;	// (JK2_WORLD_HALF=check: tr_world.cpp)
 +void R_SE_FrontWait( void )
 +{
++	{	// (JK2_FRONT=check's counts: here, before the returns of a frame whose views the front end's worker made)
++		static unsigned printed;
++		if ( SE_FrontOn() == 2 && se_front_check.views >= printed + 100 )
++			printed = se_front_check.views, ri.Printf( PRINT_ALL, "jk2front: %u views checked, %u not as made whole (the last: %u surfaces, whole %u; world %u, whole %u; polygons %u, whole %u)\n", se_front_check.views, se_front_check.wrong, se_front_check.unused[0], se_front_check.unused[1], se_front_check.world, se_front_check.whole_world, se_front_check.polys, se_front_check.whole_polys );
++	}
 +	{
 +		static int printed;
 +		if ( se_world_checked >= printed + 100 )
@@ -9230,9 +9465,6 @@ index da619736..a939b765 100644
 +	while ( (int)( se_views_made.made - se_views.target ) < 0 )
 +		SE_FrontRest();
 +	se_views.target = 0;
-+	static unsigned printed;
-+	if ( SE_FrontOn() == 2 && se_front_check.views >= printed + 100 )
-+		printed = se_front_check.views, ri.Printf( PRINT_ALL, "jk2front: %u views checked, %u not as made whole\n", se_front_check.views, se_front_check.wrong );
 +}
 +#endif
 \ No newline at end of file
@@ -13654,10 +13886,10 @@ index 221cf26d..f87c9246 100644
  void WriteInUseBits(void);
  void ReadInUseBits(void);
 diff --git a/codeJK2/game/g_main.cpp b/codeJK2/game/g_main.cpp
-index 671b309a..3f86be59 100644
+index 671b309a..42aa1dce 100644
 --- a/codeJK2/game/g_main.cpp
 +++ b/codeJK2/game/g_main.cpp
-@@ -28,6 +28,823 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
+@@ -28,6 +28,836 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
  #include "Q3_Interface.h"
  #include "g_nav.h"
  #include "g_roff.h"
@@ -13682,6 +13914,7 @@ index 671b309a..3f86be59 100644
 +// (the most entities in use since the game came up: past it every entity is free and has no client, NPC or Ghoul2, and
 +// the arrays above are 0 there, so this core's loops of the give and the take stop at it; 320 of 1,024 in the walk)
 +static int se_hi;
++static int se_acc[MAX_GENTITIES];	// (the give's: the ranges' weights summed up to each entity, for the cuts)
 +static const unsigned short se_ent_ptrs[] = { offsetof( gentity_t, owner ), offsetof( gentity_t, nextTrain ),
 +	offsetof( gentity_t, prevTrain ), offsetof( gentity_t, chain ), offsetof( gentity_t, enemy ), offsetof( gentity_t, activator ),
 +	offsetof( gentity_t, teamchain ), offsetof( gentity_t, teammaster ), offsetof( gentity_t, lastEnemy ) };
@@ -14295,6 +14528,7 @@ index 671b309a..3f86be59 100644
 +		se_g2_hand = !( e && !strcmp( e, "0" ) ) && !se_g2_check_on && se_split != 2;
 +	}
 +	se_g2_ncand = se_g2_ncore = 0;
++	int se_total = 0;
 +	for ( int i = 0 ; i < se_hi ; i++ ) {
 +		gentity_t *g = &g_entities[i];
 +		se_live_cl[i] = g->client, se_live_npc[i] = g->NPC;
@@ -14317,6 +14551,8 @@ index 671b309a..3f86be59 100644
 +			se_gv_npc[i] = (gNPC_t *)SE_HandAlloc( sizeof( gNPC_t ) );
 +			memset( (void *)se_sh_npc[i], 0, sizeof( gNPC_t ) ), memset( (void *)se_gv_npc[i], 0, sizeof( gNPC_t ) );
 +		}
++		se_total += se_was_used[i] + ( se_live_cl[i] ? 40 : 0 ) + ( se_live_npc[i] ? 16 : 0 ) + ( se_g2_h[i] ? 80 : 0 );
++		se_acc[i] = se_total;
 +	}
 +	// (the ranges cut by their work, each starting on an even entity, so that a range's entities are whole texels of the
 +	// copy: a client's copy and its words weigh most, then an NPC's, then an entity's pointers; the cuts by number put
@@ -14328,15 +14564,24 @@ index 671b309a..3f86be59 100644
 +			const char *e = getenv( "JK2_HAND_CUTS" );
 +			by_number = e && !strcmp( e, "even" );
 +		}
-+		int total = 0;
-+		for ( int i = 0 ; i < se_hi ; i++ )
-+			total += se_was_used[i] + ( se_live_cl[i] ? 40 : 0 ) + ( se_live_npc[i] ? 16 : 0 ) + ( se_g2_h[i] ? 80 : 0 );
++		const int total = se_total;
 +		se_cut[0] = 0, se_cut[SE_HAND_PARTS] = MAX_GENTITIES;
-+		int r = 1, acc = 0;
-+		for ( int i = 0 ; i < se_hi && r < SE_HAND_PARTS ; i++ ) {
-+			acc += se_was_used[i] + ( se_live_cl[i] ? 40 : 0 ) + ( se_live_npc[i] ? 16 : 0 ) + ( se_g2_h[i] ? 80 : 0 );
-+			if ( !by_number && ( i & 1 ) && acc * SE_HAND_PARTS >= total * r )
-+				se_cut[r++] = i + 1;
++		int r = 1;
++		// (each cut after the first odd entity past the cut before whose sum reaches its share: the sums found by halves, not
++		// walked again; the cuts a walk of the entities made)
++		for ( int last = -1 ; !by_number && r < SE_HAND_PARTS ; r++ ) {
++			int lo = last + 1, hi = se_hi;
++			while ( lo < hi ) {
++				const int mid = ( lo + hi ) >> 1;
++				if ( se_acc[mid] * SE_HAND_PARTS >= total * r )
++					hi = mid;
++				else
++					lo = mid + 1;
++			}
++			const int i = lo | 1;
++			if ( i >= se_hi )
++				break;
++			se_cut[r] = i + 1, last = i;
 +		}
 +		for ( ; r < SE_HAND_PARTS ; r++ )	// (by number, or what is left)
 +			se_cut[r] = se_cut[r - 1] > r * ( MAX_GENTITIES / SE_HAND_PARTS ) ? se_cut[r - 1] : r * ( MAX_GENTITIES / SE_HAND_PARTS );
@@ -14481,7 +14726,7 @@ index 671b309a..3f86be59 100644
  #include "g_navigator.h"
  #include "b_local.h"
  #include "anims.h"
-@@ -55,11 +872,20 @@ void G_ASPreCacheFree(void);
+@@ -55,11 +885,20 @@ void G_ASPreCacheFree(void);
  
  void ClearAllInUse(void)
  {
@@ -14502,7 +14747,7 @@ index 671b309a..3f86be59 100644
  	assert(((uintptr_t)ent)>=(uintptr_t)g_entities);
  	assert(((uintptr_t)ent)<=(uintptr_t)(g_entities+MAX_GENTITIES-1));
  	unsigned int entNum=ent-g_entities;
-@@ -68,18 +894,23 @@ void SetInUse(gentity_t *ent)
+@@ -68,18 +907,23 @@ void SetInUse(gentity_t *ent)
  
  void ClearInUse(gentity_t *ent)
  {
@@ -14526,7 +14771,7 @@ index 671b309a..3f86be59 100644
  
  qboolean PInUse2(gentity_t *ent)
  {
-@@ -736,6 +1567,10 @@ ShutdownGame
+@@ -736,6 +1580,10 @@ ShutdownGame
  =================
  */
  void ShutdownGame( void ) {
@@ -14537,7 +14782,7 @@ index 671b309a..3f86be59 100644
  	gi.Printf ("==== ShutdownGame ====\n");
  
  	gi.Printf ("... ICARUS_Shutdown\n");
-@@ -1256,6 +2091,9 @@ void G_RunFrame( int levelTime ) {
+@@ -1256,6 +2104,9 @@ void G_RunFrame( int levelTime ) {
  	int			i;
  	gentity_t	*ent;
  	int			ents_inuse=0; // someone's gonna be pissed I put this here...
@@ -14547,7 +14792,35 @@ index 671b309a..3f86be59 100644
  #if	AI_TIMERS
  	AITime = 0;
  	navTime = 0;
-@@ -1482,8 +2320,84 @@ void G_RunFrame( int levelTime ) {
+@@ -1295,7 +2146,11 @@ void G_RunFrame( int levelTime ) {
+ 			ent->lastWaypoint = ent->waypoint;
+ 			ent->waypoint = WAYPOINT_NONE;
+ 		}
+-		if ( d_altRoutes->integer )
++		if ( d_altRoutes->integer
++#ifdef SHADEREMU
++			&& ent->failedWaypointCheckTime && ent->failedWaypointCheckTime < level.time	// (CheckFailedNodes' own test)
++#endif
++			)
+ 		{
+ 			navigator.CheckFailedNodes( ent );
+ 		}
+@@ -1339,8 +2194,14 @@ void G_RunFrame( int levelTime ) {
+ 		if ( ent->freeAfterEvent )
+ 			continue;
+ 
++#ifdef SHADEREMU
++		if ( ent->sequencer && ent->taskManager )	// (Q3_TaskIDPending is false without them)
++#endif
+ 		G_CheckTasksCompleted(ent);
+ 
++#ifdef SHADEREMU
++		if ( ent->next_roff_time && ent->next_roff_time <= level.time )	// (G_Roff's own tests)
++#endif
+ 		G_Roff( ent );
+ 
+ 		if( !ent->client )
+@@ -1482,8 +2343,84 @@ void G_RunFrame( int levelTime ) {
  		ValidateInUseBits();
  	}
  #endif
@@ -14632,7 +14905,7 @@ index 671b309a..3f86be59 100644
  
  
  extern qboolean player_locked;
-@@ -1518,5 +2432,14 @@ void PrintEntClassname( int gentNum )
+@@ -1518,5 +2455,14 @@ void PrintEntClassname( int gentNum )
  
  IGhoul2InfoArray &TheGameGhoul2InfoArray()
  {

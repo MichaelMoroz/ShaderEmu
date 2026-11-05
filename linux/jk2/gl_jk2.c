@@ -49,19 +49,22 @@ static int on_front(void) {
     char here;
     return (uint8_t*)&here >= front_stack && (uint8_t*)&here < front_stack + FRONT_STACK;
 }
-// (0 this core, 1 the drawing's worker, 2 the front end's: tr_main.cpp keeps R_RotateForEntity's scratch by it)
+// (0 this core, 1 the drawing's worker, 2 the front end's, 3 and 4 the drawing's second and third parts': tr_main.cpp
+// keeps R_RotateForEntity's scratch by it)
 #ifndef SE_DRAW_B
 uint8_t* b_jk2glHalfStack(void);   // (the drawing's second part's stack: tr_main.cpp's fourth scratch)
+uint8_t* c_jk2glHalfStack(void);   // (the third part's: the fifth)
 static int on_half(void) {
     char here;
-    static uint8_t* at;
-    if (!at) at = b_jk2glHalfStack();
-    return (uint8_t*)&here >= at && (uint8_t*)&here < at + RENDER_STACK;
+    static uint8_t *at, *at_c;
+    if (!at) at = b_jk2glHalfStack(), at_c = c_jk2glHalfStack();
+    return (uint8_t*)&here >= at && (uint8_t*)&here < at + RENDER_STACK ? 3 :
+           (uint8_t*)&here >= at_c && (uint8_t*)&here < at_c + RENDER_STACK ? 4 : 0;
 }
 #else
 static int on_half(void) { return 0; }
 #endif
-int jk2RenderWorkerHere(void) { return on_render() ? 1 : on_front() ? 2 : on_half() ? 3 : 0; }
+int jk2RenderWorkerHere(void) { return on_render() ? 1 : on_front() ? 2 : on_half(); }
 void jk2ServerServe(void);   // (the game's frame's worker: below)
 // ---- a large draw's indices made into the GPU's words by helper workers (docs/games/jk2.md, "The drawing's stores"):
 // fast_triangles on the drawing's worker makes each vertex's four words once, into the frame's memory, with the indices
@@ -1422,83 +1425,115 @@ int jk2MixWorkerHere(void) {
 // has none (render_body), draws it with the second copies of the back end and of this file (SE_DRAW_B, made by build.sh)
 // on that copy's own stack, and says it is done; the drawing waits for it and moves its commands after its own.
 typedef struct { uint8_t gpu[256]; int swaps, frames, rooms, unused; } gl_half;   // (in the renderer's 512 bytes)
+// (the drawing in three parts, JK2_DRAW_PARTS=3, the default: a third worker draws the list's middle with the third
+// copies (c_, build.sh), in the room the first part leaves between its own and the second's; the drawing merges the
+// third's commands first, then the second's: the list's order. JK2_DRAW_PARTS=2: two parts, as before)
+#define HALF_PARTS 2
 #ifndef SE_DRAW_B
 uint8_t* b_jk2glHalfStack(void);   // (the second copy's: its stack, as on_render's)
 void se_b_SE_DrawHalfB(void* half);   // (the renderer's second copy: tr_backend.cpp's SE_DrawHalfB)
-static struct __attribute__((aligned(16))) { volatile uint32_t gen, state; void* arg; uint32_t unused; } half_go;   // the drawing's: 1 given, 2 none
-static struct __attribute__((aligned(16))) { volatile uint32_t gen, unused[3]; } half_done;   // the half's worker's
-static struct __attribute__((aligned(16))) { uint32_t gen, given, unused[2]; } half_d;   // the drawing's
-static uint32_t half_body(uint32_t arg) {
+void se_c_SE_DrawHalfB(void* half);   // (and its third)
+static struct __attribute__((aligned(16))) { volatile uint32_t gen, state; void* arg; uint32_t unused; } half_go[HALF_PARTS];   // the drawing's: 1 given, 2 none
+static struct __attribute__((aligned(16))) { volatile uint32_t gen, unused[3]; } half_done[HALF_PARTS];   // each part's worker's
+static struct __attribute__((aligned(16))) { uint32_t gen, given[HALF_PARTS], unused; } half_d;   // the drawing's
+static uint32_t half_body_b(uint32_t arg) {
     se_b_SE_DrawHalfB((void*)(uintptr_t)arg);
     return 0;
 }
-static uint32_t half_job(uint32_t gen, uint32_t a1) {
-    (void)a1;
+static uint32_t half_body_c(uint32_t arg) {
+    se_c_SE_DrawHalfB((void*)(uintptr_t)arg);
+    return 0;
+}
+static uint32_t half_job(uint32_t gen, uint32_t part) {
     for (;;) {
-        if (half_go.gen == gen) {
-            if (half_go.state == 1) jk2_call_on_stack(half_body, (uint32_t)(uintptr_t)half_go.arg, b_jk2glHalfStack() + RENDER_STACK);
+        if (half_go[part].gen == gen) {
+            if (half_go[part].state == 1)
+                jk2_call_on_stack(part ? half_body_c : half_body_b, (uint32_t)(uintptr_t)half_go[part].arg,
+                                  (part ? c_jk2glHalfStack() : b_jk2glHalfStack()) + RENDER_STACK);
             break;
         }
         mc_end_pass();
     }
-    half_done.gen = gen;
+    half_done[part].gen = gen;
     return 0;
 }
-// (core 0, at the give: whether the frame's second part may be drawn; the job is taken by a free worker, never run on this
-// core, whose waiting there for the drawing would hold the drawing back: it waits for this core's skins, job_go)
-static mcw_handle half_h;
-static struct __attribute__((aligned(16))) { volatile uint32_t gen, unused[3]; } half_posted;   // this core's: the frame posted for
+// (core 0, at the give: whether the frame's other parts may be drawn; each job is taken by a free worker, never run on
+// this core, whose waiting there for the drawing would hold the drawing back: it waits for this core's skins, job_go)
+static mcw_handle half_h[HALF_PARTS];
+static struct __attribute__((aligned(16))) { volatile uint32_t gen[HALF_PARTS], unused[4 - HALF_PARTS]; } half_posted;   // this core's: the frame each part was posted for
+static int half_parts = 1;   // (this core's: the parts beside the drawing's own, 1 or 2)
 static int half_on(void) {
     if (!hw0.tried) {
         const char* e = getenv("JK2_HALF");
+        const char* n = getenv("JK2_DRAW_PARTS");
         hw0.tried = 1, hw0.unused = rw0.mode && !(e && !strcmp(e, "0"));   // (JK2_HALF=0: one part, as before)
+        half_parts = n && !strcmp(n, "2") ? 1 : HALF_PARTS;
         if (hw0.unused) {
-            mcw_touch(b_jk2glHalfStack(), RENDER_STACK);
-            mcw_touch(&half_go, sizeof half_go), mcw_touch((void*)&half_done, sizeof half_done), mcw_touch(&half_d, sizeof half_d);
+            mcw_touch(b_jk2glHalfStack(), RENDER_STACK), mcw_touch(c_jk2glHalfStack(), RENDER_STACK);
+            mcw_touch(half_go, sizeof half_go), mcw_touch((void*)half_done, sizeof half_done), mcw_touch(&half_d, sizeof half_d);
             mcw_touch((void*)&half_posted, sizeof half_posted);
-            printf("jk2: the drawing's second part on a free worker\n");
+            printf("jk2: the drawing's other %d part%s on free workers\n", half_parts, half_parts > 1 ? "s" : "");
         }
     }
     return hw0.unused;
 }
 static void half_settle(void) {
-    if (!hw0.out) return;
-    mcw_join(half_h);
+    for (int p = 0; p < HALF_PARTS; p++)
+        if (hw0.out >> p & 1) mcw_join(half_h[p]);
     hw0.out = 0;
 }
 static void half_post(uint32_t gen) {
     half_settle();
     if (!half_on()) return;
-    mcw_handle h = mcw_try_call(half_job, gen, 0);
-    if (!h) return;   // (no worker free: this frame drawn in one part)
-    half_h = h, hw0.out = 1, half_posted.gen = gen;
+    for (int p = 0; p < half_parts; p++) {
+        mcw_handle h = mcw_try_call(half_job, gen, (uint32_t)p);
+        if (!h) return;   // (no worker free: this frame in fewer parts)
+        half_h[p] = h, hw0.out |= 1 << p, half_posted.gen[p] = gen;
+    }
 }
-// (the drawing's: its 3D list's second part given, the frame's list split; 0: drawn whole by the drawing)
+// (the drawing's: its 3D list's other parts given, the frame's list split; 0: drawn whole by the drawing)
 static void half_frame(uint32_t given) { half_d.gen = given; }
-static void half_none(void) {   // (no part given this frame: the half's worker told so)
-    if (half_posted.gen == half_d.gen && half_d.given != half_d.gen) half_go.state = 2, half_go.gen = half_d.gen;
+static void half_none(void) {   // (a part not given this frame: its worker told so)
+    for (int p = 0; p < HALF_PARTS; p++)
+        if (half_posted.gen[p] == half_d.gen && half_d.given[p] != half_d.gen) half_go[p].state = 2, half_go[p].gen = half_d.gen;
 }
-int jk2DrawHalfGive(void* half, void* glp) {
+int gpuHalfSplitAt(void* hp, unsigned share);
+// (how many parts beside its own the drawing may give this frame: their workers posted for it)
+int jk2DrawParts(void) {
+    if (!on_render()) return 0;
+    int n = 0;
+    while (n < HALF_PARTS && half_posted.gen[n] == half_d.gen) n++;
+    return n;
+}
+// (part 0, the second, takes the list's last share of the room: with a third part a third of it, else a half; part 1, the
+// third, the upper half of what the first part has left)
+int jk2DrawPartGive(int part, void* half, void* glp) {
     gl_half* g = glp;
-    if (!on_render() || half_posted.gen != half_d.gen || half_d.given == half_d.gen || !gpuHalfSplit(g->gpu)) return 0;
+    if (!on_render() || half_posted.gen[part] != half_d.gen || half_d.given[part] == half_d.gen ||
+        !gpuHalfSplitAt(g->gpu, part ? 128 : jk2DrawParts() > 1 ? 171 : 128)) return 0;
     g->swaps = swaps, g->frames = gl_frames, g->rooms = rooms_on();
-    half_go.arg = half, half_go.state = 1, half_go.gen = half_d.gen;
-    half_d.given = half_d.gen;
+    half_go[part].arg = half, half_go[part].state = 1, half_go[part].gen = half_d.gen;
+    half_d.given[part] = half_d.gen;
     return 1;
 }
-int jk2DrawHalfJoin(void* glp) {   // (how many passes the drawing waited: tr_backend.cpp moves the cut by it)
+int jk2DrawPartJoin(int part, void* glp) {   // (how many passes the drawing waited: tr_backend.cpp moves the cuts by it)
     gl_half* g = glp;
     int waited = 0;
-    while (half_done.gen != half_d.gen) {
+    while (half_done[part].gen != half_d.gen) {
         mc_end_pass();
         waited++;
     }
     gpuHalfMerge(g->gpu);
     return waited;
 }
+int jk2DrawHalfGive(void* half, void* glp) { return jk2DrawPartGive(0, half, glp); }
+int jk2DrawHalfJoin(void* glp) { return jk2DrawPartJoin(0, glp); }
 #else
 static void half_frame(uint32_t given) { (void)given; }
 static void half_none(void) {}
+int jk2DrawParts(void) { return 0; }
+int jk2DrawPartGive(int part, void* half, void* glp) { (void)part, (void)half, (void)glp; return 0; }
+int jk2DrawPartJoin(int part, void* glp) { (void)part, (void)glp; return 0; }
 int jk2DrawHalfGive(void* half, void* glp) { (void)half, (void)glp; return 0; }
 int jk2DrawHalfJoin(void* glp) { (void)glp; return 0; }
 #endif

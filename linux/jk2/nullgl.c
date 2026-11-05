@@ -152,5 +152,8 @@ void mcw_for_opt(unsigned n, void (*fn)(void *ctx, unsigned from, unsigned to), 
 /* the drawing on two workers (gl_jk2.c's): never on the build computer */
 int jk2DrawHalfGive(void *half, void *gl) { (void)half; (void)gl; return 0; }
 int jk2DrawHalfJoin(void *gl) { (void)gl; return 0; }
+int jk2DrawParts(void) { return 0; }
+int jk2DrawPartGive(int part, void *half, void *gl) { (void)part; (void)half; (void)gl; return 0; }
+int jk2DrawPartJoin(int part, void *gl) { (void)part; (void)gl; return 0; }
 void jk2glHalfInit(const void *gl) { (void)gl; }
 void jk2glHalfEnd(void *gl) { (void)gl; }
