@@ -59,6 +59,8 @@ cp "$MW/src/lib/libnano-X.a" "$STAGE/usr/lib/" 2>/dev/null || cp "$MW/lib/libnan
 cp "$MW/include/nano-X.h" "$MW/include/mwtypes.h" "$MW/include/mwconfig.h" "$STAGE/usr/include/" 2>/dev/null || true
 mkdir -p "$STAGE/usr/include/GLES"
 cp "$GL"/include/GLES/*.h "$STAGE/usr/include/GLES/"
+# the vectors, matrices and quaternions games and graphics want (docs/system/semath.md): one header
+cp "$GL/semath.h" "$STAGE/usr/include/"
 # (the library's float build: what a program here hands it is floats)
 rv32-cc -O2 -Wall -c -DSEGL_FLOAT -idirafter "$GL/include" -I"$MW/include" "$GL/gles.c" -o "$WORK/build/gles.o"
 rm -f "$STAGE/usr/lib/libgles.a"
