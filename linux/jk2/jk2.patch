@@ -13850,6 +13850,93 @@ index 62e0c45c..a48c4b74 100644
  			memset( &level.groups[i], 0, sizeof( level.groups[i] ) );
  		}
  	}
+diff --git a/codeJK2/game/G_Timer.cpp b/codeJK2/game/G_Timer.cpp
+index 068db56a..3d33364e 100644
+--- a/codeJK2/game/G_Timer.cpp
++++ b/codeJK2/game/G_Timer.cpp
+@@ -286,6 +286,16 @@ static gtimer_t *TIMER_GetNew(int num, const char *identifier)
+ 	assert(num < ENTITYNUM_MAX_NORMAL);//don't want timers on NONE or the WORLD
+ 	gtimer_t *p = g_timers[num];
+ 
++#ifdef SHADEREMU
++	// (the name's handle made once, not at every timer of the list: hstring's constructor hashed and compared the name
++	// each time, some 1,700 instructions a TIMER_Done of a stormtrooper's; made only where the list has a timer, as before)
++	if ( p ) {
++		const hstring h( identifier );
++		for ( ; p ; p = p->next )
++			if ( p->id == h )
++				return p;
++	}
++#else
+ 	// Search for an existing timer with this name
+ 	while (p)
+ 	{
+@@ -296,6 +306,7 @@ static gtimer_t *TIMER_GetNew(int num, const char *identifier)
+ 
+ 		p = p->next;
+ 	}
++#endif
+ 
+ 	// No existing timer with this name was found, so grab one from the free list
+ 	if (!g_timerFreeList)
+@@ -316,6 +327,14 @@ gtimer_t *TIMER_GetExisting(int num, const char *identifier)
+ {
+ 	gtimer_t *p = g_timers[num];
+ 
++#ifdef SHADEREMU
++	if ( p ) {	// (the name's handle made once: TIMER_GetNew)
++		const hstring h( identifier );
++		for ( ; p ; p = p->next )
++			if ( p->id == h )
++				return p;
++	}
++#else
+ 	while (p)
+ 	{
+ 		if (p->id == identifier)
+@@ -325,6 +344,7 @@ gtimer_t *TIMER_GetExisting(int num, const char *identifier)
+ 
+ 		p = p->next;
+ 	}
++#endif
+ 
+ 	return NULL;
+ }
+@@ -340,6 +360,26 @@ TIMER_Set
+ void TIMER_Set( gentity_t *ent, const char *identifier, int duration )
+ {
+ 	assert(ent->inuse);
++#ifdef SHADEREMU
++	// (the name's handle made once: TIMER_GetNew's search and the assignment each made it again)
++	const hstring h( identifier );
++	gtimer_t *timer = g_timers[ent->s.number];
++	assert(ent->s.number < ENTITYNUM_MAX_NORMAL);
++	while ( timer && !( timer->id == h ) )
++		timer = timer->next;
++	if ( !timer && g_timerFreeList ) {
++		timer = g_timerFreeList;
++		g_timerFreeList = g_timerFreeList->next;
++		timer->next = g_timers[ent->s.number];
++		g_timers[ent->s.number] = timer;
++	}
++	assert( timer );
++	if (timer)
++	{
++		timer->id	= h;
++		timer->time = level.time + duration;
++	}
++#else
+ 	gtimer_t *timer = TIMER_GetNew(ent->s.number, identifier);
+ 
+ 	if (timer)
+@@ -347,6 +387,7 @@ void TIMER_Set( gentity_t *ent, const char *identifier, int duration )
+ 		timer->id	= identifier;
+ 		timer->time = level.time + duration;
+ 	}
++#endif
+ }
+ 
+ /*
 diff --git a/codeJK2/game/NPC.cpp b/codeJK2/game/NPC.cpp
 index b57d6347..52e98d9e 100644
 --- a/codeJK2/game/NPC.cpp
