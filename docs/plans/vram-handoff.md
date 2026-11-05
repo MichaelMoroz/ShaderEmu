@@ -107,3 +107,11 @@ how it was checked, and what is left, in the order it is worth doing.
 - Card timings: `RVC_PASS_PROF=1` with the `gpubench` images, `--image` the image's folder
   (`build\gpubench\mN\build\images\linux`: `linux-net` by name is refused on the card) and `--define NO_PAGING`.
   gpubench 7 and 8 (uploads) draw nothing under `--cpu`, the search of before too: not looked into.
+
+## Merging
+
+- `shader_vm/src/gpu.h` here splits `gpu_command` into `gpu_owner`, `gpu_command_search` and the claims, and adds the
+  claims pass, the plain slot's key and `gpu_claim`. The Jedi Outcast session's uncommitted `VERTEX_ARRAYS` (0x100000,
+  `gpu_arrays_vertex`, a branch before `VERTEX_COMPACT` in `gpu_vertex_sized`) in the main checkout touches the vertex
+  stage beside it: when the two meet, a new vertex mode needs no change to the claims (a command's vertices and pass are
+  what the claims hold), but run `GPU_CLAIMS_CHECK` on a game that uses it.
