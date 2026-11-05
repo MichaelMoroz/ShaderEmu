@@ -1162,10 +1162,51 @@ that ran (rows 2 and 3) differ by 7 passes on the march. Read the rows as a tren
 | Given before the wait | 213.68 | 193.26 |
 | The players' waves at once | 211.07 | 193.50 |
 
+The ends against each other as the means of three runs at shifted timings (`game_par.py --runs 3`): the march 222.68
+to 190.87 passes a frame (3.4 to 4.0 frames a second), core 0 1,071.6 to 949.4 thousand instructions a frame; the walk
+208.24 to 210.23, its window in the heavier state now (core 0 892.0 to 1,013.7 thousand), while to frame 1,700 core 0
+ran 2,288,570 thousand instructions before and 2,206,771 after.
+
 **Where the frame goes now** (`RVC_PROF_CORES=1`, `RVC_PROF_PCS=1`, frames 1,500 to 1,600 of the walk: 182.5 passes a
 frame): the game's frame on its worker is the chain, about 135 passes without a break, core 0 resting for it; after it
-core 0 does about 50 passes alone (the take and the give, each with about 5 passes waiting for its helpers' ranges, and
-the mix's settle). The drawing's two parts 127 and 85 passes, the front end 62, the mix 44.
+core 0 does about 50 passes alone: the client entities pointed back at the game's (3), the take (8), the server's
+message and the player's `ClientThink` (14), the machine's copy of the entities (5, the first core running nothing), the
+give (8), its helpers' ranges waited for (3), the second copy (5), the client entities pointed at the copy (3). The
+drawing's two parts 127 and 85 passes, the front end 62, the mix 44. `tl.py`-style reading: `timeline.bin` has core 0's
+pc at each pass's end.
+
+**The game's frame and the handover lighter** (each row adds to the table's last):
+
+- **The touched list stamped** (`g_active.cpp`'s `G_TouchTriggersLerped`): 4 KB of `touched[MAX_GENTITIES]` cleared on the
+  stack at each call (16 a frame, a quarter of the game's worker's write-cache stops) is a static marked with the call's
+  number. **An empty AI group cleared only when it is not zeros already** (`AI_UpdateGroups`, 27 a frame).
+- **The given entity words packed** (`g_main.cpp`'s `se_gv_keep`, `se_gv_take`; `JK2_GV_PACK=0` the way before): the take
+  compares 18 fields of an entity, so the give's ranges keep those 20 words of each entity in use instead of the
+  machine copying the whole copy again (1.26 MB, five passes of core 0 running nothing); a field the client's frame
+  changed goes back whole, as before. **The client entities pointed by the ranges** (`cg_main.cpp`'s
+  `SE_CGEntitiesRange`): each give's and take's helper range points its own entities, not core 0 all 1,024.
+- **The entities copied up to the last ever used** (`globals.num_entities`, 701 of 1,024 in the walk), and **`Pmove`'s
+  locals cleared but the ground trace's Ghoul2 records** (`bg_pmove.cpp`; nothing reads them, 128 texels a `Pmove`).
+
+- **What the game's frame registers is made by core 0** (`sv_game.cpp`'s `SV_G2API_InitGhoul2Model`, `SV_RE_RegisterSkin`,
+  `cl_cgame.cpp`'s `CL_CgameSystemCalls` through `jk2ServerOnCore0`, as cvars and files already were): an NPC spawned in
+  play has its model, skin and weapon registered from the game's frame, and on its worker that uploaded a texture, and
+  the GL's settle then showed the frame there beside core 0 (`RVC_RACES`: 76 stores undone in `swap`, `fps_caption` and
+  the upload's `memcpy`, in the start both runs share; it came and went with the timing). `gl_jk2.c` makes no ask
+  inside an ask (`sv_serving`): a call of the client game's polls.
+
+| Change | Walk | March |
+|---|---|---|
+| The touched list stamped, empty groups not cleared again | 207.95 | 190.91 |
+| The entities pointed by the ranges (the packing was off: a field past word 255 turned it off) | 205.93 | 188.34 |
+| The entities copied up to the last ever used, `Pmove`'s locals | 207.61 | 185.36 |
+| The given words packed, the game's registrations by core 0 | 206.16 | 219.34 |
+| The packing by the fields' list, unrolled | 199.99 | 185.24 |
+
+The packing as first written (a loop over a table of the fields, about 170 instructions an entity) cost the march 30
+passes a frame (219.34 against 189.44 with `JK2_GV_PACK=0` on the same build): in the march the give's and the take's
+ranges often find no free worker and run on core 0. By the fields' list, each copy and compare of its own size, about
+45 instructions an entity.
 
 ### What bounds it
 
