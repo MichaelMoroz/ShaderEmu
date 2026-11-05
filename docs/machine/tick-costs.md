@@ -911,6 +911,8 @@ dropped):
 | The same with `next - 4 == pc`; with the two tests swapped; with `(next & 12) > 0` | -0.9%; -0.3%; -0.2% | -1.25%; +0.1%; +0.35% | -0.65%; +0.25%; +0.5% | the subtraction is what gains, not the change |
 | `ot` declared before the cache; the data texel's statics first; `ot[9]`; the cache 480 and the registers 96 | -0.25 to +0.3% | -0.7 to -0.2% | -0.0 to +0.9% | level |
 
+| On the tree with `same` as a difference: the fetch's `t - fw_t == 1`; a load's range as `va - 0x80000000`; both; a jump's alignment by its distance; x0's sink by an addition; the crossing's test as a difference; it with the fetch's | -1.05 to +0.9% | +0.3 to +1.5% | -0.1 to +1.8% | level or lost: the difference gains in `same` alone |
+
 **What was learnt.** Nothing of the fast loop's shape gave more than 1% on every load: f2 + fp1 (+ ffma) about 1%, at the
 noise's edge; the kept fusion 2% of Tiberian Dawn, a little of the shell, level on Quake. fp1 changes what fdiv makes (the card's quotient, which `rvc_cpu` does not make: a model of the card's
 division is owed first), and ffma's `mad` is fused where the general step rounds twice: neither is in the tree. The ways
