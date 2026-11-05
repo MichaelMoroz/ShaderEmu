@@ -57,10 +57,10 @@ how it was checked, and what is left, in the order it is worth doing.
    `totalInstructions` and the frame's GPU time. The port now also has the passes GPUVertices (six 512 x 384 targets,
    `_GpuMade*`) and GPUCopy (the GPU's target read, the VRAM written after the list's passes) to wire, which Unity's
    host does not draw yet (`docs/machine/gpu.md`, "The vertex front end", "Copies").
-2. **What still reads RAM** (`docs/machine/gpu.md`, "Streams"; `--define GPU_VRAM_ONLY` shows it magenta): `gles.c`'s draws
-   stream their textures, but Quake's, Quake III's own commands, ClassiCube's, OpenTTD's sprites, `programs/linux/gl.c`,
-   the bare library, the window server's pointer and every text's atlas read RAM. Each is a stream or an upload of its
-   own, or the band given to them; then `GPU_VRAM_ONLY` can compile the fragment's RAM paths out.
+2. **The draws read the VRAM alone.** Done in the harness (`docs/machine/gpu.md`, "Streams"): the device streams what a draw
+   would read from RAM into its texture, and GPUDraw binds no RAM. In Unity the passes GPUStreamSums (four targets: R32G32_UINT
+   256 x 256, R32_UINT 256 x 1 twice and 256 x 256) and GPUStream (into `_GpuStreams`, 4096 x 4096 RGBA8) are to be wired with the rest of the port; until then Unity's GPUDraw is built
+   without `GPU_FRONT` and reads RAM as before.
 3. **The vertex cost.** Done in the harness (5 November 2026, `docs/machine/gpu.md`, "Draw IDs"): a draw-ID pass finds every
    vertex's command and passes once a frame, and the upload pass and the 12 passes read one texel a vertex in place of the
    search. Checked by `GPU_DRAW_IDS_CHECK` (Quake, OpenTTD, gpubench 9, the blits). On the RTX 3090 it is 0.020 ms a frame

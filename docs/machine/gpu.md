@@ -549,20 +549,41 @@ the window's corner, and on frame 5 makes the mistake once.
 
 ## Streams
 
-A texture a draw names by its address is read from RAM by the fragment, four 16-byte texels a sample. `gles.c` uploads
-every such texture of a list at the list's end into the VRAM's rows from 3072 on (`stream_put`): words, indices, a mask,
-three bytes, tiles or a film's frame, in GPU memory or the ROM, once a list however many draws name it, padded with a texel
-of itself and of no levels; the draws are given its slot. Since a list's uploads are drawn every frame the list is, a
-texture the program writes as it runs is what it was when the list was drawn, as from RAM. The library's own textures'
-shelves stop at the band, and one that does not fit is streamed; `SEGL_STREAM=0` draws from GPU memory, as before. A sum of a
-list counts a stream as its address (`vram_source_of`).
+The draw passes read the VRAM alone: no stage of GPUDraw reads RAM (`RVC_GPU_READS=1` makes the harness say so from the
+compiler's reflection, `GPUDraw reads RAM: vertex no, fragment no`; with `--define GPU_NO_STREAMS`, the way before, its
+fragment does). Its vertices are the front end's, and what a draw would read from RAM, a texture, a light map, a glyph's
+bitmap or a sprite's pixels, the device copies before the list's passes into a texture as large as the VRAM and of the
+VRAM's kind, the streams' (`_GpuStreams`, 4096 x 4096 colours: a picture as large as the screen, as Doom's view at 2048 x
+1600, did not fit in a band of the VRAM).
 
-`--define GPU_VRAM_ONLY` makes a draw that reads its texture or light map from RAM magenta, to see what is left: text's
-atlases (masks, coverage, distance fields) and sprites (OpenTTD's) are apart, and read RAM still. Under `--cpu`, 5 November
-2026: `glcopy.c` with a texture of its own pixels leaves 48 magenta pixels, the pointer's (the window server draws it from
-its own picture), against 5,808 with `SEGL_STREAM=0`; the NES's thwaite 48 against 247,086, and its window the same pixels
-streamed and from RAM. What is not `gles.c`'s draws as before from RAM: Quake's (`linux/quake/gpu_shaderemu.c`), Quake III's
-own commands, ClassiCube's, OpenTTD's sprites, `programs/linux/gl.c` and the bare library (`programs/common/gpu.h`).
+- **The sums** (GPUStreamSums, four draws of one pass after the draw IDs, `_GpuStreamStep` 0 to 3, `gpu_stream_sums_fragment`):
+  a texel a triangle of the mesh, 256 x 256, of what that triangle begins (`gpu_stream_item`: a rectangle's or a draw's texture
+  and a compact draw's light map at its command's first triangle, a glyph at its character's, a sprite record's pixels at its
+  record's) and its size in texels; each row's sum; where each row starts; and each triangle's first texel in the band.
+- **The front end** gives a vertex its stream's place, `VRAM_STREAM` (bit 29) and the texel's number, in place of the address.
+- **Sharing**: a rectangle's or a draw's texture the same as one of the 256 commands before it (`GPU_STREAM_LOOK`: mode,
+  address, size, the key if keyed; no light map) takes the earliest one's stream (the second word of the sizes), and the front
+  end follows such a chain 16 steps: Doom's walls and flats are 96 streams for 928 draws.
+- **The stream pass** (GPUStream, `gpu_stream_fragment`) draws a quad over the streams' rows in use; a texel finds its stream
+  by the rows' starts and its row's offsets (two searches of eight steps) and is made as an upload makes a texel
+  (`gpu_upload_fragment`: every kind is a colour there), or, for a sprite, as its fragment would be (`gpu_sprite_fragment`,
+  remaps and the palette applied, a hole of no alpha).
+- **The fragment** reads a stream's texel by its number (`stream_texel`), nearest, four weighed, the distance fields' four
+  samples or the light map's four, as it read RAM; under `GPU_VRAM_ONLY` (the default in GPUDraw with the front end) its RAM
+  paths are not compiled at all, and what a stream did not bring, only what the band (3,145,728 texels) had no room for, is
+  magenta: only what 16,777,216 texels had no room for.
+
+A glyph's and a sprite record's streams are their own. `gles.c` streams its own first, into the VRAM's rows 3072 to 3328 at the
+list's end (`stream_put`), once however many draws name a texture and drawn by the sampler; `SEGL_STREAM=0` leaves them to the
+device. A sum of a list counts a stream as its address (`vram_source_of`).
+
+`RVC_GPU_COMPARE=N` checks it: every N-th frame the harness draws the list a second time the way before (`GPU_NO_STREAMS`, from
+RAM) into a second target that starts from the same picture, and counts the pixels that differ (`[gpu compare] ...`; the first
+such pair to `RVC_GPU_COMPARE_SAVE=PREFIX`, and what the sums held). One run, one memory: two runs, however fixed their clock,
+are not the same machine. Under `--cpu`, 5 November 2026: `gpubench` 11 and 12 (every texture kind and every sprite kind, with
+and without a palette, a 640 x 400 words record) the same bytes as from RAM; Quake's frame 200 of the timedemo with its
+textures and light maps in RAM (`QUAKE_VRAM=0 QUAKE_VRAM_LIGHT=0`), drawn from one snapshot both ways, 0 pixels; Doom's E1M1,
+479 frames both ways, 0 frames with a pixel that differs.
 
 ## Cost
 

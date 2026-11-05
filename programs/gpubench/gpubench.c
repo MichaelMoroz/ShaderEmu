@@ -9,6 +9,8 @@
 //      the list's end and drawn from there over the rest of the picture, four times as large (the frame before's copy)
 //   11 the kinds an upload converts: a mask, coverage, a layer of tiles (keyed), a film's frame and a glyph's distance fields,
 //      each 64 x 64 drawn twice as large from RAM on the left and from its slot on the right: the halves must match
+//   12 sprite records of every kind (CMD_SPRITES) without a palette, with one, and the shades: what the device's streams
+//      make of them, to compare with a capture under --define GPU_NO_STREAMS
 
 #include "../common/gpu.h"
 
@@ -115,6 +117,57 @@ int main(void) {
                 c[10] = 64, c[11] = 64;
                 c[12] = 0, c[13] = 0, c[14] = ONE, c[15] = ONE;
             }
+        for (;;) gpu_submit();
+    }
+#endif
+#if MODE == 12
+    {
+        enum { COPY, REMAP, BLACK, SHADE, FILL, FILL_SHADE, CHECKER, WORDS, RAW };
+        static uint8_t sprite[64 * 64] GPU_ALIGNED, table[256] GPU_ALIGNED, ta[256] GPU_ALIGNED, tb[256] GPU_ALIGNED;
+        static uint32_t picture[64 * 64] GPU_ALIGNED, palette[256] GPU_ALIGNED, recs[4][9 * 4] GPU_ALIGNED;
+        static uint32_t big[640 * 400] GPU_ALIGNED;   // (as OpenTTD's picture: a words record of rows of 2,560 bytes)
+        for (int i = 0; i < 640 * 400; i++) big[i] = (uint32_t)(((i % 640) + (i / 640) * 3) & 0xff) << 16;
+        for (int i = 0; i < 64 * 64; i++) {
+            int x = i % 64, y = i / 64;
+            sprite[i] = (uint8_t)(((x - 32) * (x - 32) + (y - 32) * (y - 32) < 900) ? 1 + (x * 3 + y) % 250 : 0);
+            picture[i] = (uint32_t)((x * 4) & 0xff) << 16 | (uint32_t)(i % 3 == 0 ? 0x11 : i % 3 == 1 ? 0x02 : 0) << 8;
+        }
+        for (int i = 0; i < 256; i++) {
+            table[i] = (uint8_t)(i % 7 == 0 ? 0 : 255 - i), ta[i] = (uint8_t)(i + 40), tb[i] = (uint8_t)(i ^ 0x5a);
+            palette[i] = (uint32_t)(i * 0x00010307u) & 0x00ffffff;
+        }
+        static const int kinds[3][9] = {{COPY, REMAP, BLACK, RAW, WORDS, FILL, CHECKER, -1, -1}, {COPY, REMAP, BLACK, RAW, WORDS, FILL, CHECKER, -1, -1},
+                                        {SHADE, FILL_SHADE, -1, -1, -1, -1, -1, -1, -1}};
+        gpu_begin();
+        gpu_clear(0x00203040);
+        uint32_t order = 1;
+        for (int row = 0; row < 3; row++) {
+            uint32_t n = 0;
+            for (int k = 0; k < 9 && kinds[row][k] >= 0; k++, n++) {
+                int kind = kinds[row][k], x = 8 + 72 * k, y = 8 + 80 * row;
+                uint32_t stride = kind == WORDS ? 64 * 4 : 64, *r = &recs[row][4 * n];
+                r[0] = kind == WORDS ? (uint32_t)picture : kind == FILL || kind == CHECKER ? (uint32_t)(40 + 20 * k) | (kind == CHECKER ? 0x100u : 0) : (uint32_t)sprite;
+                r[1] = kind == REMAP ? (uint32_t)table : kind == SHADE || kind == FILL_SHADE ? 0x30u : 0;
+                r[2] = (uint32_t)x | (uint32_t)y << 11 | (stride & 1023) << 22;
+                r[3] = 64u | 64u << 11 | (uint32_t)kind << 22 | (stride >> 10) << 26;
+            }
+            volatile uint32_t* c = gpu_command(GPU_SPRITES, 6 * n);
+            c[1] = (uint32_t)recs[row];
+            c[2] = n;
+            c[4] = row == 2 ? 4u : 1u;
+            c[5] = order;
+            c[6] = row == 1 ? (uint32_t)palette : 0;
+            c[7] = (uint32_t)ta;
+            c[8] = (uint32_t)tb;
+            order += n;
+            if (row == 2) gpu_passes |= 4;
+        }
+        {
+            uint32_t* r = recs[3];
+            r[0] = (uint32_t)big, r[1] = 0, r[2] = 0u | 260u << 11 | (2560u & 1023) << 22, r[3] = 640u | 400u << 11 | (uint32_t)WORDS << 22 | (2560u >> 10) << 26;
+            volatile uint32_t* c = gpu_command(GPU_SPRITES, 6);
+            c[1] = (uint32_t)r, c[2] = 1, c[4] = 1, c[5] = order, c[6] = (uint32_t)palette, c[7] = (uint32_t)ta, c[8] = (uint32_t)tb;
+        }
         for (;;) gpu_submit();
     }
 #endif

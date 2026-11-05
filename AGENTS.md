@@ -446,5 +446,8 @@
   Each vertex is made once a frame by GPUVertices (`gpu_front_fragment`, "The vertex front end"): a change to how a vertex is
   made is a change there, and `--define GPU_FRONT_CHECK` must leave no magenta. A copy (command 7, `glCopyTexSubImage2D`,
   framebuffer objects; "Copies") is made after the whole list: a draw after it in its list is a mistake `SEGL_DEBUG=1`
-  reports. A texture a `gles.c` draw names by its address is streamed into the VRAM's rows from 3072 on by every list
-  ("Streams"; `SEGL_STREAM=0`): `--define GPU_VRAM_ONLY` shows what still reads RAM in magenta.
+  reports. GPUDraw reads the VRAM alone ("Streams"): what a draw would read from RAM is copied into the band by the device
+  (GPUStreamSums, GPUStream), and the fragment's RAM paths are compiled out (`GPU_VRAM_ONLY`). A new kind of what a draw
+  reads, or a new command that reads a texture, is an item of `gpu_stream_item`, a conversion of the stream pass's and a read
+  of the fragment's, and `RVC_GPU_READS=1` must still say `vertex no, fragment no`; compare a capture with `--define
+  GPU_NO_STREAMS`.

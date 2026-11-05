@@ -758,10 +758,11 @@ void glGenTextures(GLsizei n, GLuint* out) {
 #define VRAM_SIDE 4096
 #define VRAM_PREMULTIPLIED 0x08000000u
 #define MAX_UPLOADS 512
-// The VRAM's rows from STREAM_Y on are the streams' (stream_put): a texture a draw names in GPU memory is uploaded there in
-// every list that draws it, so that the draws read the VRAM alone (docs/machine/gpu.md, "Streams"). SEGL_STREAM=0: drawn
-// from GPU memory, as before.
+// The VRAM's rows STREAM_Y to STREAM_END are the library's streams (stream_put): a texture a draw names in GPU memory is
+// uploaded there in every list that draws it, once however many draws name it, and drawn by the sampler (docs/machine/gpu.md,
+// "Streams"). SEGL_STREAM=0 leaves them to the device's streams, the rows after these, one a draw.
 #define STREAM_Y 3072
+#define STREAM_END 3328
 #define MAX_STREAMS 256
 static int stream_off = -1;   // -1: not asked yet
 static struct { uint32_t address, how, width, height, key, slot; } streams[MAX_STREAMS];
@@ -933,7 +934,7 @@ static void stream_put(void) {
             // its block on a shelf of the band: the texture and a texel of padding round it (no mip levels)
             uint32_t bw = (w + 2 + 3) & ~3u, bh = h + 2;
             if (x + bw > VRAM_SIDE) x = 0, y += shelf, shelf = 0;
-            if (bw > VRAM_SIDE || y + bh > VRAM_SIDE || stream_count == MAX_STREAMS) continue;   // (drawn from GPU memory)
+            if (bw > VRAM_SIDE || y + bh > STREAM_END || stream_count == MAX_STREAMS) continue;   // (the device's streams then)
             uint32_t* u = command(CMD_UPLOAD, 6);
             if (!u) break;
             slot = (x + 1) | (y + 1) << 12 | (how & FRAGMENT_KEYED ? VRAM_PREMULTIPLIED : 0) | (how & 0x1000u ? 0x10000000u : 0);
