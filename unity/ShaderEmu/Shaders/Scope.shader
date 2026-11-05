@@ -1,13 +1,16 @@
 Shader "ShaderEmu/Scope"
 {
     // The memory screen's other pictures (EmuScope.cs picks one): the CPU's state texels, the
-    // ROM, and the sound card's ring of samples as two traces.
+    // ROM, the sound card's ring of samples as two traces, and the GPU's VRAM (docs/machine/gpu.md,
+    // "VRAM": the textures the guest uploaded).
     Properties
     {
-        _Mode ("1: CPU state, 2: ROM, 3: sound", Int) = 1
+        _Mode ("1: CPU state, 2: ROM, 3: sound, 4: VRAM", Int) = 1
         _State ("Machine state texture", 2D) = "black" {}
         _Data_ROM ("ROM, a 16-byte texel a pixel (RGBAFloat, read by its bits)", 2D) = "black" {}
         _Mix ("Sound card's mix", 2D) = "black" {}
+        _GpuVram ("The GPU's VRAM (4096 x 4096 RGBA8)", 2D) = "black" {}
+        _Aspect ("The screen's width over its height (the VRAM is drawn square in its middle)", Float) = 1
     }
     SubShader
     {
@@ -24,6 +27,9 @@ Shader "ShaderEmu/Scope"
             Texture2D<uint4> _State;
             Texture2D<float4> _Data_ROM;   // the ROM: a 16-byte texel a pixel, read by its bits (asuint)
             Texture2D<float4> _Mix;
+            Texture2D<float4> _GpuVram;
+            SamplerState sampler_GpuVram_linear_clamp;
+            float _Aspect;
             uint _Mode;
 
             struct v2f {
@@ -114,9 +120,29 @@ Shader "ShaderEmu/Scope"
                 return c;
             }
 
+            // The VRAM square in the screen's middle, its row 0 at the top as the GPU addresses it (gpu.h's
+            // VRAM_X and VRAM_Y). Level 0 in four bilinear taps a pixel: the levels are made only when a list
+            // asks for them. A texel's alpha is shown over a dim checker of 64 texels, a 512-texel grid over all.
+            float3 vram(float2 p) {
+                float2 t = float2((p.x - 0.5) * _Aspect + 0.5, p.y);
+                float2 d = float2(ddx(t.x), ddy(t.y)) * 0.25;   // (before the branch: no derivatives inside one)
+                if (t.x < 0 || t.x > 1) return float3(0.02, 0.025, 0.04);
+                float4 c = 0;
+                c += _GpuVram.SampleLevel(sampler_GpuVram_linear_clamp, t + float2(-d.x, -d.y), 0);
+                c += _GpuVram.SampleLevel(sampler_GpuVram_linear_clamp, t + float2( d.x, -d.y), 0);
+                c += _GpuVram.SampleLevel(sampler_GpuVram_linear_clamp, t + float2(-d.x,  d.y), 0);
+                c += _GpuVram.SampleLevel(sampler_GpuVram_linear_clamp, t + float2( d.x,  d.y), 0);
+                c *= 0.25;
+                float2 texel = t * 4096;
+                float check = ((uint(texel.x / 64) + uint(texel.y / 64)) & 1) ? 0.07 : 0.04;
+                float3 rgb = lerp(check.xxx, c.rgb, c.a);
+                float2 grid = abs(frac(texel / 512 + 0.5) - 0.5) * 512;
+                return min(grid.x, grid.y) < abs(d.x) * 4096 * 2 ? lerp(rgb, float3(0.25, 0.35, 0.5), 0.6) : rgb;
+            }
+
             float4 frag(v2f i) : SV_Target {
                 float2 p = float2(i.uv.x, 1.0 - i.uv.y);
-                float3 c = _Mode == 1 ? cpu_state(p) : _Mode == 2 ? rom(p) : sound(p);
+                float3 c = _Mode == 1 ? cpu_state(p) : _Mode == 2 ? rom(p) : _Mode == 4 ? vram(p) : sound(p);
 #ifndef UNITY_COLORSPACE_GAMMA
                 c = GammaToLinearSpace(c);
 #endif

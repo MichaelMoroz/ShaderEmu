@@ -1211,7 +1211,7 @@ public static partial class ShaderEmuBuilder
         Slider slider = PanelSlider(panel, bx, 238, 48, 7, 4);   // 32,768 instructions a frame
         machine.speedSlider = slider;
         machine.tickLabel = Label(panel, "Tick", "", bx, 344, 600, 34, 24, TextAnchor.MiddleLeft, dim);
-        machine.tickSlider = PanelSlider(panel, bx, 380, 40, 5, 3);   // 1,024 to 32,768 a tick, 8,192
+        machine.tickSlider = PanelSlider(panel, bx, 380, 40, 6, 4);   // EmuMachine's TickSizes: 1,024 to 32,768 a tick, 12,288
 
         // an address of the visitor's own for the guest's browser: VRChat only loads what is
         // typed into a field of this kind

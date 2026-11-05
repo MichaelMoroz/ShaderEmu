@@ -98,7 +98,7 @@ public class EmuMachine : UdonSharpBehaviour
     public TextMeshProUGUI pauseLabel;
     public Slider speedSlider;         // whole steps: 2,048 instructions a frame, doubled per step
     public TextMeshProUGUI modeLabel;  // on the button that picks how the slider is read
-    public Slider tickSlider;          // instructions a tick (a round's pass): 1,024 doubled per step
+    public Slider tickSlider;          // instructions a tick (a round's pass): a step of TickSizes
     public TextMeshProUGUI tickLabel;  // and how much of it core 0 really runs, lately
     public float minFrameRate = 45f;   // "steady" gives up instructions before frames come slower than this
     public bool powerOnAtStart;        // off until someone presses Power
@@ -153,7 +153,10 @@ public class EmuMachine : UdonSharpBehaviour
     private const int KindFile = 3;     // a request for whatever an address holds, as a file
     private const int UartBurst = 4;
     private const int InitFrames = 2;
-    private const int TicksPerRound = 8192;   // instructions a pass, as the harness's
+    private const int TicksPerRound = 12288;   // instructions a pass by default (the harness's is 8,192): TickSizes[4]
+    // The tick slider's steps: 12,288 is between two doublings (tick-costs.md, sixth round: a longer pass is worth more
+    // in the world, where a round's devices' list is under 1% of a frame, than in the harness's 7%).
+    private int[] TickSizes = { 1024, 2048, 4096, 8192, 12288, 16384, 32768 };
     private const int MaxRounds = 32;
     private const int PassCommit = 0, PassControl = 1, PassUnpack = 2, PassWindowBack = 3;
     private const int FieldPoints = 2 * 3968;   // the lanes' field's buckets (FIELD_MAX in lean/tick.hlsl)
@@ -258,7 +261,7 @@ public class EmuMachine : UdonSharpBehaviour
         for (int i = 0; i < 4; i++) wanted[i] = "";
         linksPanel.SetActive(false);
         linksButton.SetActive(false);
-        if (tickSlider != null) tickSize = 1024 << (int)tickSlider.value;
+        if (tickSlider != null) tickSize = TickSizes[Mathf.Clamp((int)tickSlider.value, 0, TickSizes.Length - 1)];
         if (speedSlider != null) SetBudget(2048 << (int)speedSlider.value);
         ShowLabels();
         if (powerOnAtStart) PowerOn();
@@ -323,7 +326,7 @@ public class EmuMachine : UdonSharpBehaviour
 
     public void TickChanged()
     {
-        tickSize = 1024 << (int)tickSlider.value;
+        tickSize = TickSizes[Mathf.Clamp((int)tickSlider.value, 0, TickSizes.Length - 1)];
         perRound = tickSize;
         carry = 0f;
         SpeedChanged();
