@@ -303,9 +303,14 @@ uint2 gpu_draw_ids_fragment(uint id) {
 // fitted to the hinted bitmaps at 11 to 17 pixels (docs/system/fonts.md, "Distance fields")
 #define MSDF_SHARP 1.2
 
-// Mesh vertex `id`, which the command at `base` draw IDs, placed and coloured for a picture of
-// `size` pixels.
-gpu_varyings gpu_vertex_sized(uint id, uint base, uint4 head, float2 size) {
+// Mesh vertex `id`, which the command at `base` draw IDs, placed and coloured for a picture of `size` pixels; and for the
+// holodeck (docs/world/holodeck.md) `eye`, its place in its program's camera (x right, y up, the view along -z) and in w
+// its kind (VOLUME_WORLD a draw in perspective with a modelview of its own, VOLUME_FLAT one over the picture, 0 none),
+// and `proj` the projection's near and far planes and its x and y scales.
+#define VOLUME_WORLD 1.0
+#define VOLUME_FLAT 2.0
+gpu_varyings gpu_vertex_sized(uint id, uint base, uint4 head, float2 size, out float4 eye, out float4 proj) {
+    eye = 0, proj = 0;
     gpu_varyings o;
     o.position = float4(2, 2, 2, 1);
     o.colour = 0;
@@ -333,6 +338,7 @@ gpu_varyings gpu_vertex_sized(uint id, uint base, uint4 head, float2 size) {
             uint corner = k < 3 ? k : (k == 3 ? 2 : (k == 4 ? 1 : 3));   // 0 1 2, 2 1 3
             bool right = (corner & 1) != 0, low = (corner & 2) != 0;
             o.position = place_pixels(float2(asint(right ? box.b : box.r), asint(low ? box.a : box.g)), 0.0);
+            eye.w = VOLUME_FLAT;
             o.colour = colour_of(head.g);
             o.uv = float2(right ? uv.z : uv.x, low ? uv.w : uv.y);
             o.texture_info = tex;
@@ -408,6 +414,7 @@ gpu_varyings gpu_vertex_sized(uint id, uint base, uint4 head, float2 size) {
                 in_glyph *= scale;
             }
             o.position = place_pixels(float2(asint(at.r) + (int)(letter >> 16), asint(at.g)) + in_glyph, 0.0);
+            eye.w = VOLUME_FLAT;
             o.colour = colour_of(head.g);
             o.uv = float2(right ? 1.0 : 0.0, low ? 1.0 : 0.0);
             // (the glyph's slot: word 15 a word a character, gpu_list_uploads)
@@ -474,14 +481,20 @@ gpu_varyings gpu_vertex_sized(uint id, uint base, uint4 head, float2 size) {
             uint vertex_mode = how.r & 0xff;
             if (vertex_mode == VERTEX_SCREEN) {
                 o.position = place_pixels(pos.xy, pos.z);
+                eye.w = VOLUME_FLAT;
             } else {
                 // with VERTEX_MODELVIEW the GPU does the matrix product the program would have done
                 if (how.r & VERTEX_MODELVIEW)
                     pos = float4(dot(gpu_number(fl, ram(u + 4)), pos), dot(gpu_number(fl, ram(u + 5)), pos),
                                  dot(gpu_number(fl, ram(u + 6)), pos), pos.w);
                 if (how.r & VERTEX_POINTS) pos.xy += gpu_corner(gpu_number(fl, ram(base + 3)), corner, -pos.z);
-                float4 clip = float4(dot(gpu_number(fl, ram(u)), pos), dot(gpu_number(fl, ram(u + 1)), pos),
-                                     dot(gpu_number(fl, ram(u + 2)), pos), dot(gpu_number(fl, ram(u + 3)), pos));
+                float4 r0 = gpu_number(fl, ram(u)), r1 = gpu_number(fl, ram(u + 1)), r2 = gpu_number(fl, ram(u + 2)), r3 = gpu_number(fl, ram(u + 3));
+                float4 clip = float4(dot(r0, pos), dot(r1, pos), dot(r2, pos), dot(r3, pos));
+                // (a projection whose w does not come from z draws flat on the picture, a status bar; OpenGL's third row
+                // is 0, 0, -(f+n)/(f-n), -2fn/(f-n))
+                bool world = (how.r & VERTEX_MODELVIEW) && ram(u + 3).b != 0;
+                eye = float4(pos.xyz, world ? VOLUME_WORLD : VOLUME_FLAT);
+                if (world) proj = float4(r2.w / (r2.z - 1.0), r2.w / (r2.z + 1.0), r0.x, r1.y);
                 // The picture is the top-left size.x by size.y pixels of the target; clip z
                 // arrives as -w..w (the OpenGL convention) and leaves as 0..w.
                 float2 part = size / float2(GPU_TARGET_W, GPU_TARGET_H);
@@ -512,10 +525,6 @@ float2 gpu_picture_size() {
     return size;
 }
 
-// The same for the list that is submitted (gpu_command).
-gpu_varyings gpu_vertex_of(uint id, uint base, uint4 head) {
-    return gpu_vertex_sized(id, base, head, gpu_picture_size());
-}
 
 // ---- the vertex front end (docs/machine/gpu.md, "The vertex front end") ----
 // Every vertex a command claims is made once a frame, by the GPUVertices pass, from the list in RAM, into six textures of
@@ -523,10 +532,11 @@ gpu_varyings gpu_vertex_of(uint id, uint base, uint4 head) {
 // words: the texture's four, the key and the light map's three). The passes after it take a vertex from there by its draw ID
 // and read no RAM for it: a draw pass's vertex stage reads only the VRAM's textures.
 uint2 gpu_made_at(uint id) { return uint2(id % GPU_DRAW_IDS_W, id / GPU_DRAW_IDS_W); }
-// (the edge's target has the list's address the vertices were made from in z, as a float's bits: the holodeck takes a
-// vertex's streams from here only for that list)
-Texture2D<float4> _GpuMadePos, _GpuMadeColour, _GpuMadeUv, _GpuMadeEdge;
+
+Texture2D<float4> _GpuMadePos, _GpuMadeColour, _GpuMadeUv, _GpuMadeEdge, _GpuMadeEye, _GpuMadeProj;
 Texture2D<int4> _GpuMadeTex, _GpuMadeMore;
+// The list's picture as the front end found it (its frame's texel 3, gpu_frame_texel): what a pass reads in place of RAM.
+float2 gpu_made_picture() { return max(_GpuMadeEye.Load(int3(3, GPU_DRAW_IDS_H, 0)).yz, 1.0); }
 gpu_varyings gpu_vertex_made(uint id) {
     gpu_varyings o;
     int3 at = int3(gpu_made_at(id), 0);
@@ -555,21 +565,50 @@ struct gpu_made {
     float4 edge : SV_Target3;
     int4 tex : SV_Target4;
     int4 more : SV_Target5;
+    float4 eye : SV_Target6;    // (the holodeck's: gpu_vertex_sized's `eye` and `proj`)
+    float4 proj : SV_Target7;
 };
-// Mesh vertex `id` as the draw passes made it, for all of them (a sprite's shade or not is in its draw ID's passes).
+// The list's frame for the holodeck, the front end's row GPU_DRAW_IDS_H of its targets (`eye`): texels 0 to 2 the rows of
+// the turn of the list's first draw in perspective with a modelview (for a program that draws its world before what moves
+// in it, the view alone), w 1 if there is one; texel 3 which of the program's axes is up (1 x, 2 y, 3 z; 0 not said: the
+// volume words' size word, docs/world/volume.md), the picture's size, and the list's address.
+#define VOLUME_LIST DEV_T(0x100030u)   // the volume words: the last whole frame's list address, commands, frames, size
+float4 gpu_frame_texel(uint k) {
+    uint4 ctrl = ram(GPU_CTRL);
+    if (k == 3) return float4(ram(VOLUME_LIST).a >> 28, gpu_picture_size(), asfloat(ctrl.g));
+    uint list = texel_of(ctrl.g), count = min(ctrl.b, 24u);
+    [loop]
+    for (uint i = 0; i < count; i++) {
+        uint at = list + 4 * i;
+        uint4 how = ram(at + 1);
+        if (ram(at).r != CMD_DRAW || (how.r & VERTEX_MODELVIEW) == 0 || (how.r & 0xff) == VERTEX_SCREEN) continue;
+        uint u = texel_of(how.b);
+        if (ram(u + 3).b == 0) continue;
+        return float4(gpu_number((how.r & VERTEX_FLOAT) != 0, ram(u + 4 + k)).xyz, 1.0);
+    }
+    return float4(k == 0, k == 1, k == 2, 0.0);
+}
+
+// Mesh vertex `id` as the draw passes made it, for all of them (a sprite's shade or not is in its draw ID's passes); on
+// the row past the mesh's, the frame's texels (gpu_frame_texel).
 gpu_made gpu_front_fragment(uint id) {
     gpu_made m;
     m.pos = float4(2, 2, 2, 1);
-    m.colour = 0, m.uv = 0, m.edge = 0, m.tex = 0, m.more = 0;
+    m.colour = 0, m.uv = 0, m.edge = 0, m.tex = 0, m.more = 0, m.eye = 0, m.proj = 0;
+    [branch]
+    if (id >= GPU_DRAW_IDS_W * GPU_DRAW_IDS_H) {
+        if (id - GPU_DRAW_IDS_W * GPU_DRAW_IDS_H < 4) m.eye = gpu_frame_texel(id - GPU_DRAW_IDS_W * GPU_DRAW_IDS_H);
+        return m;
+    }
     uint2 c = gpu_draw_id(id);
     [branch]
     if (c.g != 0) {
         uint4 head = ram(c.r);
-        gpu_varyings o = gpu_vertex_of(id, c.r, head);
+        gpu_varyings o = gpu_vertex_sized(id, c.r, head, gpu_picture_size(), m.eye, m.proj);
         m.pos = o.position;
         m.colour = o.colour;
         m.uv = float4(o.uv, o.light_uv);
-        m.edge = float4(o.edge, asfloat(ram(GPU_CTRL).g), 0);
+        m.edge = float4(o.edge, 0, 0);
         m.tex = asint(o.texture_info);
         m.more = asint(uint4(o.key, o.light_info));
     }
@@ -827,165 +866,33 @@ float4 gpu_fragment(gpu_varyings i) {
 }
 
 #ifdef GPU_VOLUME
-// The volume display (docs/world/volume.md): a host that shows a 3D program's last whole frame from
-// a point of view of its own, instead of the picture the GPU drew of it.
-#define VOLUME_LIST DEV_T(0x100030u)   // that frame's list address, command count, frames so far, picture size
-// Which of the program's axes is up, where the program says (the top four bits of the size
-// word: 1 x, 2 y, 3 z); 0: it does not, and a host works it out from the camera.
-uint volume_up() { return ram(VOLUME_LIST).a >> 28; }
-
-// The frame's command that claims mesh vertices id to id + 2, if it is a draw in perspective
-// with its own modelview: the only kind that has a place in space.
-bool volume_command(uint id, out uint base, out uint4 head) {
-    base = 0;
-    head = 0;
-    uint4 frame = ram(VOLUME_LIST);
-    uint list = texel_of(frame.r), count = min(frame.g, GPU_MAX_COMMANDS);
-    if (frame.r == 0 || count == 0) return false;
-    uint lo = 0, hi = count;
-    for (uint step = 0; step < 12; step++) {
-        uint mid = (lo + hi) >> 1;
-        if (hi - lo > 1) {
-            if (ram(list + 4 * mid).a <= id) lo = mid;
-            else hi = mid;
-        }
-    }
-    base = list + 4 * lo;
-    head = ram(base);
-    if (head.r != CMD_DRAW || id < head.a || id + 3 > head.a + head.b) return false;
-    uint4 how = ram(base + 1);
-    if ((how.r & VERTEX_MODELVIEW) == 0 || (how.r & 0xff) == VERTEX_SCREEN) return false;
-#ifdef GPU_VOLUME_PASS
-    // the pass being drawn: the command's own, or for passes 4-7 (no depth test) the one that blends alike
-    if (VOLUME_BLENDING(FRAGMENT_PASS(how.g)) != GPU_VOLUME_PASS) return false;
-#endif
-    // a projection whose w does not come from z draws flat on the picture (a status bar)
-    return ram(texel_of(how.b) + 3).b != 0;
+// The holodeck (docs/world/holodeck.md, docs/world/volume.md): the device's last list as the front end made it, seen from a
+// visitor's eyes. It reads no RAM: a vertex's place in its program's camera, its kind and its projection are the front end's
+// (gpu_vertex_sized), the frame's camera its row past the mesh's (gpu_frame_texel). The includer defines GPU_VOLUME_PASS,
+// the pass being drawn (0 to 3, VOLUME_BLENDING).
+float4 volume_frame(uint k) { return _GpuMadeEye.Load(int3(k, GPU_DRAW_IDS_H, 0)); }
+uint volume_up() { return (uint)volume_frame(3).x; }
+float2 volume_picture() { return gpu_made_picture(); }
+// The frame's camera: the rows of its turn (camera = rows * world + move). False: no draw in perspective.
+bool volume_view(out float3 rx, out float3 ry, out float3 rz) {
+    rx = volume_frame(0).xyz, ry = volume_frame(1).xyz, rz = volume_frame(2).xyz;
+    return volume_frame(0).w != 0.0;
 }
-
-// The frame's command that claims mesh vertices id to id + 2 if it is drawn flat over the picture: a
-// status bar, a cross-hair, a message, the console (a draw with no place in space, a rectangle, text).
-// The holodeck shows these on a layer of their own before the sitter (docs/world/holodeck.md, "The
-// HUD layer"). Clears and sprite records are not drawn there.
-bool volume_flat_command(uint id, out uint base, out uint4 head) {
-    base = 0;
-    head = 0;
-    uint4 frame = ram(VOLUME_LIST);
-    uint list = texel_of(frame.r), count = min(frame.g, GPU_MAX_COMMANDS);
-    if (frame.r == 0 || count == 0) return false;
-    uint lo = 0, hi = count;
-    for (uint step = 0; step < 12; step++) {
-        uint mid = (lo + hi) >> 1;
-        if (hi - lo > 1) {
-            if (ram(list + 4 * mid).a <= id) lo = mid;
-            else hi = mid;
-        }
-    }
-    base = list + 4 * lo;
-    head = ram(base);
-    uint op = head.r;
-    uint slots = op == CMD_RECT ? 6 : op == CMD_DRAW ? head.b : op == CMD_TEXT ? 6 * ram(base + 1).b : 0;
-    if (slots == 0 || id < head.a || id + 3 > head.a + slots) return false;
-    uint drawn_in = op == CMD_DRAW ? FRAGMENT_PASS(ram(base + 1).g) : FRAGMENT_PASS(ram(base + 2).r);
-#ifdef GPU_VOLUME_PASS
-    if (VOLUME_BLENDING(drawn_in) != GPU_VOLUME_PASS) return false;
-#endif
-    if (op != CMD_DRAW) return true;
-    uint4 how = ram(base + 1);
-    // the world's draws are the volume's: a perspective with a modelview
-    return (how.r & VERTEX_MODELVIEW) == 0 || (how.r & 0xff) == VERTEX_SCREEN || ram(texel_of(how.b) + 3).b == 0;
+// Whether mesh vertices v to v + 2 are one command's of this kind (VOLUME_WORLD or VOLUME_FLAT) in a pass that blends as
+// the pass being drawn (passes 4 to 7, of no depth test, as the pass that blends alike).
+bool volume_triangle(uint v, float kind) {
+    uint2 c = gpu_draw_id(v);
+    if ((c.g & 0x3fffu) == 0 || gpu_draw_id(v + 2).r != c.r) return false;
+    if (_GpuMadeEye.Load(int3(gpu_made_at(v), 0)).w != kind) return false;
+    return VOLUME_BLENDING(firstbitlow(c.g & 0x3fffu)) == GPU_VOLUME_PASS;
 }
-
-// The picture's size (the frame's size word): what a flat vertex's place is a share of.
-float2 volume_picture() {
-    uint s = ram(VOLUME_LIST).a;
-    return float2(max(s & 0xffff, 1u), max((s >> 16) & 0xfff, 1u));
-}
-
-// The frame's camera: the modelview of its first draw with a place in space, which for a
-// program that draws its world before what moves in it is the view alone. Rows of its
-// rotation and its translation: camera = rows * world + move. False: no such draw.
-bool volume_view(out float3 rx, out float3 ry, out float3 rz, out float3 move) {
-    rx = float3(1, 0, 0); ry = float3(0, 1, 0); rz = float3(0, 0, 1); move = 0;
-    uint4 frame = ram(VOLUME_LIST);
-    uint list = texel_of(frame.r), count = min(frame.g, 24u);
-    if (frame.r == 0) return false;
-    for (uint i = 0; i < count; i++) {
-        uint at = list + 4 * i;
-        uint4 how = ram(at + 1);
-        if (ram(at).r != CMD_DRAW || (how.r & VERTEX_MODELVIEW) == 0 || (how.r & 0xff) == VERTEX_SCREEN) continue;
-        uint u = texel_of(how.b);
-        if (ram(u + 3).b == 0) continue;
-        bool fl = (how.r & VERTEX_FLOAT) != 0;
-        float4 mx = gpu_number(fl, ram(u + 4)), my = gpu_number(fl, ram(u + 5)), mz = gpu_number(fl, ram(u + 6));
-        rx = mx.xyz; ry = my.xyz; rz = mz.xyz; move = float3(mx.w, my.w, mz.w);
-        return true;
-    }
-    return false;
-}
-
-// Mesh vertex `id` of such a command as the program's camera sees it, in the camera's own
-// units (x right, y up, the view along -z), coloured as the GPU colours it. `planes` is how
-// far the camera's near and far planes are and `focal` the projection's x and y scales: the
-// picture's edges are at x = +-z / focal.x and y = +-z / focal.y.
-gpu_varyings volume_vertex(uint id, uint base, uint4 head, out float3 eye, out float2 planes, out float2 focal) {
-    gpu_varyings o;
-    o.position = 0;
-    o.texture_info = 0;
-    o.light_uv = 0;
-    o.light_info = 0;
-    uint4 how = ram(base + 1), more = ram(base + 2);
-    uint u = texel_of(how.b), k = id - head.a;
-    bool fl = (how.r & VERTEX_FLOAT) != 0;
-    if (how.r & VERTEX_QUADS) {
-        uint part = k % 6;
-        k = (k / 6) * 4 + (part < 3 ? part : part == 3 ? 0 : part - 2);
-    }
-    float4 pos, normal = 0;
-    uint corner = 0;
-    if (how.r & VERTEX_POINTS) { corner = k % 3; k = k / 3; }
-    // (the same kinds of vertex as gpu_vertex: without the skinned and the arrays' kinds Jedi Outcast's
-    // models and kept faces were read as plain vertices, a room of torn triangles from the seat)
-    [branch]
-    if (how.r & VERTEX_BONES) {
-        gpu_bones_vertex(head, more, ram(base + 3), k, pos, o.uv, o.colour);
-    } else if (how.r & VERTEX_ARRAYS) {
-        gpu_arrays_vertex(head, more, ram(base + 3), k, pos, o.uv, o.colour);
-    } else if (how.r & VERTEX_COMPACT) {
-        gpu_compact_vertex(base, head, how, more, k, pos, o.uv, o.colour);
-    } else {
-        uint v = texel_of(head.g) + 4 * k;
-        pos = gpu_number(fl, ram(v));
-        normal = gpu_number(fl, ram(v + 1));
-        o.uv = gpu_number(fl, ram(v + 2)).xy;
-        o.colour = gpu_number(fl, ram(v + 3));
-    }
-    // every pass is drawn as pass 0: what blends there is solid here
-    o.texture_info = uint4(how.g, how.a, more.r, more.g);
-    o.key = more.b;
-    if (how.r & VERTEX_MOVED) {
-        uint rows = texel_of(ram(base + 3).a);
-        float3 at = float3(o.uv, 1.0);
-        o.uv = float2(dot(gpu_number(fl, ram(rows)).xyz, at), dot(gpu_number(fl, ram(rows + 1)).xyz, at));
-    }
-    if ((how.g & FRAGMENT_LIT) && (how.r & VERTEX_COMPACT)) {
-        uint4 lit = ram(base + 3);
-        uint at = ram_word(lit.r + 4 * k);
-        o.light_uv = float2(at & 0xffff, at >> 16) / 65535.0;
-        o.light_info = uint3(lit.g, lit.b & 0xffff, lit.b >> 16);
-    }
-    float4 mx = gpu_number(fl, ram(u + 4)), my = gpu_number(fl, ram(u + 5)), mz = gpu_number(fl, ram(u + 6));
-    eye = float3(dot(mx, pos), dot(my, pos), dot(mz, pos));
-    if (how.r & VERTEX_POINTS) eye.xy += gpu_corner(gpu_number(fl, ram(base + 3)), corner, -eye.z);
-    if ((how.r & 0xff) == VERTEX_LIT) {
-        float3 n = float3(dot(mx.xyz, normal.xyz), dot(my.xyz, normal.xyz), dot(mz.xyz, normal.xyz));
-        float facing = max(dot(n, gpu_number(fl, ram(u + 7)).xyz), 0.0);
-        o.colour = float4(facing * gpu_number(fl, ram(u + 8)).rgb + gpu_number(fl, ram(u + 9)).rgb, 1.0);
-    }
-    float4 depth = gpu_number(fl, ram(u + 2));   // OpenGL's third row: 0, 0, -(f+n)/(f-n), -2fn/(f-n)
-    planes = float2(depth.w / (depth.z - 1.0), depth.w / (depth.z + 1.0));
-    focal = float2(gpu_number(fl, ram(u)).x, gpu_number(fl, ram(u + 1)).y);
-    return o;
+// Mesh vertex `id`: as the device draws it, and its place in its program's camera, the projection's near and far planes
+// and its x and y scales (the picture's edges are at x = +-z / focal.x and y = +-z / focal.y).
+gpu_varyings volume_vertex(uint id, out float3 eye, out float2 planes, out float2 focal) {
+    int3 at = int3(gpu_made_at(id), 0);
+    float4 p = _GpuMadeProj.Load(at);
+    eye = _GpuMadeEye.Load(at).xyz, planes = p.xy, focal = p.zw;
+    return gpu_vertex_made(id);
 }
 #endif
 

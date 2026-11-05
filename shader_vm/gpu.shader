@@ -258,7 +258,7 @@ Shader "ShaderEmu/gpu"
             float4 vert(uint id : SV_VertexID) : SV_Position {
                 uint k = id % 6;
                 bool right = k == 1 || k == 2 || k == 4, low = k == 2 || k == 4 || k == 5;
-                float2 size = gpu_picture_size();
+                float2 size = gpu_made_picture();
                 return place_pixels(float2(right ? size.x : 0.0, low ? size.y : 0.0), 1.0);
             }
             float4 frag() : SV_Target {

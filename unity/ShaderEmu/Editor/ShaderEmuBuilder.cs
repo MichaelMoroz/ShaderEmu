@@ -22,6 +22,7 @@ public static partial class ShaderEmuBuilder
     const string ScenePath = Root + "/ShaderEmuWorld.unity";
     const int GpuLayer = 22;
     const int TickLayer = 23, PointsLayer = 24;   // the tick's camera and the commit's points' (MachineCameras)
+    const int FrontLayer = 25;                     // the GPU's vertex front end's camera (GpuFront.shader)
     const int MachineCores = 256;                  // CORES in MachineBlit.cginc
     const int FieldPoints = 2 * 3968;              // the lanes' field's buckets (FIELD_MAX in lean/tick.hlsl)
     const int GpuTriangles = 65536;
@@ -366,7 +367,17 @@ public static partial class ShaderEmuBuilder
         machine.vram = Vram();
         gpuBlitMat.SetTexture("_GpuVram", machine.vram);
         machine.drawIds = DrawIds();
-        gpuBlitMat.SetTexture("_GpuDrawIds", machine.drawIds);
+        // the vertex front end (docs/machine/gpu.md, "The vertex front end"): a camera of eight targets and one triangle,
+        // rendered between the draw IDs and the uploads
+        NameLayer(FrontLayer, "GpuFront");
+        Material frontMat = Mat("GpuFront", "ShaderEmu/GpuFront");
+        frontMat.SetTexture("_State", machine.state);
+        frontMat.SetTexture("_GpuDrawIds", machine.drawIds);
+        machine.made = Made();
+        machine.madeDepth = Target("GpuMadeDepth", 512, 385, 16);
+        machine.frontCamera = PassCamera(device, "GpuFront", FrontLayer, FrontTriangle(), frontMat);
+        machine.frontMaterial = frontMat;
+        GpuInputs(gpuBlitMat);
         machine.gatherBlitMaterial = gatherBlitMat;
         machine.pointsBlitMaterial = pointsBlitMat;
         machine.gpuBlitMaterial = gpuBlitMat;
@@ -799,6 +810,53 @@ public static partial class ShaderEmuBuilder
         return rt;
     }
 
+    // What every pass of the GPU's drawing reads (docs/machine/gpu.md): the VRAM, the draw IDs and the front end's eight.
+    static readonly string[] MadeNames = { "_GpuMadePos", "_GpuMadeColour", "_GpuMadeUv", "_GpuMadeEdge", "_GpuMadeTex", "_GpuMadeMore",
+                                           "_GpuMadeEye", "_GpuMadeProj" };
+    public static void GpuInputs(Material m)
+    {
+        m.SetTexture("_GpuVram", Vram());
+        m.SetTexture("_GpuDrawIds", DrawIds());
+        RenderTexture[] made = Made();
+        for (int i = 0; i < made.Length; i++) m.SetTexture(MadeNames[i], made[i]);
+    }
+
+    // The front end's targets (shader_vm/src/gpu_draw.h, gpu_made): a texel a mesh vertex and a row past them for the frame,
+    // floats but the two of words (signed, read by their bits).
+    static RenderTexture[] Made()
+    {
+        RenderTexture[] made = new RenderTexture[8];
+        for (int i = 0; i < 8; i++)
+        {
+            RenderTextureFormat f = i == 4 || i == 5 ? RenderTextureFormat.ARGBInt : RenderTextureFormat.ARGBFloat;
+            RenderTexture rt = LoadOrCreate(Generated + "/" + MadeNames[i].Substring(1) + ".renderTexture",
+                () => new RenderTexture(512, 385, 0, f, RenderTextureReadWrite.Linear));
+            rt.Release();
+            rt.width = 512;
+            rt.height = 385;
+            rt.format = f;
+            rt.antiAliasing = 1;
+            rt.useMipMap = false;
+            rt.filterMode = FilterMode.Point;
+            rt.wrapMode = TextureWrapMode.Clamp;
+            EditorUtility.SetDirty(rt);
+            made[i] = rt;
+        }
+        return made;
+    }
+
+    // One triangle for the front end's camera (its shader places the corners over the targets by their number).
+    static Mesh FrontTriangle()
+    {
+        Mesh mesh = LoadOrCreate(Generated + "/GpuFrontTriangle.asset", () => new Mesh { name = "GpuFrontTriangle" });
+        mesh.Clear();
+        mesh.vertices = new Vector3[] { Vector3.zero, Vector3.right, Vector3.up };
+        mesh.triangles = new int[] { 0, 1, 2 };
+        mesh.bounds = new Bounds(Vector3.zero, Vector3.one * 100f);
+        EditorUtility.SetDirty(mesh);
+        return mesh;
+    }
+
     // The GPU's draw IDs (docs/machine/gpu.md, "Draw IDs"): a texel each of the mesh's 196,608 vertices, its command's texel and
     // the passes it is drawn in, two 32-bit integers (signed in Unity, read by their bits), loaded by texel, no levels.
     static RenderTexture DrawIds()
@@ -823,7 +881,7 @@ public static partial class ShaderEmuBuilder
     {
         Material sceneMat = Mat("GpuVolume", "ShaderEmu/GpuVolume");
         sceneMat.SetTexture("_State", state);
-        sceneMat.SetTexture("_GpuVram", Vram());
+        GpuInputs(sceneMat);
         sceneMat.SetVector("_ScreenSize", new Vector4(1.28f, 0.8f, 0, 0));
         return sceneMat;
     }
@@ -916,7 +974,6 @@ public static partial class ShaderEmuBuilder
         // ---- what the machine runs on
         Material machineMat = Mat("Machine", "ShaderEmu/Machine");
         Material tickMat = Mat("MachineTick", "ShaderEmu/MachineTickLean");
-        Material gpuMat = Mat("GpuDraw", "ShaderEmu/GpuDraw");
         Material displayMat = Mat("Display", "ShaderEmu/Display");
         Material showMat = Mat("DisplayShow", "ShaderEmu/DisplayShow");
         Material heatMat = Mat("MemHeat", "ShaderEmu/MemHeat");
@@ -967,7 +1024,6 @@ public static partial class ShaderEmuBuilder
 
         machineMat.SetTexture("_GpuTarget", gpuTarget);
         machineMat.SetTexture("_TickState", tickState);
-        gpuMat.SetTexture("_State", state);
         displayMat.SetTexture("_State", state);
         displayMat.SetTexture("_GpuTarget", gpuTarget);
         heatMat.SetTexture("_State", state);
@@ -1074,7 +1130,7 @@ public static partial class ShaderEmuBuilder
         Vector3 towerAt = new Vector3(1.55f, 0.186f, halfD - 0.4f - 0.04f);
         Box(computer, "Tower", towerAt, new Vector3(0.184f, 0.372f, 0.42f), plasticMat);
 
-        // ---- the GPU device: a camera of its own, under the floor, that sees only the mesh
+        // ---- the GPU device: a camera of its own under the floor, which holds its target (EmuMachine blits the lists there)
         Transform device = new GameObject("GPU device").transform;
         device.SetParent(world, false);
         device.localPosition = new Vector3(0, -20f, 0);
@@ -1092,18 +1148,7 @@ public static partial class ShaderEmuBuilder
         camera.useOcclusionCulling = false;
         camera.depth = -10;
         camera.stereoTargetEye = StereoTargetEyeMask.None;
-        camera.enabled = false;   // EmuMachine renders it, once a round
-        GameObject meshObject = new GameObject("GPU mesh", typeof(MeshFilter), typeof(MeshRenderer));
-        meshObject.transform.SetParent(device, false);
-        meshObject.transform.localPosition = new Vector3(0, 0, 2f);
-        meshObject.layer = GpuLayer;
-        meshObject.GetComponent<MeshFilter>().sharedMesh = GpuMesh();
-        MeshRenderer meshRenderer = meshObject.GetComponent<MeshRenderer>();
-        meshRenderer.sharedMaterial = gpuMat;
-        meshRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-        meshRenderer.receiveShadows = false;
-        meshRenderer.lightProbeUsage = UnityEngine.Rendering.LightProbeUsage.Off;
-        meshRenderer.reflectionProbeUsage = UnityEngine.Rendering.ReflectionProbeUsage.Off;
+        camera.enabled = false;   // nothing renders it: the blits draw into its target
 
         // ---- behaviours
         EmuTerminal terminal = Udon<EmuTerminal>(terminalScreen);
@@ -1128,7 +1173,6 @@ public static partial class ShaderEmuBuilder
         machine.tickState = tickState;
         machine.tickMaterial = tickMat;
         machine.machineMaterial = machineMat;
-        machine.gpuMaterial = gpuMat;
         machine.volumeMaterial = Volume(state);
         machine.gpuCamera = camera;
         MachineCameras(world, machine);

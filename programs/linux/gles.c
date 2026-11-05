@@ -90,7 +90,7 @@ static int swaps;
 static uint32_t buffers_seen;
 
 static uint32_t commands, blocks, mesh_vertices, vertex_top, texture_top = TEXTURES_AT, passes_used;
-static uint32_t kept_texture[MAX_COMMANDS];   // a kept command's texture as the program gave it (stream_put)
+static uint32_t kept_texture[MAX_COMMANDS][2];   // a kept command's texture and light map as the program gave them (stream_put)
 static gpu_up_state list_uploads;   // the last list's uploads (stream_put)
 static uint32_t set_at = SETS_AT;   // the set the frame being built is in
 static uint32_t* last_draw;   // the command the next vertices may join, with what it was made for
@@ -922,7 +922,15 @@ void seglVramLevels(int levels) {
 // submitted (uploads_done).
 static void stream_put(void) {
     if (!gpu) return;
-    for (uint32_t i = 0; i < kept; i++) ((uint32_t*)(gpu + set_at))[16 * i + 7] = kept_texture[i];
+    // (a kept command's texture or light map in the scratch band is a copy an earlier list made: the program's own again,
+    // for this list to copy; any other is the program's, kept for that)
+    for (uint32_t i = 0; i < kept; i++)
+        for (int w = 0; w < 2; w++) {
+            uint32_t* c = (uint32_t*)(gpu + set_at) + 16 * i, *a = c + (w ? 13 : 7);
+            if (c[0] != CMD_DRAW || (w && !((c[5] & GPU_UP_LIT) && (c[4] & GPU_UP_COMPACT)))) continue;   // (word 13 a light map's only there)
+            if (VRAM_IS_SCRATCH(*a)) *a = kept_texture[i][w];
+            else kept_texture[i][w] = *a;
+        }
     gpu_uploads_list l = {gpu, GPU_PHYS, GPU_SIZE, (uint32_t*)(gpu + set_at), GPU_PHYS + set_at, commands, GLES_COMMANDS_END,
                           mesh_vertices, GLES_MESH_END, (uint32_t*)(gpu + vertex_top), GPU_PHYS + vertex_top,
                           (GLES_VERTEX_END - vertex_top) / 4};
@@ -1758,8 +1766,7 @@ void seglSwapAgainEarly(void) { swap_again(0); }
 
 // ---- commands that stay (segl.h) ----
 
-// Both sets hold them: a frame is built in one while the other is still being shown. A kept command's texture as the program
-// gave it (kept_texture): a list's uploads draw it from the scratch band, and the next list of that set copies it again.
+// Both sets hold them: a frame is built in one while the other is still being shown.
 static uint32_t* kept_command(int set, int index) { return (uint32_t*)(gpu + SETS_AT + set * SET_SIZE) + 16 * index; }
 
 int seglKeep(int count, int quads) {
@@ -1786,7 +1793,7 @@ void seglKeptQuads(int index, const void* vertices, int first_quad, int quads, G
         c[4] = VERTEX_CLIP | VERTEX_MODELVIEW | VERTEX_COMPACT | VERTEX_QUADS | NUM_FORMAT;
         c[5] = FRAGMENT_INDEXED | t->smooth | (keyed ? FRAGMENT_KEYED : 0);
         c[6] = GPU_PHYS + SETS_AT + set * SET_SIZE + UNIFORMS_IN;
-        c[7] = kept_texture[index] = drawn_at(t);
+        c[7] = drawn_at(t);
         c[8] = t->width;
         c[9] = t->height;
         c[10] = key_index;
@@ -1823,7 +1830,7 @@ void seglKeptTexture(int index, GLuint name) {
     for (int set = 0; set < 2; set++) {
         uint32_t* c = kept_command(set, index);
         c[5] = (c[5] & ~(uint32_t)FRAGMENT_SMOOTH) | t->smooth;
-        c[7] = kept_texture[index] = drawn_at(t);
+        c[7] = drawn_at(t);
         c[8] = t->width;
         c[9] = t->height;
     }

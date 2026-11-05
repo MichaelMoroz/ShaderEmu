@@ -29,6 +29,7 @@ enum { GPU_UP_LIT = 0x800, GPU_UP_KEYED = 0x100, GPU_UP_TEXT_MORE = 0x100, GPU_U
 #define GPU_UP_PREMULTIPLIED 0x08000000u
 #define GPU_UP_CLAMPED 0x10000000u
 #define GPU_UP_IS_SLOT(a) (((a) >> 30) == 0u)
+#define VRAM_IS_SCRATCH(a) (GPU_UP_IS_SLOT(a) && (a) != 0 && (((a) >> 12) & 0xfffu) >= GPU_SCRATCH_Y)   // a copy a list made
 
 // The band's shelves and the textures copied so far, for one list (a caller's: lists made at once on several cores each
 // have one).
@@ -71,21 +72,21 @@ static inline uint32_t gpu_up_place(gpu_up_state* s, uint32_t w, uint32_t h) {
 
 // The slot a texture of fragment `kind` (its mode and FRAGMENT_KEYED) at `address`, w x h, is drawn from: copied once a list.
 static inline uint32_t gpu_up_texture(gpu_uploads_list* l, gpu_up_state* s, uint32_t address, uint32_t kind, uint32_t w,
-                                      uint32_t h, uint32_t key, uint32_t flags) {
+                                      uint32_t h, uint32_t key, uint32_t flags, uint32_t row) {
     if (GPU_UP_IS_SLOT(address) || w == 0 || h == 0) return address;
     kind &= 0xff | GPU_UP_KEYED;
     for (uint32_t k = 0; k < s->n; k++)
-        if (s->seen[k][0] == address && s->seen[k][1] == (kind | flags) && s->seen[k][2] == w && s->seen[k][3] == h &&
+        if (s->seen[k][0] == address && s->seen[k][1] == (kind | flags) && s->seen[k][2] == (w | row << 16) && s->seen[k][3] == h &&
             (!(kind & GPU_UP_KEYED) || s->seen[k][4] == key))
             return s->slots[k];
     uint32_t slot = gpu_up_place(s, w, h);
     volatile uint32_t* c = slot ? gpu_up_command(l, s) : 0;
     if (!c) return address;   // (drawn magenta: the band or the list is full)
     slot |= flags | ((kind & GPU_UP_KEYED) ? GPU_UP_PREMULTIPLIED : 0);
-    c[1] = address, c[2] = kind, c[4] = w, c[5] = h, c[6] = slot, c[7] = key;
+    c[1] = address, c[2] = kind, c[4] = w, c[5] = h, c[6] = slot, c[7] = key, c[9] = row;
     if (s->n < GPU_UP_SEEN) {
         uint32_t* e = s->seen[s->n];
-        e[0] = address, e[1] = kind | flags, e[2] = w, e[3] = h, e[4] = key;
+        e[0] = address, e[1] = kind | flags, e[2] = w | row << 16, e[3] = h, e[4] = key;
         s->slots[s->n++] = slot;
     }
     return slot;
@@ -108,14 +109,37 @@ static inline int gpu_list_uploads(gpu_uploads_list* l, uint32_t first, gpu_up_s
         uint32_t op = c[0];
         if (op == GPU_UP_RECT) {
             // words 8 to 11: mode, address, width, height; word 2 the key
-            if ((c[8] & 0xff) != 0) c[9] = gpu_up_texture(l, s, c[9], c[8], c[10], c[11], c[2], (c[8] & GPU_UP_FRAG_CLAMPED) ? GPU_UP_CLAMPED : 0);
+            // (12 to 15 its coordinates, 16.16: of a texture of words, bytes or three bytes a pixel only the part they cover,
+            // a window's picture of a tall page)
+            uint32_t mode = c[8] & 0xff, w = c[10], h = c[11];
+            if (mode == 0 || w == 0 || h == 0 || GPU_UP_IS_SLOT(c[9])) continue;
+            uint32_t bpp = mode == 1 ? 4 : mode == 2 ? 1 : mode == GPU_UP_RGB24 ? 3 : 0, flags = (c[8] & GPU_UP_FRAG_CLAMPED) ? GPU_UP_CLAMPED : 0;
+            int32_t u0 = (int32_t)c[12], v0 = (int32_t)c[13], u1 = (int32_t)c[14], v1 = (int32_t)c[15];
+            int32_t lu = u0 < u1 ? u0 : u1, hu = u0 < u1 ? u1 : u0, lv = v0 < v1 ? v0 : v1, hv = v0 < v1 ? v1 : v0;
+            if (!bpp || lu < 0 || lv < 0 || hu > 65536 || hv > 65536) {
+                c[9] = gpu_up_texture(l, s, c[9], c[8], w, h, c[2], flags, 0);
+                continue;
+            }
+            uint32_t x0 = (uint32_t)(((int64_t)lu * w) >> 16), y0 = (uint32_t)(((int64_t)lv * h) >> 16);
+            uint32_t x1 = (uint32_t)(((int64_t)hu * w + 65535) >> 16), y1 = (uint32_t)(((int64_t)hv * h + 65535) >> 16);
+            if (x1 > w) x1 = w;
+            if (y1 > h) y1 = h;
+            if (x1 <= x0) x0 = x1 - 1;
+            if (y1 <= y0) y0 = y1 - 1;
+            uint32_t pw = x1 - x0, ph = y1 - y0, slot = gpu_up_texture(l, s, c[9] + (y0 * w + x0) * bpp, c[8], pw, ph, c[2], flags, w);
+            if (!GPU_UP_IS_SLOT(slot)) continue;
+            for (int k = 0; k < 4; k++) {   // (the part's coordinates: u' = (u w - x0) / pw)
+                int64_t t = (int32_t)c[12 + k], size = k & 1 ? h : w, first = k & 1 ? y0 : x0, part = k & 1 ? ph : pw;
+                c[12 + k] = (uint32_t)(int32_t)((t * size - (first << 16)) / part);
+            }
+            c[9] = slot, c[10] = pw, c[11] = ph;
         } else if (op == GPU_UP_DRAW) {
             // word 5 the fragment, 7 the texture, 8 to 10 width, height, key; a compact lit draw's light map at 13, 14 its size
             uint32_t frag = c[5];
             if ((frag & 0xff) != 0 && (frag & 0xff) != GPU_UP_SPRITE)
-                c[7] = gpu_up_texture(l, s, c[7], frag, c[8], c[9], c[10], (frag & GPU_UP_FRAG_CLAMPED) ? GPU_UP_CLAMPED : 0);
+                c[7] = gpu_up_texture(l, s, c[7], frag, c[8], c[9], c[10], (frag & GPU_UP_FRAG_CLAMPED) ? GPU_UP_CLAMPED : 0, 0);
             if ((frag & GPU_UP_LIT) && (c[4] & GPU_UP_COMPACT))
-                c[13] = gpu_up_texture(l, s, c[13], GPU_UP_RGB24, c[14] & 0xffff, c[14] >> 16, 0, GPU_UP_CLAMPED);
+                c[13] = gpu_up_texture(l, s, c[13], GPU_UP_RGB24, c[14] & 0xffff, c[14] >> 16, 0, GPU_UP_CLAMPED, 0);
         } else if (op == GPU_UP_TEXT) {
             // word 2 the font's table (a texel a glyph: bitmap, width, height, corner), 6 the count, 7 the string; word 15
             // the characters' slots, a word each, which the device draws in place of the glyphs' bitmaps
@@ -126,7 +150,7 @@ static inline int gpu_list_uploads(gpu_uploads_list* l, uint32_t first, gpu_up_s
                 uint32_t letter = gpu_up_at(l, c[7] + 4 * j)[0];
                 const volatile uint32_t* g = gpu_up_at(l, c[2] + 16 * (letter & 0xffff));
                 uint32_t w = kind == GPU_UP_MSDF ? g[1] & 0xffff : g[1], h = kind == GPU_UP_MSDF ? g[1] >> 16 : g[2];
-                l->table[j] = gpu_up_texture(l, s, g[0] + more, kind, w, h, 0, 0);
+                l->table[j] = gpu_up_texture(l, s, g[0] + more, kind, w, h, 0, 0, 0);
             }
             c[15] = l->table_gpu;
             l->table += n, l->table_gpu += 4 * n, l->table_left -= n;

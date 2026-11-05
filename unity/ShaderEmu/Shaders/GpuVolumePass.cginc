@@ -9,14 +9,13 @@ float _Plane;
 #ifdef HOLODECK
 float4 _RoomMin, _RoomMax;   // the holodeck in use, in the world
 #endif
-// The ROM, for textures, light maps and vertices that are files in it.
-Texture2D<float4> _Data_ROM;   // the ROM: a 16-byte texel a pixel, read by its bits (asuint)
-#define GPU_ROM
+// (the device's last list as its front end made it, the VRAM, the draw IDs: no RAM is read here)
 #define GPU_STATE _State
 #define GPU_VOLUME
 #define GPU_VOLUME_PASS _VolumePass
-#define GPU_VRAM   // (textures in the VRAM, docs/machine/gpu.md)
-#include "src/gpu.cginc"
+#define GPU_TARGET_W 1280.0
+#define GPU_TARGET_H 720.0
+#include "src/gpu_draw.cginc"
 
 struct mesh_point {
     uint id : SV_VertexID;
@@ -47,15 +46,14 @@ volume_point vert(mesh_point v) {
 [maxvertexcount(3)]
 void geom(point volume_point i[1], inout TriangleStream<volume_out> stream) {
     UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(i[0]);
-    uint first = i[0].triangle_id * 3, base;
-    uint4 head;
-    if (!volume_command(first, base, head)) return;
+    uint first = i[0].triangle_id * 3;
+    if (!volume_triangle(first, VOLUME_WORLD)) return;
 #ifdef HOLODECK
     // The program's camera stands at this object (the seat's eye point) and the horizon is the
     // room's: of the camera's turn only what is about the world's up is followed, so whoever
     // sits there faces the way the camera faces and the floor stays the floor.
-    float3 rx, ry, rz, move;
-    bool placed = volume_view(rx, ry, rz, move);
+    float3 rx, ry, rz;
+    bool placed = volume_view(rx, ry, rz);
     // which of the program's axes is up (0: x, 1: y, 2: z): the one the program names; or,
     // of one that names none, the one the camera's own up is nearest to and its right is
     // square to (a camera does not roll), which is wrong once it looks more down than ahead
@@ -71,7 +69,7 @@ void geom(point volume_point i[1], inout TriangleStream<volume_out> stream) {
         float2 planes, focal;
         volume_out o;
         UNITY_INITIALIZE_OUTPUT(volume_out, o);
-        o.v = volume_vertex(first + k, base, head, eye, planes, focal);
+        o.v = volume_vertex(first + k, eye, planes, focal);
 #ifdef HOLODECK
         // out of the camera's turn, back into the world's, the camera where it is
         float3 p = placed ? rx * eye.x + ry * eye.y + rz * eye.z : eye;

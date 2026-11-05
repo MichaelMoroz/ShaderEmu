@@ -798,10 +798,12 @@ private:
             err = "draw IDs: " + hrToString(hr);
             return false;
         }
-        // the vertex front end's six (shader_vm/src/gpu.h, "the vertex front end"): four of floats, two of words
+        // the vertex front end's eight (shader_vm/src/gpu_draw.h, "the vertex front end"): floats but the two of words, a texel
+        // a vertex and a row past them for the holodeck's frame (gpu_frame_texel)
         for (int k = 0; k < kMade && SUCCEEDED(hr); k++) {
             D3D11_TEXTURE2D_DESC md = cd;
-            md.Format = k < 4 ? DXGI_FORMAT_R32G32B32A32_FLOAT : DXGI_FORMAT_R32G32B32A32_SINT;
+            md.Height = kDrawIdsH + 1;
+            md.Format = k == 4 || k == 5 ? DXGI_FORMAT_R32G32B32A32_SINT : DXGI_FORMAT_R32G32B32A32_FLOAT;
             hr = gpu_.device->CreateTexture2D(&md, nullptr, &made_[k]);
             if (SUCCEEDED(hr)) hr = gpu_.device->CreateRenderTargetView(made_[k].Get(), nullptr, &madeRtv_[k]);
             if (SUCCEEDED(hr)) hr = gpu_.device->CreateShaderResourceView(made_[k].Get(), nullptr, &madeSrv_[k]);
@@ -900,7 +902,7 @@ private:
         ID3D11RenderTargetView* rtvs[kMade];
         for (int k = 0; k < kMade; k++) rtvs[k] = madeRtv_[k].Get();
         ctx->OMSetRenderTargets(kMade, rtvs, nullptr);
-        D3D11_VIEWPORT vp{0, 0, (float)kDrawIdsW, (float)kDrawIdsH, 0, 1};
+        D3D11_VIEWPORT vp{0, 0, (float)kDrawIdsW, (float)(kDrawIdsH + 1), 0, 1};
         ctx->RSSetViewports(1, &vp);
         ctx->RSSetState(gpu_.rasterNoCull.Get());
         ctx->IASetInputLayout(nullptr);
@@ -915,8 +917,9 @@ private:
         ID3D11ShaderResourceView* none = nullptr;
         for (auto& t : pass.psLayout.textures) ctx->PSSetShaderResources(t.slot, 1, &none);
         ctx->OMSetRenderTargets(0, nullptr, nullptr);
-        static const char* names[kMade] = {"_GpuMadePos", "_GpuMadeColour", "_GpuMadeUv", "_GpuMadeEdge", "_GpuMadeTex", "_GpuMadeMore"};
-        for (int k = 0; k < kMade; k++) mat.setTexture(names[k], madeSrv_[k].Get(), kDrawIdsW, kDrawIdsH);
+        static const char* names[kMade] = {"_GpuMadePos", "_GpuMadeColour", "_GpuMadeUv", "_GpuMadeEdge", "_GpuMadeTex", "_GpuMadeMore",
+                                           "_GpuMadeEye", "_GpuMadeProj"};
+        for (int k = 0; k < kMade; k++) mat.setTexture(names[k], madeSrv_[k].Get(), kDrawIdsW, kDrawIdsH + 1);
     }
 
     void gpuUpload(Material& mat, bool mips) {
@@ -1620,7 +1623,7 @@ private:
     ComPtr<ID3D11Texture2D> drawIds_;
     ComPtr<ID3D11RenderTargetView> drawIdsRtv_;
     ComPtr<ID3D11ShaderResourceView> drawIdsSrv_;
-    static const int kMade = 6;   // the vertex front end's targets (GPUVertices)
+    static const int kMade = 8;   // the vertex front end's targets (GPUVertices)
     ComPtr<ID3D11Texture2D> made_[kMade];
     ComPtr<ID3D11RenderTargetView> madeRtv_[kMade];
     ComPtr<ID3D11ShaderResourceView> madeSrv_[kMade];

@@ -20,7 +20,8 @@ Shader "ShaderEmu/HolodeckMask"
         Texture2D<uint4> _State;
         #define GPU_STATE _State
         #define GPU_VOLUME
-        #include "src/gpu.cginc"
+        #define GPU_VOLUME_PASS 0
+        #include "src/gpu_draw.cginc"
 
         struct v2f {
             float4 pos : SV_Position;
@@ -32,9 +33,8 @@ Shader "ShaderEmu/HolodeckMask"
             UNITY_SETUP_INSTANCE_ID(v);
             UNITY_INITIALIZE_OUTPUT(v2f, o);
             UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(o);
-            uint4 frame = ram(VOLUME_LIST);
-            // no frame: off the screen
-            o.pos = frame.r != 0 && frame.g != 0 ? UnityObjectToClipPos(v.vertex) : float4(0, 0, -2, 1);
+            // no list drawn yet (the front end's frame names none): off the screen
+            o.pos = asuint(volume_frame(3).w) != 0 ? UnityObjectToClipPos(v.vertex) : float4(0, 0, -2, 1);
             return o;
         }
         ENDCG
