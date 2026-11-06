@@ -503,6 +503,16 @@ CASES = [
       for n, size, s in (('', '160x120', 'd63313e9'), ('cornell', '120x120', '78c07525'), ('materials', '160x120', '5ecc7a24'))],
     case('nxpath-cornell-check', 'workers pathtrace', X + 'NXPATH_CHECK=500 nxpath cornell', True, until='thousandths of a pixel',
          has=[r'nxpath: 0 of 500 rays met another object', r'at most 0 thousandths of a pixel']),
+    # the picture smoothed, the lanes' job (docs/apps/raytrace.md, "The picture smoothed on the lanes"): its sum, and no texel
+    # near a pass (rvc_cpu's lane has 8,192 instructions; each texel counted twice, the fewer kept)
+    case('nxpath-smooth', 'workers pathtrace', X + 'NXPATH_SMOOTH=1 NXPATH_AUTO=1 NXPATH_EXIT=1 NXPATH_SIZE=160x120 NXPATH_SAMPLES=2 nxpath', True,
+         has=[r'pathstat: 160 x 120, 2 samples.* sum d63313e9', r'nxpath: smoothed 160 x 120 of 2 samples: sum f339cab5, \d+ instructions a texel on average, the most [1-2]\d{3}\s*$']),
+    # Dear ImGui's frames (docs/apps/imgui.md): the triangles of 30 held frames with the demo window, the same whether the
+    # first core copies them and makes the text, lines and shapes or the workers do ("Drawn later"), and as the library
+    # unchanged made them (the sum of the committed 1.91.5 with the held picture's count of vertices)
+    *[case(f'imdemo-sum{tag}', 'desktop imgui', X + f'IMGUI_SUM=1 IMDEMO_HOLD=1 IMDEMO_SHOW=1 IMDEMO_FRAMES=30 {pre}imdemo 2>&1 | grep imsum | md5sum', not pre,
+           has=[r'^dba8c49bf512875113898e1c5fca5ead'])
+      for tag, pre in (('', ''), ('-inline', 'IMGUI_COPY=inline '))],
     # libmedia and the players (docs/system/media.md, docs/apps/play.md, docs/apps/video.md)
     case('media-sound', 'media', '; '.join(f'media_test audio /usr/share/play-test.{e} /tmp/o.raw {w}' for e in ('flac', 'mp3', 'mod') for w in (0, 63)),
          True, wall=400, sums=[(r'audio /usr/share/play-test\.\w+: .* sum ([0-9a-f]+)', ['518c5ac8'] * 2 + ['aa07a2e5'] * 2 + ['c714a845'] * 2)]),

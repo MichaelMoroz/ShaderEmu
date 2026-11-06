@@ -392,6 +392,17 @@
   of `nxpath`), which must say 0 over a pass and 0 paths not as traced whole. `steptest` must PASS. A
   change there must leave the plain path's instructions as they were (`NXPATH_FIELD=0` on `rvc_cpu`):
   the lane's copy of a search is its own branch (`limited`), so the workers pay nothing for it.
+  Since 6 November 2026 `nxpath`'s paths are its workers' and its lanes smooth the picture shown, a fixed
+  1,600 instructions a texel (`pt_smooth_texel`; `docs/apps/raytrace.md`, "The picture smoothed on the lanes";
+  `test_all.py nxpath-smooth` holds its sum and that no texel comes near a pass); its paths in steps on the
+  field are `NXPATH_FIELD=1`, which the probe above is of.
+- Dear ImGui is patched (`linux/imgui/imgui.patch`, made by `host/make_patch_edits.py` on a clean tree;
+  `docs/apps/imgui.md`) and compiled with `imgui.profile`'s counts: with workers a list's text, lines and filled
+  shapes are records the copying workers make by the library's own functions. What reads back the vertices it
+  made turns `ImDrawListFlags_Deferred` off around it, and a place that makes two commands one adds their
+  `UserCallbackData` and `UserCallbackDataSize` (the shares' work). After a change, `test_all.py imdemo-sum
+  imdemo-sum-inline` must give the library's own sum, and the counts are made again (`linux/imgui/counts.py`).
+  `nxpath`'s window is ImGui's (`panel.cpp`): what a control asks for is done after the frame.
 - The browser opens `http` of the machine's own network over its own sockets (`linux/apps/web_net.h`, `docs/apps/web.md`,
   "Addresses the machine reaches itself"), never waiting in a call: the rest goes to the host. A change there runs
   `tools/web_net_test.c` on the host and `tools/test_all.py web`, and a capture of a form (`NXWEB_CHECK` sees no strip with a field).

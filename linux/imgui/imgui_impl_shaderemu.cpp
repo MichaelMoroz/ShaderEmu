@@ -1,5 +1,6 @@
 // Dear ImGui's platform and renderer for this machine (docs/apps/imgui.md).
 #include "imgui_impl_shaderemu.h"
+#include "imgui_internal.h"     // (ImDrawListSharedData: "Drawn later")
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/time.h>
@@ -280,9 +281,254 @@ bool ImGui_ImplShaderEmu_NewFrame()
 // A corner as ImGui has it (ImDrawVert's layout).
 struct corner { float x, y, u, v; ImU32 colour; };
 
+// ---- drawn later (docs/apps/imgui.md, "Drawn later") ----
+//
+// With worker cores, a list's text, lines and filled shapes are not made by the first core
+// (imgui.patch's hooks): it keeps what each was asked with, the text or the points, in the
+// list's _Deferred words, and puts in the list a triangle on one vertex three times, which
+// stands for it. The core that copies the list makes it there, by the library's own function
+// on a list of its own (the same triangles in the same order), and copies those.
+//
+// The vertex: x is all ones (no corner is inside a clip rectangle so, and the fast loops leave
+// it to one_shape()), y the record's place in _Deferred, u the indices the library could make of
+// it at most (the copy's room) and v what making it costs, in about four instructions (an index
+// copied is one): the workers' shares are cut by that.
+enum { DEFER_TEXT = 1, DEFER_LINE, DEFER_FILL, DEFER_SEGMENTS, DEFER_PLOT, DEFER_PLOT_PART };
+#define SCRATCH_V 2048      // a list of a copier's own, for one primitive at a time; one larger is made at once
+#define SCRATCH_I 6144
+#define SCRATCH_T 2048      // the library's temporary points (ImDrawListSharedData::TempBuffer)
+#define MARK 0xffffffffu
+
+struct text_record { ImU32 kind; ImFont* font; float size; ImVec2 pos; ImU32 col; ImVec4 clip; float wrap; ImU32 fine, length; char text[]; };
+struct shape_record { ImU32 kind, col; ImDrawFlags flags; float thickness; ImDrawListFlags list_flags; float fringe; ImU32 count; ImVec2 points[]; };
+struct plot_record {
+    ImU32 kind; int values_count, values_offset, res_w, item_count; float scale_min, scale_max; ImVec2 min, max;
+    ImU32 col_base, col_hovered; int idx_hovered; ImDrawListFlags list_flags; float fringe; int from, to; float values[];
+};
+// a later part of a plot's segments, `from` to `to`, by the plot's record at `whole`
+struct plot_part { ImU32 kind; int whole, from, to; };
+
+static bool deferring;
+
+// Room for a record at the end of the list's words. (Its growth apart: a hook's own work is a
+// few dozen instructions, and a call with the growth in it would save registers every time.)
+__attribute__((noinline)) static void defer_grow(ImVector<unsigned int>& d, int size) { d.reserve(d._grow_capacity(size)); }
+
+static inline ImU32* defer_room(ImDrawList* list, int words, int* at)
+{
+    ImVector<unsigned int>& d = list->_Deferred;
+    const int size = d.Size + words;
+    if (size > d.Capacity) defer_grow(d, size);
+    *at = d.Size;
+    d.Size = size;
+    return d.Data + *at;
+}
+
+// What stands for a record in the list: one vertex, three indices, as PrimReserve() would make
+// room for them (it does when the list is full or near 65,536 vertices).
+static inline void defer_mark(ImDrawList* list, int at, int indices, int work)
+{
+    ImDrawList& l = *list;
+    ImU32* v;
+    ImDrawIdx* i;
+    if (l.VtxBuffer.Size < l.VtxBuffer.Capacity && l.IdxBuffer.Size + 3 <= l.IdxBuffer.Capacity && l._VtxCurrentIdx < 0xfff0) {
+        v = (ImU32*)(l.VtxBuffer.Data + l.VtxBuffer.Size), i = l.IdxBuffer.Data + l.IdxBuffer.Size;
+        l.CmdBuffer.Data[l.CmdBuffer.Size - 1].ElemCount += 3;
+        l.VtxBuffer.Size++, l.IdxBuffer.Size += 3;
+    } else {
+        l.PrimReserve(3, 1);
+        v = (ImU32*)l._VtxWritePtr, i = l._IdxWritePtr;
+    }
+    // (the command's work and corners, for the workers' shares: imgui.patch adds them up where commands are made one)
+    ImDrawCmd& cmd = l.CmdBuffer.Data[l.CmdBuffer.Size - 1];
+    cmd.UserCallbackData = (char*)cmd.UserCallbackData + work, cmd.UserCallbackDataSize += indices;
+    v[0] = MARK, v[1] = (ImU32)at, v[2] = (ImU32)indices, v[3] = (ImU32)work, v[4] = 0;
+    i[0] = i[1] = i[2] = (ImDrawIdx)l._VtxCurrentIdx;
+    l._VtxWritePtr = (ImDrawVert*)v + 1, l._IdxWritePtr = i + 3, l._VtxCurrentIdx++;
+}
+
+static bool defer_text(ImDrawList* list, ImFont* font, float size, const ImVec2& pos, ImU32 col, const ImVec4& clip, const char* begin,
+                       const char* end, float wrap, bool fine)
+{
+    const int length = (int)(end - begin);
+    if (length > SCRATCH_V / 4) return false;
+    if ((float)(int)pos.y > clip.w) return true;    // (RenderText's own first test: nothing is drawn)
+    int at;
+    text_record* r = (text_record*)defer_room(list, (int)(sizeof(text_record) + length + 3) / 4, &at);
+    r->kind = DEFER_TEXT, r->font = font, r->size = size, r->pos = pos, r->col = col, r->clip = clip, r->wrap = wrap;
+    r->fine = fine, r->length = (ImU32)length;
+    memcpy(r->text, begin, (size_t)length);
+    defer_mark(list, at, 6 * length, 22 * length + 30);
+    return true;
+}
+
+static bool defer_shape(ImDrawList* list, ImU32 kind, const ImVec2* points, int count, ImU32 col, ImDrawFlags flags, float thickness,
+                        int indices, int vertices, int temporary, int work)
+{
+    if (vertices > SCRATCH_V || indices > SCRATCH_I || temporary > SCRATCH_T) return false;
+    int at;
+    shape_record* r = (shape_record*)defer_room(list, (int)(sizeof(shape_record) / 4) + 2 * count, &at);
+    r->kind = kind, r->col = col, r->flags = flags, r->thickness = thickness;
+    r->list_flags = list->Flags & ~ImDrawListFlags_Deferred, r->fringe = list->_FringeScale, r->count = (ImU32)count;
+    memcpy(r->points, points, (size_t)count * sizeof(ImVec2));
+    defer_mark(list, at, indices, work);
+    return true;
+}
+
+// (at most: a thick line's 18 indices a segment and four vertices a point, five temporary points a point)
+static bool defer_line(ImDrawList* list, const ImVec2* points, int count, ImU32 col, ImDrawFlags flags, float thickness)
+{
+    return defer_shape(list, DEFER_LINE, points, count, col, flags, thickness, 18 * count, 4 * count, 5 * count, 30 + 30 * count);
+}
+
+static bool defer_fill(ImDrawList* list, const ImVec2* points, int count, ImU32 col)
+{
+    return defer_shape(list, DEFER_FILL, points, count, col, 0, 0, 9 * count, 2 * count, 2 * count, 30 + 25 * count);
+}
+
+// AddLine's: one-segment lines of one colour and width, one after another in one command with
+// nothing else drawn between them (a plot's), are one record of their segments, each a polyline
+// of its two points on the copier's list, as each was (at most 18 indices and 8 vertices a
+// segment). The record before is forgotten when a frame is copied.
+#define LINES_MOST 128
+#define SEGMENT_WORK 150    // (a two-point polyline is some 400 instructions, and its copy: 600 as measured)
+static struct {
+    const ImDrawList* list;
+    const ImDrawIdx* index_end;     // the list's when the last segment was taken
+    int records_end, commands, at, left;
+    ImU32 col;
+    float thickness, fringe;
+    ImDrawListFlags flags;
+} lines_last;
+
+__attribute__((noinline)) static bool lines_begin(ImDrawList* list, float x1, float y1, float x2, float y2, ImU32 col, float thickness)
+{
+    int at;
+    shape_record* r = (shape_record*)defer_room(list, (int)(sizeof(shape_record) / 4) + 4, &at);
+    r->kind = DEFER_SEGMENTS, r->col = col, r->flags = 0, r->thickness = thickness;
+    r->list_flags = list->Flags & ~ImDrawListFlags_Deferred, r->fringe = list->_FringeScale, r->count = 2;
+    r->points[0] = ImVec2(x1, y1), r->points[1] = ImVec2(x2, y2);
+    defer_mark(list, at, 18, SEGMENT_WORK);
+    lines_last = {list, list->_IdxWritePtr, list->_Deferred.Size, list->CmdBuffer.Size, at, LINES_MOST - 1, col, thickness, list->_FringeScale, list->Flags};
+    return true;
+}
+
+static bool defer_segment(ImDrawList* list, float x1, float y1, float x2, float y2, ImU32 col, float thickness)
+{
+    ImVector<unsigned int>& d = list->_Deferred;
+    if (lines_last.list != list || lines_last.index_end != list->_IdxWritePtr || lines_last.records_end != d.Size ||
+        lines_last.commands != list->CmdBuffer.Size || lines_last.col != col || lines_last.thickness != thickness ||
+        lines_last.flags != list->Flags || lines_last.fringe != list->_FringeScale || !lines_last.left || d.Size + 4 > d.Capacity)
+        return lines_begin(list, x1, y1, x2, y2, col, thickness);
+    float* to = (float*)(d.Data + d.Size);
+    to[0] = x1, to[1] = y1, to[2] = x2, to[3] = y2;
+    d.Size += 4, lines_last.records_end = d.Size, lines_last.left--;
+    ((shape_record*)(d.Data + lines_last.at))->count += 2;
+    ImU32* mark = (ImU32*)(list->_VtxWritePtr - 1);
+    mark[2] += 18, mark[3] += SEGMENT_WORK;
+    ImDrawCmd& cmd = list->CmdBuffer.Data[list->CmdBuffer.Size - 1];
+    cmd.UserCallbackData = (char*)cmd.UserCallbackData + SEGMENT_WORK, cmd.UserCallbackDataSize += 18;
+    return true;
+}
+
+// PlotLines()'s segments (imgui.patch, PlotEx()): its values copied, and the scale (when it is
+// to be found from them) and every segment worked out where the record is made, as PlotEx() would.
+// The segments are in parts of PLOT_PART, each a record and a marker of its own, so that several
+// cores make one plot: a part goes through the segments before it for their floats alone.
+#define PLOT_PART 12
+static bool defer_plot(ImDrawList* list, float (*getter)(void*, int), void* data, const float* array, int stride, int count, int offset,
+                       int res_w, int item_count, float scale_min, float scale_max, const ImVec2& min, const ImVec2& max, ImU32 col_base,
+                       ImU32 col_hovered, int idx_hovered)
+{
+    if (res_w <= 0 || 8 * res_w > SCRATCH_V || 18 * res_w > SCRATCH_I) return false;
+    int at;
+    plot_record* r = (plot_record*)defer_room(list, (int)(sizeof(plot_record) / 4) + count, &at);
+    r->kind = DEFER_PLOT, r->values_count = count, r->values_offset = offset, r->res_w = res_w, r->item_count = item_count;
+    r->scale_min = scale_min, r->scale_max = scale_max, r->min = min, r->max = max, r->col_base = col_base, r->col_hovered = col_hovered;
+    r->idx_hovered = idx_hovered, r->list_flags = list->Flags & ~ImDrawListFlags_Deferred, r->fringe = list->_FringeScale;
+    if (array && stride == 4) memcpy(r->values, array, (size_t)count * 4);
+    else if (array) for (int i = 0; i < count; i++) r->values[i] = *(const float*)(const void*)((const char*)array + (size_t)i * stride);
+    else for (int i = 0; i < count; i++) r->values[i] = getter(data, i);
+    r->from = 0, r->to = res_w < PLOT_PART ? res_w : PLOT_PART;
+    defer_mark(list, at, 18 * r->to, SEGMENT_WORK * r->to + count);
+    for (int from = PLOT_PART; from < res_w; from += PLOT_PART) {
+        const int whole = at, to = from + PLOT_PART < res_w ? from + PLOT_PART : res_w;
+        plot_part* part = (plot_part*)defer_room(list, (int)(sizeof(plot_part) / 4), &at);
+        part->kind = DEFER_PLOT_PART, part->whole = whole, part->from = from, part->to = to;
+        defer_mark(list, at, 18 * (to - from), SEGMENT_WORK * (to - from) + count + 5 * from);
+        at = whole;
+    }
+    return true;
+}
+
+// PlotEx()'s loop, from its record: the same floats and the same AddLine() calls, of the
+// segments from `from` to `to`.
+static void plot_made(ImDrawList& l, const plot_record& r, int from, int to)
+{
+    const float* v = r.values;
+    const int count = r.values_count, offset = r.values_offset;
+    float scale_min = r.scale_min, scale_max = r.scale_max;
+    if (scale_min == FLT_MAX || scale_max == FLT_MAX) {
+        float v_min = FLT_MAX, v_max = -FLT_MAX;
+        for (int i = 0; i < count; i++) {
+            if (v[i] != v[i]) continue;
+            v_min = ImMin(v_min, v[i]), v_max = ImMax(v_max, v[i]);
+        }
+        if (scale_min == FLT_MAX) scale_min = v_min;
+        if (scale_max == FLT_MAX) scale_max = v_max;
+    }
+    const float t_step = 1.0f / (float)r.res_w;
+    const float inv_scale = (scale_min == scale_max) ? 0.0f : (1.0f / (scale_max - scale_min));
+    float t0 = 0.0f;
+    ImVec2 tp0 = ImVec2(t0, 1.0f - ImSaturate((v[(0 + offset) % count] - scale_min) * inv_scale));
+    for (int n = 0; n < to; n++) {
+        const float t1 = t0 + t_step;
+        const int v1_idx = (int)(t0 * r.item_count + 0.5f);
+        const float v1 = v[(v1_idx + offset + 1) % count];
+        const ImVec2 tp1 = ImVec2(t1, 1.0f - ImSaturate((v1 - scale_min) * inv_scale));
+        if (n >= from) l.AddLine(ImLerp(r.min, r.max, tp0), ImLerp(r.min, r.max, tp1), r.idx_hovered == v1_idx ? r.col_hovered : r.col_base);
+        t0 = t1, tp0 = tp1;
+    }
+}
+
+// A copier's own list and the library's shared data it makes them with: its memory here (a
+// worker allocates nothing, and the program's data is touched for the workers before they start),
+// the shared data a copy of the context's made by the first core (the temporary points the copier's).
+struct alignas(16) scratch {      // (16 bytes apart: each a worker's, stored to in the same passes)
+    ImDrawVert vertices[SCRATCH_V];
+    ImDrawIdx indices[SCRATCH_I];
+    ImVec2 temporary[SCRATCH_T];
+    ImDrawCmd commands[2];
+    ImVec2 path[16];        // (AddLine's two points)
+    alignas(16) unsigned char list[sizeof(ImDrawList)], shared[sizeof(ImDrawListSharedData)];
+    bool made;
+};
+
+static void scratch_ready(scratch* s, const ImDrawListSharedData* live)
+{
+    ImDrawListSharedData* d = (ImDrawListSharedData*)s->shared;
+    ImDrawList* l = (ImDrawList*)s->list;
+    if (!s->made) IM_PLACEMENT_NEW(l) ImDrawList(d);
+    // (what the three functions read of it; the tables follow the circles' error)
+    if (!s->made || d->TexUvWhitePixel.x != live->TexUvWhitePixel.x || d->TexUvWhitePixel.y != live->TexUvWhitePixel.y ||
+        d->TexUvLines != live->TexUvLines || d->Font != live->Font || d->FontSize != live->FontSize ||
+        d->CircleSegmentMaxError != live->CircleSegmentMaxError || d->CurveTessellationTol != live->CurveTessellationTol ||
+        d->ArcFastRadiusCutoff != live->ArcFastRadiusCutoff) {
+        memcpy((void*)d, (const void*)live, sizeof *d);
+        d->TempBuffer.Data = s->temporary, d->TempBuffer.Capacity = SCRATCH_T, d->TempBuffer.Size = 0;
+    }
+    if (!s->made) {
+        l->VtxBuffer.Data = s->vertices, l->VtxBuffer.Capacity = SCRATCH_V;
+        l->IdxBuffer.Data = s->indices, l->IdxBuffer.Capacity = SCRATCH_I;
+        l->CmdBuffer.Data = s->commands, l->CmdBuffer.Capacity = 2;
+        l->_Path.Data = s->path, l->_Path.Capacity = 16;
+        s->made = true;
+    }
+}
+
 // A piece of one of ImGui's commands: its clip rectangle and texture, where its vertices are,
-// and the indices of it that are this piece's.
-struct piece { ImVec4 clip; GLuint name; const char* base; const ImDrawIdx *index, *end; };
+// and the indices of it that are this piece's; its list's records.
+struct piece { ImVec4 clip; GLuint name; const char* base; const ImDrawIdx *index, *end; const ImU32* records; };
 // Vertices a worker core wrote, for the first core to make a command of.
 struct run { ImU32 *first, *table; int count, quads; GLuint name; };
 #define MOST_RUNS 256
@@ -370,7 +616,9 @@ struct alignas(16) copier {
         ImU32 left, top, wide, high;    // the command's clip rectangle, for inside() below
         const ImDrawIdx* next_lone; // triangles one after the other in a run of quads: where the next would begin,
         int lone;                   // and how many there are so far
+        const ImU32* records;       // the list's records ("Drawn later")
     } out;
+    scratch* later;                 // its own list for them
     // On a worker core (`ahead`): room and tables of its own in the frame, the pieces that are
     // its share, and the runs it wrote. `noted`: the first core's runs are kept too (the sum).
     bool ahead, noted, failed;
@@ -389,6 +637,7 @@ struct alignas(16) copier {
     bool edge_triangle(const ImVec4& clip, const ImDrawIdx* index, const ImU32* p, const ImU32* q, const ImU32* r);
     int edge_quad(const ImVec4& clip, const ImDrawIdx* index, const ImU32* p, const ImU32* q, const ImU32* r, const ImU32* s);
     int one_shape(const ImVec4& clip, const char* base, const ImDrawIdx* index, const ImDrawIdx* end);
+    bool made_later(const ImVec4& clip, const ImU32* mark);
     bool copy_command(const ImVec4& clip, const char* base, const ImDrawIdx* index, const ImDrawIdx* end);
     void copy_pieces();
 
@@ -562,6 +811,7 @@ __attribute__((noinline)) int copier::one_shape(const ImVec4& clip, const char* 
 {
     const ImU32 *p = (const ImU32*)(base + index[0] * sizeof(ImDrawVert)), *q = (const ImU32*)(base + index[1] * sizeof(ImDrawVert)),
                 *r = (const ImU32*)(base + index[2] * sizeof(ImDrawVert));
+    if (index[0] == index[1] && p[0] == MARK) return made_later(clip, p) ? 3 : 0;
     const ImU32 left = out.left, top = out.top, wide = out.wide, high = out.high;
     const bool three = inside(p, left, top, wide, high) && inside(q, left, top, wide, high) && inside(r, left, top, wide, high);
     // two triangles on corners 0 1 2 and 0 2 3, as ImGui makes its rectangles and letters: a quad
@@ -572,6 +822,35 @@ __attribute__((noinline)) int copier::one_shape(const ImVec4& clip, const char* 
         if (whole) return whole > 0 ? 6 : 0;
     }
     return (three ? coloured(index, p, q, r, nullptr) : edge_triangle(clip, index, p, q, r)) ? 3 : 0;
+}
+
+// A record ("Drawn later") made by the library on the copier's own list, and copied as its
+// command's triangles. False: no table.
+__attribute__((noinline)) bool copier::made_later(const ImVec4& clip, const ImU32* mark)
+{
+    const ImU32* record = out.records + mark[1];
+    ImDrawList& l = *(ImDrawList*)later->list;
+    l.VtxBuffer.Size = l.IdxBuffer.Size = 0, l.CmdBuffer.Size = 1;
+    later->commands[0].ElemCount = 0, later->commands[0].VtxOffset = 0, l._CmdHeader.VtxOffset = 0;
+    l._VtxCurrentIdx = 0, l._VtxWritePtr = later->vertices, l._IdxWritePtr = later->indices;
+    if (record[0] == DEFER_TEXT) {
+        const text_record& t = *(const text_record*)record;
+        t.font->RenderText(&l, t.size, t.pos, t.col, t.clip, t.text, t.text + t.length, t.wrap, t.fine != 0);
+    } else if (record[0] == DEFER_PLOT || record[0] == DEFER_PLOT_PART) {
+        const plot_part* part = record[0] == DEFER_PLOT_PART ? (const plot_part*)record : nullptr;
+        const plot_record& p = *(const plot_record*)(part ? out.records + part->whole : record);
+        l.Flags = p.list_flags, l._FringeScale = p.fringe;
+        plot_made(l, p, part ? part->from : p.from, part ? part->to : p.to);
+    } else {
+        const shape_record& s = *(const shape_record*)record;
+        l.Flags = s.list_flags, l._FringeScale = s.fringe;
+        if (s.kind == DEFER_LINE) l.AddPolyline(s.points, (int)s.count, s.col, s.flags, s.thickness);
+        else if (s.kind == DEFER_FILL) l.AddConvexPolyFilled(s.points, (int)s.count, s.col);
+        else
+            for (ImU32 i = 0; i < s.count; i += 2) l.AddPolyline(s.points + i, 2, s.col, 0, s.thickness);
+    }
+    if (!l.IdxBuffer.Size) return true;
+    return copy_command(clip, (const char*)l.VtxBuffer.Data, l.IdxBuffer.Data, l.IdxBuffer.Data + l.IdxBuffer.Size);
 }
 
 // One of ImGui's commands, or a piece of one: its triangles into the frame, as the runs of
@@ -660,7 +939,11 @@ __attribute__((noinline)) bool copier::copy_command(const ImVec4& clip, const ch
             }
         }
         out.to = to;
-        if (!(index + 2 < end && to <= last)) return true;
+        if (!(index + 2 < end && to <= last)) {
+            // (a worker out of room: the first core makes the frame)
+            if (index + 2 < end && ahead) failed = true;
+            return true;
+        }
         if (again) continue;
         int indices = one_shape(clip, base, index, end);
         if (!indices && !full_table()) return false;    // (with a new table, the same one again)
@@ -675,14 +958,19 @@ void copier::copy_pieces()
     if (!new_table()) return;
     out.quads = 0, out.next_lone = nullptr;
     more_room();
+    // (a run of the device's for every texture: the clip rectangles are the copy's)
+    out.name = pieces != pieces_end ? pieces->name : 0;
     for (const piece* p = pieces; p != pieces_end && out.to && !failed; p++) {
-        out.name = p->name;
+        if (p->name != out.name) flush(out.quads), out.name = p->name;
+        out.records = p->records;
         if (!copy_command(p->clip, p->base, p->index, p->end)) return;
-        flush(out.quads);
     }
+    if (out.to && !failed) flush(out.quads);
 }
 
+#define MOST_AHEAD 6        // workers asked for
 static copier own;          // the first core's
+static scratch later_lists[MOST_AHEAD + 1];     // the workers' and (last) the first core's
 static bool summing;        // IMGUI_SUM=1: an imsum: line a frame, to compare two ways of copying by
 static unsigned summed;
 
@@ -715,23 +1003,33 @@ void ImGui_ImplShaderEmu_RenderDrawData(ImDrawData* draw_data)
     static int asked;
     if (!asked) asked = 1, summing = getenv("IMGUI_SUM") != nullptr;
     own.noted = summing, own.run_count = 0, own.failed = false;
+    lines_last.list = nullptr;
+    if (deferring && draw_data->CmdListsCount) {
+        own.later = &later_lists[MOST_AHEAD];
+        scratch_ready(own.later, draw_data->CmdLists[0]->_Data);
+    }
     if (!own.new_table()) return;
     own.out.quads = 0, own.out.next_lone = nullptr;
     own.more_room();
+    bool open = false;
     for (int n = 0; n < draw_data->CmdListsCount && own.out.to; n++) {
         const ImDrawList* list = draw_data->CmdLists[n];
+        own.out.records = list->_Deferred.Data;
         for (const ImDrawCmd& cmd : list->CmdBuffer) {
             if (cmd.UserCallback) {
+                // (what the program draws there comes after what is before it)
+                if (open) own.flush(own.out.quads), open = false;
                 if (cmd.UserCallback != ImDrawCallback_ResetRenderState) cmd.UserCallback(list, &cmd);
                 continue;
             }
-            own.out.name = (GLuint)cmd.TextureId;
+            // a command of the device's for every texture: the clip rectangles are the copy's
+            if (open && (GLuint)cmd.TextureId != own.out.name) own.flush(own.out.quads);
+            own.out.name = (GLuint)cmd.TextureId, open = true;
             const ImDrawIdx* index = list->IdxBuffer.Data + cmd.IdxOffset;
             if (!own.copy_command(cmd.ClipRect, (const char*)(list->VtxBuffer.Data + cmd.VtxOffset), index, index + cmd.ElemCount)) return;
-            // a command of the device's for every one of ImGui's that drew: each has one texture
-            own.flush(own.out.quads);
         }
     }
+    if (open && own.out.to) own.flush(own.out.quads);
     if (summing) {
         unsigned sum = 0, triangles = 0;
         sum_runs(own.runs, own.run_count, &sum, &triangles);
@@ -741,24 +1039,37 @@ void ImGui_ImplShaderEmu_RenderDrawData(ImDrawData* draw_data)
 
 // ---- the copy on worker cores (docs/apps/imgui.md) ----
 
-#define MOST_AHEAD 4        // workers asked for
 #define MOST_PIECES 512
 #define MOST_LISTS 32
 #define AHEAD_TABLES 2      // a worker's colour tables: 512 colours in its share, or the first core copies
-#define AHEAD_LEAST 1200    // indices a frame from which the workers are worth their two passes
+#define AHEAD_LEAST 1200    // indices a frame (those its records stand for too) from which the workers are worth their two passes
 
-extern "C" char __DATA_BEGIN__[], _end[];
+extern "C" char __DATA_BEGIN__[], _end[], _start[], etext[];
 static copier ahead[MOST_AHEAD];
 static piece pieces[MOST_PIECES];
-// ImGui's vertices and indices of the frame the workers are copying: its lists have others
-// meanwhile, these of two frames ago, which a list empties before it writes
+// ImGui's vertices, indices and records of the frame the workers are copying: its lists have
+// others meanwhile, these of two frames ago, which a list empties before it writes
 static ImVector<ImDrawVert> kept_vertices[MOST_LISTS];
 static ImVector<ImDrawIdx> kept_indices[MOST_LISTS];
+static ImVector<unsigned int> kept_records[MOST_LISTS];
 static int workers = -1, jobs, piece_count, touched;
+static int weights[MOST_PIECES], corners[MOST_PIECES];   // each command's: its work, and the corners its records may make
 
-static unsigned copy_job(unsigned copier_at, unsigned)
+static struct alignas(16) { unsigned n; } shares[MOST_AHEAD];     // IMGUI_SHARES=1: each worker's instructions (a texel each), a line every 30 frames
+static bool telling;
+
+static unsigned count_now()
 {
+    unsigned n;
+    __asm__ volatile("rdcycle %0" : "=r"(n));
+    return n;
+}
+
+static unsigned copy_job(unsigned copier_at, unsigned k)
+{
+    const unsigned from = telling ? count_now() : 0;
     ((copier*)copier_at)->copy_pieces();
+    if (telling) shares[k].n = count_now() - from;
     return 0;
 }
 
@@ -767,47 +1078,85 @@ bool ImGui_ImplShaderEmu_RenderAhead(ImDrawData* draw_data)
     if (workers < 0) {
         const char* how = getenv("IMGUI_COPY");
         summing = getenv("IMGUI_SUM") != nullptr;
+        telling = getenv("IMGUI_SHARES") != nullptr;
         workers = how && !strcmp(how, "inline") ? 0 : mcw_open(MOST_AHEAD);
         if (workers > MOST_AHEAD) workers = MOST_AHEAD;
         if (workers > 0) {
             atexit(mcw_close);
-            // (a worker stops at a page of the program's that nobody has touched: mcw.h)
+            // (a worker stops at a page of the program's that nobody has touched, and at a page of
+            // code no core has run, the library's that the first core no longer runs among them: mcw.h)
             mcw_touch(__DATA_BEGIN__, (unsigned)(_end - __DATA_BEGIN__));
-            // (and at a page of code no core has run: the copy's is round its job)
-            const volatile char* code = (const volatile char*)&copy_job;
-            for (int i = -64 * 1024; i <= 64 * 1024; i += 4096) (void)code[i];
+            mcw_touch_code(_start, (unsigned)(etext - _start));
+            // the lists' text, lines and filled shapes made by the workers from the next frame on
+            // ("Drawn later"; IMGUI_LATER=0: by the first core as they are asked for)
+            const char* later = getenv("IMGUI_LATER");
+            if (!later || strcmp(later, "0")) {
+                GImDrawListDefer.Text = defer_text, GImDrawListDefer.Polyline = defer_line, GImDrawListDefer.ConvexPolyFilled = defer_fill;
+                GImDrawListDefer.Line = defer_segment, GImDrawListDefer.PlotLines = defer_plot;
+                deferring = true;
+            }
         }
     }
-    const int total = draw_data->TotalIdxCount;
-    if (workers <= 0 || jobs || total < AHEAD_LEAST || draw_data->CmdListsCount > MOST_LISTS) return false;
+    lines_last.list = nullptr;
+    if (workers <= 0 || jobs || draw_data->CmdListsCount > MOST_LISTS) return false;
 
-    // the commands as pieces, each worker's share of the indices a run of them: a command is
-    // cut where a share ends, at a whole number of its quads
-    const int share = (total / workers / 6 + 1) * 6;
-    int first[MOST_AHEAD + 1], indices[MOST_AHEAD] = {0}, job = 0, room = share;
-    piece_count = first[0] = 0;
+    // every command's weight, and all of them
+    int total = 0, command_count = 0;
     for (int n = 0; n < draw_data->CmdListsCount; n++) {
         const ImDrawList* list = draw_data->CmdLists[n];
         for (const ImDrawCmd& cmd : list->CmdBuffer) {
             // (a call of the program's is the first core's to make, in its place among the draws)
             if (cmd.UserCallback && cmd.UserCallback != ImDrawCallback_ResetRenderState) return false;
             if (cmd.UserCallback) continue;
+            if (command_count == MOST_PIECES) return false;
+            // (a command's work: an index copied is one, and its records' as the hooks said, in UserCallbackData)
+            const int w = (int)cmd.ElemCount + (int)(intptr_t)cmd.UserCallbackData;
+            corners[command_count] = cmd.UserCallbackDataSize, weights[command_count++] = w, total += w;
+        }
+    }
+    if (total < AHEAD_LEAST) return false;
+
+    // the commands as pieces, each worker's share of the weight a run of them: a command is
+    // cut where a share ends, at a whole triangle and never between a quad's two
+    const int share = total / workers + 1;
+    int first[MOST_AHEAD + 1], indices[MOST_AHEAD] = {0}, made[MOST_AHEAD] = {0}, job = 0, room = share, c = 0;
+    piece_count = first[0] = 0;
+    for (int n = 0; n < draw_data->CmdListsCount; n++) {
+        const ImDrawList* list = draw_data->CmdLists[n];
+        for (const ImDrawCmd& cmd : list->CmdBuffer) {
+            if (cmd.UserCallback) continue;
+            const char* base = (const char*)(list->VtxBuffer.Data + cmd.VtxOffset);
             const ImDrawIdx *index = list->IdxBuffer.Data + cmd.IdxOffset, *end = index + cmd.ElemCount;
+            int left = weights[c], left_made = corners[c++];
             while (index < end) {
                 if (piece_count == MOST_PIECES) return false;
                 if (room <= 0 && job + 1 < workers) first[++job] = piece_count, room = share;
-                const ImDrawIdx* to = end - index > room && job + 1 < workers ? index + room : end;
-                pieces[piece_count++] = {cmd.ClipRect, (GLuint)cmd.TextureId, (const char*)(list->VtxBuffer.Data + cmd.VtxOffset), index, to};
-                indices[job] += (int)(to - index), room -= (int)(to - index);
+                const ImDrawIdx* to = end;
+                int w = left, k = left_made;
+                if (left > room && job + 1 < workers) {
+                    // (where the share ends in it)
+                    for (to = index, w = 0, k = 0; to < end && w < room; to += 3) {
+                        w += 3;
+                        if (to[0] == to[1]) {
+                            const ImU32* mark = (const ImU32*)(base + to[0] * sizeof(ImDrawVert));
+                            k += (int)mark[2], w += (int)mark[3];
+                        }
+                    }
+                    if (to + 2 < end && to[0] == to[-3] && to[1] == to[-1]) to += 3, w += 3;
+                }
+                pieces[piece_count++] = {cmd.ClipRect, (GLuint)cmd.TextureId, base, index, to, list->_Deferred.Data};
+                indices[job] += (int)(to - index), made[job] += k;
+                room -= w, left -= w, left_made -= k;
                 index = to;
             }
         }
     }
     first[job + 1] = piece_count;
 
-    // room for each: no cut triangle is more than five corners an index, and a quad is fewer
+    // room for each: no cut triangle is more than five corners an index, and a quad is fewer;
+    // a record's corners at most its indices, but for a few cut (or the first core makes it all)
     unsigned bytes = 0, at = 0;
-    for (int k = 0; k <= job; k++) bytes += AHEAD_TABLES * 1024 + (5 * indices[k] + 24) * 16;
+    for (int k = 0; k <= job; k++) bytes += AHEAD_TABLES * 1024 + (5 * indices[k] + made[k] + made[k] / 8 + 96) * 16;
     ImU32* memory = bytes <= seglFrameLeft() ? (ImU32*)seglFrameSpace(bytes) : nullptr;
     if (!memory) return false;
     // (the frame's pages there before a worker steps on them: a set's are new to its first frames)
@@ -820,17 +1169,20 @@ bool ImGui_ImplShaderEmu_RenderAhead(ImDrawData* draw_data)
         c.ahead = true;
         c.tables = memory + at, c.tables_left = AHEAD_TABLES;
         c.room = c.tables + AHEAD_TABLES * 256;
-        c.room_end = c.room + (5 * indices[k] + 24) * 4;
+        c.room_end = c.room + (5 * indices[k] + made[k] + made[k] / 8 + 96) * 4;
         at += (unsigned)(c.room_end - c.tables);
         c.pieces = pieces + first[k], c.pieces_end = pieces + first[k + 1];
+        if (deferring) c.later = &later_lists[k], scratch_ready(c.later, draw_data->CmdLists[0]->_Data);
     }
-    // the lists' vertices and indices are ours until the frame is finished
+    if (deferring) own.later = &later_lists[MOST_AHEAD], scratch_ready(own.later, draw_data->CmdLists[0]->_Data);
+    // the lists' vertices, indices and records are ours until the frame is finished
     for (int n = 0; n < draw_data->CmdListsCount; n++) {
         draw_data->CmdLists[n]->VtxBuffer.swap(kept_vertices[n]);
         draw_data->CmdLists[n]->IdxBuffer.swap(kept_indices[n]);
+        draw_data->CmdLists[n]->_Deferred.swap(kept_records[n]);
     }
     jobs = job + 1;
-    for (int k = 0; k < jobs; k++) mcw_post(k + 1, copy_job, (unsigned)&ahead[k], 0);
+    for (int k = 0; k < jobs; k++) mcw_post(k + 1, copy_job, (unsigned)&ahead[k], (unsigned)k);
     return true;
 }
 
@@ -866,5 +1218,11 @@ void ImGui_ImplShaderEmu_RenderFinish()
         }
     }
     if (summing) fprintf(stderr, "imsum: frame %u, %u triangles, sum %08x%s\n", ++summed, triangles, sum, failed ? " (this core's)" : "");
+    static unsigned finished;
+    if (telling && ++finished % 30 == 0) {
+        fprintf(stderr, "imshares: %d of %d workers%s:", jobs, workers, failed ? " (failed: this core's)" : "");
+        for (int k = 0; k < jobs; k++) fprintf(stderr, " %u", shares[k].n);
+        fprintf(stderr, "\n");
+    }
     jobs = 0;
 }

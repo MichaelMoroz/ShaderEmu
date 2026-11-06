@@ -5,8 +5,8 @@ pixel of a traced picture is a few thousand instructions of float arithmetic and
 stored, so a core needs next to no write cache for it.
 
 `nxray` traces on lanes, a texel of four pixels an index: the field's or its workers'
-(`docs/machine/lanes.md`; "Lanes", below). `nxpath` traces in tiles on the workers, or in steps on the
-field ("On the field", below). A tile is 32 x 32 pixels, halved until every worker has two dozen tiles of
+(`docs/machine/lanes.md`; "Lanes", below). `nxpath` traces in tiles on the workers, and its lanes smooth the
+picture shown ("The picture smoothed on the lanes", below; its paths in steps on the field are `NXPATH_FIELD=1`). A tile is 32 x 32 pixels, halved until every worker has two dozen tiles of
 the picture and never narrower than 8. A tile's rows begin and end on 16 bytes of the picture (a tile is a
 multiple of eight pixels of four bytes across, the picture's width a multiple of four), so no two cores
 store to the same 16 bytes. Everything else a job writes is its own; the scene is only read.
@@ -117,13 +117,12 @@ by OpenGL, and path traced by the worker cores under a tree of boxes that they b
   round a point, and the sky's light. It starts with a ground, the teapot, a mirror ball and
   a light. The example meshes are `/root/Models/teapot.obj` (6,320 triangles), `bunny.ply`
   (3,851) and `knot.obj` (5,040, `make_knot.py`).
-- **The window** (`nxpath.c`): menus along the top (File, Add, View, Render), the view on the
-  left, a panel of the window system's own on the right (`ui.h`), and along the bottom a line
-  of figures with the picture's bar. The panel is the scene's list and three tabs, laid out as one table of rectangles that is both what is drawn
-  and what a click is on. "Object" (or "Light"): what the handles do (move, turn, size), the
+- **The window** (`nxpath.c`, `panel.cpp`): Dear ImGui's menus along the top (File, Add, View, Render), the view
+  on the left, a panel on the right, and along the bottom a line of figures with the picture's bar ("The window",
+  below). The panel is the scene's list and three tabs. "Object" (or "Light"): what the handles do (move, turn, size), the
   three numbers of each with a button down and up (a light: its place, radius, power,
   colour), Duplicate, Delete. "Render": Detail, samples a pixel (1 to 512, or no end), turns
-  of a path, the background's light, "Traced when the view is still", Render
+  of a path, the background's light, "Traced when the view is still", "Smoothed while it has few samples", Render
   or Stop, the scene or the picture, Export (a PPM file). In the view the left button picks
   what is clicked and turns the view while held, the right one moves it, the wheel goes
   nearer. Keys: g, r, s the handles, Delete, Ctrl+D a copy, Home the whole scene in view, L
@@ -135,10 +134,9 @@ by OpenGL, and path traced by the worker cores under a tree of boxes that they b
   directions its normal is nearest, and an object has a table of 256 colours, its own colour
   lit from each direction as its matrix turns it. A turn, a colour or a selection is 256
   words written, not the mesh.
-- **The handles are ImGuizmo's** (`gizmo.cpp`), Dear ImGui's only part here: its frame is
-  made of the pointer and the picture's matrices, drawn over the picture. ImGuizmo is fetched at a commit
-  and has three circles' side counts changed at build time (`build.sh`). A frame is drawn only when something changed or the
-  pointer moved in the picture.
+- **The handles are ImGuizmo's** (`gizmo.cpp`), drawn in the window's frame of ImGui over the view with the
+  picture's matrices. ImGuizmo is fetched at a commit and has three circles' side counts changed at build time
+  (`build.sh`).
 - **The world** (`bvh.c`): every object's triangles where they stand, 80 bytes each, under
   one tree of boxes of at most four triangles a leaf. The first core cuts the triangles into
   parts by a grid, the workers build a binned tree a part in memory that is each one's own,
@@ -153,15 +151,17 @@ by OpenGL, and path traced by the worker cores under a tree of boxes that they b
   of that code, and a worker stops at a page no core has run. `tracer.c` is built `-O3 -fno-tree-vectorize
   -fsched-pressure -funroll-loops -fira-loop-pressure`: a worker's time is its instructions, so float constants
   from integer registers and such tricks for the first core's loads do not pay here.
-- **Settings are the registry's** (`pathtrace.detail`, `.samples`, `.turns`, `.background`, `.live`:
+- **Settings are the registry's** (`pathtrace.detail`, `.samples`, `.turns`, `.background`, `.live`, `.smooth`:
   `docs/system/persist.md`).
 
 For tests: `NXPATH_AUTO=1` renders at the start and `NXPATH_EXIT=1` leaves when the picture
 is done, `NXPATH_SIZE=WxH`, `NXPATH_SAMPLES=N`, `NXPATH_CORES=N` (0: this core alone),
 `NXPATH_SAVE=FILE`, `NXPATH_LIVE=0` (not traced when still), `NXPATH_PRINT=1` (a line for
-every change of the scene, with the panel's controls counted: none may lie over another or
-have words wider than its place; a line when the small picture is shown, when the picture has
-its first sample, and `pathstat:` whenever a picture ends), `NXPATH_CHECK=N` (N rays through
+every change of the scene, with the panel's controls of the frame after it counted: none may lie over another or
+have words wider than its place; a line for what each frame of the panel asked for; a line when the small picture
+is shown, when the picture has its first sample, and `pathstat:` whenever a picture ends), `NXPATH_SMOOTH=1` (the
+picture smoothed where there are no lanes, by this core, and at its end a line with the smoothed picture's sum and
+the instructions of its texels), `NXPATH_CHECK=N` (N rays through
 the tree and by every triangle: 0 may differ; and 50 N of the tracer's rays through OpenGL's
 matrices: 0 thousandths of a pixel apart). A picture of `NXPATH_SIZE` is a test's: it has its
 own shape, is shown as large as fits and has no small picture before it. The picture's line
@@ -169,6 +169,28 @@ has the tree's time, the picture's, its rays and its sum. On `rvc_cpu`, 160 x 12
 scene it starts with (7,282 triangles): sum `d63313e9` with 255 workers and with none. 320 x 240 with 8
 samples: the tree 179 ms by 227 workers, the picture 1,439 ms on 255, 1,306,934 rays, 850 million
 instructions on all cores in the whole run (calibrated, 31 October 2026; the workers term rests on one game).
+
+### The window
+
+Since 6 November 2026 the window is one OpenGL surface and Dear ImGui's frames (`panel.cpp`; the library and its
+backend as `docs/apps/imgui.md` has them, the copy on the first core: the workers trace). A frame is the view (the
+scene by OpenGL, or the traced picture) in its viewport, then ImGui: the handles (`gizmo.cpp`), the main menu bar,
+the panel (a window of fixed place and size), the line of figures, and a chooser of files when one is asked for
+(`panel_files`: a modal window with the folder, its folders and the files of the wanted endings, a name to write,
+Open or Save and Cancel; File's four dialogs, each called again with the file chosen, `A_FILES`). A press in the
+view is the view's once the frame that gave it ImGui found nothing of ImGui's under the pointer (no window, no
+popup open: a menu's row over the view is the menu's).
+
+- **What a control asks for is done after the frame**: `panel_draw()` hands back `asked` (the `A_*` of `panel.h`,
+  a slider's change with its value, a row chosen) and `nxpath.c` does them, so no dialog, no scene change and no
+  new frame happens inside one. What a frame shows is read from `nxpath.c`'s `path_*` functions.
+- **Input**: `nxpath.c`'s events feed ImGui (the pointer from the machine's words when it moves, the buttons, the
+  wheel, keys only while a slider is typed into); a press is the view's where ImGui does not want the pointer
+  (`panel_wants_pointer`) and the handles do not have it. A button's change waits until a frame has had the pointer
+  where it is: a tab takes a click only where the pointer was the frame before, and `nxkey` moves and presses at once.
+- **When a frame is drawn**: the view changed, ImGui is settling an input (`panel_busy`: a click and its release, a
+  hover), or the panel or the line of figures changed, at most every 100 ms; each frame for a change is followed by
+  one more (ImGui lays out a tab bar in one frame and draws it in the next).
 
 ### The view is the picture
 
@@ -281,11 +303,32 @@ one camera. A click picks by each thing's ball, not its triangles. The handles f
 machine's own pointer words, which `nxkey` does not move: a drag is tested with `rvc_cpu
 --pointer-circle` and `--pointer-button`, which has been done on `gizmo.cpp` alone, not in this program.
 
-### On the field
+### The picture smoothed on the lanes
 
-Where the machine has the lanes' field (`docs/machine/lanes.md`) `nxpath` traces on it, and its
-workers build the tree and fold what the field makes; `NXPATH_FIELD=0` takes the workers' shares
-instead. A picture's samples go in **batches** (`pt_batch_step`, `pt_batch_fold` in `tracer.c`): a
+The lanes' job is the shown picture's smoothing (`pt_smooth_texel` in `tracer.c`), a fixed and small amount of
+work, and the workers trace whole paths in their shares. A texel (four pixels of a row) a lane: each pixel the mean
+of its 3 x 3 neighbours' light (a part's byte squared, `shown()`'s curve undone), weighed by the binomial filter's
+place and by a tent of how near its colour is to the pixel's own (none where the squared byte differences times
+twice the samples reach 65,536), in whole numbers with no quotient a neighbour. It reads the picture as shown (each
+tile's pixels of one count of samples; the sums may be a sample ahead in some tiles) and stores its own texel of the
+output alone.
+
+- The first core posts a smoothing when the picture has more samples shown than the last was made of, every 250
+  ms at most, and does not wait for it (`smooth_poll`); the view shows the smoothed picture until it has 32
+  samples (`SMOOTH_MOST`); "Smoothed while it has few samples" (`pathtrace.smooth`) off shows the picture itself.
+  The traced picture, its sums and Export are as before.
+- Its memory (1.2 MB of the GPU's) is taken when it is first wanted, after the scene's meshes have theirs: with none
+  left (the glow scene) the picture is not smoothed.
+- What a texel costs, `NXPATH_SMOOTH=1` on `rvc_cpu` (each texel twice, the fewer counted): on average 1,585 to
+  1,638 instructions a texel in the start's scene, cornell, mirrors and balls at 160 x 120, the most 1,658; a lane's
+  pass is 8,192 (`rvc_cpu`) or 12,288. `test_all.py nxpath-smooth` holds the sum and the bound.
+- Why not the paths: a path in steps stops where the pass has 2,500 instructions left, and a step can still go
+  past a pass on the card ("steps too long for the lanes", made by the first core); a smoothing's texel cannot.
+
+### On the field (`NXPATH_FIELD=1`, the way before)
+
+With `NXPATH_FIELD=1` and where the machine has the lanes' field (`docs/machine/lanes.md`) `nxpath` traces on it,
+and its workers build the tree and fold what the field makes (no smoothing then). A picture's samples go in **batches** (`pt_batch_step`, `pt_batch_fold` in `tracer.c`): a
 batch is one job of the field in steps, an index a pixel's sample; up to 4 samples a batch, up to the
 next sample whose picture is shown. The workers fold a batch into the sums in the samples' order, every
 n-th texel a worker, making the picture when it is shown; two batches, so the field makes one while the

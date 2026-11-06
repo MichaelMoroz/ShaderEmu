@@ -4,6 +4,7 @@
  * width a multiple of four and a pixel's sum 16 bytes, so no two cores store to the same 16 bytes. The
  * scene is only read. */
 #include <stdlib.h>
+#include <string.h>
 #include "scene.h"
 #include "mcw.h"
 
@@ -837,13 +838,14 @@ void
 pt_read_all(void)
 {
 	extern char __executable_start[], etext[];
-	uintptr_t at[5] = {(uintptr_t)pt_tile, (uintptr_t)pt_share, (uintptr_t)world_between, (uintptr_t)pt_batch_step, (uintptr_t)pt_batch_fold}, low = at[0], high = at[0], page;
+	uintptr_t at[6] = {(uintptr_t)pt_tile, (uintptr_t)pt_share, (uintptr_t)world_between, (uintptr_t)pt_batch_step, (uintptr_t)pt_batch_fold,
+			   (uintptr_t)pt_smooth_texel}, low = at[0], high = at[0], page;
 	const volatile char *part[4] = {(const char *)sc_world.nodes, (const char *)sc_world.triangles, (const char *)pt.glowing, (const char *)pt.glow_upto};
 	uint32_t bytes[4] = {(uint32_t)sc_world.node_count * sizeof(struct sc_node), (uint32_t)sc_world.triangle_count * sizeof(struct sc_triangle),
 			     (uint32_t)pt.glowing_count * 4, (uint32_t)pt.glowing_count * 4}, i;
 	int k;
 
-	for (k = 1; k < 5; k++) {
+	for (k = 1; k < 6; k++) {
 		if (at[k] < low) low = at[k];
 		if (at[k] > high) high = at[k];
 	}
@@ -1026,6 +1028,55 @@ pt_batch_fold(const struct pt_batch *b, uint32_t p0, uint32_t p1, int show)
 		if (show)
 			pt.pixels[p] = shown(sum[0], samples) << 16 | shown(sum[1], samples) << 8 | shown(sum[2], samples);
 	}
+}
+
+/* ---- the picture smoothed, a texel of it a lane (docs/apps/raytrace.md, "The picture smoothed on the lanes") ---- */
+
+/* Texel t of the smoothed picture (four pixels of a row): each pixel the mean of its 3 x 3 neighbours' light, each
+ * weighed by the binomial filter's place (1 2 1) and by how near its colour is to the pixel's own (a tent: none where
+ * the squared difference of their bytes, times twice the samples, reaches 65,536: the more samples, the less a
+ * difference is noise), then as shown() makes a pixel. In whole numbers, with no quotient a neighbour: a fixed and
+ * small amount of work whatever the scene (some 1,500 instructions a texel; NXPATH_SMOOTH=1 says), far under a
+ * lane's pass. It reads the picture as it is shown (each tile's pixels of one count of samples, where the sums may
+ * be a sample ahead in some), a part's light the square of its byte (shown()'s curve undone), and stores its own
+ * texel of the output alone. */
+void
+pt_smooth_texel(uint32_t t, void *ctx)
+{
+	const struct pt_smooth *sm = (const struct pt_smooth *)ctx;
+	const int w = sm->width, h = sm->height, x0 = (int)(t * 4u % (uint32_t)w), y = (int)(t * 4u / (uint32_t)w);
+	const int k = 2 * (int)sm->samples, ya = y > 0 ? -1 : 0, yb = y + 1 < h ? 1 : 0;
+	uint32_t px[4];
+	int i, dx, dy;
+
+	for (i = 0; i < 4; i++) {
+		const int x = x0 + i, xa = x > 0 ? -1 : 0, xb = x + 1 < w ? 1 : 0;
+		const uint32_t c = sm->pixels[y * w + x];
+		const int cr = (int)(c >> 16 & 255), cg = (int)(c >> 8 & 255), cb = (int)(c & 255);
+		int r = 0, g = 0, b = 0, weights = 0;
+
+		for (dy = ya; dy <= yb; dy++) {
+			const uint32_t *row = sm->pixels + (y + dy) * w + x;
+
+			for (dx = xa; dx <= xb; dx++) {
+				const uint32_t q = row[dx];
+				const int qr = (int)(q >> 16 & 255), qg = (int)(q >> 8 & 255), qb = (int)(q & 255);
+				const int d = (qr - cr) * (qr - cr) + (qg - cg) * (qg - cg) + (qb - cb) * (qb - cb);
+				int wt = 256 - (d * k >> 8);
+
+				if (wt <= 0)
+					continue;
+				wt <<= (dy == 0) + (dx == 0);
+				r += qr * qr * wt, g += qg * qg * wt, b += qb * qb * wt, weights += wt;
+			}
+		}
+		{
+			const float of = (float)weights * 65025.0f;
+
+			px[i] = shown((float)r, of) << 16 | shown((float)g, of) << 8 | shown((float)b, of);
+		}
+	}
+	memcpy(sm->out + t * 4, px, sizeof px);
 }
 
 /* Whether the picture is made of the sums after sample `sample` on the lanes: as shows() has it for a worker. */

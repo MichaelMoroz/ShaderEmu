@@ -1,7 +1,7 @@
 // imdemo: a cube drawn with OpenGL and, over it, windows of Dear ImGui (docs/apps/imgui.md).
 // IMDEMO_FRAMES=N ends after N frames, IMDEMO_SHOW=1 starts with ImGui's own demo window open,
 // IMDEMO_SWAP=wait waits for each frame to be drawn before the next is begun. IMDEMO_HOLD=1
-// draws a picture that the clock and the counts have no part in, for comparing two builds,
+// draws a picture that the clock and the counts (the vertices too) have no part in, for comparing two builds,
 // and IMDEMO_SCROLL=N makes the demo window low and keeps it N pixels down its list (rows cut
 // by its edges).
 #include <stdio.h>
@@ -125,7 +125,7 @@ int main()
         show(false);
         ImGui::Text("%.1f frames a second", held ? 10.0f : io.Framerate);
         ImGui::Text("a frame: %u,000 instructions", whole / 1000);
-        ImGui::Text("ImGui's part: %u,000 (%d vertices)", interface / 1000, io.MetricsRenderVertices);
+        ImGui::Text("ImGui's part: %u,000 (%d vertices)", interface / 1000, held ? 1500 : io.MetricsRenderVertices);
         ImGui::Text("of that, its triangles: %u,000", drawing / 1000);
         ImGui::PlotLines("##frame", history, HISTORY, oldest, "instructions a frame", 0, FLT_MAX, ImVec2(-1, 50));
         ImGui::Separator();

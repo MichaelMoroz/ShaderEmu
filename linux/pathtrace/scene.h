@@ -147,6 +147,10 @@ struct pt_batch {
 	uint32_t s0, count, pixels;
 };
 uint32_t pt_batch_step(uint32_t i, void *batch, uint32_t round);
+/* The picture smoothed while it has few samples, a texel (four pixels of a row) a lane: from the picture as it is
+ * shown, of `samples` samples, into `out`, the picture's size (tracer.c, pt_smooth_texel). */
+struct pt_smooth { const uint32_t *pixels; uint32_t *out; int width, height; float samples; };
+void pt_smooth_texel(uint32_t texel, void *smooth);
 uint32_t pt_batch_check(const struct pt_batch *b, uint32_t first, uint32_t count);
 void pt_batch_fold(const struct pt_batch *b, uint32_t p0, uint32_t p1, int show);
 int pt_shown_after(uint32_t sample);
@@ -163,16 +167,7 @@ int pt_pick(float x, float y, int width, int height);
 /* The way an eye's ray goes through that point of such a picture, for a test of the camera. */
 void pt_way(float x, float y, int width, int height, float *way);
 
-/* ---- gizmo.cpp: Dear ImGui and ImGuizmo, for the handles of what is selected only ---- */
-
-enum { GIZMO_MOVE, GIZMO_TURN, GIZMO_SIZE };
-/* Once, after seglInit: false when it cannot be. */
-int gizmo_init(unsigned int window);
-/* One frame's handles over the picture just drawn (before the swap), with the matrices it was
- * drawn with. `matrix` is the selected thing's: 1 when a drag changed it, 2 while the pointer
- * is over a handle or holds one (the click is the handle's then, not the view's). The pointer
- * in the picture's pixels, `buttons` bit 0 the left one. */
-int gizmo_frame(const float *view, const float *projection, float *matrix, int what, int width, int height, int x, int y, int buttons);
+/* (the handles, the panel and the menus: panel.h) */
 
 #ifdef __cplusplus
 }

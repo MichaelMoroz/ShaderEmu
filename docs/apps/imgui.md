@@ -2,8 +2,10 @@
 
 [Dear ImGui](https://github.com/ocornut/imgui) runs in the Linux image over the machine's
 OpenGL: `imdemo` is a Nano-X window with a cube drawn through `programs/linux/gles.c` and
-ImGui's windows on top of it. The library is as it comes (v1.91.5, fetched by the build, no
-file of it changed); this repository has its platform and renderer, some 600 lines.
+ImGui's windows on top of it. The library is v1.91.5, fetched by the build, with `imgui.patch`
+("Drawn later", "The library's own costs"; `host/make_patch_edits.py` makes it on a clean tree:
+`git diff` there is the patch); this repository has its platform and renderer. `nxpath`'s window
+is ImGui's too (`docs/apps/raytrace.md`, "The window").
 
     wsl -- bash linux/nommu/build.sh tdawn/build.sh    (once: it makes the C++ driver)
     wsl -- bash linux/nommu/build.sh imgui/build.sh
@@ -46,8 +48,23 @@ arrow keys and Space working ImGui's own keyboard navigation.
 
 ## What it costs
 
-`rvc_cpu`, 31 October 2026, from the frame after `imstat: frame 30` to the end of 300 frames; the
-frames a second are calibrated, 31 October 2026, so programs' clocks saw the card's pace:
+The first core's instructions a frame, `IMDEMO_HOLD=1`, the mean from `imstat: frame 30` to frame 150 (`RVC_PROF`'s
+count, the kernel's and the window system's instructions on that core in it), 6 November 2026, against the
+committed code of the day before built with the held picture's count of vertices (the same sums, frame by frame):
+
+| | before | now | |
+|---|---|---|---|
+| the program's own window | 155,172 | 57,539 | 2.70 times fewer |
+| with ImGui's demo window | 218,521 | 88,164 | 2.48 times fewer |
+
+The busiest of the six copying workers: 41,600 and 52,800 a frame. What gave it, each measured on the demo window:
+drawn later (218,500 to 151,000), the plot's segments as one record and the plot on the workers (135,700 to
+114,000), the counts (to 101,000), the shares cut by work (the busiest worker 103,000 to 53,000), the fallback
+window bare, the keys' walks skipped, the resize grips quiet, a text's width in a tight loop, a run a texture,
+more inlining and the counts made again (to 88,200).
+
+The table of 31 October 2026, before all that (`rvc_cpu`, from the frame after `imstat: frame 30` to the end of
+300 frames; the frames a second calibrated, so programs' clocks saw the card's pace):
 
 | | the first core's instructions a frame | of them copying triangles | vertices | frames a second |
 |---|---|---|---|---|
@@ -125,6 +142,46 @@ and the first core goes on to the next frame.
 those with two corners the same left out, each corner with its colour for its tag. It must be
 the same for both ways of copying, every frame of 40, in `IMDEMO_HOLD=1` alone, with
 `IMDEMO_SHOW=1` and with `IMDEMO_SCROLL=300` and `1000`.
+
+## Drawn later
+
+With worker cores (`RenderAhead`), a list's text, lines and filled shapes are not made by the first core: the
+library hands them to the backend's hooks (`GImDrawListDefer`, `imgui.patch`), which keep what each was asked with
+(the text, the points) in the list's `_Deferred` words and put in its place a triangle on one vertex three times
+(x all ones, y the record's place, u the indices it can make at most, v its work). The worker that copies the list
+meets that triangle in `one_shape()` and makes the record by the library's own function (`ImFont::RenderText`,
+`AddPolyline`, `AddConvexPolyFilled`) on a list of its own (`struct scratch`: 2,048 vertices, the shared data a copy
+of the context's with its own temporary points), and copies those triangles: the same triangles in the same order,
+so `IMGUI_SUM` is the same as the first core's copy and as the library unchanged.
+
+- `AddLine`'s one-segment lines of one colour and width with nothing between them in one command are one record
+  (a plot's grid), and `PlotLines()` hands over its values and scale (`PlotEx` in the patch) in parts of 12
+  segments, each a marker of its own: a part goes through the segments before it for their floats alone.
+- What reads back the vertices it made (the colour wheel's hue ring, angled table headers, a rounded picture)
+  draws with the flag off.
+- The shares are cut by work, not indices: a command keeps its records' work and corners in `UserCallbackData` and
+  `UserCallbackDataSize` (the patch adds them where commands are made one), a marker's are in its vertex. A
+  worker out of room, or a third colour table, gives the frame to the first core (`failed`).
+- A run of the device's is a texture's, not a command's: the clip rectangles are the copy's.
+- `IMGUI_LATER=0`: the first core draws them, as before; `IMGUI_SHARES=1` prints each worker's instructions every
+  30 frames. The scratch lists are 16 bytes apart (a worker's each).
+
+## The library's own costs
+
+The rest of `imgui.patch`: a window's first place in floats (the soft doubles were two conversions and four sums a
+window); the fallback window (`Debug##Default`) begun with no title bar, background, resizing or scroll bars after a
+frame with nothing in it (it is not drawn then); the 154 named keys' two walks skipped while no key is down, owned
+or locked and none was touched (`KeysIdle`, cleared wherever a key's state or owner is written); a window's resize
+grip or border that the pointer is not over and that is not held left out of `ItemAdd()` and `ButtonBehavior()`
+(`ResizeHandleQuiet`); a text's width a run of plain characters at a time at the font's own size.
+
+## Played counts
+
+The library and the backend are compiled with GCC's counts of four held runs (`imgui.profile`, `IMGUI_PROFILE=off`
+none): `IMGUI_PROFILE=count` builds the counting program in its own folder, and `counts.py` runs it and gathers the
+counts (its docstring has the steps). The sources are named from the build's folder, so the counts hold wherever
+the tree lies. After a change to the patch or the backend, make them again: a function whose code changed has none.
+`IMGUI_AUTO`/`IMGUI_GROWTH` set the inlining (120 and 200; 60 and 80 were 1.2% more, 250 and 500 the same).
 
 ## Not done
 

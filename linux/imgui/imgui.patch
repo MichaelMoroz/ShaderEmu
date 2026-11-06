@@ -1,0 +1,461 @@
+diff --git a/imgui.cpp b/imgui.cpp
+index 4624c45..b6ee69a 100644
+--- a/imgui.cpp
++++ b/imgui.cpp
+@@ -3845,6 +3845,8 @@ ImGuiContext::ImGuiContext(ImFontAtlas* shared_font_atlas)
+ 
+     WindowsActiveCount = 0;
+     CurrentWindow = NULL;
++    KeysIdle = false;
++    FallbackWindowBefore = NULL;
+     HoveredWindow = NULL;
+     HoveredWindowUnderMovingWindow = NULL;
+     HoveredWindowBeforeClear = NULL;
+@@ -5044,6 +5046,8 @@ static void SetupDrawListSharedData()
+         g.DrawListSharedData.InitialFlags |= ImDrawListFlags_AntiAliasedFill;
+     if (g.IO.BackendFlags & ImGuiBackendFlags_RendererHasVtxOffset)
+         g.DrawListSharedData.InitialFlags |= ImDrawListFlags_AllowVtxOffset;
++    if (GImDrawListDefer.Text)
++        g.DrawListSharedData.InitialFlags |= ImDrawListFlags_Deferred;
+ }
+ 
+ void ImGui::NewFrame()
+@@ -5292,7 +5296,10 @@ void ImGui::NewFrame()
+     // This fallback is particularly important as it prevents ImGui:: calls from crashing.
+     g.WithinFrameScopeWithImplicitWindow = true;
+     SetNextWindowSize(ImVec2(400, 400), ImGuiCond_FirstUseEver);
+-    Begin("Debug##Default");
++    const bool fallback_bare = g.FallbackWindowBefore && !g.FallbackWindowBefore->WasActive;
++    Begin("Debug##Default", NULL, fallback_bare ? ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar |
++                                                  ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoCollapse : 0);
++    g.FallbackWindowBefore = g.CurrentWindow;
+     IM_ASSERT(g.CurrentWindow->IsFallbackWindow == true);
+ 
+     // Store stack sizes
+@@ -6410,6 +6417,25 @@ ImGuiID ImGui::GetWindowResizeBorderID(ImGuiWindow* window, ImGuiDir dir)
+     return id;
+ }
+ 
++// ShaderEmu: true when a resize grip or border of the current window can be neither hovered nor held (nor anything
++// else of an item's: not the active, navigated or located one, and no next item's data but flags to clear); then
++// what ItemAdd() leaves of it is made here, and ItemAdd() and ButtonBehavior() are not called.
++static bool ResizeHandleQuiet(const ImRect& r, ImGuiID id)
++{
++    ImGuiContext& g = *GImGui;
++    if (id == g.ActiveId || id == g.ActiveIdPreviousFrame || id == g.NavId || id == g.NavActivateId || id == g.DebugLocateId || g.NextItemData.HasFlags)
++        return false;
++    const ImVec2 m = g.IO.MousePos, pad = g.Style.TouchExtraPadding;
++    if (m.x >= r.Min.x - pad.x && m.y >= r.Min.y - pad.y && m.x < r.Max.x + pad.x && m.y < r.Max.y + pad.y)
++        return false;
++    g.LastItemData.ID = id;
++    g.LastItemData.Rect = g.LastItemData.NavRect = r;
++    g.LastItemData.ItemFlags = g.CurrentItemFlags | g.NextItemData.ItemFlags | ImGuiItemFlags_NoNav;
++    g.LastItemData.StatusFlags = r.Overlaps(g.CurrentWindow->ClipRect) ? ImGuiItemStatusFlags_Visible : ImGuiItemStatusFlags_None;
++    g.NextItemData.ItemFlags = ImGuiItemFlags_None;
++    return true;
++}
++
+ // Handle resize for: Resize Grips, Borders, Gamepad
+ // Return true when using auto-fit (double-click on resize grip)
+ static int ImGui::UpdateWindowManualResize(ImGuiWindow* window, const ImVec2& size_auto_fit, int* border_hovered, int* border_held, int resize_grip_count, ImU32 resize_grip_col[4], const ImRect& visibility_rect)
+@@ -6446,13 +6472,16 @@ static int ImGui::UpdateWindowManualResize(ImGuiWindow* window, const ImVec2& si
+         const ImVec2 corner = ImLerp(window->Pos, window->Pos + window->Size, def.CornerPosN);
+ 
+         // Using the FlattenChilds button flag we make the resize button accessible even if we are hovering over a child window
+-        bool hovered, held;
++        bool hovered = false, held = false;
+         ImRect resize_rect(corner - def.InnerDir * grip_hover_outer_size, corner + def.InnerDir * grip_hover_inner_size);
+         if (resize_rect.Min.x > resize_rect.Max.x) ImSwap(resize_rect.Min.x, resize_rect.Max.x);
+         if (resize_rect.Min.y > resize_rect.Max.y) ImSwap(resize_rect.Min.y, resize_rect.Max.y);
+         ImGuiID resize_grip_id = window->GetID(resize_grip_n); // == GetWindowResizeCornerID()
++        if (!ResizeHandleQuiet(resize_rect, resize_grip_id))
++        {
+         ItemAdd(resize_rect, resize_grip_id, NULL, ImGuiItemFlags_NoNav);
+         ButtonBehavior(resize_rect, resize_grip_id, &hovered, &held, ImGuiButtonFlags_FlattenChildren | ImGuiButtonFlags_NoNavFocus);
++        }
+         //GetForegroundDrawList(window)->AddRect(resize_rect.Min, resize_rect.Max, IM_COL32(255, 255, 0, 255));
+         if (hovered || held)
+             SetMouseCursor((resize_grip_n & 1) ? ImGuiMouseCursor_ResizeNESW : ImGuiMouseCursor_ResizeNWSE);
+@@ -6492,11 +6521,14 @@ static int ImGui::UpdateWindowManualResize(ImGuiWindow* window, const ImVec2& si
+         const ImGuiResizeBorderDef& def = resize_border_def[border_n];
+         const ImGuiAxis axis = (border_n == ImGuiDir_Left || border_n == ImGuiDir_Right) ? ImGuiAxis_X : ImGuiAxis_Y;
+ 
+-        bool hovered, held;
++        bool hovered = false, held = false;
+         ImRect border_rect = GetResizeBorderRect(window, border_n, grip_hover_inner_size, WINDOWS_HOVER_PADDING);
+         ImGuiID border_id = window->GetID(border_n + 4); // == GetWindowResizeBorderID()
++        if (!ResizeHandleQuiet(border_rect, border_id))
++        {
+         ItemAdd(border_rect, border_id, NULL, ImGuiItemFlags_NoNav);
+         ButtonBehavior(border_rect, border_id, &hovered, &held, ImGuiButtonFlags_FlattenChildren | ImGuiButtonFlags_NoNavFocus);
++        }
+         //GetForegroundDrawList(window)->AddRect(border_rect.Min, border_rect.Max, IM_COL32(255, 255, 0, 255));
+         if (hovered && g.HoveredIdTimer <= WINDOWS_RESIZE_FROM_EDGES_FEEDBACK_TIMER)
+             hovered = false;
+@@ -7524,8 +7556,8 @@ bool ImGui::Begin(const char* name, bool* p_open, ImGuiWindowFlags flags)
+ 
+         // Record the loss of precision of CursorStartPos which can happen due to really large scrolling amount.
+         // This is used by clipper to compensate and fix the most common use case of large scroll area. Easy and cheap, next best thing compared to switching everything to double or ImU64.
+-        double start_pos_highp_x = (double)window->Pos.x + window->WindowPadding.x - (double)window->Scroll.x + window->DecoOuterSizeX1 + window->DC.ColumnsOffset.x;
+-        double start_pos_highp_y = (double)window->Pos.y + window->WindowPadding.y - (double)window->Scroll.y + window->DecoOuterSizeY1;
++        float start_pos_highp_x = window->Pos.x + window->WindowPadding.x - window->Scroll.x + window->DecoOuterSizeX1 + window->DC.ColumnsOffset.x;
++        float start_pos_highp_y = window->Pos.y + window->WindowPadding.y - window->Scroll.y + window->DecoOuterSizeY1;
+         window->DC.CursorStartPos  = ImVec2((float)start_pos_highp_x, (float)start_pos_highp_y);
+         window->DC.CursorStartPosLossyness = ImVec2((float)(start_pos_highp_x - window->DC.CursorStartPos.x), (float)(start_pos_highp_y - window->DC.CursorStartPos.y));
+         window->DC.CursorPos = window->DC.CursorStartPos;
+@@ -9035,6 +9067,8 @@ static void ImGui::UpdateKeyRoutingTable(ImGuiKeyRoutingTable* rt)
+ {
+     ImGuiContext& g = *GImGui;
+     rt->EntriesNext.resize(0);
++    if (rt->Entries.Size == 0)
++        return;     // (every key's Index is -1 then)
+     for (ImGuiKey key = ImGuiKey_NamedKey_BEGIN; key < ImGuiKey_NamedKey_END; key = (ImGuiKey)(key + 1))
+     {
+         const int new_routing_start_idx = rt->EntriesNext.Size;
+@@ -9058,6 +9092,7 @@ static void ImGui::UpdateKeyRoutingTable(ImGuiKeyRoutingTable* rt)
+                 if (owner_data->OwnerCurr == ImGuiKeyOwner_NoOwner)
+                 {
+                     owner_data->OwnerCurr = routing_entry->RoutingCurr;
++                    g.KeysIdle = false;
+                     //IMGUI_DEBUG_LOG("SetKeyOwner(%s, owner_id=0x%08X) via Routing\n", GetKeyName(key), routing_entry->RoutingCurr);
+                 }
+             }
+@@ -9568,6 +9603,8 @@ static void UpdateAliasKey(ImGuiKey key, bool v, float analog_value)
+ {
+     IM_ASSERT(ImGui::IsAliasKey(key));
+     ImGuiKeyData* key_data = ImGui::GetKeyData(key);
++    if (v)
++        GImGui->KeysIdle = false;
+     key_data->Down = v;
+     key_data->AnalogValue = analog_value;
+ }
+@@ -9613,7 +9650,9 @@ static void ImGui::UpdateKeyboardInputs()
+         g.LastKeyModsChangeFromNoneTime = g.Time;
+ 
+     // Clear gamepad data if disabled
+-    if ((io.BackendFlags & ImGuiBackendFlags_HasGamepad) == 0)
++    const bool keys_idle = g.KeysIdle;
++    bool keys_busy = false;
++    if (!keys_idle && (io.BackendFlags & ImGuiBackendFlags_HasGamepad) == 0)
+         for (int key = ImGuiKey_Gamepad_BEGIN; key < ImGuiKey_Gamepad_END; key++)
+         {
+             io.KeysData[key - ImGuiKey_NamedKey_BEGIN].Down = false;
+@@ -9621,9 +9660,12 @@ static void ImGui::UpdateKeyboardInputs()
+         }
+ 
+     // Update keys
+-    for (int key = ImGuiKey_NamedKey_BEGIN; key < ImGuiKey_NamedKey_END; key++)
++    for (int key = ImGuiKey_NamedKey_BEGIN; !keys_idle && key < ImGuiKey_NamedKey_END; key++)
+     {
+         ImGuiKeyData* key_data = &io.KeysData[key - ImGuiKey_NamedKey_BEGIN];
++        if (!key_data->Down && key_data->DownDuration < 0.0f && key_data->DownDurationPrev < 0.0f)
++            continue;
++        keys_busy = true;
+         key_data->DownDurationPrev = key_data->DownDuration;
+         key_data->DownDuration = key_data->Down ? (key_data->DownDuration < 0.0f ? 0.0f : key_data->DownDuration + io.DeltaTime) : -1.0f;
+         if (key_data->DownDuration == 0.0f)
+@@ -9636,16 +9678,21 @@ static void ImGui::UpdateKeyboardInputs()
+     }
+ 
+     // Update keys/input owner (named keys only): one entry per key
+-    for (ImGuiKey key = ImGuiKey_NamedKey_BEGIN; key < ImGuiKey_NamedKey_END; key = (ImGuiKey)(key + 1))
++    for (ImGuiKey key = ImGuiKey_NamedKey_BEGIN; !keys_idle && key < ImGuiKey_NamedKey_END; key = (ImGuiKey)(key + 1))
+     {
+         ImGuiKeyData* key_data = &io.KeysData[key - ImGuiKey_NamedKey_BEGIN];
+         ImGuiKeyOwnerData* owner_data = &g.KeysOwnerData[key - ImGuiKey_NamedKey_BEGIN];
++        if (owner_data->OwnerCurr == ImGuiKeyOwner_NoOwner && owner_data->OwnerNext == ImGuiKeyOwner_NoOwner && !owner_data->LockThisFrame && !owner_data->LockUntilRelease)
++            continue;
++        keys_busy = true;
+         owner_data->OwnerCurr = owner_data->OwnerNext;
+         if (!key_data->Down) // Important: ownership is released on the frame after a release. Ensure a 'MouseDown -> CloseWindow -> MouseUp' chain doesn't lead to someone else seeing the MouseUp.
+             owner_data->OwnerNext = ImGuiKeyOwner_NoOwner;
+         owner_data->LockThisFrame = owner_data->LockUntilRelease = owner_data->LockUntilRelease && key_data->Down;  // Clear LockUntilRelease when key is not Down anymore
+     }
+ 
++    g.KeysIdle = !keys_busy;
++
+     // Update key routing (for e.g. shortcuts)
+     UpdateKeyRoutingTable(&g.KeysRoutingTable);
+ }
+@@ -9984,6 +10031,7 @@ void ImGui::UpdateInputEvents(bool trickle_fast_inputs)
+             key_data->Down = e->Key.Down;
+             key_data->AnalogValue = e->Key.AnalogValue;
+             key_changed = true;
++            g.KeysIdle = false;
+             key_changed_mask.SetBit(key_data_index);
+             if (trickle_interleaved_nonchar_keys_and_text && !key_is_potentially_for_char_input)
+                 key_changed_nonchar = true;
+@@ -10106,6 +10154,7 @@ void ImGui::SetKeyOwner(ImGuiKey key, ImGuiID owner_id, ImGuiInputFlags flags)
+ 
+     ImGuiKeyOwnerData* owner_data = GetKeyOwnerData(&g, key);
+     owner_data->OwnerCurr = owner_data->OwnerNext = owner_id;
++    g.KeysIdle = false;
+ 
+     // We cannot lock by default as it would likely break lots of legacy code.
+     // In the case of using LockUntilRelease while key is not down we still lock during the frame (no key_data->Down test)
+diff --git a/imgui.h b/imgui.h
+index d628659..2434950 100644
+--- a/imgui.h
++++ b/imgui.h
+@@ -3031,8 +3031,27 @@ enum ImDrawListFlags_
+     ImDrawListFlags_AntiAliasedLinesUseTex  = 1 << 1,  // Enable anti-aliased lines/borders using textures when possible. Require backend to render with bilinear filtering (NOT point/nearest filtering).
+     ImDrawListFlags_AntiAliasedFill         = 1 << 2,  // Enable anti-aliased edge around filled shapes (rounded rectangles, circles).
+     ImDrawListFlags_AllowVtxOffset          = 1 << 3,  // Can emit 'VtxOffset > 0' to allow large meshes. Set when 'ImGuiBackendFlags_RendererHasVtxOffset' is enabled.
++    ImDrawListFlags_Deferred                = 1 << 4,  // ShaderEmu: text, lines and filled shapes are handed to GImDrawListDefer, which may draw them later (a backend's)
+ };
+ 
++// ShaderEmu (linux/imgui/imgui.patch, docs/apps/imgui.md "Drawn later"): a backend that draws an ImDrawList's text,
++// lines and filled shapes later, elsewhere, by these same functions on a list of its own. Each hook answers true
++// when it took the primitive (it then put what stands for it in the list), false when the list is to draw it now.
++// A list draws through them only with ImDrawListFlags_Deferred, which NewFrame() gives every list when Text is set.
++struct ImDrawListDefer
++{
++    bool (*Text)(ImDrawList* list, ImFont* font, float size, const ImVec2& pos, ImU32 col, const ImVec4& clip_rect, const char* text_begin, const char* text_end, float wrap_width, bool cpu_fine_clip);
++    bool (*Polyline)(ImDrawList* list, const ImVec2* points, int points_count, ImU32 col, ImDrawFlags flags, float thickness);
++    bool (*Line)(ImDrawList* list, float x1, float y1, float x2, float y2, ImU32 col, float thickness);   // AddLine's two points, a half pixel on
++    // PlotLines()'s segments: the values as the getter gives them (or `array` at `stride`, Plot_ArrayGetter's), the scale
++    // (FLT_MAX: from the values), and the rest as PlotEx() has worked it out; the same AddLine() calls made later
++    bool (*PlotLines)(ImDrawList* list, float (*values_getter)(void* data, int idx), void* data, const float* array, int stride, int values_count,
++                      int values_offset, int res_w, int item_count, float scale_min, float scale_max, const ImVec2& min, const ImVec2& max,
++                      ImU32 col_base, ImU32 col_hovered, int idx_hovered);
++    bool (*ConvexPolyFilled)(ImDrawList* list, const ImVec2* points, int points_count, ImU32 col);
++};
++extern IMGUI_API ImDrawListDefer GImDrawListDefer;
++
+ // Draw command list
+ // This is the low-level list of polygons that ImGui:: functions are filling. At the end of the frame,
+ // all command lists are passed to your ImGuiIO::RenderDrawListFn function for rendering.
+@@ -3063,6 +3082,7 @@ struct ImDrawList
+     ImVector<ImU8>          _CallbacksDataBuf;  // [Internal]
+     float                   _FringeScale;       // [Internal] anti-alias fringe is scaled by this value, this helps to keep things sharp while zooming at vertex buffer content
+     const char*             _OwnerName;         // Pointer to owner window's name for debugging
++    ImVector<unsigned int>  _Deferred;          // [Internal] ShaderEmu: what GImDrawListDefer's hooks keep of the primitives they took
+ 
+     // If you want to create ImDrawList instances, pass them ImGui::GetDrawListSharedData() or create and use your own ImDrawListSharedData (so you can use ImDrawList without ImGui)
+     ImDrawList(ImDrawListSharedData* shared_data) { memset(this, 0, sizeof(*this)); _Data = shared_data; }
+diff --git a/imgui_draw.cpp b/imgui_draw.cpp
+index fa82a94..28c464f 100644
+--- a/imgui_draw.cpp
++++ b/imgui_draw.cpp
+@@ -418,10 +418,13 @@ void ImDrawList::_ResetForNewFrame()
+     _CallbacksDataBuf.resize(0);
+     _Path.resize(0);
+     _Splitter.Clear();
++    _Deferred.resize(0);
+     CmdBuffer.push_back(ImDrawCmd());
+     _FringeScale = 1.0f;
+ }
+ 
++ImDrawListDefer GImDrawListDefer;
++
+ void ImDrawList::_ClearFreeMemory()
+ {
+     CmdBuffer.clear();
+@@ -436,6 +439,7 @@ void ImDrawList::_ClearFreeMemory()
+     _CallbacksDataBuf.clear();
+     _Path.clear();
+     _Splitter.ClearFreeMemory();
++    _Deferred.clear();
+ }
+ 
+ ImDrawList* ImDrawList::CloneOutput() const
+@@ -522,6 +526,8 @@ void ImDrawList::_TryMergeDrawCmds()
+     if (ImDrawCmd_HeaderCompare(curr_cmd, prev_cmd) == 0 && ImDrawCmd_AreSequentialIdxOffset(prev_cmd, curr_cmd) && curr_cmd->UserCallback == NULL && prev_cmd->UserCallback == NULL)
+     {
+         prev_cmd->ElemCount += curr_cmd->ElemCount;
++        prev_cmd->UserCallbackData = (char*)prev_cmd->UserCallbackData + (size_t)curr_cmd->UserCallbackData;
++        prev_cmd->UserCallbackDataSize += curr_cmd->UserCallbackDataSize;
+         CmdBuffer.pop_back();
+     }
+ }
+@@ -750,6 +756,8 @@ void ImDrawList::AddPolyline(const ImVec2* points, const int points_count, ImU32
+ {
+     if (points_count < 2 || (col & IM_COL32_A_MASK) == 0)
+         return;
++    if ((Flags & ImDrawListFlags_Deferred) && GImDrawListDefer.Polyline(this, points, points_count, col, flags, thickness))
++        return;
+ 
+     const bool closed = (flags & ImDrawFlags_Closed) != 0;
+     const ImVec2 opaque_uv = _Data->TexUvWhitePixel;
+@@ -1008,6 +1016,8 @@ void ImDrawList::AddConvexPolyFilled(const ImVec2* points, const int points_coun
+ {
+     if (points_count < 3 || (col & IM_COL32_A_MASK) == 0)
+         return;
++    if ((Flags & ImDrawListFlags_Deferred) && GImDrawListDefer.ConvexPolyFilled(this, points, points_count, col))
++        return;
+ 
+     const ImVec2 uv = _Data->TexUvWhitePixel;
+ 
+@@ -1428,6 +1438,8 @@ void ImDrawList::AddLine(const ImVec2& p1, const ImVec2& p2, ImU32 col, float th
+ {
+     if ((col & IM_COL32_A_MASK) == 0)
+         return;
++    if ((Flags & ImDrawListFlags_Deferred) && GImDrawListDefer.Line(this, p1.x + 0.5f, p1.y + 0.5f, p2.x + 0.5f, p2.y + 0.5f, col, thickness))
++        return;
+     PathLineTo(p1 + ImVec2(0.5f, 0.5f));
+     PathLineTo(p2 + ImVec2(0.5f, 0.5f));
+     PathStroke(col, 0, thickness);
+@@ -1674,6 +1686,8 @@ void ImDrawList::AddText(ImFont* font, float font_size, const ImVec2& pos, ImU32
+         clip_rect.z = ImMin(clip_rect.z, cpu_fine_clip_rect->z);
+         clip_rect.w = ImMin(clip_rect.w, cpu_fine_clip_rect->w);
+     }
++    if ((Flags & ImDrawListFlags_Deferred) && GImDrawListDefer.Text(this, font, font_size, pos, col, clip_rect, text_begin, text_end, wrap_width, cpu_fine_clip_rect != NULL))
++        return;
+     font->RenderText(this, font_size, pos, col, clip_rect, text_begin, text_end, wrap_width, cpu_fine_clip_rect != NULL);
+ }
+ 
+@@ -1730,10 +1744,13 @@ void ImDrawList::AddImageRounded(ImTextureID user_texture_id, const ImVec2& p_mi
+     if (push_texture_id)
+         PushTextureID(user_texture_id);
+ 
++    const ImDrawListFlags deferred = Flags & ImDrawListFlags_Deferred;
++    Flags &= ~ImDrawListFlags_Deferred;
+     int vert_start_idx = VtxBuffer.Size;
+     PathRect(p_min, p_max, rounding, flags);
+     PathFillConvex(col);
+     int vert_end_idx = VtxBuffer.Size;
++    Flags |= deferred;
+     ImGui::ShadeVertsLinearUV(this, vert_start_idx, vert_end_idx, p_min, p_max, uv_min, uv_max, true);
+ 
+     if (push_texture_id)
+@@ -2130,6 +2147,8 @@ void ImDrawListSplitter::Merge(ImDrawList* draw_list)
+             {
+                 // Merge previous channel last draw command with current channel first draw command if matching.
+                 last_cmd->ElemCount += next_cmd->ElemCount;
++                last_cmd->UserCallbackData = (char*)last_cmd->UserCallbackData + (size_t)next_cmd->UserCallbackData;
++                last_cmd->UserCallbackDataSize += next_cmd->UserCallbackDataSize;
+                 idx_offset += next_cmd->ElemCount;
+                 ch._CmdBuffer.erase(ch._CmdBuffer.Data); // FIXME-OPT: Improve for multiple merges.
+             }
+@@ -3973,10 +3992,19 @@ ImVec2 ImFont::CalcTextSizeA(float size, float max_width, float wrap_width, cons
+ 
+     const bool word_wrap_enabled = (wrap_width > 0.0f);
+     const char* word_wrap_eol = NULL;
++    const float* plain = !word_wrap_enabled && scale == 1.0f && max_width == FLT_MAX && IndexAdvanceX.Size >= 0x80 ? IndexAdvanceX.Data : NULL;
+ 
+     const char* s = text_begin;
+     while (s < text_end)
+     {
++        if (plain)
++        {
++            unsigned int c;
++            while (s < text_end && (c = (unsigned char)*s) >= 32 && c < 0x80)
++                line_width += plain[c], s++;
++            if (s >= text_end)
++                break;
++        }
+         if (word_wrap_enabled)
+         {
+             // Calculate how far we can render. Requires two passes on the string data but keeps the code simple and not intrusive for what's essentially an uncommon feature.
+diff --git a/imgui_internal.h b/imgui_internal.h
+index 49452ab..6ad9aae 100644
+--- a/imgui_internal.h
++++ b/imgui_internal.h
+@@ -2061,6 +2061,8 @@ struct ImGuiContext
+     ImVec2                  WindowsHoverPadding;                // Padding around resizable windows for which hovering on counts as hovering the window == ImMax(style.TouchExtraPadding, WINDOWS_HOVER_PADDING).
+     ImGuiID                 DebugBreakInWindow;                 // Set to break in Begin() call.
+     ImGuiWindow*            CurrentWindow;                      // Window being drawn into
++    bool                    KeysIdle;                           // ShaderEmu: no named key is down, held, owned or locked, and none has been touched since
++    ImGuiWindow*            FallbackWindowBefore;               // ShaderEmu: the fallback window of the frame before
+     ImGuiWindow*            HoveredWindow;                      // Window the mouse is hovering. Will typically catch mouse inputs.
+     ImGuiWindow*            HoveredWindowUnderMovingWindow;     // Hovered window ignoring MovingWindow. Only set if MovingWindow is set.
+     ImGuiWindow*            HoveredWindowBeforeClear;           // Window the mouse is hovering. Filled even with _NoMouse. This is currently useful for multi-context compositors.
+diff --git a/imgui_tables.cpp b/imgui_tables.cpp
+index e36e6f1..4e00d46 100644
+--- a/imgui_tables.cpp
++++ b/imgui_tables.cpp
+@@ -3341,11 +3341,14 @@ void ImGui::TableAngledHeadersRowEx(ImGuiID row_id, float angle, float max_label
+                     float clip_width = max_label_width - padding.y; // Using padding.y*2.0f would be symmetrical but hide more text.
+                     float clip_height = ImMin(label_size.y, column->ClipRect.Max.x - column->WorkMinX - line_off_curr_x);
+                     ImRect clip_r(window->ClipRect.Min, window->ClipRect.Min + ImVec2(clip_width, clip_height));
++                    const ImDrawListFlags deferred = draw_list->Flags & ImDrawListFlags_Deferred;
++                    draw_list->Flags &= ~ImDrawListFlags_Deferred;
+                     int vtx_idx_begin = draw_list->_VtxCurrentIdx;
+                     PushStyleColor(ImGuiCol_Text, request->TextColor);
+                     RenderTextEllipsis(draw_list, clip_r.Min, clip_r.Max, clip_r.Max.x, clip_r.Max.x, label_name, label_name_eol, &label_size);
+                     PopStyleColor();
+                     int vtx_idx_end = draw_list->_VtxCurrentIdx;
++                    draw_list->Flags |= deferred;
+ 
+                     // Up<>Down alignment
+                     const float available_space = ImMax(clip_width - label_size.x + ImAbs(padding.x * cos_a) * 2.0f - ImAbs(padding.y * sin_a) * 2.0f, 0.0f);
+diff --git a/imgui_widgets.cpp b/imgui_widgets.cpp
+index b5d66ba..f7f14cd 100644
+--- a/imgui_widgets.cpp
++++ b/imgui_widgets.cpp
+@@ -5979,10 +5979,13 @@ bool ImGui::ColorPicker4(const char* label, float col[4], ImGuiColorEditFlags fl
+         {
+             const float a0 = (n)     /6.0f * 2.0f * IM_PI - aeps;
+             const float a1 = (n+1.0f)/6.0f * 2.0f * IM_PI + aeps;
++            const ImDrawListFlags deferred = draw_list->Flags & ImDrawListFlags_Deferred;
++            draw_list->Flags &= ~ImDrawListFlags_Deferred;
+             const int vert_start_idx = draw_list->VtxBuffer.Size;
+             draw_list->PathArcTo(wheel_center, (wheel_r_inner + wheel_r_outer)*0.5f, a0, a1, segment_per_arc);
+             draw_list->PathStroke(col_white, 0, wheel_thickness);
+             const int vert_end_idx = draw_list->VtxBuffer.Size;
++            draw_list->Flags |= deferred;
+ 
+             // Paint colors over existing vertices
+             ImVec2 gradient_p0(wheel_center.x + ImCos(a0) * wheel_r_inner, wheel_center.y + ImSin(a0) * wheel_r_inner);
+@@ -8323,6 +8326,9 @@ bool ImGui::ListBox(const char* label, int* current_item, const char* (*getter)(
+ // - others https://github.com/ocornut/imgui/wiki/Useful-Extensions
+ //-------------------------------------------------------------------------
+ 
++struct ImGuiPlotArrayGetterData;
++static float Plot_ArrayGetter(void* data, int idx);
++
+ int ImGui::PlotEx(ImGuiPlotType plot_type, const char* label, float (*values_getter)(void* data, int idx), void* data, int values_count, int values_offset, const char* overlay_text, float scale_min, float scale_max, const ImVec2& size_arg)
+ {
+     ImGuiContext& g = *GImGui;
+@@ -8345,8 +8351,11 @@ int ImGui::PlotEx(ImGuiPlotType plot_type, const char* label, float (*values_get
+     bool hovered;
+     ButtonBehavior(frame_bb, id, &hovered, NULL);
+ 
++    // ShaderEmu: a plot's lines made later (GImDrawListDefer.PlotLines), with the scale
++    const bool later = plot_type == ImGuiPlotType_Lines && values_count >= 2 && (window->DrawList->Flags & ImDrawListFlags_Deferred) && GImDrawListDefer.PlotLines;
++
+     // Determine scale from values if not specified
+-    if (scale_min == FLT_MAX || scale_max == FLT_MAX)
++    if (!later && (scale_min == FLT_MAX || scale_max == FLT_MAX))
+     {
+         float v_min = FLT_MAX;
+         float v_max = -FLT_MAX;
+@@ -8389,6 +8398,38 @@ int ImGui::PlotEx(ImGuiPlotType plot_type, const char* label, float (*values_get
+             idx_hovered = v_idx;
+         }
+ 
++        if (later)
++        {
++            const ImU32 col_base = GetColorU32(ImGuiCol_PlotLines), col_hovered = GetColorU32(ImGuiCol_PlotLinesHovered);
++            const bool array = values_getter == &Plot_ArrayGetter;
++            const float* values = array ? *(const float* const*)data : NULL;
++            const int stride = array ? ((const int*)data)[1] : 0;
++            if (GImDrawListDefer.PlotLines(window->DrawList, values_getter, data, values, stride, values_count, values_offset, res_w, item_count,
++                                           scale_min, scale_max, inner_bb.Min, inner_bb.Max, col_base, col_hovered, idx_hovered))
++                values_count = 0;   // (drawn: the loop below has nothing to do)
++            else if (scale_min == FLT_MAX || scale_max == FLT_MAX)
++            {
++                float v_min = FLT_MAX;
++                float v_max = -FLT_MAX;
++                for (int i = 0; i < values_count; i++)
++                {
++                    const float v = values_getter(data, i);
++                    if (v != v) // Ignore NaN values
++                        continue;
++                    v_min = ImMin(v_min, v);
++                    v_max = ImMax(v_max, v);
++                }
++                if (scale_min == FLT_MAX)
++                    scale_min = v_min;
++                if (scale_max == FLT_MAX)
++                    scale_max = v_max;
++            }
++        }
++    }
++    if (values_count >= values_count_min)
++    {
++        int res_w = ImMin((int)frame_size.x, values_count) + ((plot_type == ImGuiPlotType_Lines) ? -1 : 0);
++        int item_count = values_count + ((plot_type == ImGuiPlotType_Lines) ? -1 : 0);
+         const float t_step = 1.0f / (float)res_w;
+         const float inv_scale = (scale_min == scale_max) ? 0.0f : (1.0f / (scale_max - scale_min));
+ 

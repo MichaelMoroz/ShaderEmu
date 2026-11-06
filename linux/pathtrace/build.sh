@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds nxpath, the mesh viewer whose scenes the worker cores path trace (docs/apps/raytrace.md),
+# Builds nxpath, the mesh viewer whose scenes the worker cores path trace (docs/apps/raytrace.md), its window Dear ImGui's,
 # and puts its example meshes into /root/Models of the image.
 #   wsl -- bash /mnt/c/.../linux/pathtrace/build.sh        (after linux/imgui/build.sh)
 # In the guest: nano-X -p & nxpath
@@ -46,6 +46,8 @@ grep -q 'mRadiusSquareCenter, colors\[0\], 0, ' "$BUILD/ImGuizmo_ours.cpp" || { 
 # (its own sines and cosines, a ring's, are gizmo.cpp's: in floats)
 rv32-c++ -O3 $CXX $INC -I"$GIZMO" -Dsinf=gizmo_sin -Dcosf=gizmo_cos -c "$BUILD/ImGuizmo_ours.cpp" -o "$BUILD/ImGuizmo.o"
 rv32-c++ -O3 $CXX $INC -I"$GIZMO" -c "$HERE/gizmo.cpp" -o "$BUILD/gizmo.o"
+# the window's menus, panel and line of figures, by Dear ImGui over the view (docs/apps/raytrace.md, "The window")
+rv32-c++ -O2 $CXX $INC -c "$HERE/panel.cpp" -o "$BUILD/panel.o"
 # the OpenGL library with floats inside and its own frame size (not linux/imgui's megabyte: the
 # meshes are drawn where they lie, and the memory is theirs)
 rv32-cc -O2 -fno-pie -w -DSEGL_FLOAT $INC -c "$REPO/programs/linux/gles.c" -o "$BUILD/gles.o"
@@ -58,7 +60,7 @@ done
 rv32-cc -O2 -fno-pie -Wall -Wno-unused-function -fsingle-precision-constant -fno-math-errno $INC -c "$HERE/nxpath.c" -o "$BUILD/nxpath.o"
 rv32-cc -O2 -fno-pie -w $INC -c "$REPO/programs/mc/mcw.c" -o "$BUILD/mcw.o"
 rv32-c++ $TUNE --param=max-inline-insns-auto=60 --param=inline-unit-growth=80 -flto=auto -w "$BUILD/nxpath.o" "$BUILD/tracer.o" "$BUILD/bvh.o" "$BUILD/mesh.o" \
-    "$BUILD/gizmo.o" "$BUILD/ImGuizmo.o" "$BUILD/mcw.o" "$LIB/imgui.o" "$LIB/imgui_draw.o" "$LIB/imgui_tables.o" "$LIB/imgui_widgets.o" \
+    "$BUILD/gizmo.o" "$BUILD/panel.o" "$BUILD/ImGuizmo.o" "$BUILD/mcw.o" "$LIB/imgui.o" "$LIB/imgui_draw.o" "$LIB/imgui_tables.o" "$LIB/imgui_widgets.o" \
     "$LIB/imgui_impl_shaderemu.o" "$LIB/cxxrt.o" "$BUILD/gles.o" "$MW/src/lib/libnano-X.a" -lm -o "$BUILD/nxpath"
 riscv32-linux-strip -o "$OUT/usr/bin/nxpath" "$BUILD/nxpath"
 echo "Other/Path tracer (every core)=nxpath" > "$OUT/usr/share/nxapps.83-pathtrace"
