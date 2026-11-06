@@ -30,15 +30,24 @@ public static class ShaderEmuGlass
     const string GlassPath = Generated + "/Glass.mat";
     const string GlassShader = "ShaderEmu/WindowRain";
 
+    // The next turn of the editor's loop. Not EditorApplication.delayCall: an editor in the back runs none of those until it is
+    // in front again (6 November 2026: a bake's end waited there, its lamps on and its scene unsaved), and runs its update.
+    public static void Soon(System.Action what)
+    {
+        EditorApplication.CallbackFunction once = null;
+        once = () => { EditorApplication.update -= once; what(); };
+        EditorApplication.update += once;
+    }
+
     static ShaderEmuGlass()
     {
         EditorSceneManager.sceneOpened += (scene, mode) => Hold(scene, "the scene opened");
         EditorSceneManager.sceneSaving += (scene, path) => Hold(scene, "the scene saved");
         Lightmapping.bakeCompleted += () => HoldOpen("Unity's bake");
 #if BAKERY_INCLUDED
-        ftRenderLightmap.OnFinishedFullRender += (sender, e) => EditorApplication.delayCall += () => HoldOpen("Bakery's bake");
+        ftRenderLightmap.OnFinishedFullRender += (sender, e) => Soon(() => HoldOpen("Bakery's bake"));
 #endif
-        EditorApplication.delayCall += () => HoldOpen("scripts reloaded");   // (after a shader sync, an image import, an editor start)
+        Soon(() => HoldOpen("scripts reloaded"));   // (after a shader sync, an image import, an editor start)
         // and a watch: an event did not always come (a model imported from a script called none), so
         // every two seconds the panes are looked at, and held if one is wrong (two renderers: no cost)
         EditorApplication.hierarchyChanged += () => watched = null;
@@ -55,6 +64,9 @@ public static class ShaderEmuGlass
         Scene scene = SceneManager.GetActiveScene();
         if (watched == null) { watched = new List<MeshRenderer>(Panes(scene)); watchedProbe = Probe(scene); }
         if (watched.Count == 0) return;
+        // (a build destroys the probe and makes another: the one kept is gone before Unity says the hierarchy changed,
+        // and every build said there was no probe)
+        if (watchedProbe == null) watchedProbe = Probe(scene);
         if (watchedProbe == null)   // (a scene without the window's probe: said once a minute, not mended here)
         {
             nextWatch = EditorApplication.timeSinceStartup + 60.0;
@@ -277,7 +289,7 @@ class ShaderEmuGlassImport : AssetPostprocessor
         foreach (string path in imported)
             if (path.StartsWith("Assets/ShaderEmu/Models/") || path == "Assets/ShaderEmu/Generated/Glass.mat")
             {
-                EditorApplication.delayCall += () => ShaderEmuGlass.HoldOpen("a model import");
+                ShaderEmuGlass.Soon(() => ShaderEmuGlass.HoldOpen("a model import"));
                 return;
             }
     }

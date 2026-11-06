@@ -606,7 +606,8 @@ public static partial class ShaderEmuBuilder
         Solid(solid, "Wall back", CorX0, dx0, 0, height, -halfD - wall, -halfD);
         Solid(solid, "Wall back", dx1, CorX1 + wall, 0, height, -halfD - wall, -halfD);
         Solid(solid, "Wall back", dx0, dx1, BackDoorHigh, height, -halfD - wall, -halfD);
-        Solid(solid, "Corridor floor", CorX0, CorX1, -0.1f, 0, corZ0, -halfD);
+        // (the floors run under the walls: a doorway had the wall's 20 cm of no floor, a bump to walk over and a pen dropped there lost)
+        Solid(solid, "Corridor floor", CorX0, CorX1, -0.1f, 0, corZ0 - wall, -halfD);
         Solid(solid, "Corridor ceiling", CorX0, CorX1, CorHigh, CorHigh + 0.1f, corZ0, corZ1);
         SideRoomsPlan sides = SideRooms();
         List<float> sideDoors = new List<float>();   // the side rooms' doorways in the corridor's south wall, in rising x
@@ -616,7 +617,7 @@ public static partial class ShaderEmuBuilder
         Solid(solid, "Corridor wall", CorX1, CorX1 + wall, 0, CorHigh, corZ0, corZ1);
         Solid(solid, "Corridor bench", -2.55f, -1.35f, 0, 0.45f, corZ1 - 0.5f, corZ1);
         // the holodecks' corridor, and a box of walls round each room with its doorway left open
-        Solid(solid, "Holo corridor floor", hx0, -halfW, -0.1f, 0, hz0, hz1);
+        Solid(solid, "Holo corridor floor", hx0, -halfW, -0.1f, 0, hz0 - wall, hz1 + wall);
         Solid(solid, "Holo corridor ceiling", hx0, hx1, hHigh, hHigh + 0.1f, hz0, hz1);
         Solid(solid, "Holo corridor wall", hx0 - wall, hx0, 0, hHigh, hz0, hz1);
         List<float> north = new List<float>(), south = new List<float>();
@@ -661,6 +662,10 @@ public static partial class ShaderEmuBuilder
             Solid(solid, "Side room wall", x0 - wall, x0, 0, high, z0 - wall, z1);
             Solid(solid, "Side room wall", x1, x1 + wall, 0, high, z0 - wall, z1);
             Solid(solid, "Side room wall", x0, x1, 0, high, z0 - wall, z0);
+            // its north wall is the corridor's, which is no wider than the corridor: N13 reaches 0.8 m past its west end, and
+            // there its wall (world/rooms.py's, seen) had nothing behind it to stop a visitor walking out of the building
+            if (x0 < CorX0) Solid(solid, "Side room wall", x0 - wall, CorX0, 0, high, z1, z1 + wall);
+            if (x1 > CorX1) Solid(solid, "Side room wall", CorX1, x1 + wall, 0, high, z1, z1 + wall);
             Vector3 middle = new Vector3((x0 + x1) / 2, high / 2, (z0 + z1) / 2), size = new Vector3(x1 - x0, high, z1 - z0);
             LightVolumeIn(world, "Light volume side room", middle, size);
             ProbeIn(decor, "Reflection probe side room", middle, size);

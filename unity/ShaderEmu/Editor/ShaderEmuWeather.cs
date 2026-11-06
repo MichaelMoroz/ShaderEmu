@@ -155,31 +155,41 @@ public static partial class ShaderEmuBuilder
         camera.farClipPlane = 3000f;
         CubemapFace[] faces = { CubemapFace.PositiveX, CubemapFace.NegativeX, CubemapFace.PositiveY, CubemapFace.NegativeY, CubemapFace.PositiveZ, CubemapFace.NegativeZ };
         // the room (and the city through the other panes' frames), the panes themselves put away
-        List<Renderer> panesAway = new List<Renderer>();
-        foreach (Renderer renderer in Object.FindObjectsOfType<Renderer>())
-            if (renderer.enabled && System.Array.IndexOf(renderer.sharedMaterials, glass) >= 0) { renderer.enabled = false; panesAway.Add(renderer); }
-        Color[][] whole = CaptureHdr(camera, faces, RoomSize);
-        foreach (Renderer renderer in panesAway) renderer.enabled = true;
-        // again with nothing but the city and the sky
-        Transform city = world.Find("Models/City");
-        List<Renderer> hidden = new List<Renderer>();
-        foreach (Renderer renderer in Object.FindObjectsOfType<Renderer>())
-            if (renderer.enabled && (city == null || !renderer.transform.IsChildOf(city))) { renderer.enabled = false; hidden.Add(renderer); }
-        Color[][] cityOnly = CaptureHdr(camera, faces, CitySize);
-        // and the city and the sky as a flash of 1 lights them (_UdonWeatherFlash, EmuWeather): the
-        // drops show lightning as the window does. Everything lightning lights is linear in the flash,
-        // so the glass mixes the two pictures by the flash and has what any flash shows
+        // (what is put away comes back whatever a capture does: a capture that threw left the room's renderers off,
+        // and the build's save kept a scene with nothing in it drawn)
+        List<Renderer> panesAway = new List<Renderer>(), hidden = new List<Renderer>();
         int flashId = Shader.PropertyToID("_UdonWeatherFlash");
         float flashWas = Shader.GetGlobalFloat(flashId);
-        Shader.SetGlobalFloat(flashId, 1f);
-        Color[][] cityLit = CaptureHdr(camera, faces, CitySize);
-        Shader.SetGlobalFloat(flashId, flashWas);
-        foreach (Renderer renderer in hidden) renderer.enabled = true;
+        Color[][] whole, cityOnly, cityLit;
+        try
+        {
+            foreach (Renderer renderer in Object.FindObjectsOfType<Renderer>())
+                if (renderer.enabled && System.Array.IndexOf(renderer.sharedMaterials, glass) >= 0) { renderer.enabled = false; panesAway.Add(renderer); }
+            whole = CaptureHdr(camera, faces, RoomSize);
+            foreach (Renderer renderer in panesAway) renderer.enabled = true;
+            panesAway.Clear();
+            // again with nothing but the city and the sky
+            Transform city = world.Find("Models/City");
+            foreach (Renderer renderer in Object.FindObjectsOfType<Renderer>())
+                if (renderer.enabled && (city == null || !renderer.transform.IsChildOf(city))) { renderer.enabled = false; hidden.Add(renderer); }
+            cityOnly = CaptureHdr(camera, faces, CitySize);
+            // and the city and the sky as a flash of 1 lights them (_UdonWeatherFlash, EmuWeather): the
+            // drops show lightning as the window does. Everything lightning lights is linear in the flash,
+            // so the glass mixes the two pictures by the flash and has what any flash shows
+            Shader.SetGlobalFloat(flashId, 1f);
+            cityLit = CaptureHdr(camera, faces, CitySize);
+        }
+        finally
+        {
+            Shader.SetGlobalFloat(flashId, flashWas);
+            foreach (Renderer renderer in panesAway) renderer.enabled = true;
+            foreach (Renderer renderer in hidden) renderer.enabled = true;
+            if (rain != null) rain.gameObject.SetActive(rainOn);
+            Object.DestroyImmediate(camera.gameObject);
+        }
         Cubemap picture = StoreCube(path, cityOnly, faces, CitySize, true);
         Cubemap lightning = StoreCube(LightningPath, cityLit, faces, CitySize, true);
         Cubemap room = StoreCube(RoomPath, whole, faces, RoomSize, false);
-        Object.DestroyImmediate(camera.gameObject);
-        if (rain != null) rain.gameObject.SetActive(rainOn);
         probe.mode = ReflectionProbeMode.Custom;
         probe.customBakedTexture = picture;
         probe.boxProjection = false;   // (a direction's colour: the city is far)

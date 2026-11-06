@@ -108,6 +108,17 @@ public class EmuStreams : UdonSharpBehaviour
         return -1;
     }
 
+    // A sender some surface wants and no slot can take: every slot holds another that is shown
+    // (16 slots, 24 surfaces). Its screen stays black, and the place says why.
+    public bool NoRoom(int id)
+    {
+        Init();
+        if (id <= 0 || SlotOf(id) >= 0 || !hub.Known(id)) return false;
+        for (int s = 0; s < count; s++)
+            if (sender[s] == 0 || !Shown(sender[s])) return false;
+        return true;
+    }
+
     public Texture Picture(int slot) { return pictures[slot]; }
     public Texture Console(int slot) { return consoles[slot]; }
     public Color32[] Cells(int slot) { return cells[slot]; }

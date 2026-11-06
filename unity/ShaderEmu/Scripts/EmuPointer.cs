@@ -123,7 +123,7 @@ public class EmuPointer : UdonSharpBehaviour
     private float stickX, moveX, moveY;     // the right stick across, the left one across and up
     // notches not sent yet of the four wheels: the right hand's (or the mouse's) up and across, the left hand's up and across
     private float[] turnedOf = new float[4];
-    private bool jumpDown, stilled;         // the jump button is held; the player stands still while a stick scrolls
+    private bool jumpDown, stilled, typedBefore;         // the jump button is held; the player stands still while a stick scrolls
     private bool started;
     private bool aimShown;                  // an aim's beam is on
     private bool[] landedOn = new bool[2];  // a hand's beam is on something of the room's
@@ -780,8 +780,16 @@ public class EmuPointer : UdonSharpBehaviour
         // (a sitter's seat holds them, a station of Immobilize: an Immobilize(false) of ours there let the left stick move
         // the avatar as well as the game; standing up, the keyboard's SetCapture(false) frees them)
         if (away) { stilled = false; return; }
+        // (a keyboard typing for them holds them still too, and each lets go only what it alone holds: a right stick's scroll
+        // let them walk away from a keyboard, and a keyboard that stopped typing let them walk while the stick scrolled)
+        bool typing = false;
+        if (keyboards != null)
+            for (int k = 0; k < keyboards.Length && !typing; k++) if (keyboards[k] != null && keyboards[k].Capturing()) typing = true;
+        if (stilled && on && typedBefore && !typing) player.Immobilize(true);
+        typedBefore = typing;
         if (on == stilled) return;
         stilled = on;
+        if (!on && typing) return;
         player.Immobilize(on);
     }
 

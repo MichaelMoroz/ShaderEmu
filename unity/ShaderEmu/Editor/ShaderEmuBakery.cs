@@ -112,7 +112,7 @@ public static partial class ShaderEmuBuilder
     static void BakeryDone(object sender, System.EventArgs e)
     {
         ftRenderLightmap.OnFinishedFullRender -= BakeryDone;
-        EditorApplication.delayCall += () =>
+        ShaderEmuGlass.Soon(() =>
         {
             foreach (Light light in RoomLights()) light.enabled = false;   // the lightmap has their light already
             foreach (ReflectionProbe probe in Object.FindObjectsOfType<ReflectionProbe>(true))
@@ -126,8 +126,28 @@ public static partial class ShaderEmuBuilder
                 probe.customBakedTexture = AssetDatabase.LoadAssetAtPath<Cubemap>(path);
                 EditorUtility.SetDirty(probe);
             }
+            // Bakery ends its render even when its programs did not start ("ftraceRTX9 launch failed": on
+            // 6 November 2026 an editor started from another program's shell could start none of them, though
+            // .NET could): then the scene's store names no renderer, and saving it loses the lightmaps it had
+            int lit = 0;
+            foreach (ftLightmapsStorage store in Object.FindObjectsOfType<ftLightmapsStorage>(true))
+            {
+                // a whole-scene bake lists them in the store itself (311 on 6 November 2026), a sector's in its sector
+                foreach (Renderer renderer in store.bakedRenderers) if (renderer != null) lit++;
+                if (store.sectors != null)
+                    foreach (var sector in store.sectors)
+                        if (sector.bakedRenderers != null)
+                            foreach (Renderer renderer in sector.bakedRenderers) if (renderer != null) lit++;
+            }
+            if (lit == 0)
+            {
+                Debug.LogError("[ShaderEmu] Bakery's render made no lightmaps (see Bakery's errors above): the scene is NOT saved. " +
+                    "Close it without saving, start the editor from Unity Hub and bake again.");
+                return;
+            }
+            Debug.Log("[ShaderEmu] Bakery lit " + lit + " renderers");
             Baked();
-        };
+        });
     }
 }
 #endif

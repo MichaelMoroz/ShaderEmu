@@ -139,137 +139,6 @@ public static partial class ShaderEmuBuilder
         return Glyphs[text[letter]][(int)y][column] == '1';
     }
 
-    // A quad of the city's mesh, wound to face along `normal`. Corners go round it; `shade`'s
-    // alpha is the haze there.
-    static void CityQuad(List<Vector3> vertices, List<Vector2> uvs, List<Color> colours, List<int> triangles,
-                         Vector3 a, Vector3 b, Vector3 c, Vector3 d, Vector2 ua, Vector2 ub, Vector2 uc, Vector2 ud,
-                         Vector3 normal, Color shade)
-    {
-        int first = vertices.Count;
-        vertices.AddRange(new[] { a, b, c, d });
-        uvs.AddRange(new[] { ua, ub, uc, ud });
-        for (int i = 0; i < 4; i++) colours.Add(shade);
-        bool flip = Vector3.Dot(Vector3.Cross(b - a, c - a), normal) < 0;
-        if (flip) triangles.AddRange(new[] { first, first + 2, first + 1, first, first + 3, first + 2 });
-        else triangles.AddRange(new[] { first, first + 1, first + 2, first, first + 2, first + 3 });
-    }
-
-    static Mesh CityMesh(string name, List<Vector3> vertices, List<Vector2> uvs, List<Color> colours, List<int> triangles)
-    {
-        AssetDatabase.DeleteAsset(Generated + "/" + name + ".asset");
-        Mesh mesh = new Mesh { name = name, indexFormat = IndexFormat.UInt32 };
-        mesh.SetVertices(vertices);
-        mesh.SetUVs(0, uvs);
-        mesh.SetColors(colours);
-        mesh.SetTriangles(triangles, 0);
-        mesh.RecalculateBounds();
-        AssetDatabase.CreateAsset(mesh, Generated + "/" + name + ".asset");
-        return mesh;
-    }
-
-    static void CityObject(Transform parent, string name, Mesh mesh, Material material)
-    {
-        GameObject go = new GameObject(name, typeof(MeshFilter), typeof(MeshRenderer));
-        go.transform.SetParent(parent, false);
-        go.GetComponent<MeshFilter>().sharedMesh = mesh;
-        MeshRenderer renderer = go.GetComponent<MeshRenderer>();
-        renderer.sharedMaterial = material;
-        renderer.shadowCastingMode = ShadowCastingMode.Off;
-        renderer.receiveShadows = false;
-        renderer.lightProbeUsage = LightProbeUsage.Off;
-        renderer.reflectionProbeUsage = ReflectionProbeUsage.Off;
-    }
-
-    // The city outside the window, which is 42 m above its streets: one building a block, as
-    // two meshes (towers, streets) of plain unlit geometry. `window` is the opening's centre.
-    static void City(Transform decor, Vector3 window)
-    {
-        const float block = 16f, above = 42f, storey = 3.3f, bay = 2.4f;
-        const int across = 30, rows = 40, cells = 16;
-        System.Random random = new System.Random(11);
-        System.Func<float, float, float> rand = (a, b) => a + (float)random.NextDouble() * (b - a);
-
-        // windows: a tile of 16 x 16, some lit warm, a few cool, most dark
-        Color[] lit = new Color[cells * cells];
-        for (int i = 0; i < lit.Length; i++)
-        {
-            double chance = random.NextDouble();
-            Color warm = random.NextDouble() < 0.25 ? new Color(0.65f, 0.85f, 1f) : new Color(1f, 0.72f, 0.38f);
-            lit[i] = chance > 0.62 ? warm * rand(0.55f, 1f) : new Color(0.05f, 0.06f, 0.09f);
-        }
-        Texture2D windowsTex = Pattern("CityWindows", 256, (u, v) =>
-        {
-            float x = u * cells, y = v * cells;
-            float fx = x - Mathf.Floor(x), fy = y - Mathf.Floor(y);
-            bool glass = fx > 0.18f && fx < 0.82f && fy > 0.25f && fy < 0.80f;
-            Color c = glass ? lit[((int)y % cells) * cells + (int)x % cells] : new Color(0.07f, 0.075f, 0.10f);
-            c.a = 1f;
-            return c;
-        });
-        Texture2D streetTex = Pattern("CityStreet", 128, (u, v) =>
-        {
-            // one block: dark ground, a lighter road round it, lamps along the road
-            float gx = Mathf.Abs(u - 0.5f), gy = Mathf.Abs(v - 0.5f);
-            bool road = Mathf.Max(gx, gy) > 0.42f;
-            float lx = Mathf.Abs(Mathf.Repeat(u * 4f, 1f) - 0.5f), ly = Mathf.Abs(Mathf.Repeat(v * 4f, 1f) - 0.5f);
-            float lamp = road ? Mathf.Clamp01(1f - Mathf.Sqrt(lx * lx + ly * ly) * 7f) : 0f;
-            Color c = road ? new Color(0.20f, 0.17f, 0.14f) : new Color(0.07f, 0.07f, 0.08f);
-            return c + new Color(1f, 0.7f, 0.35f) * lamp;
-        });
-        Material towerMat = Mat("City", "ShaderEmu/City");
-        towerMat.mainTexture = windowsTex;
-        Material streetMat = Mat("CityStreet", "ShaderEmu/City");
-        streetMat.mainTexture = streetTex;
-
-        Transform city = new GameObject("City").transform;
-        city.SetParent(decor, false);
-        Vector3 origin = new Vector3(window.x, window.y - above, window.z);   // street level, under the window
-        System.Func<Vector3, float> haze = p => 1f - Mathf.Exp(-Vector3.Distance(p, window) / 900f);
-
-        List<Vector3> vertices = new List<Vector3>();
-        List<Vector2> uvs = new List<Vector2>();
-        List<Color> colours = new List<Color>();
-        List<int> triangles = new List<int>();
-        for (int r = 2; r < rows; r++)   // nothing in the first two rows of blocks
-            for (int a = -across; a < across; a++)
-            {
-                float seed = rand(0f, 1f), side = block * rand(0.26f, 0.40f), extra = rand(0f, 30f);
-                Vector2 offset = new Vector2(random.Next(cells), random.Next(cells)) / cells;
-                if (seed < 0.22f) continue;   // an empty lot
-                float tall = 14f + 80f * seed * seed + (seed > 0.8f ? extra : 0f);
-                Vector3 centre = origin + new Vector3((r + 0.5f) * block, 0, (a + 0.5f) * block);
-                float x0 = centre.x - side, x1 = centre.x + side, z0 = centre.z - side, z1 = centre.z + side, y0 = origin.y, y1 = origin.y + tall;
-                float h = haze(new Vector3(x0, window.y, centre.z));
-                float us = 2f * side / bay / cells, vs = tall / storey / cells;
-                Vector2 u00 = offset, u10 = offset + new Vector2(us, 0), u11 = offset + new Vector2(us, vs), u01 = offset + new Vector2(0, vs);
-                // the three walls the room can see, and the roof (dark: a spot of wall between windows)
-                CityQuad(vertices, uvs, colours, triangles, new Vector3(x0, y0, z0), new Vector3(x0, y0, z1), new Vector3(x0, y1, z1), new Vector3(x0, y1, z0),
-                         u00, u10, u11, u01, Vector3.left, new Color(1f, 1f, 1f, h));
-                CityQuad(vertices, uvs, colours, triangles, new Vector3(x0, y0, z0), new Vector3(x1, y0, z0), new Vector3(x1, y1, z0), new Vector3(x0, y1, z0),
-                         u00, u10, u11, u01, Vector3.back, new Color(0.6f, 0.6f, 0.6f, h));
-                CityQuad(vertices, uvs, colours, triangles, new Vector3(x0, y0, z1), new Vector3(x1, y0, z1), new Vector3(x1, y1, z1), new Vector3(x0, y1, z1),
-                         u00, u10, u11, u01, Vector3.forward, new Color(0.6f, 0.6f, 0.6f, h));
-                CityQuad(vertices, uvs, colours, triangles, new Vector3(x0, y1, z0), new Vector3(x1, y1, z0), new Vector3(x1, y1, z1), new Vector3(x0, y1, z1),
-                         Vector2.zero, Vector2.zero, Vector2.zero, Vector2.zero, Vector3.up, new Color(0.5f, 0.5f, 0.5f, h));
-            }
-        CityObject(city, "Towers", CityMesh("CityTowers", vertices, uvs, colours, triangles), towerMat);
-
-        vertices.Clear();
-        uvs.Clear();
-        colours.Clear();
-        triangles.Clear();
-        for (int r = 0; r < rows + 8; r++)
-            for (int a = -across - 8; a < across + 8; a++)
-            {
-                Vector3 p = origin + new Vector3(r * block, 0, a * block);
-                Vector3 q = p + new Vector3(block, 0, block);
-                float h = haze(new Vector3(p.x, origin.y, p.z));
-                CityQuad(vertices, uvs, colours, triangles, p, new Vector3(q.x, p.y, p.z), q, new Vector3(p.x, p.y, q.z),
-                         new Vector2(0, 0), new Vector2(1, 0), new Vector2(1, 1), new Vector2(0, 1), Vector3.up, new Color(1f, 1f, 1f, h));
-            }
-        CityObject(city, "Streets", CityMesh("CityStreets", vertices, uvs, colours, triangles), streetMat);
-    }
-
     // The night sky as a panorama for the skybox: dark above, the city's glow on the haze at
     // the horizon, stars, and a moon on the window's side of the room.
     static Material NightSky()
@@ -558,7 +427,7 @@ public static partial class ShaderEmuBuilder
         closed.transform.SetParent(decor, false);
         closed.transform.localPosition = new Vector3(halfW + 0.1f, WindowY, WindowZ);
         closed.size = new Vector3(0.2f, windowHigh, windowWide);
-        City(decor, new Vector3(halfW + 0.2f, WindowY, WindowZ));
+        // (the city outside is Models/City.fbx, world/city.py: the one of boxes made here before went at once in Remodel, its meshes kept)
         Box(decor, "Window top", windowAt + new Vector3(-0.03f, windowHigh / 2 + 0.035f, 0), new Vector3(0.08f, 0.07f, windowWide + 0.14f), trimMat, false);
         RBox(decor, "Window sill", windowAt + new Vector3(-0.08f, -windowHigh / 2 - 0.03f, 0), new Vector3(0.20f, 0.06f, windowWide + 0.2f), trimMat, 0.02f);
         for (int i = 0; i <= 3; i++)

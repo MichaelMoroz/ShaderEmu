@@ -74,7 +74,7 @@ public static partial class ShaderEmuBuilder
         RetroNewPanels();
         AssetDatabase.SaveAssets();
         EditorSceneManager.MarkSceneDirty(machine.gameObject.scene);
-        Debug.Log("[ShaderEmu] Udon machine added: " + program.SerializedProgramAsset.GetSerializedProgramSize() + " bytes of program");
+        Debug.Log("[ShaderEmu] Udon machine added: " + program.SerializedProgramAsset.GetSerializedProgramSize() + " bytes of program (an experiment, not a part of Build world: a rebuild takes it away, and this menu puts it back)");
     }
 
     // where the toggle between the processors sits on the control panel

@@ -80,6 +80,7 @@ public class EmuHolodeck : UdonSharpBehaviour
     private float nextAt;
     private bool[] trigger = new bool[2], grip = new bool[2];   // left, right: for the machine's host words
     private int[] told = new int[16];
+    private int[] nowWords = new int[16];
     private int roomMinId, roomMaxId;  // the sitter's room for HoloGuard.shader, which marks only there
     private bool leaving;              // this visitor asked to stand up (a jump): the seat lets them
     private bool respawned;
@@ -528,6 +529,9 @@ public class EmuHolodeck : UdonSharpBehaviour
             }
 
             string who = occupant[k] == 0 ? "FREE" : me ? Networking.LocalPlayer.displayName : NameOf(occupant[k]);
+            // every stream slot holds another machine that is shown: this one's screen is black, and the door says why
+            // (the label is 300 x 80 at 30 with no rich text: two short lines, the note first so a long name is what is cut)
+            if (theirs && slot < 0 && streams.NoRoom(occupant[k])) who = "NOT SHOWN\n" + who;
             if (doorLabels[k] != null && doorLabels[k].text != who) doorLabels[k].text = who;
             if (plateLabels[k] != null)
             {
@@ -680,7 +684,7 @@ public class EmuHolodeck : UdonSharpBehaviour
         Quaternion back = Quaternion.Inverse(own >= 0 ? eyes[own].rotation : player.GetRotation());
         VRCPlayerApi.TrackingData head = player.GetTrackingData(VRCPlayerApi.TrackingDataType.Head);
         Vector3 at = back * (head.position - origin) * 1000f, turn = (back * head.rotation).eulerAngles;
-        int[] now = new int[16];
+        int[] now = nowWords;   // (all sixteen are written below: one array, not a new one a frame)
         // (a test's invented hands are told as a headset's)
         bool headset = player.IsUserInVR() || (pointer != null && pointer.debugBeam);
         // (bit 5: the hands are tracked, and a program may aim by one)

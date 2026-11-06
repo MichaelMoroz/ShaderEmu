@@ -1085,11 +1085,18 @@ public class EmuMachine : UdonSharpBehaviour
         return fetchTest && fetchTestUrl != null && url != null && url.Get() == fetchTestUrl.Get() && fetchTestAt > 0f;
     }
 
+    // An answer for the address loading now: one that came after its 20 seconds were up was taken as the
+    // answer of whatever was asked next (VRChat loads one address in 5 s, so a page's pictures queue).
+    private bool Held(VRCUrl url)
+    {
+        return heldUrl != null && url != null && url.Get() == heldUrl.Get();
+    }
+
     public override void OnImageLoadSuccess(IVRCImageDownload result)
     {
         if (FetchTestOf(result.Url))
             Debug.Log("[FetchTest] picture: " + result.Result.width + " x " + result.Result.height + " after " + (Time.time - fetchTestAt).ToString("F1") + " s");
-        if (fetchState != FetchLoading) return;
+        if (fetchState != FetchLoading || !Held(result.Url)) return;
         hostImage = result.Result;
         // every pixel, four bytes each: the guest asks for the parts after the first
         int w = hostImage.width, h = hostImage.height;
@@ -1105,7 +1112,7 @@ public class EmuMachine : UdonSharpBehaviour
     {
         if (FetchTestOf(result.Url))
             Debug.Log("[FetchTest] picture failed: " + result.Error + " " + result.ErrorMessage + " after " + (Time.time - fetchTestAt).ToString("F1") + " s");
-        if (fetchState != FetchLoading) return;
+        if (fetchState != FetchLoading || !Held(result.Url)) return;
         fetchLength = 0;
         // a server's refusal reads "HTTP/1.1 404 Not Found": its code
         fetchStatus = 0;
@@ -1150,7 +1157,7 @@ public class EmuMachine : UdonSharpBehaviour
             for (int i = 0; got != null && i < Mathf.Min(8, got.Length); i++) head += got[i].ToString("x2") + " ";
             Debug.Log("[FetchTest] text: " + (got != null ? got.Length : -1) + " bytes, first " + head + "after " + (Time.time - fetchTestAt).ToString("F1") + " s");
         }
-        if (fetchState != FetchLoading) return;
+        if (fetchState != FetchLoading || !Held(result.Url)) return;
         // (a page, a sheet or a file: its whole length is said, and it is handed over in parts
         // of 256 KB as the guest asks for them; a browser of before takes the first and no more)
         fetchBytes = result.ResultBytes;
@@ -1167,7 +1174,7 @@ public class EmuMachine : UdonSharpBehaviour
     {
         if (FetchTestOf(result.Url))
             Debug.Log("[FetchTest] text failed: " + result.ErrorCode + " " + result.Error + " after " + (Time.time - fetchTestAt).ToString("F1") + " s");
-        if (fetchState != FetchLoading) return;
+        if (fetchState != FetchLoading || !Held(result.Url)) return;
         fetchLength = 0;
         fetchStatus = result.ErrorCode > 1 && result.ErrorCode != 200 ? result.ErrorCode : 2;
         fetchState = FetchReady;

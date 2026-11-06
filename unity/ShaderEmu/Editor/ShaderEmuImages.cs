@@ -28,7 +28,22 @@ public static class ShaderEmuImages
 
     public static string Repo
     {
-        get { return EditorPrefs.GetString("ShaderEmu.Repo", "C:/Development/ShaderEmu"); }
+        // (the project lies outside the tree, so the tree is asked for once and kept: before, an editor without the
+        // setting read one computer's folder, AGENTS.md's "a default path")
+        get
+        {
+            string repo = EditorPrefs.GetString("ShaderEmu.Repo", "");
+            if (IsRepo(repo)) return repo;
+            repo = EditorUtility.OpenFolderPanel("The ShaderEmu repository (the folder with shader_vm and AGENTS.md)", "", "");
+            if (!IsRepo(repo)) throw new System.Exception("[ShaderEmu] not the repository: " + (repo == "" ? "no folder chosen" : repo) + " has no shader_vm");
+            EditorPrefs.SetString("ShaderEmu.Repo", repo);
+            return repo;
+        }
+    }
+
+    static bool IsRepo(string folder)
+    {
+        return folder != "" && System.IO.Directory.Exists(folder + "/shader_vm") && System.IO.File.Exists(folder + "/AGENTS.md");
     }
 
     public static string LanePath(string name, string part, int lane)

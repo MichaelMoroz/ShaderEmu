@@ -31,8 +31,19 @@ public class EmuGate : UdonSharpBehaviour
         if (Utilities.IsValid(player) && player.isLocal) restored = true;
     }
 
+    private int timed = -1;   // frames timed after the parts came on (the log says how long the gate's frame was)
+    private float timedAt;
+
     void Update()
     {
+        if (timed >= 0)
+        {
+            float now = Time.realtimeSinceStartup;
+            Debug.Log("[Gate] frame " + timed + " after: " + ((now - timedAt) * 1000f).ToString("F0") + " ms");
+            timedAt = now;
+            if (++timed >= 4) enabled = false;
+            return;
+        }
         VRCPlayerApi me = Networking.LocalPlayer;
         if (!Utilities.IsValid(me)) return;
         Vector3 at = me.GetPosition();
@@ -42,7 +53,9 @@ public class EmuGate : UdonSharpBehaviour
         if (inside) arrived = true;
         if (!arrived || (inside && !(testOpen && Time.time - arrivedAt > 5f))) return;
         Debug.Log("[Gate] out of the corridor at " + at + ": " + parts.Length + " parts on");
+        timedAt = Time.realtimeSinceStartup;
         foreach (GameObject part in parts) if (part != null) part.SetActive(true);
-        enabled = false;
+        Debug.Log("[Gate] the parts' SetActive: " + ((Time.realtimeSinceStartup - timedAt) * 1000f).ToString("F0") + " ms");
+        timed = 0;
     }
 }

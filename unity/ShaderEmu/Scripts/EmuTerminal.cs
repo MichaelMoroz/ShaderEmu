@@ -172,7 +172,7 @@ public class EmuTerminal : UdonSharpBehaviour
         {
             if (c >= '0' && c <= '9')
             {
-                if (escCount[t] < 8) escArgs[t * 8 + escCount[t]] = escArgs[t * 8 + escCount[t]] * 10 + (c - '0');
+                if (escCount[t] < 8) escArgs[t * 8 + escCount[t]] = Mathf.Min(escArgs[t * 8 + escCount[t]] * 10 + (c - '0'), 9999);   // (more digits went negative: a cursor off the grid)
                 escHasDigits[t] = true;
             }
             else if (c == ';')
