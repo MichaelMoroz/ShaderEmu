@@ -819,6 +819,17 @@ public static partial class ShaderEmuBuilder
         GameObject world = GameObject.Find("ShaderEmu");
         if (world == null) { Debug.LogError("[ShaderEmu] no ShaderEmu object: run ShaderEmu/Build world first"); return; }
         Retro(world.transform);
+        // what Build world makes after Retro, from what Retro left: the holodecks' Hide keys, their keyboard (a copy
+        // of the den's restyled one: before, the holodeck kept the old style) and every panel's keys for a fingertip
+        ConsoleSwitch();
+        AddHoloKeyboard();
+        EmuPointer pointer = world.GetComponentInChildren<EmuPointer>(true);
+        if (pointer != null)
+        {
+            UdonSharpEditor.UdonSharpEditorUtility.CopyUdonToProxy(pointer);
+            TouchPanels(world.transform, pointer);
+            Apply(pointer);
+        }
         AssetDatabase.SaveAssets();
         EditorSceneManager.MarkSceneDirty(world.scene);
         Debug.Log("[ShaderEmu] the panels are restyled: bake the lighting again, for their plates");

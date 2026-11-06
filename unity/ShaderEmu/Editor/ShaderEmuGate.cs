@@ -57,7 +57,13 @@ class ShaderEmuGateBuild : IProcessSceneWithReport
             foreach (UdonBehaviour gate in root.GetComponentsInChildren<UdonBehaviour>(true))
             {
                 if (gate.programSource != program || !gate.publicVariables.TryGetVariableValue("parts", out GameObject[] parts)) continue;
-                foreach (GameObject part in parts) if (part != null) part.SetActive(false);
+                // an LTCGI screen switched off asks LTCGI to count its screens again (LTCGI_Screen.OnDisable), which
+                // finds none active and writes 0 into its adapter, which UdonSharp then ships: in both clients of
+                // 6 November 2026 "No screens found!" halted it. What the saved scene counted is what the build keeps.
+                pi.LTCGI.LTCGI_Controller ltcgi = pi.LTCGI.LTCGI_Controller.Singleton;
+                pi.LTCGI.LTCGI_Controller.Singleton = null;
+                try { foreach (GameObject part in parts) if (part != null) part.SetActive(false); }
+                finally { pi.LTCGI.LTCGI_Controller.Singleton = ltcgi; }
                 Debug.Log("[ShaderEmu] gate: " + parts.Length + " parts off in the build");
             }
     }

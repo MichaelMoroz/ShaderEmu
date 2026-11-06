@@ -149,7 +149,9 @@ public class EmuPersist : UdonSharpBehaviour
     {
         wanted = bytes;
         saveStatus = bytes > Limit ? 413 : 500;
-        if (bytes > Limit || bytes < 16 || readMaterial == null) return;
+        // (the sign said "Saving..." until something else was pressed)
+        if (bytes > Limit) { Say("Not saved: the folder packs to " + ((bytes + 999) / 1000) + " KB."); return; }
+        if (bytes < 16 || readMaterial == null) { Say("Not saved."); return; }
         reading = true;
         readMaterial.SetTexture("_State", state);
         VRCGraphics.Blit(state, readTexture, readMaterial);
@@ -159,10 +161,10 @@ public class EmuPersist : UdonSharpBehaviour
     public override void OnAsyncGpuReadbackComplete(VRCAsyncGPUReadbackRequest request)
     {
         reading = false;
-        if (request.hasError || !request.TryGetData(taken)) return;
+        if (request.hasError || !request.TryGetData(taken)) { Say("Not saved: the picture of it was not read."); return; }
         // its own mark and length first (nxpersist.c): anything else is not a folder
         int length = taken[8] | taken[9] << 8 | taken[10] << 16 | taken[11] << 24;
-        if (taken[0] != 'S' || taken[1] != 'E' || taken[2] != 'P' || taken[3] != 'D' || length != wanted - 16) return;
+        if (taken[0] != 'S' || taken[1] != 'E' || taken[2] != 'P' || taken[3] != 'D' || length != wanted - 16) { Say("Not saved."); return; }
         byte[] blob = new byte[wanted];
         System.Buffer.BlockCopy(taken, 0, blob, 0, wanted);
         PlayerData.SetBytes(BlobKey, blob);
@@ -174,7 +176,8 @@ public class EmuPersist : UdonSharpBehaviour
 
     public void Save()
     {
-        if (machine.AskSave()) Say("Saving...");
+        // (a folder too large is refused by nxpersist on the desktop, which never asks: "Saving..." stood for ever)
+        if (machine.AskSave()) Say("Saving: the desktop says how it goes.");
         else Say(machine.Powered() ? "Start the desktop first." : "The computer is off.");
     }
 

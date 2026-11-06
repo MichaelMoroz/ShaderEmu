@@ -1373,10 +1373,31 @@ public static partial class ShaderEmuBuilder
         TouchPanels(world, pointer);   // again, for the keys those two made
         Apply(pointer);
         Gate(root);   // last: it gates the parts there are now (ShaderEmuGate.cs)
+        // the network ids of what is synced, as play mode and an upload give them: a scene saved without
+        // them (the seat, the stations' fields, the streams, the weather) was marked changed by every play
+        VRC.SDK3.ClientSim.ClientSimNetworkingUtilities.DoSceneSetup();
+        LtcgiIntoUdon();
 
         AssetDatabase.SaveAssets();
         EditorSceneManager.MarkSceneDirty(scene);
         EditorSceneManager.SaveScene(scene);
         Debug.Log("[ShaderEmu] world built: " + scene.path + ". Now run ShaderEmu/Bake lighting.");
+    }
+
+    // LTCGI writes its screens (count, vertices, textures) into its adapter's proxy, and the editor's
+    // play mode copies proxies into their Udon programs, so it works there; a build ships the Udon
+    // program's own values, which nothing had written: in both clients of 6 November 2026 the adapter
+    // found "No screens found!" and Udon halted it, and no screen lit the room. So the scene keeps them.
+    public static void LtcgiIntoUdon()
+    {
+        pi.LTCGI.LTCGI_Controller controller = Object.FindObjectOfType<pi.LTCGI.LTCGI_Controller>(true);
+        if (controller == null) return;
+        controller.UpdateMaterials();
+        foreach (UdonSharp.UdonSharpBehaviour behaviour in Object.FindObjectsOfType<UdonSharp.UdonSharpBehaviour>(true))
+        {
+            if (behaviour.GetType().Name != "LTCGI_UdonAdapter") continue;
+            UdonSharpEditorUtility.CopyProxyToUdon(behaviour);
+            EditorUtility.SetDirty(UdonSharpEditorUtility.GetBackingUdonBehaviour(behaviour));
+        }
     }
 }

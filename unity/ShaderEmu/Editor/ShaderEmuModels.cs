@@ -446,7 +446,8 @@ public static partial class ShaderEmuBuilder
     // in its second coordinates, as Unity's unwrap and ours split them) is under TinyChart texels.
     static float TinyChartShare(Mesh mesh, Transform t, float texelsPerMetre)
     {
-        if (mesh == null || mesh.uv2 == null || mesh.uv2.Length == 0) return 0f;
+        // (an empty mesh cannot be read: world/rooms.py's "Room shelf things" holds only other objects, and logged four errors a build)
+        if (mesh == null || mesh.vertexCount == 0 || mesh.uv2 == null || mesh.uv2.Length == 0) return 0f;
         int[] tris = mesh.triangles;
         Vector3[] v = mesh.vertices;
         int[] parent = new int[v.Length];

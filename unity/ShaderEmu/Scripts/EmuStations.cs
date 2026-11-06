@@ -53,6 +53,7 @@ public class EmuStations : UdonSharpBehaviour
 
     private int count;
     private int[] owner, claimed, mode, netSeen;
+    private bool[] noRoom;             // somebody else's place that no stream slot is left for
     private int[] localMode;           // what this visitor chose to see on somebody else's tube; -1: what its owner shows
     private Texture[] showing;
     private float nextAt;
@@ -71,6 +72,7 @@ public class EmuStations : UdonSharpBehaviour
         mode = new int[count];
         netSeen = new int[count];
         localMode = new int[count];
+        noRoom = new bool[count];
         for (int s = 0; s < count; s++) localMode[s] = -1;
         speedShown = new int[count];
         for (int s = 0; s < count; s++) speedShown[s] = -1;
@@ -271,6 +273,10 @@ public class EmuStations : UdonSharpBehaviour
             mine.stationMode = has ? 0 : 1;
             hub.StateOut();
         }
+        // a place lost other than by its EXIT (the machine switched off, an earlier visitor's claim) lets the
+        // visitor go: its keyboard typing for them held them still, and went on typing into their machine
+        if (tubeFor >= 0 && tubeFor != own && keyboards != null && tubeFor < keyboards.Length && keyboards[tubeFor] != null)
+            keyboards[tubeFor].SetCapture(false);
         tubeFor = own;
         tubeHad = has;
         // this visitor's machine's speed step, for their tower's slider on everybody's client
@@ -312,12 +318,15 @@ public class EmuStations : UdonSharpBehaviour
             bool theirs = owner[s] > 0 && owner[s] != myId;
             streams.SetWant(s < SidePlace ? FirstSurface + s : SideSurface + s - SidePlace, theirs ? owner[s] : 0);
             int slot = theirs ? streams.SlotOf(owner[s]) : -1;
+            bool full = theirs && slot < 0 && streams.NoRoom(owner[s]);
+            if (full != noRoom[s]) { noRoom[s] = full; relabel = true; }
             if (relabel)
             {
                 // the key says whose the place is, what its tube shows, and to its owner that it switches
                 if (labels[s] != null) labels[s].text = owner[s] == 0 ? "FREE" : owner[s] == myId ? Networking.LocalPlayer.displayName : NameOf(owner[s]);
                 if (modes != null && modes[s] != null)
                     modes[s].text = owner[s] == 0 ? "press POWER: yours starts here" : (wants == 1 ? "CONSOLE" : "DISPLAY") + (owner[s] == myId ? " - press to switch" : " - press to switch your view");
+                if (full && modes != null && modes[s] != null) modes[s].text = "NOT SHOWN: 16 shown at once";   // (the key is 96 x 11 at 6)
             }
             Texture shown = blackTexture;
             int w = 0, h = 0;

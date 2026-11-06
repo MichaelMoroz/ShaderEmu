@@ -21,6 +21,7 @@ public class EmuSeat : UdonSharpBehaviour
     // visitor sits and for a second after.
     private Collider reach;
     private bool mine;
+    private int sitter = -1;       // who sits, by player number
 
     void Start()
     {
@@ -37,6 +38,7 @@ public class EmuSeat : UdonSharpBehaviour
     {
         taken = true;
         since = Time.time;
+        sitter = Utilities.IsValid(player) ? player.playerId : -1;
         if (Utilities.IsValid(player) && player.isLocal)
         {
             mine = true;
@@ -49,8 +51,19 @@ public class EmuSeat : UdonSharpBehaviour
     {
         taken = false;
         since = Time.time;
+        sitter = -1;
         if (Utilities.IsValid(player) && player.isLocal) mine = false;
         if (Utilities.IsValid(player) && holodeck != null) holodeck.Exited(room, player);
+    }
+
+    // A sitter who leaves the instance seated is not always told as getting up: the seat stood
+    // up under nobody for everyone else until somebody sat in it again.
+    public override void OnPlayerLeft(VRCPlayerApi player)
+    {
+        if (!taken || !Utilities.IsValid(player) || player.playerId != sitter) return;
+        taken = false;
+        since = Time.time;
+        sitter = -1;
     }
 
     void Update()

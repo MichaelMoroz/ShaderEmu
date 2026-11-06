@@ -323,7 +323,8 @@ public class EmuShareHub : UdonSharpBehaviour
                 continue;
             }
             // (an object made from a template older than a field has that field empty)
-            if (found.seenAsk == null || found.seenAsk.Length != found.ask.Length) found.seenAsk = new int[found.ask.Length];
+            int asked = found.ask != null ? found.ask.Length : 0;
+            if (found.seenAsk == null || found.seenAsk.Length != asked) found.seenAsk = new int[asked];
             found.ownerId = player.playerId;
             found.ownerName = player.displayName;
             if (foundNet != null) foundNet.share = found;
@@ -437,7 +438,9 @@ public class EmuShareHub : UdonSharpBehaviour
             EmuShare share = shares[i];
             bool shows = false;
             int[] ask = share.ask, lost = share.lost, seen = share.seenAsk;
-            for (int k = 0; k < ask.Length && k < seen.Length; k++)
+            // (another's arrays are as long as their client sent them: a read past one stops this behaviour for good)
+            int asks = ask == null || lost == null || seen == null ? 0 : Mathf.Min(ask.Length, Mathf.Min(lost.Length, seen.Length));
+            for (int k = 0; k < asks; k++)
             {
                 int word = ask[k];
                 if ((word & 0xffff) != me || word == 0)
@@ -1212,6 +1215,7 @@ public class EmuShareHub : UdonSharpBehaviour
             if (pointerFrom == share.ownerId) DropPointer();
             return;
         }
+        if (share.input == null || share.input.Length < 16) return;
         for (int k = Mathf.Min(n, 16); k >= 1; k--)
         {
             int e = share.input[(share.inputSeq - k) & 15];
