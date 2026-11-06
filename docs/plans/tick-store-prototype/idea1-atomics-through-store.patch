@@ -1,0 +1,111 @@
+diff --git a/shader_vm/tick.hlsl b/shader_vm/tick.hlsl
+index 6ee50302..bb1b97c0 100644
+--- a/shader_vm/tick.hlsl
++++ b/shader_vm/tick.hlsl
+@@ -201,7 +201,10 @@ uint ram_word(uint o) {
+ // `bits` into the word at RAM offset o under `mask`: the tables looked in one after another, each
+ // one's bucket worked out only when the one before is full; a whole word into a texel the cache
+ // has is written without reading what was there
+-void ram_store_nc(uint o, uint v, uint mask) {   // ram_store for an o known to be in RAM
++// op: 0 a store under mask; 1 an atomic that keeps the word (lr, an sc that fails); 2 + funct5 an atomic whose word
++// is made from the old one (st_old: the old word, for an atomic's result)
++static uint st_old;
++void ram_store_op(uint o, uint v, uint mask, uint op) {   // ram_store for an o known to be in RAM
+     uint t = o >> 4, wi = (o >> 2) & 3, tag = t + 1, n = 1u << bits, b0 = 0, b1 = 0, f0 = 0, f1 = 0;
+     uint4 tags0 = 0, tags1 = 0;
+     uint at = t == m1_t ? m1_at : t == m2_t ? m2_at : 0;
+@@ -233,7 +236,9 @@ void ram_store_nc(uint o, uint v, uint mask) {   // ram_store for an o known to
+         // (no return in it: a return in a function inlined in the loop is a flag tested after it)
+         uint4 texel = at != 0 ? c[at] : dr_v;   // (the RAM texel was asked with the search)
+         uint cur = at == 0 && ovf_addr == o && (o & bloom) == o ? ovf_val : idx(texel, wi);
+-        uint val = (cur & ~mask) | (v & mask);
++        uint fa = op - 2, made = fa == 0 ? cur + v : fa == 4 ? cur ^ v : fa == 8 ? cur | v : fa == 12 ? cur & v : v;
++        uint val = op == 0 ? (cur & ~mask) | (v & mask) : op == 1 ? cur : made;
++        st_old = cur;
+         [branch] if (val != cur) {
+             bloom |= o;
+             dirty |= 1u << ((o >> 22) & 31);
+@@ -255,6 +260,7 @@ void ram_store_nc(uint o, uint v, uint mask) {   // ram_store for an o known to
+         }
+     }
+ }
++void ram_store_nc(uint o, uint v, uint mask) { ram_store_op(o, v, mask, 0); }
+ void ram_store(uint o, uint v, uint mask) { [branch] if (o < RAM_MAX) ram_store_nc(o, v, mask); }   // (any o: past RAM no store)
+ // a word anywhere (a on a word): RAM, the ROM, the clock chip, the timer
+ uint load_word(uint a) {
+@@ -446,7 +452,11 @@ uint fast(uint room) {
+     uint4 cur = 0;
+     [loop] while (n < budget) {
+         [branch] if (!same) { fetch(pc); uint s = (pc >> 2) & 3; cur = (s & 2) ? ((s & 1) ? fw0.wxyz : fw0.zwxy) : ((s & 1) ? fw0.yzwx : fw0); }
++#ifdef FROZEN_WORD
++        uint w = FROZEN_WORD ^ (cur.x & _Init), opc = w & 0x7f, f3 = (w >> 12) & 7, rd = (w >> 7) & 31, rs1 = (w >> 15) & 31, rs2 = (w >> 20) & 31;
++#else
+         uint w = cur.x, opc = w & 0x7f, f3 = (w >> 12) & 7, rd = (w >> 7) & 31, rs1 = (w >> 15) & 31, rs2 = (w >> 20) & 31;
++#endif
+         uint a = xr[rs1], b = xr[rs2], next = pc + 4, v = 0, dst = rd == 0 ? 64 : rd;
+         bool ok = true;
+         // arithmetic and loads a group, stores and floats the next (each test passed is a level of every kind after it)
+@@ -478,17 +488,31 @@ uint fast(uint room) {
+ #endif
+                 v = (f3 & 4) ? x >> up : asuint(asint(x) >> up);
+             }
+-        } else [branch] if (opc == 0x23 || (w & 0x5f) == 0x07 || opc == 0x53) {
+-            [branch] if (opc == 0x23) {
+-                // sb sh sw, within one word of RAM (funct3 3 to 7 fail the size test)
+-                uint sa = a + ((asuint(asint(w) >> 20) & 0xffffffe0) | rd), off = sa & 3;
++        } else [branch] if (opc == 0x23 || (w & 0x5f) == 0x07 || opc == 0x53 || (w & 0x707f) == 0x202f) {
++            [branch] if (opc == 0x23 || opc == 0x2f) {
++                // sb sh sw, within one word of RAM (funct3 3 to 7 fail the size test); and amoadd amoswap lr sc amoxor amoor
++                // amoand on a word of RAM through the same call (min and max are the general step's; a funct5 under 16 that is
++                // none of these is amoswap, and lr's rs2 is not looked at)
++                bool amo = (w & 8) != 0;
++                uint f5 = w >> 27;
+ #ifdef FAST
+-                ok = (sa ^ 0x80000000) < RAM_MAX;   // (FAST: a store not on its size goes into its word from sa on)
++                bool lr = f5 == 2, sc = f5 == 3, sc_ok = true;
+ #else
+-                ok = (sa ^ 0x80000000) < RAM_MAX && off + (1u << f3) <= 4;
++                bool lr = f5 == 2, sc = f5 == 3, sc_ok = res_en != 0 && res_addr == a;
+ #endif
+-                ram_store_nc(sa & 0x7ffffffc, b << (off * 8), ok ? (0xffffffffu >> LOAD_UP(f3)) << (off * 8) : 0);   // (no test: a store that may not changes nothing)
+-                dst = 64;
++                uint sa = amo ? a : a + ((asuint(asint(w) >> 20) & 0xffffffe0) | rd), off = sa & 3;
++#ifdef FAST
++                ok = amo ? (a & 0x80000003) == 0x80000000 && (a & 0x7ffffffc) < RAM_MAX && f5 < 16 : (sa ^ 0x80000000) < RAM_MAX;
++#else
++                ok = amo ? (a & 0x80000003) == 0x80000000 && (a & 0x7ffffffc) < RAM_MAX && f5 < 16 : (sa ^ 0x80000000) < RAM_MAX && off + (1u << f3) <= 4;
++#endif
++                uint sop = !amo || !ok ? 0 : lr || (sc && !sc_ok) ? 1 : 2 + f5;
++                ram_store_op(sa & 0x7ffffffc, b << (off * 8), ok && !amo ? (0xffffffffu >> LOAD_UP(f3)) << (off * 8) : 0, sop);   // (no test: a store that may not changes nothing)
++                bool did = amo && ok;
++                res_en = did ? (lr ? 1 : sc && sc_ok ? 0 : res_en) : res_en;
++                res_addr = did && lr ? a : res_addr;
++                v = sc ? (sc_ok ? 0 : 1) : st_old;
++                dst = amo ? dst : 64;
+             } else [branch] if (opc == 0x53) {
+                 // (opcode 0x53 before flw and fsw: a program has more of them) floats: a sum, a difference, a product, and the light ones; the rest are the general step's
+                 // (rs1's float register by a select, read with rs2's: under an if the second read waited for the first)
+@@ -549,23 +573,6 @@ uint fast(uint room) {
+             v = jump ? pc + 4 : (w & 0xfffff000) + (opc == 0x17 ? pc : 0);
+             next = opc == 0x6f ? pc + imm_j(w) : opc == 0x67 ? a + imm_i(w) : next;
+             ok = (next & 3) == 0;
+-        } else [branch] if ((w & 0x707f) == 0x202f) {
+-            // amoadd amoswap lr sc amoxor amoor amoand on a word of RAM (min and max are the general step's); a funct5 under
+-            // 16 that is none of these is amoswap, and lr's rs2 is not looked at
+-            uint f5 = w >> 27, o = a & 0x7ffffffc;
+-#ifdef FAST
+-            bool lr = f5 == 2, sc = f5 == 3, sc_ok = true;   // (FAST: an sc always succeeds)
+-#else
+-            bool lr = f5 == 2, sc = f5 == 3, sc_ok = res_en != 0 && res_addr == a;
+-#endif
+-            ok = (a & 0x80000003) == 0x80000000 && o < RAM_MAX && f5 < 16;
+-            [branch] if (ok) {
+-                uint old = sc ? 0 : ram_word(o);
+-                [branch] if (sc ? sc_ok : !lr) ram_store_nc(o, f5 == 0 ? old + b : f5 == 4 ? old ^ b : f5 == 8 ? old | b : f5 == 12 ? old & b : b, 0xffffffff);
+-                res_en = lr ? 1 : sc && sc_ok ? 0 : res_en;
+-                res_addr = lr ? a : res_addr;
+-                v = sc ? (sc_ok ? 0 : 1) : old;
+-            }
+         } else [branch] if (opc == 0x33 && (w >> 25) == 1) {
+             v = op_m(f3, a, b);
+         } else [branch] if (opc == 0x73 && (f3 & 3) != 0) {

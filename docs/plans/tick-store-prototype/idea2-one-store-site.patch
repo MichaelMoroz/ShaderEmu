@@ -1,0 +1,37 @@
+--- a/shader_vm/tick.hlsl	2026-11-04 23:46:24.588204600 +0100
++++ b/shader_vm/tick.hlsl	2026-11-04 23:57:06.032165200 +0100
+@@ -614,7 +614,7 @@
+     [branch] if (pre_valid) w = pre_w; else w = fetch(pc);
+     pre_valid = false;
+     uint opc = w & 0x7f, f3 = (w >> 12) & 7, rd = (w >> 7) & 31, rs1 = (w >> 15) & 31, rs2 = (w >> 20) & 31, f7 = w >> 25;
+-    uint a = xr[rs1], b = xr[rs2], next = pc + 4, v = 0, dst = rd == 0 ? 64 : rd;
++    uint a = xr[rs1], b = xr[rs2], next = pc + 4, v = 0, dst = rd == 0 ? 64 : rd, st_a = 0, st_v = 0, st_n = 0;
+     if ((pc & 3) != 0) { raise(0, pc); w = 0; opc = 0x7f; }
+     // a read for loads and atomics, put together from two words when it is not on one (at 0: nothing)
+     uint ra = (opc & 0x7b) == 0x03 ? a + imm_i(w) : (w & 0x202f) == 0x202f ? a : 0, mv = 0;
+@@ -632,7 +632,7 @@
+         if (opc == 0x07 ? f3 != 2 : ((0x77u >> f3) & 1) == 0) raise(2, w);   // (lwu is lw)
+     } else [branch] if (opc == 0x23 || opc == 0x27) {
+         if (opc == 0x27 ? f3 != 2 : f3 > 2) raise(2, w);
+-        else store_any(a + imm_s(w), opc == 0x27 ? xr[32 + rs2] : b, 1u << f3);
++        else { st_a = a + imm_s(w); st_v = opc == 0x27 ? xr[32 + rs2] : b; st_n = 1u << f3; }
+         dst = 64;
+     } else [branch] if (opc == 0x63) {
+         bool lt = (f3 & 2) ? a < b : asint(a) < asint(b);
+@@ -655,7 +655,7 @@
+         if (f5 == 2) { res_en = 1; res_addr = a; }
+         if (f5 == 3 && sc_ok) res_en = 0;
+         if (f5 >= 16 && (f5 & 3) != 0) raise(2, w);
+-        else if (f5 != 2 && (f5 != 3 || sc_ok)) store_any(a, f5 == 3 ? b : x, 4);
++        else if (f5 != 2 && (f5 != 3 || sc_ok)) { st_a = a; st_v = f5 == 3 ? b : x; st_n = 4; }
+     } else [branch] if ((w & 0x06000073) == 0x43) {
+         // fmadd, fmsub, fnmsub, fnmadd: a product and a sum, each rounded
+         precise float x = asfloat(xr[32 + rs1]), y = asfloat(xr[32 + rs2]), z = asfloat(xr[32 + (w >> 27)]);
+@@ -701,6 +701,7 @@
+     } else {
+         raise(2, w);
+     }
++    [branch] if (st_n != 0) store_any(st_a, st_v, st_n);
+     if (!trapped) xr[dst] = v;
+     [branch] if (core != 0 && trapped) {
+         // a worker is given no trap: it stops where it is, its record in its mailbox (docs/machine/multicore.md)
