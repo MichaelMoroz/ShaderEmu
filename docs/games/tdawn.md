@@ -181,7 +181,20 @@ is (index 0, which the game never draws).
   (`pointer_read()`, `docs/machine/input.md`).
 - **A frame with nothing new** (the pointer moved, a dialog is open) draws the last list
   again (`seglSwapAgain`): its textures are the page's memory, and the pointer's corners and
-  the page it shows are changed in place.
+  the page it shows are changed in place. The draws name the VRAM's copies of the page, made by
+  uploads at the list's end, so the page shown now is the source of those uploads (`page_uploads`),
+  never a draw's word: an address there that is not a slot is drawn magenta, and from 5 November
+  2026 every such frame was a pink window in the world (6 November 2026). The pointer's texture is
+  128 x 128 whatever its picture, the picture in its corner and drawn by its vertices' texels, so a
+  new pointer fits the block the list's upload was given.
+- **The atlas is 1,024 x 2,048 bytes, drawn through views of 1,024 rows** (the GPU's texture coordinates are 1,024ths of a
+  texture's height): the icons' rows 0 to 1,007 through the first, the shapes from row 1,024 (`SHAPE_ROWS`) through the last
+  alone, and their shadows through the masks' last (6 November 2026). A list copies every texture it draws into the VRAM's
+  scratch band (`programs/common/gpu_uploads.h`), 2,048 rows on shelves with a texel round each: three textures of 1,024
+  rows fill a shelf, and a fourth found no room, so its draws were magenta. Shapes from row 1,008, as before, lay in the
+  views a half apart too, and a battle drew from five (the two sprite views and the two mask views): Red Alert's and Tiberian
+  Dawn's maps blinked pink in the world. A new texture of the map's must fit beside those three, on the shelf's last
+  1,018 columns or under them in 1,022 rows.
 - All sprites are in the blended pass with no depth, so that a shape and its shadow keep the
   game's order. What does not fit (a shape with the cloak effect, a full atlas: "A long battle", a map of
   more than 64 x 64 cells) the game draws itself, into the page; `TDAWN_RENDER=soft` makes it all.

@@ -174,8 +174,8 @@ is not padded, the pak is not summed, the bots' answers to chat are not read.
 ## In a holodeck
 
 The room draws the frame's list itself (`docs/world/holodeck.md`), so its pass must read what the
-GPU's reads: `GpuVolumePass.cginc` has the ROM's four textures (the materials get them from
-"ShaderEmu/Give the holodecks' world the ROM"), and `volume_vertex` in `src/gpu.h` moves a
+GPU's reads: `GpuVolumePass.cginc` has the ROM's four textures (the materials get them from the builder's
+`GiveRom`), and `volume_vertex` in `src/gpu.h` moves a
 texture and places a light map as `gpu_vertex_sized` does. The level is sent whole whatever the
 camera sees, up is z (`seglWorldUp`), and the right hand aims and holds the weapon
 (`docs/world/holodeck.md`, "Played from the seat"; `SE_SeatMove`, `SE_SeatView`).

@@ -11,6 +11,8 @@ enum
     ATLAS_W = 1024,
     ATLAS_ROWS = 2048,
     ICON_ROWS = 1008, // the atlas's first rows hold terrain icons, each in a square of 26
+    SHAPE_ROWS = 1024, // and the shapes lie under them, in the atlas's last view alone (host.c: a list copies the
+                       // textures it draws into the VRAM's band, which holds three of 1,024 rows, not four)
     ICON_ACROSS = 39,
     ICON_MOST = 39 * 38,
     SHADE_ACROSS = 9,
@@ -299,7 +301,7 @@ static void forget(void)
     memset(shelf_x, 0, sizeof(shelf_x));
     memset(shelf_y, 0, sizeof(shelf_y));
     icon_count = shade_count = 0;
-    shelf_top = ICON_ROWS;
+    shelf_top = SHAPE_ROWS;
     host_tiles_clear();
     memset(host_masks(), 0, ATLAS_W / 8 * ATLAS_ROWS);
     memset(kept, 0, sizeof(kept));
@@ -325,7 +327,7 @@ static void shapes_forget(void)
     memset(shelf_x, 0, sizeof(shelf_x));
     memset(shelf_y, 0, sizeof(shelf_y));
     shade_count = 0;
-    shelf_top = ICON_ROWS;
+    shelf_top = SHAPE_ROWS;
     memset(host_masks() + ICON_ROWS * (ATLAS_W / 8), 0, (ATLAS_ROWS - ICON_ROWS) * (ATLAS_W / 8));
     memset(kept, 0, sizeof(kept));
     memset(cell_kept, 0, sizeof(cell_kept));

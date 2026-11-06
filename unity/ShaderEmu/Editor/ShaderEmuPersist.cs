@@ -37,18 +37,4 @@ public static partial class ShaderEmuBuilder
         Apply(machine);
     }
 
-    [MenuItem("ShaderEmu/Add the storage sign to the open scene")]
-    public static void AddPersist()
-    {
-        EmuMachine machine = Object.FindObjectOfType<EmuMachine>();
-        Transform computer = Den();
-        if (machine == null || computer == null) throw new System.Exception("no machine in the open scene: run ShaderEmu/Build world");
-        CreateProgramAssets();
-        UdonSharpEditorUtility.CopyUdonToProxy(machine);
-        Persist(computer, machine);
-        RetroNewPanels();   // never left as a bare canvas
-        AssetDatabase.SaveAssets();
-        EditorSceneManager.MarkSceneDirty(machine.gameObject.scene);
-        Debug.Log("[ShaderEmu] storage sign added");
-    }
 }

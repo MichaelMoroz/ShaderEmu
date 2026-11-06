@@ -98,9 +98,8 @@ cell. A typed character is one short row; a full screen is about 1.2 KB.
 ## Display
 
 The GPU makes the whole of a packet's display part (`ShareUnits.shader`); Udon copies one row
-of bytes, and the receiver's GPU draws it (`ShareUnitsDecode.shader`). "ShaderEmu/Update the
-display stream in the open scene" makes its textures and fills the hub's and the receiver's
-fields.
+of bytes, and the receiver's GPU draws it (`ShareUnitsDecode.shader`). "Build world" makes its
+textures and fills the hub's and the receiver's fields (`UnitsSender`, `UnitsReceiver`).
 
 ### Units
 
@@ -208,8 +207,7 @@ the display and dropped by the owner after two seconds of silence.
   on `EmuStreams` loses every tenth packet: its `repairs` and the hub's `repaired` must go
   up and the hub's `refreshed` must not.
 - The scene has one "Players panel", under the den's Computer, and every button of it calls
-  the hub. "ShaderEmu/Remove the dead players' panel in the open scene" mends a scene with an old one
-  left beside it; the den is looked up as the world's own child (`Den()`).
+  the hub. "Build world" makes it once.
 - Destroy a spawned player's "Share player" object before its `OnPlayerLeft`: no behaviour
   may halt (`enabled` stays true), and the place reads FREE with a black picture.
 - ClientSim never raises `OnPostSerialization` for these objects, so `EmuShare.Busy()` runs

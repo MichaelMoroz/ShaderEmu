@@ -79,10 +79,8 @@ in Blender by scripts in `world/`; furniture, plants and the main surfaces come 
   Name parts after `--` to build only those.
 
 Then copy `unity/ShaderEmu` over the Unity project's `Assets/ShaderEmu` and run
-"ShaderEmu/Put the modelled room into the open scene" (twice the first time: the storm's Udon
-program has to exist before it can be filled in), "ShaderEmu/Restyle the panels in the open
-scene", then "ShaderEmu/Bake lighting". "Build world" does the first two itself. Putting the
-models in again drops their lightmaps: the room is unlit until the next bake.
+"ShaderEmu/Build world", then "ShaderEmu/Bake lighting". Putting the models in again drops their
+lightmaps: the room is unlit until the next bake.
 
 After a change to `world/pc.py`, `blender -b --python world/bake_pc.py` comes before
 `build.py` (`docs/world/stations.md`).
@@ -398,18 +396,20 @@ lightmap, which shows a line wherever two pieces of a wall meet and at every cor
 The board's three long texts are constants (`WhatText` and `CreditsText` in
 `ShaderEmuDecor.cs`, `DoText` in `ShaderEmuGamepad.cs`); the control panel's words beside its
 switches are `PanelHelp` (`ShaderEmuTouch.cs`). Both say that "your machine" is a computer
-emulated in a pixel shader on the visitor's own graphics card. "ShaderEmu/Write the board's words
-again in the open scene" puts them into a scene that has a board, each at the largest size at
-which it fits its box (it logs the size and the height), and letters the plate again: no
-build, no bake.
+emulated in a pixel shader on the visitor's own graphics card. "Build world" writes
+them, each at the largest size at which it fits its box, and letters the plate.
 
 The world's entry at VRChat is `unity/listing`: `description.txt`, and `WorldIcon.png`, which
 `python tools\make_world_icon.py CAPTURE.png unity\listing\WorldIcon.png` letters onto a
-capture (`WorldIconCapture.jpg` is the one it was made from). The capture is a camera made in
-editor code in play mode with the machine on, rendered 2400 x 1800 with 8 samples: low at the
-left of the front row's first computer, `(-2.30, 0.78, 0.55)` looking at `(-1.40, 1.19,
-1.36)`, 54 degrees, after `Take0` on "Stations" twice (the second makes its tube show the
-display) and `doom &` typed at the console keyboard's `queue`. "ShaderEmu/Show the world's
+capture (`WorldIconCapture.jpg` is the one it was made from), in a column right of the capture's
+screen and at least 170 pixels inside the picture's right edge: VRChat crops the picture to 16:9
+and to a square, and lettering over the screen hid it. The capture is a camera made in editor
+code in play mode with the machine on, rendered 2400 x 1800 with 8 samples: low at the left of
+the front row's first computer, at `(-2.36, 0.78, 1.60)` looking at `(-1.46, 1.19, 2.41)`,
+moved 0.15 m back along its view and turned 15 degrees right about the vertical (6 November
+2026), 54 degrees, after `Take0` on "Stations" twice (the second makes its tube show the
+display), `quake3 &` typed into the machine (`RemoteChar`) and, at its skill menu, Enter (`RemoteKey` 28
+with 65536, then 28): The Longest Yard in play, its window on the desktop. "ShaderEmu/Show the world's
 listing at VRChat" reads the entry, and "Update the world's picture and description at
 VRChat" sends those two and nothing else (`ShaderEmuListing.cs`: the SDK's
 `UpdateWorldInfo` and `UpdateWorldImage`, which need its panel logged in and no build).
@@ -423,9 +423,7 @@ with its command (from `ls` of the machine's `/bin`, `/usr/bin`, `/sbin`, `/usr/
 more besides ours), which files each opens, the NES mappers, the samples and how to start things.
 Its words are `unity/ShaderEmu/Editor/ShaderEmuSheet.txt` (columns, headings, `NAME | TEXT`
 lines; ASCII only), laid out by `ShaderEmuSheet.cs` in mono type at the largest size at which
-every column fits (18.5 on 29 October 2026). "ShaderEmu/Write the system sheet into the open
-scene" puts it there styled as the board's paper, or, when it has its plate, letters that plate
-again from the file: no build, no bake. The frame is the board's mesh ("Board" of `Computer.fbx`)
+every column fits (18.5 on 29 October 2026). "Build world" puts it there styled as the board's paper (`SystemSheet`). The frame is the board's mesh ("Board" of `Computer.fbx`)
 turned and stretched, not static, on copies of its materials without the light volume
 (`Generated/* by probes.mat`): with it the wood is black this close to the wall. The plate and
 the frame take the probes' light. After a change to `linux/apps/nxopen.conf`, a program's
@@ -438,7 +436,7 @@ card (its shader was too much for that driver's compiler), that this may now be 
 have run it, that other cards have problems at times, and which work so far. `EmuMachine.PowerWarning` is on the console while the machine is off and on the control
 panel's read-out beside "Power on" (the visitor's own; the line sent to others stays "off");
 `PowerWarningShort` (`ShaderEmuConsole.cs`) is a sign over the storage sign on the tower, in the power
-sign's leaning plane and as wide: "ShaderEmu/Add the power warning to the open scene", no bake.
+sign's leaning plane and as wide: `WarningSign`.
 
 ## Physical buttons
 
@@ -454,29 +452,37 @@ that bone's length again) and
   it (`Button.OnSubmit`, which is what VRChat's own click does), and moves a slider to where the
   tip is across it. The panels are every canvas with a collider whose buttons or sliders a
   laser presses (`TouchPanels`),
-  found by `Physics.OverlapSphere` round the tip, 5 cm. "Build world" and "Put the modelled room into the open scene"
-  make the list again; "ShaderEmu/Add physical buttons and the classroom's speed sliders to the
-  open scene" adds the switch and the list to a built scene, with the steady pointer's switch
-  under it (`docs/machine/input.md`); "ShaderEmu/Add the monitors' volume sliders and the towers'
-  new speeds to the open scene" makes the list again too.
+  found by `Physics.OverlapSphere` round the tip, 5 cm. "Build world"
+  makes the list, the switch and the steady pointer's switch under it (`docs/machine/input.md`).
 - A press shows on the keyboards as the key's colour (`EmuKeyboard.Paint`) and on a panel as the
   button's tint. A held key's cap sinks in the keyboard's model, 0.4 of its height, its feet
   staying: `EmuKeyboard.Sink` gives each hand's key as a box in `_UdonPress0`/`1` globals, and
-  `Plate.shader`'s vertex stage (the caps' material) moves what lies in it. "ShaderEmu/Sink held
-  keys' caps in the open scene" sets the caps' depths (`capUnder`, `capHigh`) on a built scene.
+  `Plate.shader`'s vertex stage (the caps' material) moves what lies in it. "Build world" sets the caps'
+  depths (`capUnder`, `capHigh`).
 
 The holodecks' consoles (keys of a plate, not buttons) are not on the list.
 
 ## The pens
 
 ureishi's QvPen 3.3.5, as the fluid world has it: fifteen pens, three erasers and their keys in
-a row under the board on the den's left wall (`ShaderEmuPens.cs`, "ShaderEmu/Put the pens into
-the open scene"). It is a package of its own (`world/install_packages.py`), its prefab put in
+a row under the board on the den's left wall (`ShaderEmuPens.cs`, `Pens()` in "Build world"). It is a package of its own (`world/install_packages.py`), its prefab put in
 as it is, outside "ShaderEmu", so the restyle leaves its keys alone. Nothing of it is baked.
+
+## What "Build world" makes
+
+"ShaderEmu/Build world" builds the open scene when it is a world already (the copy uploaded as ShaderEmu v2 too),
+else `ShaderEmuWorld.unity`, and stops before taking anything down when the boot image is missing. It makes every
+part of the world, and it is the one way a part gets into a scene: a change to a part is a rebuild, then "Bake
+lighting". Until 6 November 2026 forty-six menus ("Add ... to the open scene", "... again in the open scene",
+"Bring the open scene up to 12 October") put one part into a scene as it was, without a bake; five parts (the
+storage sign, the power warning, the danger zone, the network's panel and the corridor's gate) were made by their
+menus alone, and a rebuild had left both scenes without them (no `/persistence`). A new part goes into `Build()`,
+never into a menu of its own. In `Build()` the storage sign comes before the power warning, which hangs over it; the
+danger zone after `Scope`, which its laser points at; the network's panel after `Sharing`, whose hub it reads; the
+gate last, as it takes the parts there are then.
 
 ## The danger zone
 
 On the den's right wall, between the room's switches and the rack: a panel whose keys harm
 the visitor's own machine's memory (`docs/world/danger.md`). It is a canvas, styled as the others
-(`RetroNewPanels`); "ShaderEmu/Add the danger zone to the open scene" puts it there without a
-bake. The memory screen has a trigger collider for its laser, which stops no beam and no player.
+(`RetroNewPanels`); "Build world" makes it (no bake). The memory screen has a trigger collider for its laser, which stops no beam and no player.

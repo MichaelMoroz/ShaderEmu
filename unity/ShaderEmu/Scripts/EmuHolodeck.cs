@@ -524,7 +524,7 @@ public class EmuHolodeck : UdonSharpBehaviour
                     screenGuards[k].SetPositionAndRotation(screen.position, screen.rotation);
                     screenGuards[k].localScale = screen.lossyScale;
                 }
-                if (me) PlaceKeyboard(screen, frames[k]);
+                if (me) PlaceKeyboard(screen, frames[k], large == 1 ? null : Plate(k));
             }
 
             string who = occupant[k] == 0 ? "FREE" : me ? Networking.LocalPlayer.displayName : NameOf(occupant[k]);
@@ -603,15 +603,29 @@ public class EmuHolodeck : UdonSharpBehaviour
     // back, to 85 degrees, and then rises over the screen's edge, its lowest edge KeyboardFloor over the floor. It is as wide
     // as the screen, KeyboardWidth at least and KeyboardMost at most: under the large screen, 1.7 m off, one 0.54 m wide had
     // keys too small to hit; under the largest (3.2 m, its edge 5 cm over the floor) it lies at 85 degrees, 12 cm up.
+    // Under the console's small screen is the console's plate (its words and keys): there the keyboard hangs under the plate,
+    // its top KeyboardGap below the plate's lowest corner along the screen's upright (it covered the plate's keys before:
+    // ShaderEmuSight, "ShaderEmu/Check lines of sight in the open scene", docs/world/holodeck.md, "What the sitter must see").
     private const float KeyboardTilt = 25f, KeyboardGap = 0.04f, KeyboardFloor = 0.12f, KeyboardWidth = 0.54f, KeyboardMost = 1.6f;
+    private Vector3[] plateCorners = new Vector3[4];
 
-    private void PlaceKeyboard(Transform screen, Transform frame)
+    private GameObject Plate(int k) { return plates != null && k < plates.Length ? plates[k] : null; }
+
+    private void PlaceKeyboard(Transform screen, Transform frame, GameObject under)
     {
         if (keyboard == null) return;
         Transform kb = keyboard.transform;
         float wide = Mathf.Clamp(screen.lossyScale.x, KeyboardWidth, KeyboardMost), parent = kb.parent != null ? kb.parent.lossyScale.x : 1f;
         kb.localScale = Vector3.one * (wide / keyboard.panelWidth / parent);
-        Vector3 edge = screen.TransformPoint(new Vector3(0f, -0.5f, 0f)) - screen.up * KeyboardGap;
+        Vector3 bottom = screen.TransformPoint(new Vector3(0f, -0.5f, 0f));
+        float below = 0f;
+        RectTransform plate = under != null ? under.GetComponent<RectTransform>() : null;
+        if (plate != null)
+        {
+            plate.GetWorldCorners(plateCorners);
+            for (int i = 0; i < 4; i++) below = Mathf.Min(below, Vector3.Dot(plateCorners[i] - bottom, screen.up));
+        }
+        Vector3 edge = bottom + screen.up * (below - KeyboardGap);
         float floor = frame.position.y + KeyboardFloor;
         float tilt = KeyboardTilt, low = 0f;
         Vector3 centre = edge;

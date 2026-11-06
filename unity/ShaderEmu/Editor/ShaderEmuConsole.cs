@@ -96,19 +96,6 @@ public static partial class ShaderEmuBuilder
         Apply(paste);
     }
 
-    // The console's strip alone, as one field and three keys; nothing else is made again.
-    [MenuItem("ShaderEmu/Make the console's field again in the open scene")]
-    public static void ConsoleFieldAgain()
-    {
-        EmuKeyboard keys = null;
-        foreach (EmuKeyboard k in Object.FindObjectsOfType<EmuKeyboard>())
-            if (k.name == "Console keyboard") keys = k;
-        if (keys == null) throw new System.Exception("no console keyboard in the open scene");
-        ConsolePaste(keys.transform.parent, keys, Object.FindObjectOfType<EmuMachine>());
-        RetroNewPanels();
-        EditorSceneManager.MarkSceneDirty(keys.gameObject.scene);
-        Debug.Log("[ShaderEmu] the console's field is made again (the scene is not saved)");
-    }
 
     // Along the display keyboard's far edge, the size of the console's strip there (the desk's
     // model has room for that and no more): one field, whose text is an address the machine is
@@ -163,23 +150,6 @@ public static partial class ShaderEmuBuilder
         Apply(machine);
     }
 
-    [MenuItem("ShaderEmu/Add the display's paste and link fields to the open scene")]
-    public static void AddDisplayFields()
-    {
-        EmuMachine machine = Object.FindObjectOfType<EmuMachine>();
-        EmuKeyboard keys = null;
-        foreach (EmuKeyboard k in Object.FindObjectsOfType<EmuKeyboard>())
-            if (k.name == "Display keyboard") keys = k;
-        if (machine == null || keys == null) throw new System.Exception("no machine in the open scene: run ShaderEmu/Build world");
-        CreateProgramAssets();
-        UdonSharpEditor.UdonSharpEditorUtility.CopyUdonToProxy(machine);
-        DisplayFields(keys.transform.parent, machine, keys);
-        RetroNewPanels();   // never left as a bare canvas
-        AssetDatabase.SaveAssets();
-        EditorSceneManager.MarkSceneDirty(machine.gameObject.scene);
-        EditorSceneManager.SaveScene(machine.gameObject.scene);
-        Debug.Log("[ShaderEmu] the display's paste and link fields added");
-    }
 
     // The switch where a visitor looks for it: a small sign standing on the computer's tower,
     // leaning back, with a button that is red while the computer is off and green while it runs.
@@ -224,45 +194,6 @@ public static partial class ShaderEmuBuilder
         Label(sign, "Says", PowerWarningShort, 8, 30, 224, 146, 12, TextAnchor.UpperLeft, new Color(0.85f, 0.87f, 0.9f));
     }
 
-    [MenuItem("ShaderEmu/Add the power warning to the open scene")]
-    public static void AddWarningSign()
-    {
-        Transform computer = Den();
-        if (computer == null) throw new System.Exception("no computer in the open scene: run ShaderEmu/Build world");
-        WarningSign(computer);
-        RetroNewPanels();   // never left as a bare canvas
-        EditorSceneManager.MarkSceneDirty(computer.gameObject.scene);
-        EditorSceneManager.SaveScene(computer.gameObject.scene);
-        Debug.Log("[ShaderEmu] power warning added");
-    }
 
-    [MenuItem("ShaderEmu/Add the power button to the open scene")]
-    public static void AddPowerSign()
-    {
-        EmuMachine machine = Object.FindObjectOfType<EmuMachine>();
-        Transform computer = Den();
-        if (machine == null || computer == null) throw new System.Exception("no machine in the open scene: run ShaderEmu/Build world");
-        CreateProgramAssets();
-        PowerSign(computer, machine);
-        AssetDatabase.SaveAssets();
-        EditorSceneManager.MarkSceneDirty(machine.gameObject.scene);
-        EditorSceneManager.SaveScene(machine.gameObject.scene);
-        Debug.Log("[ShaderEmu] power button added");
-    }
 
-    [MenuItem("ShaderEmu/Add the console's tabs and paste field to the open scene")]
-    public static void AddConsole()
-    {
-        EmuTerminal terminal = Object.FindObjectOfType<EmuTerminal>();
-        EmuKeyboard keys = null;
-        foreach (EmuKeyboard k in Object.FindObjectsOfType<EmuKeyboard>())
-            if (k.name == "Console keyboard") keys = k;
-        if (terminal == null || keys == null) throw new System.Exception("no console in the open scene: run ShaderEmu/Build world");
-        CreateProgramAssets();
-        Console(terminal.transform.parent, terminal, keys);
-        AssetDatabase.SaveAssets();
-        EditorSceneManager.MarkSceneDirty(terminal.gameObject.scene);
-        EditorSceneManager.SaveScene(terminal.gameObject.scene);
-        Debug.Log("[ShaderEmu] console tabs and paste field added");
-    }
 }

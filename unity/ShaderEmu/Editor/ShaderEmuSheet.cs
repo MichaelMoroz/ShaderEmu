@@ -200,33 +200,4 @@ public static partial class ShaderEmuBuilder
         Debug.Log("[ShaderEmu] the system sheet: " + columns.Count + " columns at size " + size + " (" + Mathf.FloorToInt(wide / advance) + " characters a line)");
     }
 
-    // Into the scene as it is: a new sheet styled alone (its plate takes the probes' light until a
-    // bake), or the words of one that has its plate lettered again on that plate.
-    [MenuItem("ShaderEmu/Write the system sheet into the open scene")]
-    public static void AddSheet()
-    {
-        GameObject world = GameObject.Find("ShaderEmu");
-        if (world == null) throw new System.Exception("no ShaderEmu object: run ShaderEmu/Build world");
-        Transform old = world.transform.Find(SheetName);
-        if (old != null && old.Find(SheetName + " plate") != null)
-        {
-            Canvas canvas = old.GetComponent<Canvas>();
-            SheetLabels((RectTransform)old);
-            if (world.transform.Find(SheetName + " frame") == null) SheetFrame(world.transform, old.localPosition);
-            TMP_FontAsset mono = RetroFont("IBMPlexMono-Regular"), monoBold = RetroFont("IBMPlexMono-Bold");
-            FontSheet(RetroFont("IBMPlexSansCondensed-Medium"), RetroFont("IBMPlexSansCondensed-Bold"), mono, monoBold);
-            List<Graphic> print = PaperPrint(canvas, mono, monoBold);
-            Lettering(canvas, SheetName, print, Mat("Plate " + SheetName, "ShaderEmu/Plate"));
-            foreach (Graphic graphic in print) graphic.enabled = false;
-            AssetDatabase.SaveAssets();
-            Debug.Log("[ShaderEmu] the system sheet is lettered again (the scene is not saved)");
-        }
-        else
-        {
-            SystemSheet(world.transform);
-            RetroNewPanels();   // never left as a bare canvas
-            Debug.Log("[ShaderEmu] the system sheet is on the back wall (the scene is not saved)");
-        }
-        EditorSceneManager.MarkSceneDirty(world.scene);
-    }
 }

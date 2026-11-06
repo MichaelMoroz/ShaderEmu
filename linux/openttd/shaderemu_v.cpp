@@ -632,7 +632,7 @@ static const int PLAY_FOLLOW[] = { 200, 201, 202, 203, 204, 205, 206, 207, 208, 
 		220, 221, 222, 223, 224, 225, 226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239,
 		240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 199 };
 /* OPENTTD_PLAY_PART=window: 60 pictures of the view standing still, with OPENTTD_PLAY_SCENE=none (no window), one (the
- * finances), many (finances, a station list, a station, the towns) or vehicle (a train's window, following it) */
+ * finances), many (finances, a station list, a station, the towns), vehicle (a train's window, following it) or map (the small map) */
 static const int PLAY_WINDOW[] = { 300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319,
 		320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 337, 338, 339,
 		340, 341, 342, 343, 344, 345, 346, 347, 348, 349, 350, 351, 352, 353, 354, 355, 356, 357, 358, 359, 199 };
@@ -926,6 +926,7 @@ static constexpr uint32_t PLAY_POINTER_TIME = 66 * 5, PLAY_PLACE_TIME = 400 * 5;
  * an industry's. Run with light pictures (no OPENTTD_CHECK, which turns them off): the window's view must stay at the vehicle, and no view be
  * nearly all black (docs/games/openttd.md, "Pictures the tick does not wait for"). */
 void ShowIndustryViewWindow(IndustryID industry);
+void ShowSmallMap();
 static VehicleID _depot_vehicle = VehicleID::Invalid();
 static TileIndex _depot_tile = INVALID_TILE;
 static uint32_t _depot_looks, _depot_off, _depot_light;
@@ -1469,6 +1470,7 @@ if (GetEnv("OPENTTD_MADE_CHECK").has_value()) PlayLine(fmt::format("openttd: veh
 			if (any != nullptr) ShowVehicleViewWindow(any);
 		}
 		if (s == "depot") PlayDepotBegin();
+		if (s == "map") ShowSmallMap();
 	}
 	if (play_scene_depot && f == 302) PlayDepotBuild();
 	if (play_scene_depot && f == 304) PlayDepotShow();

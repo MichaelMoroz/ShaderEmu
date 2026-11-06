@@ -128,7 +128,6 @@ public static class SeCheckAuto
                 return;
             }
             else if (cmd == "scene") EditorSceneManager.OpenScene("Assets/ShaderEmu/ShaderEmuWorld.unity", OpenSceneMode.Single);
-            else if (cmd == "hud") ShaderEmuBuilder.AddHudLayer();
             else if (cmd == "check") Check();
             else if (cmd == "play")
             {

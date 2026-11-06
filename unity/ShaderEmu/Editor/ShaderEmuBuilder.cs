@@ -176,41 +176,7 @@ public static partial class ShaderEmuBuilder
         EditorUtility.SetDirty(machine);
     }
 
-    [MenuItem("ShaderEmu/Add the kernel log button to the open scene")]
-    static void KernelLogButtonHere()
-    {
-        EmuMachine machine = Object.FindObjectOfType<EmuMachine>(true);
-        GameObject panel = GameObject.Find("Control panel");
-        if (machine == null || panel == null) throw new System.Exception("no machine in the open scene: run ShaderEmu/Build world");
-        KernelLogButton(panel.GetComponent<RectTransform>(), machine);
-        ShaderEmuImages.BootImage boot = ShaderEmuImages.Images[0];
-        ShaderEmuImages.BootPieces(boot, out machine.bootKernel, out machine.bootTree, out machine.bootLog);
-        EditorUtility.SetDirty(machine);
-        UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(machine.gameObject.scene);
-        Debug.Log("[ShaderEmu] kernel log button added; the tree's loglevel digit at texel " + machine.bootLog.x + ", byte " + machine.bootLog.y);
-    }
 
-    [MenuItem("ShaderEmu/Keep the GPU's pictures apart in the open scene")]
-    static void GpuKeepHere()
-    {
-        EmuMachine machine = Object.FindObjectOfType<EmuMachine>(true);
-        if (machine == null) throw new System.Exception("no machine in the open scene: run ShaderEmu/Build world");
-        GpuKeep(machine);
-        machine.displayMaterial.SetTexture("_GpuTarget", GpuShown());
-        EditorUtility.SetDirty(machine.displayMaterial);
-        foreach (string name in new[] { "GpuHolodeck", "GpuHolodeckHud", "HolodeckMask", "GpuVolume" })
-        {
-            Material m = AssetDatabase.LoadAssetAtPath<Material>(Generated + "/" + name + ".mat");
-            if (m == null) continue;
-            GpuHoloInputs(m);
-            EditorUtility.SetDirty(m);
-        }
-        Apply(machine);
-        EditorUtility.SetDirty(machine);
-        UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(machine.gameObject.scene);
-        AssetDatabase.SaveAssets();
-        Debug.Log("[ShaderEmu] the holodeck's frame and the display's picture are kept apart (GpuKeep)");
-    }
 
     // A texture a material keeps under a name its shader no longer has still goes into the world's build:
     // the ROM's and RAM's four lanes of old (_Data_MTD_*, _Data_RAM_*, _Data_DTB_*) were 330 MB of it.
@@ -506,19 +472,6 @@ public static partial class ShaderEmuBuilder
         return renderer;
     }
 
-    [MenuItem("ShaderEmu/Add the tick's and the commit's cameras to the open scene")]
-    public static void AddMachineCameras()
-    {
-        Transform world = GameObject.Find("ShaderEmu").transform;
-        EmuMachine machine = world.GetComponentInChildren<EmuMachine>(true);
-        UdonSharpEditorUtility.CopyUdonToProxy(machine);
-        MachineCameras(world, machine);
-        Apply(machine);
-        UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(world.gameObject.scene);
-        UnityEditor.SceneManagement.EditorSceneManager.SaveOpenScenes();
-        AssetDatabase.SaveAssets();
-        Debug.Log("[ShaderEmu] the tick's and the commit's cameras are in the scene");
-    }
 
     static Mesh GpuMesh()
     {
@@ -652,13 +605,6 @@ public static partial class ShaderEmuBuilder
 
     static readonly Color KeyColour = new Color(0.17f, 0.18f, 0.21f), KeyText = new Color(0.9f, 0.92f, 0.95f);
 
-    // The den's wall of screens in the open scene: the world's own child. Not by name alone:
-    // the model Models/Computer has the same one.
-    static Transform Den()
-    {
-        EmuMachine machine = Object.FindObjectOfType<EmuMachine>();
-        return machine == null ? null : machine.transform.parent.Find("Computer");
-    }
 
     // The fetch's line on the control panel: under the scope's keys, two lines of it. It lay in
     // the read-out's field once, over the registers.
@@ -1064,8 +1010,21 @@ public static partial class ShaderEmuBuilder
         Directory.CreateDirectory(Root + "/Textures");
         NameLayer(GpuLayer, "GpuDevice");
 
-        if (!File.Exists(ScenePath)) AssetDatabase.CopyAsset("Assets/Scenes/VRCDefaultWorldScene.unity", ScenePath);
-        UnityEngine.SceneManagement.Scene scene = EditorSceneManager.OpenScene(ScenePath, OpenSceneMode.Single);
+        // the boot image before anything is taken down: a world built without one boots nothing
+        ShaderEmuImages.BootImage bootFirst = ShaderEmuImages.Images[0];
+        Vector4 bootK, bootT, bootL;
+        if (AssetDatabase.LoadAssetAtPath<Texture2D>(ShaderEmuImages.RomPath(bootFirst.name)) == null
+            || !ShaderEmuImages.BootPieces(bootFirst, out bootK, out bootT, out bootL))
+            throw new System.Exception("no boot image: run ShaderEmu/Import boot images first (the scene is as it was)");
+
+        // the open scene when it is a world already (the copy uploaded as another world is built as the first is), else ScenePath
+        UnityEngine.SceneManagement.Scene scene = EditorSceneManager.GetActiveScene();
+        bool isWorld = !string.IsNullOrEmpty(scene.path) && System.Array.Exists(scene.GetRootGameObjects(), g => g.name == "ShaderEmu");
+        if (!isWorld)
+        {
+            if (!File.Exists(ScenePath)) AssetDatabase.CopyAsset("Assets/Scenes/VRCDefaultWorldScene.unity", ScenePath);
+            scene = EditorSceneManager.OpenScene(ScenePath, OpenSceneMode.Single);
+        }
         foreach (GameObject old in scene.GetRootGameObjects())
             if (old.name == "ShaderEmu" || old.name == "Floor") Object.DestroyImmediate(old);
 
@@ -1311,8 +1270,7 @@ public static partial class ShaderEmuBuilder
         // its tree out of the ROM: AGENTS.md, 5 November 2026)
         textures.Add(null);
         textures.Add(AssetDatabase.LoadAssetAtPath<Texture2D>(ShaderEmuImages.RomPath(boot.name)));
-        if (textures[1] == null || !ShaderEmuImages.BootPieces(boot, out machine.bootKernel, out machine.bootTree, out machine.bootLog))
-            Debug.LogError("[ShaderEmu] no boot image: run ShaderEmu/Import boot images first");
+        ShaderEmuImages.BootPieces(boot, out machine.bootKernel, out machine.bootTree, out machine.bootLog);   // (checked at the start)
         machine.imageTextures = textures.ToArray();
 
         Transform beamRoot = new GameObject("Beams").transform;
@@ -1368,6 +1326,8 @@ public static partial class ShaderEmuBuilder
 
         OnClick(power, machine, "Power");
         PowerSign(computer, machine);
+        Persist(computer, machine);   // the storage sign over it: /persistence (ShaderEmuPersist.cs)
+        WarningSign(computer);        // and the warning over that, which goes by the storage sign (ShaderEmuConsole.cs)
         DisplayFields(computer, machine, gpuKeys);   // a paste field and "open this link" (ShaderEmuConsole.cs)
         OnClick(reset, machine, "ResetMachine");
         OnClick(pause, machine, "Pause");
@@ -1400,6 +1360,8 @@ public static partial class ShaderEmuBuilder
         Label(signs, "Display", "DISPLAY", 3500 + dispAt.x * 1000 - 750, 20, 1500, 80, 54, TextAnchor.MiddleCenter, dim);
         Label(signs, "Memory", "MEMORY (writes glow)", 3500 + memAt.x * 1000 - 850, 20, 1700, 80, 54, TextAnchor.MiddleCenter, dim);
         Scope(world, computer, panel, machine);   // after the signs: it renames the memory screen's
+        Danger(world, computer, machine);   // the right wall: after Scope, which its laser points at (ShaderEmuDanger.cs)
+        Lan(world, machine);                // beside it: after Sharing, whose hub it reads (ShaderEmuLan.cs)
         Remodel(world);   // last: the boxes above are where Blender's models go (ShaderEmuModels.cs)
         SystemSheet(world);   // the system sheet on the back wall, in the board's frame (ShaderEmuSheet.cs)
         Pens();       // QvPen, under the board (ShaderEmuPens.cs)
@@ -1410,10 +1372,11 @@ public static partial class ShaderEmuBuilder
         AddHoloKeyboard();    // their keyboard: a copy of the den's as Retro left it
         TouchPanels(world, pointer);   // again, for the keys those two made
         Apply(pointer);
+        Gate(root);   // last: it gates the parts there are now (ShaderEmuGate.cs)
 
         AssetDatabase.SaveAssets();
         EditorSceneManager.MarkSceneDirty(scene);
         EditorSceneManager.SaveScene(scene);
-        Debug.Log("[ShaderEmu] world built: " + ScenePath + ". Now run ShaderEmu/Bake lighting.");
+        Debug.Log("[ShaderEmu] world built: " + scene.path + ". Now run ShaderEmu/Bake lighting.");
     }
 }

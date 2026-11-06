@@ -4984,6 +4984,157 @@ index 41cfd2e..f33c002 100644
  	Point pt = RemapCoords(this->x, this->y, this->z);
  
  	if (this->sign.kdtree_valid) _viewport_sign_kdtree.Remove(ViewportSignKdtreeItem::MakeSign(this->index));
+diff --git a/src/smallmap_gui.cpp b/src/smallmap_gui.cpp
+index 6013de6..c60f2ef 100644
+--- a/src/smallmap_gui.cpp
++++ b/src/smallmap_gui.cpp
+@@ -35,6 +35,11 @@
+ #include "table/strings.h"
+ 
+ #include <bitset>
++#include <cstdlib>
++
++#include <mcwx.h>
++#include <vector>
++#include "3rdparty/fmt/format.h"
+ 
+ #include "safeguards.h"
+ 
+@@ -942,6 +947,98 @@ protected:
+ 		} while (xc += this->zoom, yc += this->zoom, dst = blitter->MoveTo(dst, pitch, 0), --reps != 0);
+ 	}
+ 
++	/**
++	 * The tiles' colours of the rows from \c r0 to \c r1 - 1 of the small map (upstream's loop of columns, each column
++	 * drawn only where its rows lie in that band).
++	 */
++	void DrawSmallMapRows(void *ptr, int x, int tile_x, int tile_y, const DrawPixelInfo *dpi, Blitter *blitter, int r0, int r1) const
++	{
++		int y = 0;
++		for (;;) {
++			/* Distance from left edge */
++			if (x >= -3) {
++				if (x >= dpi->width) break; // Exit the loop.
++
++				int end_pos = std::min(dpi->width, x + 4);
++				int reps = (dpi->height - y + 1) / 2; // Number of lines: rows y, y + 2, ...
++				/* (those of the rows y + 2k in [r0, r1)) */
++				int k0 = r0 > y ? (r0 - y + 1) / 2 : 0;
++				int k1 = std::min(reps, r1 > y ? (r1 - y + 1) / 2 : 0);
++				if (k1 > k0) {
++					this->DrawSmallMapColumn(blitter->MoveTo(ptr, 0, 2 * k0), tile_x + k0 * this->zoom, tile_y + k0 * this->zoom,
++							dpi->pitch * 2, k1 - k0, x, end_pos, blitter);
++				}
++			}
++
++			if (y == 0) {
++				tile_y += this->zoom;
++				y++;
++				ptr = blitter->MoveTo(ptr, 0, 1);
++			} else {
++				tile_x -= this->zoom;
++				y--;
++				ptr = blitter->MoveTo(ptr, 0, -1);
++			}
++			ptr = blitter->MoveTo(ptr, 2, 0);
++			x += 2;
++		}
++	}
++
++	/** What the workers' pieces draw: a band of SMALLMAP_BAND rows each. */
++	struct SmallMapBands {
++		const SmallMapWindow *w;
++		void *ptr;
++		int x, tile_x, tile_y;
++		const DrawPixelInfo *dpi;
++		Blitter *blitter;
++	};
++	static constexpr int SMALLMAP_BAND = 8;
++
++	static void SmallMapBandPieces(void *ctx, uint32_t from, uint32_t to)
++	{
++		const SmallMapBands *b = static_cast<const SmallMapBands *>(ctx);
++		for (uint32_t i = from; i < to; i++) {
++			/* (band 0 is the first core's, drawn before: the pieces are bands 1 on) */
++			int r0 = static_cast<int>(i + 1) * SMALLMAP_BAND, r1 = std::min(b->dpi->height, r0 + SMALLMAP_BAND);
++			b->w->DrawSmallMapRows(b->ptr, b->x, b->tile_x, b->tile_y, b->dpi, b->blitter, r0, r1);
++		}
++	}
++
++	/**
++	 * The tiles' colours by every core, where that is right: the 8-bit screen, the first core, a picture tall enough and at least 15
++	 * pixels narrower than the screen (so that no 16 bytes hold two rows of it: a core stores to its band's rows alone). The
++	 * first core draws the first band before the workers start, so that the code they run has been run (a worker stops at a page
++	 * of code no core has run yet). OPENTTD_SMALLMAP=core: the first core alone, as upstream.
++	 * @return false when it was not done.
++	 */
++	bool DrawSmallMapOnWorkers(void *ptr, int x, int tile_x, int tile_y, const DrawPixelInfo *dpi, Blitter *blitter) const
++	{
++		static const char *how = getenv("OPENTTD_SMALLMAP");
++		static const bool core = how != nullptr && std::string_view(how) == "core", check = how != nullptr && std::string_view(how) == "check";
++		if (core || mcw_on_worker() || blitter->GetScreenDepth() != 8 || dpi->height < 4 * SMALLMAP_BAND || dpi->pitch - dpi->width < 15) return false;
++		this->DrawSmallMapRows(ptr, x, tile_x, tile_y, dpi, blitter, 0, SMALLMAP_BAND);
++		SmallMapBands bands = { this, ptr, x, tile_x, tile_y, dpi, blitter };
++		mcw_for_opts opts = {};
++		opts.grain = 1;
++		mcw_for_opt(static_cast<uint32_t>((dpi->height - 1) / SMALLMAP_BAND), SmallMapBandPieces, &bands, &opts);
++		if (check) {
++			/* OPENTTD_SMALLMAP=check: the same rows drawn again by this core alone, and the pixels that differ counted */
++			static uint32_t checks, differ;
++			uint8_t *rows = static_cast<uint8_t *>(dpi->dst_ptr);
++			std::vector<uint8_t> drawn(static_cast<size_t>(dpi->width) * dpi->height);
++			for (int r = 0; r < dpi->height; r++) std::copy_n(rows + static_cast<size_t>(r) * dpi->pitch, dpi->width, drawn.data() + static_cast<size_t>(r) * dpi->width);
++			this->DrawSmallMapRows(ptr, x, tile_x, tile_y, dpi, blitter, 0, dpi->height);
++			uint32_t here = 0;
++			for (int r = 0; r < dpi->height; r++) {
++				for (int c = 0; c < dpi->width; c++) here += rows[static_cast<size_t>(r) * dpi->pitch + c] != drawn[static_cast<size_t>(r) * dpi->width + c];
++			}
++			checks++;
++			differ += here;
++			fmt::print(stderr, "openttd: small map {}x{} checked {} times, {} pixels differ, {} in all\n", dpi->width, dpi->height, checks, here, differ);
++		}
++		return true;
++	}
++
+ 	/**
+ 	 * Adds vehicles to the smallmap.
+ 	 * @param dpi the part of the smallmap to be drawn into
+@@ -1070,31 +1167,11 @@ protected:
+ 
+ 		void *ptr = blitter->MoveTo(dpi->dst_ptr, -dx - 4, 0);
+ 		int x = - dx - 4;
+-		int y = 0;
+-
+-		for (;;) {
+-			/* Distance from left edge */
+-			if (x >= -3) {
+-				if (x >= dpi->width) break; // Exit the loop.
+ 
+-				int end_pos = std::min(dpi->width, x + 4);
+-				int reps = (dpi->height - y + 1) / 2; // Number of lines.
+-				if (reps > 0) {
+-					this->DrawSmallMapColumn(ptr, tile_x, tile_y, dpi->pitch * 2, reps, x, end_pos, blitter);
+-				}
+-			}
+-
+-			if (y == 0) {
+-				tile_y += this->zoom;
+-				y++;
+-				ptr = blitter->MoveTo(ptr, 0, 1);
+-			} else {
+-				tile_x -= this->zoom;
+-				y--;
+-				ptr = blitter->MoveTo(ptr, 0, -1);
+-			}
+-			ptr = blitter->MoveTo(ptr, 2, 0);
+-			x += 2;
++		/* ShaderEmu (docs/games/openttd.md, "The small map on the workers"): the tiles' colours in bands of rows, a band a
++		 * piece of the workers' loop; the vehicles, the links and the names after, on this core */
++		if (!this->DrawSmallMapOnWorkers(ptr, x, tile_x, tile_y, dpi, blitter)) {
++			this->DrawSmallMapRows(ptr, x, tile_x, tile_y, dpi, blitter, 0, dpi->height);
+ 		}
+ 
+ 		/* Draw vehicles */
 diff --git a/src/sound.cpp b/src/sound.cpp
 index 31a7ede..a8ca13d 100644
 --- a/src/sound.cpp

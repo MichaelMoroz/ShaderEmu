@@ -121,16 +121,6 @@ public static partial class ShaderEmuBuilder
         template.SetActive(false);   // (as the SDK leaves "Share player")
     }
 
-    [MenuItem("ShaderEmu/Add the network's player object to the open scene")]
-    public static void AddNetPlayer()
-    {
-        EmuShareHub hub = Object.FindObjectOfType<EmuShareHub>();
-        if (hub == null) throw new System.Exception("no sharing in the open scene");
-        NetPlayer(hub.transform.parent, hub);
-        EditorSceneManager.MarkSceneDirty(hub.gameObject.scene);
-        EditorSceneManager.SaveScene(hub.gameObject.scene);
-        Debug.Log("[ShaderEmu] the network's player object added");
-    }
 
     // The display as units the GPU picks (docs/world/share.md, "Display"): the captures and the
     // textures of ShareUnits.shader's passes, and of the receiver's two.
@@ -176,31 +166,6 @@ public static partial class ShaderEmuBuilder
         Apply(probe);
     }
 
-    // Into a scene that has sharing: nothing of it is made again; the display stream's textures
-    // are, and what the tiles of before 13 October 2026 were kept in is deleted.
-    [MenuItem("ShaderEmu/Update the display stream in the open scene")]
-    public static void AddUnits()
-    {
-        EmuShareHub hub = Object.FindObjectOfType<EmuShareHub>();
-        EmuStreams streams = Object.FindObjectOfType<EmuStreams>();
-        if (hub == null || streams == null) throw new System.Exception("no sharing in the open scene");
-        CreateProgramAssets();
-        foreach (string old in new[] { "ShareEncode.mat", "ShareDecode.mat", "ShareCaptureA.renderTexture", "ShareCaptureB.renderTexture", "ShareAtlas.renderTexture",
-                                       "ShareChanged.renderTexture", "ShareFineBlocks.renderTexture" })
-            AssetDatabase.DeleteAsset(Generated + "/" + old);
-        for (int s = 0; s < 16; s++) AssetDatabase.DeleteAsset(Generated + "/StreamStore" + s + ".asset");
-        UdonSharpEditor.UdonSharpEditorUtility.CopyUdonToProxy(hub);
-        UnitsSender(hub);
-        Apply(hub);
-        UdonSharpEditor.UdonSharpEditorUtility.CopyUdonToProxy(streams);
-        UnitsReceiver(streams);
-        Apply(streams);
-        ShareProbe(hub, streams);
-        AssetDatabase.SaveAssets();
-        EditorSceneManager.MarkSceneDirty(hub.gameObject.scene);
-        EditorSceneManager.SaveScene(hub.gameObject.scene);
-        Debug.Log("[ShaderEmu] display stream updated");
-    }
 
     // Whatever else in the scene uses the hub and the receiver is told of the new ones.
     static void ShareUsers(EmuShareHub hub, EmuStreams streams)
@@ -237,84 +202,6 @@ public static partial class ShaderEmuBuilder
         }
     }
 
-    // Into the scene as it is, without building the world again (which would need a bake).
-    [MenuItem("ShaderEmu/Add sharing to the open scene")]
-    public static void AddSharing()
-    {
-        EmuMachine machine = Object.FindObjectOfType<EmuMachine>();
-        GameObject panel = GameObject.Find("Control panel");
-        if (machine == null || panel == null) throw new System.Exception("no machine in the open scene: run ShaderEmu/Build world");
-        Transform computer = Den();
-        CreateProgramAssets();
-        UdonSharpEditor.UdonSharpEditorUtility.CopyUdonToProxy(machine);
-        Sharing(machine.transform.parent, computer, panel.GetComponent<RectTransform>(), machine,
-                new Vector3(1.28f, 1.82f, panel.transform.localPosition.z));
-        foreach (TextMeshProUGUI label in panel.GetComponentsInChildren<TextMeshProUGUI>())
-            if (label.name == "Help") label.text = label.text.Replace("other players have their own.", "other players have their own, and can show you theirs.");
-        AssetDatabase.SaveAssets();
-        EditorSceneManager.MarkSceneDirty(machine.gameObject.scene);
-        EditorSceneManager.SaveScene(machine.gameObject.scene);
-        Debug.Log("[ShaderEmu] sharing added");
-    }
 
-    // A scene where "Add sharing" hung the panel on the model Models/Computer and left the one
-    // before it, whose buttons call nothing, in the same place: that one goes, and the hub's
-    // own comes to the den. Nothing is made again, so no plate loses its place in the lightmap.
-    [MenuItem("ShaderEmu/Remove the dead players' panel in the open scene")]
-    public static void RemoveDeadPlayersPanel()
-    {
-        EmuShareHub hub = Object.FindObjectOfType<EmuShareHub>();
-        Transform computer = Den();
-        if (hub == null || computer == null) throw new System.Exception("no sharing in the open scene");
-        UdonSharpEditor.UdonSharpEditorUtility.CopyUdonToProxy(hub);
-        if (hub.watchLabel == null) throw new System.Exception("the hub has no panel: run ShaderEmu/Add sharing to the open scene");
-        Transform live = hub.watchLabel.transform.parent;
-        int removed = 0;
-        foreach (Canvas canvas in hub.transform.parent.GetComponentsInChildren<Canvas>(true))
-        {
-            if (canvas == null || canvas.name != "Players panel" || canvas.transform == live) continue;
-            Object.DestroyImmediate(canvas.gameObject);
-            removed++;
-        }
-        bool moved = live.parent != computer;
-        if (moved) live.SetParent(computer, true);
-        EditorSceneManager.MarkSceneDirty(hub.gameObject.scene);
-        EditorSceneManager.SaveScene(hub.gameObject.scene);
-        Debug.Log("[ShaderEmu] players' panels removed: " + removed + (moved ? "; the hub's own moved to the den" : ""));
-    }
 
-    // The receiver alone, into a scene that has sharing and the classroom: no panel is made
-    // again, so none loses its plate or its place in the lightmap.
-    [MenuItem("ShaderEmu/Update the streams in the open scene")]
-    public static void UpdateStreams()
-    {
-        EmuMachine machine = Object.FindObjectOfType<EmuMachine>();
-        EmuShareHub hub = Object.FindObjectOfType<EmuShareHub>();
-        EmuStations stations = Object.FindObjectOfType<EmuStations>();
-        if (machine == null || hub == null || stations == null) throw new System.Exception("no machine, sharing or classroom in the open scene");
-        CreateProgramAssets();
-        UdonSharpEditor.UdonSharpEditorUtility.CopyUdonToProxy(machine);
-        EmuStreams streams = MakeStreams(machine.transform.parent, machine);
-        UdonSharpEditor.UdonSharpEditorUtility.CopyUdonToProxy(hub);
-        hub.streams = streams;
-        Apply(hub);
-        streams.hub = hub;
-        Apply(streams);
-        UdonSharpEditor.UdonSharpEditorUtility.CopyUdonToProxy(stations);
-        stations.streams = streams;
-        stations.blackTexture = machine.blackTexture;
-        stations.ownConsole = PictureTexture("StationOwnConsole", 640, 480);
-        Apply(stations);
-        ShareUsers(hub, streams);
-        foreach (string old in new[] { "ShareStore.asset", "RemotePicture.renderTexture", "StationDecode.mat", "StationConsole.mat" })
-            AssetDatabase.DeleteAsset(Generated + "/" + old);
-        for (int s = 0; s < 8; s++)
-            foreach (string old in new[] { "StationStore" + s + ".asset", "StationPicture" + s + ".renderTexture", "StationGrid" + s + ".asset",
-                                           "StationConsole" + s + ".renderTexture" })
-                AssetDatabase.DeleteAsset(Generated + "/" + old);
-        AssetDatabase.SaveAssets();
-        EditorSceneManager.MarkSceneDirty(machine.gameObject.scene);
-        EditorSceneManager.SaveScene(machine.gameObject.scene);
-        Debug.Log("[ShaderEmu] streams updated");
-    }
 }

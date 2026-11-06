@@ -44,9 +44,8 @@ costs what it did). For one commit the host sets:
 
 In the world: `EmuDanger` (the panel's keys, the rates, the count), a branch of
 `EmuPointer.Aim` for the memory screen (a trigger collider over its quad, there while the
-laser is on), `_Cursor` in `MemView.shader`. "ShaderEmu/Add the danger zone to the open scene"
-puts it into a baked scene: a canvas, no bake. Run it twice the first time (a new Udon
-behaviour: `AGENTS.md`). The laser burns only while `EmuDanger.scope` says the screen shows RAM:
+laser is on), `_Cursor` in `MemView.shader`. "Build world" makes it
+(`Danger`, after `Scope`): a canvas, no bake. The laser burns only while `EmuDanger.scope` says the screen shows RAM:
 the memory screen's views made again ("Add the memory screen's views ...") make a new `Scope` and
 name it to the danger zone (`ShaderEmuScope.cs`); before, the old one's reference was left null, and
 the laser did nothing while radiation still worked.
