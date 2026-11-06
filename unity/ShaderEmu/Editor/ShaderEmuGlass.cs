@@ -59,7 +59,7 @@ public static class ShaderEmuGlass
         {
             nextWatch = EditorApplication.timeSinceStartup + 60.0;
             watched = null;
-            Debug.LogError("[ShaderEmu] THE WINDOWS' GLASS HAS NO " + ProbeName.ToUpper() + ": run ShaderEmu/Give the windows' glass its rain again");
+            Debug.LogError("[ShaderEmu] THE WINDOWS' GLASS HAS NO " + ProbeName.ToUpper() + ": run ShaderEmu/Build world (it makes the probe), then Bake lighting");
             return;
         }
         Material glass = AssetDatabase.LoadAssetAtPath<Material>(GlassPath);
@@ -218,10 +218,10 @@ public static class ShaderEmuGlass
         if (panes.Count == 0) return problems;   // (a scene without the room)
         Material glass = AssetDatabase.LoadAssetAtPath<Material>(GlassPath);
         ReflectionProbe probe = Probe(scene);
-        if (glass == null) problems.Add(GlassPath + " is missing (ShaderEmu/Give the windows' glass its rain again)");
-        if (probe == null) problems.Add("no " + ProbeName + " (ShaderEmu/Give the windows' glass its rain again)");
+        if (glass == null) problems.Add(GlassPath + " is missing (ShaderEmu/Build world)");
+        if (probe == null) problems.Add("no " + ProbeName + " (ShaderEmu/Build world)");
         else if (probe.customBakedTexture == null || AssetDatabase.GetAssetPath(probe.customBakedTexture) != PicturePath)
-            problems.Add("the window probe does not show " + PicturePath + " (ShaderEmu/Give the windows' glass its rain again)");
+            problems.Add("the window probe does not show " + PicturePath + " (ShaderEmu/Build world)");
         if (glass != null && (!glass.HasProperty("_Sky") || glass.GetTexture("_Sky") == null || AssetDatabase.GetAssetPath(glass.GetTexture("_Sky")) != PicturePath))
             problems.Add("the glass's drops have no sky (" + PicturePath + ")");
         if (glass != null && glass.HasProperty("_SkyFlash") && (glass.GetTexture("_SkyFlash") == null || AssetDatabase.GetAssetPath(glass.GetTexture("_SkyFlash")) != FlashPath))
