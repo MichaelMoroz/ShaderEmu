@@ -716,10 +716,12 @@ public static partial class ShaderEmuBuilder
             plate.pixelsPerUnitMultiplier = 1.3f;
             colours[i] = CapColour;
             TextMeshProUGUI label = plate.GetComponentInChildren<TextMeshProUGUI>(true);
-            if (label != null) Letters(label, bold, Ink, true);
+            if (label != null) { label.gameObject.SetActive(true); label.enabled = true; Letters(label, bold, Ink, true); }
         }
+        // (the den's keyboard is a model's: the restyle left its canvas no plate and no legends, ShaderEmuRetro.KeyboardLook;
+        // this one has no model under it and draws them, or it is black)
         Transform back = copy.transform.Find("Back");
-        if (back != null) Picture(back.GetComponent<Image>(), UiSprite("Raised", 6), Faceplate);
+        if (back != null) { Picture(back.GetComponent<Image>(), UiSprite("Raised", 6), Faceplate); back.GetComponent<Image>().enabled = true; }
         foreach (string name in new[] { "Title", "Modifiers" })
         {
             Transform t = copy.transform.Find(name);
@@ -795,9 +797,10 @@ public static partial class ShaderEmuBuilder
         Gone(holodeck, "Holodeck HUD");
         Material hudMat = Mat("GpuHolodeckHud", "ShaderEmu/GpuHolodeckHud");
         hudMat.SetTexture("_State", sceneMat.GetTexture("_State"));
-        ShaderEmuBuilder.GpuInputs(hudMat);
+        ShaderEmuBuilder.GpuHoloInputs(hudMat);
         GiveRom(hudMat);
         hudMat.SetFloat("_HudFlip", 1f);
+        hudMat.renderQueue = -1;   // the shader's: after the world, before the room's transparent things (it was 3010, over them)
         hudMat.renderQueue = 3010;   // after the world (2503), the beams and the seal (2505), and the room's transparent things
         EditorUtility.SetDirty(hudMat);
         GameObject layer = new GameObject("Holodeck HUD", typeof(MeshFilter), typeof(MeshRenderer));
@@ -948,7 +951,7 @@ public static partial class ShaderEmuBuilder
         Material sceneMat = Mat("GpuHolodeck", "ShaderEmu/GpuHolodeck");
         Material volumeMat = AssetDatabase.LoadAssetAtPath<Material>(Generated + "/GpuVolume.mat");
         if (volumeMat != null) sceneMat.SetTexture("_State", volumeMat.GetTexture("_State"));
-        ShaderEmuBuilder.GpuInputs(sceneMat);
+        ShaderEmuBuilder.GpuHoloInputs(sceneMat);
         sceneMat.SetVector("_ScreenSize", new Vector4(1.28f, 0.8f, 0, 0));
         GiveRom(sceneMat);
         sceneMat.renderQueue = 2503;   // one later than its shader says: the room's own things are marked between the mask and it (HoloGuards)
@@ -966,7 +969,7 @@ public static partial class ShaderEmuBuilder
         seal.name = "Holodeck seal";
         Material maskMat = Mat("HolodeckMask", "ShaderEmu/HolodeckMask");
         if (volumeMat != null) maskMat.SetTexture("_State", volumeMat.GetTexture("_State"));
-        ShaderEmuBuilder.GpuInputs(maskMat);
+        ShaderEmuBuilder.GpuHoloInputs(maskMat);
         mask.GetComponent<MeshRenderer>().sharedMaterial = maskMat;
         Material sealMat = Mat("VolumeSeal", "ShaderEmu/VolumeSeal");
         sealMat.renderQueue = 2505;   // (the hand beams are between the world and it)

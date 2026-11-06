@@ -8,6 +8,7 @@ Shader "ShaderEmu/GpuFront"
         _State ("Machine state texture", 2D) = "black" {}
         _StateRow ("The state texture's row RAM starts in", Float) = 64
         _Data_ROM ("ROM, a 16-byte texel a pixel (RGBAFloat, read by its bits)", 2D) = "black" {}
+        _GpuDrawIds ("Each mesh vertex's command and passes (GpuDrawBlit's pass 14, 512 x 384 RGInt): declared, or what the builder sets is not kept", 2D) = "black" {}
     }
     SubShader
     {

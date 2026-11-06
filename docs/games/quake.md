@@ -494,6 +494,17 @@ The first core writes every page of Quake's GPU memory once at the start (`qglOp
 memory a worker will store to wants a store by the first core first. The `quakestat:` line of the drawing
 worker says how many pages were brought for workers, and how long a frame was drawn, swapped and waited for.
 
+## Seated in a holodeck
+
+`SE_Seated()` (`vid_shaderemu.c`) is 1 for a sitter in a headset, 2 for one at a desktop, 0 otherwise. Two things change
+while seated (6 November 2026, `quake.patch`):
+
+- A seated player on the ground with no move asked (`cmd.forwardmove` and `sidemove` 0) stops at once (`SV_AirMove` in
+  `sv_user.c`): the ground's friction took about half a second to stop a run, a slide in a headset. In play mode, the stick
+  let go: one frame more of the move already made, then nothing. Unseated, and in every demo and sum, it is as it was.
+- No cross-hair before a sitter in a headset (`gl_screen.c`): they aim with the hand, and the cross in the middle of the
+  holodeck's HUD aimed nowhere. A desktop's sitter aims with the view's middle and keeps it.
+
 ## Checking it
 
 `tools/test_all.py`'s `quake-*` cases, under `rvc_cpu`:

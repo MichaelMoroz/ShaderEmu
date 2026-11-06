@@ -298,6 +298,20 @@
   played from the seat reads the stick and the two triggers while seated (`seated` 1 and 2), and
   its number is in `ByWords`; `rvc_cpu --host 00000112,0,0,0,0,00007f00,0,0` with its `_SEAT`
   switch must walk it. ClassiCube started in the background there wants `</dev/null`.
+- A standing player in a headset always walks with the left stick (6 November 2026; `docs/machine/input.md`, the wheels):
+  before a screen both hands' beams are on the display, so whatever the world gives a beam on the display (a wheel, a
+  key, an `Immobilize`) is had wherever the player stands there. The left stick as a second wheel while its beam was on
+  the display (`c89ebec4`) held every VR player before a screen in place, and play mode on a desktop never showed it. A new
+  use of a hand's stick, or a new `Immobilize`, takes nothing from walking but while the player asks for it (a button
+  held, a key captured), and is tried in a headset before it is called done. Seated, the station holds the player: the
+  pointer's `Still` never calls `Immobilize` while `away`, as an `Immobilize(false)` there let the left stick move the avatar.
+- The world's camera (the scene descriptor's reference camera, `ShaderEmuModels.cs`) has a near clip of 0.01 m, always
+  (6 November 2026, the developer's rule): the least VRChat takes, so a hand, a keyboard or a HUD near the eye is never cut.
+  A builder or a change that makes or touches that camera keeps it.
+- What floats before a sitter (the holodeck's HUD layer) is drawn over the program's world, never over what is nearer of
+  the room (`docs/world/holodeck.md`, "The HUD layer"): stencil bit 32 is "the world is in front here", set by
+  `GpuHolodeck.shader`'s solid passes, and every other stencil test of 87 masks it out (`ReadMask` 223 or 95). A new
+  thing drawn before the sitter takes the same pair, or it covers avatars, hands and the seat's panels in a headset.
 - The harnesses lock each other out (`harness/apps/run_lock.cpp`; `docs/machine/cpu-harness.md`, "One card, many
   processors"): CPU ones (`rvc_cpu`, `rvc_harness --cpu`) together, a GPU one alone; a refused one prints
   `[lock] ... refused` and exits 75 having done nothing. A GPU timing waits until no CPU run is left.
@@ -474,5 +488,8 @@
   gles.c, Nano-X's driver, nxweb's strips, ClassiCube, `programs/common/gpu.h`; a new one does too, and a new command or
   kind of texture is a case there and an upload kind of `gpu_upload_fragment`. The harness says `GPUDraw reads RAM` if a
   draw pass binds the state texture. The holodeck draws the device's last list from the front end's targets, and reads no
-  RAM. A copy (command 7, `glCopyTexSubImage2D`, framebuffer objects; "Copies") is made after the whole list: a draw after it
+  RAM: from copies of them kept only in a frame whose list the volume words name, and the VRAM's scratch band kept with
+  them (`GpuKeep.shader`, `EmuMachine.GpuDraw`; `GPU_KEPT_SCRATCH` in `gpu_draw.h`), since every list of any program, the
+  desktop's too, writes over the shared targets and copies its own textures into that band. A new thing the holodeck reads
+  of the GPU is kept with them, or it flickers whenever another program draws. A copy (command 7, `glCopyTexSubImage2D`, framebuffer objects; "Copies") is made after the whole list: a draw after it
   in its list is a mistake `SEGL_DEBUG=1` reports.

@@ -15,6 +15,28 @@ uint2 vram_block(uint2 size, uint slot) {
 
 Texture2D<float4> _GpuVram;           // the VRAM, with its mip levels (VRAM_SIDE square)
 SamplerState sampler_linear_clamp, sampler_point_clamp;   // (their names are their kinds, in Unity and the harness)
+// The VRAM as a draw reads it. A list's own textures are copied into the scratch band (rows GPU_SCRATCH_Y to 4095 of level 0,
+// programs/common/gpu_uploads.h) before its passes, and the next list of any program copies its own over them. The holodeck
+// draws a kept frame for many of the card's frames (Unity's EmuMachine.GpuDraw, GpuKeep.shader): with GPU_KEPT_SCRATCH it
+// reads that band from _GpuScratchKept, the band as its own list left it (the physics demo's boxes were white whenever the
+// desktop drew), and the rest from the VRAM. Without it these are the VRAM's reads as they were.
+#ifdef GPU_KEPT_SCRATCH
+Texture2D<float4> _GpuScratchKept;    // VRAM_SIDE x (VRAM_SIDE - GPU_SCRATCH_ROW): the band's level 0
+#define GPU_SCRATCH_ROW 2048
+float4 vram_level(SamplerState s, float2 at, float lod) {
+    [branch]
+    if (at.y * VRAM_SIDE >= GPU_SCRATCH_ROW) return _GpuScratchKept.SampleLevel(s, float2(at.x, at.y * 2.0 - 1.0), 0);
+    return _GpuVram.SampleLevel(s, at, lod);
+}
+float4 vram_load(int2 p) {
+    [branch]
+    if (p.y >= GPU_SCRATCH_ROW) return _GpuScratchKept.Load(int3(p.x, p.y - GPU_SCRATCH_ROW, 0));
+    return _GpuVram.Load(int3(p, 0));
+}
+#else
+#define vram_level(s, at, lod) _GpuVram.SampleLevel(s, at, lod)
+#define vram_load(p) _GpuVram.Load(int3(p, 0))
+#endif
 // Guest numbers are 16.16 fixed point.
 float4 from_fixed(uint4 t) {
     return float4(asint(t)) / 65536.0;
@@ -808,7 +830,7 @@ float3 gpu_light(gpu_varyings i) {
     if (width == 0 || height == 0) return 1.0;
     // (clamped, at level 0: the map's edge texels a half texel in)
     float2 p = clamp(saturate(i.light_uv) * float2(width, height), 0.5, float2(width, height) - 0.5);
-    return _GpuVram.SampleLevel(sampler_linear_clamp, (float2(VRAM_X(i.light_info.r), VRAM_Y(i.light_info.r)) + p) / VRAM_SIDE, 0).rgb;
+    return vram_level(sampler_linear_clamp, (float2(VRAM_X(i.light_info.r), VRAM_Y(i.light_info.r)) + p) / VRAM_SIDE, 0).rgb;
 }
 
 // A pixel of a sprite record (CMD_SPRITES), from its slot (the upload made it: an index in red, or with a palette its
@@ -826,7 +848,7 @@ float4 gpu_sprite_fragment(gpu_varyings i) {
     }
     uint slot = i.texture_info.g;
     if (!VRAM_IS(slot)) return float4(1.0, 0.0, 1.0, 1.0);   // (a record not uploaded)
-    float4 t = _GpuVram.Load(int3(VRAM_X(slot) + p.x - (i.key & 0xffff), VRAM_Y(slot) + p.y - (i.key >> 16), 0));
+    float4 t = vram_load(int2(VRAM_X(slot) + p.x - (i.key & 0xffff), VRAM_Y(slot) + p.y - (i.key >> 16)));
     if (t.a == 0.0) discard;
     if (kind == SPRITE_SHADE) return float4(0.0, (float)i.texture_info.a / 255.0, 0.0, 1.0);
     return t;
@@ -862,7 +884,7 @@ float4 gpu_fragment(gpu_varyings i) {
         [unroll]
         for (uint n = 0; n < 4; n++) {
             float2 at = saturate(uv + float2((n & 1) ? 0.25 : -0.25, (n & 2) ? 0.25 : -0.25) * i.light_uv) * (size - 1.0);
-            float3 f = _GpuVram.SampleLevel(sampler_linear_clamp, (corner + at + 0.5) / VRAM_SIDE, 0).rgb;
+            float3 f = vram_level(sampler_linear_clamp, (corner + at + 0.5) / VRAM_SIDE, 0).rgb;
             cover += saturate(range * (max(min(f.r, f.g), min(max(f.r, f.g), f.b)) - 0.5) + 0.5);
         }
         if (cover <= 0.0) discard;
@@ -871,7 +893,7 @@ float4 gpu_fragment(gpu_varyings i) {
     }
     float2 at = (corner + ((flags & FRAGMENT_CLAMPED) ? saturate(uv) * 0.99999 : frac(uv)) * size) / VRAM_SIDE;
     float4 t = (flags & FRAGMENT_SMOOTH) && mode != FRAGMENT_MASK && mode != FRAGMENT_COVER
-             ? _GpuVram.SampleLevel(sampler_linear_clamp, at, lod) : _GpuVram.SampleLevel(sampler_point_clamp, at, floor(lod + 0.5));
+             ? vram_level(sampler_linear_clamp, at, lod) : vram_level(sampler_point_clamp, at, floor(lod + 0.5));
     [branch]
     if (mode == FRAGMENT_MASK || mode == FRAGMENT_COVER) {
         // (a mask's and a coverage's alpha is the upload's: the bit, the coverage; their colour the draw's)

@@ -12741,6 +12741,28 @@ index a2502085..566b64f2 100644
  	if ( intensity > MAX_SHAKE_INTENSITY )
  		intensity = MAX_SHAKE_INTENSITY;
  
+diff --git a/codeJK2/cgame/cg_draw.cpp b/codeJK2/cgame/cg_draw.cpp
+index d0a0df66..fd5333d2 100644
+--- a/codeJK2/cgame/cg_draw.cpp
++++ b/codeJK2/cgame/cg_draw.cpp
+@@ -1315,6 +1315,8 @@ CROSSHAIR
+ CG_DrawCrosshair
+ =================
+ */
++extern "C" int SE_Seated( void );	// sys_shaderemu.cpp: 1 a sitter in a headset, 2 at a desktop
++
+ static void CG_DrawCrosshair( vec3_t worldPoint )
+ {
+ 	float		w, h;
+@@ -1324,7 +1326,7 @@ static void CG_DrawCrosshair( vec3_t worldPoint )
+ 	float		f;
+ 	float		x, y;
+ 
+-	if ( !cg_drawCrosshair.integer )
++	if ( !cg_drawCrosshair.integer || SE_Seated() == 1 )	// (a sitter in a headset aims with the hand: sys_shaderemu.cpp)
+ 	{
+ 		return;
+ 	}
 diff --git a/codeJK2/cgame/cg_effects.cpp b/codeJK2/cgame/cg_effects.cpp
 index 63add3c3..41e7273b 100644
 --- a/codeJK2/cgame/cg_effects.cpp
@@ -14005,10 +14027,32 @@ index 24c8e819..683c69ae 100644
  	{
  		return;
 diff --git a/codeJK2/game/bg_pmove.cpp b/codeJK2/game/bg_pmove.cpp
-index 964cfcec..fec7cfe7 100644
+index 964cfcec..b3288c6b 100644
 --- a/codeJK2/game/bg_pmove.cpp
 +++ b/codeJK2/game/bg_pmove.cpp
-@@ -3128,6 +3128,18 @@ static void PM_GroundTraceMissed( void ) {
+@@ -1851,6 +1851,8 @@ PM_WalkMove
+ 
+ ===================
+ */
++extern "C" int SE_SeatStop( int clientNum );	// sys_shaderemu.cpp: this is the player, seated in a holodeck
++
+ static void PM_WalkMove( void ) {
+ 	int			i;
+ 	vec3_t		wishvel;
+@@ -1915,6 +1917,12 @@ static void PM_WalkMove( void ) {
+ 	if ( !slide )
+ 	{
+ 		PM_Friction ();
++		// a sitter in a holodeck stops where the stick lets go (sys_shaderemu.cpp, SE_SeatStop: the player alone, not
++		// the NPCs this moves too): the friction's half second from a run is a slide in a headset
++		if ( !pm->cmd.forwardmove && !pm->cmd.rightmove && SE_SeatStop( pm->ps->clientNum ) )
++		{
++			pm->ps->velocity[0] = pm->ps->velocity[1] = 0;
++		}
+ 	}
+ 
+ 	fmove = pm->cmd.forwardmove;
+@@ -3128,6 +3136,18 @@ static void PM_GroundTraceMissed( void ) {
  PM_GroundTrace
  =============
  */
@@ -14027,7 +14071,7 @@ index 964cfcec..fec7cfe7 100644
  static void PM_GroundTrace( void ) {
  	vec3_t		point;
  	trace_t		trace;
-@@ -3169,7 +3181,14 @@ static void PM_GroundTrace( void ) {
+@@ -3169,7 +3189,14 @@ static void PM_GroundTrace( void ) {
  	point[2] = pm->ps->origin[2] - 0.25;
  
  	pm->trace (&trace, pm->ps->origin, pm->mins, pm->maxs, point, pm->ps->clientNum, pm->tracemask, G2_NOCOLLIDE, 0);
@@ -14042,7 +14086,7 @@ index 964cfcec..fec7cfe7 100644
  
  	// do something corrective if the trace starts in a solid...
  	if ( trace.allsolid ) {
-@@ -8741,7 +8760,18 @@ void Pmove( pmove_t *pmove )
+@@ -8741,7 +8768,18 @@ void Pmove( pmove_t *pmove )
  	}
  
  	// clear all pmove local vars

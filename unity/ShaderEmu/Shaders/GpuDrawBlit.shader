@@ -14,6 +14,15 @@ Shader "ShaderEmu/GpuDrawBlit"
         _AmpRank ("Each patch point's place in the card's order (BlitOrder.shader)", 2D) = "black" {}
         _GpuVram ("The VRAM: textures the guest uploaded, with mip levels (4096 x 4096 RGBA8)", 2D) = "black" {}
         _GpuDrawIds ("Each mesh vertex's command and passes (pass 14 writes it, 512 x 384 RGInt)", 2D) = "black" {}
+        // the vertex front end's eight (GpuFront.shader; ShaderEmuBuilder.GpuInputs): declared, or what the builder sets is not kept
+        _GpuMadePos ("The vertex front end's pos (512 x 385)", 2D) = "black" {}
+        _GpuMadeColour ("The vertex front end's colour (512 x 385)", 2D) = "black" {}
+        _GpuMadeUv ("The vertex front end's uv (512 x 385)", 2D) = "black" {}
+        _GpuMadeEdge ("The vertex front end's edge (512 x 385)", 2D) = "black" {}
+        _GpuMadeTex ("The vertex front end's tex (512 x 385)", 2D) = "black" {}
+        _GpuMadeMore ("The vertex front end's more (512 x 385)", 2D) = "black" {}
+        _GpuMadeEye ("The vertex front end's eye (512 x 385)", 2D) = "black" {}
+        _GpuMadeProj ("The vertex front end's proj (512 x 385)", 2D) = "black" {}
     }
     SubShader
     {

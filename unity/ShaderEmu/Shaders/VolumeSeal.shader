@@ -13,7 +13,7 @@ Shader "ShaderEmu/VolumeSeal"
             ZTest Always
             ZWrite On
             ColorMask 0
-            Stencil { Ref 87 Comp Equal Pass Zero }
+            Stencil { Ref 87 ReadMask 223 Comp Equal Pass Zero }
 
             CGPROGRAM
             #pragma vertex vert

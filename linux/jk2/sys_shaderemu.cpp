@@ -453,6 +453,10 @@ void seglWorldFlat( int flat );
 #define SE_HOST_STICK( s, n )   ( (signed char)( ( s )[5] >> ( 8 * ( n ) ) ) )
 #define SE_HOST_MOUSE_X( s )    ( ( s )[4] & 0xffff )
 static int se_seated;           // 0, 1 with tracked hands, 2 a desktop's sitter
+// (asked by the game: jk2.patch's cg_draw.cpp draws no cross-hair before a sitter in a headset, who aims with the hand, and
+// bg_pmove.cpp stops the seated player where the stick lets go; the player is client 0, the NPCs it moves too are not)
+extern "C" int SE_Seated( void ) { return se_seated; }
+extern "C" int SE_SeatStop( int clientNum ) { return se_seated && clientNum == 0; }
 
 // segl.h's seglWorldEye: the player's eye over its floor in the game's units, its near and far planes and its projection's scales
 static void se_world_eye( int game, float eye, float znear, float zfar, float fx, float fy )

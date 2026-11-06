@@ -262,13 +262,22 @@ Doom, Quake, Quake III, ClassiCube and Half-Life read those words, each in its o
   (`EmuMachine.keysOwn`). A single grip's key waits 0.15 s, or is a tap when let go sooner, so
   the first of both grips (standing up) sends nothing. While the console is put away the screen answers no beam and no
   click (`EmuPointer.holoHidden`); it is still shown when the program's picture is flat.
-- **A keyboard before the seat** (`EmuHolodeck.keyboard`, "Holodeck keyboard"): the den's
-  display keyboard copied, 0.54 m wide, at knee height before the sitter and tipped up to
-  them (`keyboardAt`, `keyboardTurn`), its caps and legends drawn by the canvas and unlit. One
+- **A keyboard under the screen** (`EmuHolodeck.keyboard`, "Holodeck keyboard"): the den's
+  display keyboard copied, as wide as the screen it is under (0.54 m to 1.6 m: under the large
+  screen, 1.7 m off, 0.54 m had keys too small to hit), its caps and legends drawn by the canvas and unlit (the
+  restyle leaves it alone: the den's caps are a model's, and its canvas has none, so this one
+  was black until 6 November 2026). It hangs under the sitter's screen, the console's small one
+  or the large one, in the screen's plane tipped back 25 degrees, its top 4 cm under the
+  screen's lower edge (`PlaceKeyboard`, again whenever the screen moves or is resized); where
+  the floor is too near it tips back further, to 85 degrees, and then rises, its lowest edge
+  12 cm over the floor (the largest screen, 3.2 m, its edge 5 cm over the floor: the keyboard at 85 degrees, 12 cm
+  up, in play mode). Before, it lay at knee height before the seat (`keyboardAt`, unused
+  now), where a sitter's own body hid it. It is seen wherever the screen is, the large one
+  of a flat program with the console put away too. One
   for all rooms, moved to the sitter's when they sit, fed to their own machine as raw keys
   (`Feed`), pressed by beams and by a desktop's view and click as any keyboard of the world
-  (`EmuPointer.holoKeyboard`, its place in `keyboards`), and put away with the console: a key
-  held as it goes comes up. A mark of its own (`HoloGuard.shader`) keeps the program's world
+  (`EmuPointer.holoKeyboard`, its place in `keyboards`), and put away with the console when no
+  screen is shown: a key held as it goes comes up. A mark of its own (`HoloGuard.shader`) keeps the program's world
   off it. "ShaderEmu/Add the holodecks' keyboard to the open scene" makes it, and Build world
   runs it.
   On `rvc_cpu` with the words of a desktop's sitter (`--host 00000112,0,0,0,0,00007f00,0,0`)
@@ -291,6 +300,16 @@ Doom, Quake, Quake III, ClassiCube and Half-Life read those words, each in its o
   key and the seal's queue into a scene, without a bake; it also gives that key and Hide
   the caps of the room's panels, which Hide had not. In play mode on a desktop `debugBeam`, which nothing but a test
   sets, invents hands before the head.
+- **Stopped at once, no cross-hair** (6 November 2026): in the four shooters a seated player on the ground with no move
+  asked stops where the stick lets go, not after the friction's half second from a run (a slide in a headset), and a sitter
+  in a headset, who aims with the hand, has no cross-hair in the middle of the HUD; a desktop's sitter keeps it. Each game's
+  own movement and cross-hair, asked of its engine: Quake `SE_Seated` (`sv_user.c`, `gl_screen.c`; `docs/games/quake.md`,
+  "Seated in a holodeck"), Quake III `SE_SeatStop`/`SE_Seated` in `tr_shaderemu.c` (`bg_pmove.c`'s `PM_WalkMove`, the
+  server and the client's prediction alike, the bots not; `cg_draw.c`'s cross-hair and its 3D one), Half-Life in
+  `vid_shaderemu.c` (`hlsdk.patch`'s `pm_shared.c` after `PM_Friction`, the local `player_index` only; `xash3d.patch`'s
+  `CL_DrawCrosshair`), Jedi Outcast in `sys_shaderemu.cpp` (`jk2.patch`'s `bg_pmove.cpp`, client 0, not the NPCs;
+  `cg_draw.cpp`). Unseated, every game and its sums are as they were. Quake's stop was seen in play mode; the others are
+  built, their test cases pass, and wait for a headset.
 
 ## Boxes in the hands
 
@@ -376,14 +395,33 @@ summed by `tools/volume_frames.py`:
 | Jedi Outcast (since 3 November 2026) | not in play: a menu, the console, a load (`SE_InPlay`, `se_world_tell` in `sys_shaderemu.cpp`); up is z, the eye 48 units | not a holodeck game: the large screen | on the HUD layer: up to 50 flat draws; its opening scene draws none | `+map demo`'s load flat (the large screen) for 39 minutes of the guest's at `rvc_cpu`'s speed, then 1,070 frames of the world, 2 single frames of an empty world |
 | the 2D games | not registered: always on the large screen, menus and all | | | |
 
+## Kept apart from the other programs' lists
+
+The device draws every program's lists, the desktop's too, through the same front end targets and draw IDs, and each list
+copies the textures it names into the VRAM's scratch band (rows 2048 to 4095, `programs/common/gpu_uploads.h`) before its
+passes. The holodeck draws one program's frame for many of the card's frames, so it reads copies (6 November 2026;
+`GpuKeep.shader`, at the end of `EmuMachine.GpuDraw`): the eight targets and the draw IDs (`HoloGpuMade*`,
+`HoloGpuDrawIds`) and the scratch band (`HoloGpuScratch`, 4096 x 2048, read for the band's addresses where
+`GPU_KEPT_SCRATCH` is defined: the holodeck's, its HUD's and the volume's passes), each taken only in a frame whose list is
+the one the volume words name. Before, Quake lost triangles whenever the desktop drew, and the physics demo's boxes, whose
+colours are a texture of the band, were white for one frame in about forty (a frame of the desktop's); with the band kept,
+600 frames of it seated showed none. The display reads a copy too (`GpuShown`), of the target, from lists not drawn
+`SUBMIT_SIZED`.
+
 ## The HUD layer
 
 A program's frame has draws with a place in space (the world) and draws flat over its picture: a status bar, a cross-hair,
 messages, the console, a weapon drawn flat. The world round the seat can only place the first; until 3 November 2026 the
 rest was left out, so a seated game had no HUD at all. `GpuHolodeckHud.shader` (`GpuHolodeckHudPass.cginc`, and
 `volume_flat_command` and `volume_picture` in `src/gpu.h`) draws them on a quad of their own, "Holodeck HUD", in the GPU's
-pass order and blending, over everything of the room (no depth), each vertex at its place in the picture as a share of
-the quad. `EmuHolodeck.PlaceHud` keeps the quad before the sitter's eyes while a world is shown: 1.1 m ahead and 0.12 m
+pass order and blending, each vertex at its place in the picture as a share of the quad. It floats over the program's
+world but not over what is nearer of the room (6 November 2026; before, it had no depth and was drawn over everything, an
+avatar, a hand, the seat's panels, in a headset plainly wrong): `GpuHolodeck.shader`'s two solid passes set stencil bit 32
+where the world is in front (the other stencil tests leave it out, `ReadMask` 223 and 95), and each of the HUD's four
+blendings is a pair of passes, with no depth test on that bit, so the world's own near faces (a weapon at the eye) stay
+under it, and at its own distance off it, where an avatar, a hand or the room's things before it hide it. Its queue is
+after the world's material (2503) and the hands' aims (2504): Transparent-495, the material's own queue -1 (it was 3010), so the room's transparent things, its panels
+and labels, are drawn after it and over it where they are nearer. `EmuHolodeck.PlaceHud` keeps the quad before the sitter's eyes while a world is shown: 1.1 m ahead and 0.12 m
 below them (`hudDistance`, `hudDrop`), 1.0 m wide at the picture's shape (`hudWidth`); on a desktop it turns and tilts with
 the view, in a headset it follows the head's turn about the upright and its tilt up and down at `hudFollow` (2.5 a second), never
 its roll (5 November 2026: before, it kept level, so a sitter who looked down had the HUD above the view). A menu

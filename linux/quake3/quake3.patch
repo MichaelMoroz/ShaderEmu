@@ -1030,7 +1030,7 @@ index 816e0b10..3998886f 100644
  typedef struct script_s
  {
 diff --git a/code/cgame/cg_draw.c b/code/cgame/cg_draw.c
-index afe09412..3b52a1ee 100644
+index afe09412..6e0ef8d1 100644
 --- a/code/cgame/cg_draw.c
 +++ b/code/cgame/cg_draw.c
 @@ -203,6 +203,42 @@ Draws large numbers for status bar and powerups
@@ -1142,7 +1142,25 @@ index afe09412..3b52a1ee 100644
  			w = CG_DrawStrlen( s ) * BIGCHAR_WIDTH + 8;
  			x -= w;
  			CG_DrawBigString( x + 4, y, s, 1.0F);
-@@ -1904,6 +1944,7 @@ static void CG_DrawCrosshair(void)
+@@ -1861,6 +1901,8 @@ CROSSHAIR
+ CG_DrawCrosshair
+ =================
+ */
++int SE_Seated( void );	// tr_shaderemu.c: 1 a sitter in a headset, 2 at a desktop
++
+ static void CG_DrawCrosshair(void)
+ {
+ 	float		w, h;
+@@ -1869,7 +1911,7 @@ static void CG_DrawCrosshair(void)
+ 	float		x, y;
+ 	int			ca;
+ 
+-	if ( !cg_drawCrosshair.integer ) {
++	if ( !cg_drawCrosshair.integer || SE_Seated() == 1 ) {	// (a sitter in a headset aims with the hand: tr_shaderemu.c)
+ 		return;
+ 	}
+ 
+@@ -1904,6 +1946,7 @@ static void CG_DrawCrosshair(void)
  	x = cg_crosshairX.integer;
  	y = cg_crosshairY.integer;
  	CG_AdjustFrom640( &x, &y, &w, &h );
@@ -1150,7 +1168,16 @@ index afe09412..3b52a1ee 100644
  
  	ca = cg_drawCrosshair.integer;
  	if (ca < 0) {
-@@ -2052,7 +2093,19 @@ static void CG_DrawCrosshairNames( void ) {
+@@ -1936,7 +1979,7 @@ static void CG_DrawCrosshair3D(void)
+ 	char rendererinfos[128];
+ 	refEntity_t ent;
+ 
+-	if ( !cg_drawCrosshair.integer ) {
++	if ( !cg_drawCrosshair.integer || SE_Seated() == 1 ) {	// (a sitter in a headset aims with the hand: tr_shaderemu.c)
+ 		return;
+ 	}
+ 
+@@ -2052,7 +2095,19 @@ static void CG_DrawCrosshairNames( void ) {
  	}
  
  	// scan the known entities to see if the crosshair is sighted on one
@@ -1170,7 +1197,7 @@ index afe09412..3b52a1ee 100644
  
  	// draw the name of the player being looked at
  	color = CG_FadeColor( cg.crosshairClientTime, 1000 );
-@@ -2648,10 +2701,13 @@ void CG_DrawActive( stereoFrame_t stereoView ) {
+@@ -2648,10 +2703,13 @@ void CG_DrawActive( stereoFrame_t stereoView ) {
  		CG_DrawCrosshair3D();
  
  	// draw 3D view
@@ -3008,7 +3035,7 @@ index ed5653d7..361dcf51 100644
  	trap_Cvar_Register(&bot_saveroutingcache, "bot_saveroutingcache", "0", CVAR_CHEAT);
  	trap_Cvar_Register(&bot_pause, "bot_pause", "0", CVAR_CHEAT);
 diff --git a/code/game/bg_pmove.c b/code/game/bg_pmove.c
-index c7541743..12303936 100644
+index c7541743..54063d1b 100644
 --- a/code/game/bg_pmove.c
 +++ b/code/game/bg_pmove.c
 @@ -47,6 +47,21 @@ float	pm_spectatorfriction = 5.0f;
@@ -3033,7 +3060,28 @@ index c7541743..12303936 100644
  
  /*
  ===============
-@@ -1111,7 +1126,22 @@ static void PM_GroundTrace( void ) {
+@@ -688,6 +703,8 @@ PM_WalkMove
+ 
+ ===================
+ */
++int SE_SeatStop( int clientNum );	// tr_shaderemu.c: this client is the player seated in a holodeck
++
+ static void PM_WalkMove( void ) {
+ 	int			i;
+ 	vec3_t		wishvel;
+@@ -717,6 +734,11 @@ static void PM_WalkMove( void ) {
+ 	}
+ 
+ 	PM_Friction ();
++	// a sitter in a holodeck stops where the stick lets go (tr_shaderemu.c, SE_SeatStop): the friction's half second
++	// from a run is a slide in a headset; bots and anyone unseated as before
++	if ( !pm->cmd.forwardmove && !pm->cmd.rightmove && SE_SeatStop( pm->ps->clientNum ) ) {
++		pm->ps->velocity[0] = pm->ps->velocity[1] = 0;
++	}
+ 
+ 	fmove = pm->cmd.forwardmove;
+ 	smove = pm->cmd.rightmove;
+@@ -1111,7 +1133,22 @@ static void PM_GroundTrace( void ) {
  	point[1] = pm->ps->origin[1];
  	point[2] = pm->ps->origin[2] - 0.25;
  
@@ -3056,7 +3104,7 @@ index c7541743..12303936 100644
  	pml.groundTrace = trace;
  
  	// do something corrective if the trace starts in a solid...
-@@ -1216,7 +1246,17 @@ static void PM_SetWaterLevel( void ) {
+@@ -1216,7 +1253,17 @@ static void PM_SetWaterLevel( void ) {
  	point[0] = pm->ps->origin[0];
  	point[1] = pm->ps->origin[1];
  	point[2] = pm->ps->origin[2] + MINS_Z + 1;	
@@ -3074,7 +3122,7 @@ index c7541743..12303936 100644
  
  	if ( cont & MASK_WATER ) {
  		sample2 = pm->ps->viewheight - MINS_Z;
-@@ -2036,6 +2076,9 @@ void Pmove (pmove_t *pmove) {
+@@ -2036,6 +2083,9 @@ void Pmove (pmove_t *pmove) {
  	}
  
  	pmove->ps->pmove_framecount = (pmove->ps->pmove_framecount+1) & ((1<<PS_PMOVEFRAMECOUNTBITS)-1);

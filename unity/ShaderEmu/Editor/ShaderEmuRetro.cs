@@ -767,16 +767,17 @@ public static partial class ShaderEmuBuilder
             if (canvas.name.EndsWith(" hot") || canvas.name == "Controller notice") continue;   // keys with nothing to show over a model's own; a notice that moves
             bool shown = canvas.gameObject.activeSelf, paper = canvas.name == "About" || canvas.name == SheetName,
                  plain = canvas.GetComponent<EmuKeyboard>() == null && !paper &&
-                 canvas.name != "Signs" && !canvas.name.EndsWith(" name") && canvas.name != "Memory legend" && canvas.name != "CPU sign" &&
+                 canvas.name != "Signs" && !canvas.name.EndsWith(" name") && canvas.name != "Memory legend" && canvas.name != "GPU legend" && canvas.name != "CPU sign" &&
                  canvas.name != "Speed sign";
             if (onlyNew && ((!plain && canvas.name != SheetName) || canvas.transform.Find(canvas.name + " plate") != null)) continue;
             Hidden[canvas] = onlyNew || !shown;
             canvas.gameObject.SetActive(true);   // one that opens later is drawn as it will be
             EmuKeyboard keyboard = canvas.GetComponent<EmuKeyboard>();
-            if (keyboard != null) KeyboardLook(keyboard, bold, monoBold);
+            // (the holodeck's has no model under it: its caps are its canvas's own, ShaderEmuHolodeck.AddHoloKeyboard)
+            if (keyboard != null) { if (canvas.name != "Holodeck keyboard") KeyboardLook(keyboard, bold, monoBold); }
             else if (paper) PaperLook(canvas, paperSprite, mono, monoBold);
             else if (canvas.name == "Signs" || canvas.name.EndsWith(" name")) TapeLook(canvas, monoBold, changing);
-            else if (canvas.name == "Memory legend" || canvas.name == "CPU sign" || canvas.name == "Speed sign")   // drawn over a screen: part of a display
+            else if (canvas.name == "Memory legend" || canvas.name == "GPU legend" || canvas.name == "CPU sign" || canvas.name == "Speed sign")   // drawn over a screen: part of a display
                 foreach (TextMeshProUGUI label in canvas.GetComponentsInChildren<TextMeshProUGUI>(true)) { label.font = monoBold; label.fontSharedMaterial = monoBold.material; EditorUtility.SetDirty(label); }
             else PanelLook(canvas, raised, sunken, cap, sans, bold, mono, changing, painted);
             canvas.gameObject.SetActive(shown);

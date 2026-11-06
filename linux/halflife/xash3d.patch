@@ -1214,10 +1214,26 @@ index c1b3ef13..260548be 100644
  		viewnum++;
  
 diff --git a/engine/client/dll_int/cl_game.c b/engine/client/dll_int/cl_game.c
-index a29e9354..efdb5dc5 100644
+index a29e9354..5db94aad 100644
 --- a/engine/client/dll_int/cl_game.c
 +++ b/engine/client/dll_int/cl_game.c
-@@ -1004,7 +1004,9 @@ void CL_InitEdicts( int maxclients )
+@@ -817,12 +817,14 @@ CL_DrawCrosshair
+ Render crosshair
+ ====================
+ */
++int SE_Seated( void );	// vid_shaderemu.c: 1 a sitter in a headset, 2 at a desktop
++
+ static void CL_DrawCrosshair( void )
+ {
+ 	int	x, y, width, height;
+ 	float xscale, yscale;
+ 
+-	if( !clgame.ds.pCrosshair || !cl_crosshair.value )
++	if( !clgame.ds.pCrosshair || !cl_crosshair.value || SE_Seated( ) == 1 )	// (a headset's sitter aims with the hand)
+ 		return;
+ 
+ 	// any camera on or client is died
+@@ -1004,7 +1006,9 @@ void CL_InitEdicts( int maxclients )
  	Assert( clgame.entities == NULL );
  
  	if( !clgame.mempool ) return; // Host_Error without client

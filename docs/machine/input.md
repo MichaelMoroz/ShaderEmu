@@ -57,10 +57,11 @@ while bits 0 and 1 stay the pointer's. The world tells them while a beam is on t
 sitter holds the controller (`EmuPointer.MoreButtons`, `EmuMachine.moreButtons`), and 0 otherwise.
 
 The wheels, in the key ring (above): the pointer's own (a mouse's, `0x3fc` to `0x3ff`), and in a
-headset each hand's stick while that hand's beam is on the display, at up to 12 notches a second
-in each axis: the right stick was always the wheel, and is now across too; the left stick is a
-second wheel. The player stands still (`Immobilize`) while a stick scrolls, or the left stick would
-walk and the right one turn them. On a desktop, the mouse's wheel with Shift held is the wheel
+headset the right hand's stick while its beam is on the display, at up to 12 notches a second
+in each axis: it was always the wheel, and is now across too, and the player stands still
+(`Immobilize`) while it scrolls. The left stick always walks (6 November 2026): as a second wheel
+while its beam was on the display it held a player before the screen in place, both beams being
+on it there; its axes below are never turned from the world. On a desktop, the mouse's wheel with Shift held is the wheel
 tilted (Unity has no axis for a tilt), and the side buttons are bits 3 and 4.
 
 **From Linux** (`linux/kernel/shaderemu_input.c`), on `/dev/input/event1`:

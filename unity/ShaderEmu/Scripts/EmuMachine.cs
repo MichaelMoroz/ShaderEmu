@@ -51,6 +51,14 @@ public class EmuMachine : UdonSharpBehaviour
     public Material frontMaterial;
     public RenderTexture[] made;            // its eight targets of 512 x 385 (shader_vm/src/gpu_draw.h, gpu_made)
     public RenderTexture madeDepth;
+    // What the GPU drew, kept apart (GpuKeep.shader): the front end's eight and the draw IDs of the frame the volume words
+    // name, for the holodeck (every list writes the shared ones, the window system's too), and the target of the last list
+    // drawn to be seen, for the display (a list drawn SUBMIT_SIZED is a picture only for its copies into the VRAM)
+    public Material keepMaterial;
+    public RenderTexture[] holoMade;
+    public RenderTexture holoDrawIds;
+    public RenderTexture holoScratch;       // 4096 x 2048: the VRAM's scratch band as the holodeck's frame left it (GpuKeep's pass 3)
+    public RenderTexture gpuShown;
     public Material orderMaterial;          // BlitOrder.shader
     public RenderTexture orderTexture;      // 81 x 81: its pass 0's
     public RenderTexture rankTexture;       // 81 x 1: each point's place, which the blits' calls go by (_AmpRank)
@@ -1419,6 +1427,15 @@ public class EmuMachine : UdonSharpBehaviour
             // the list's copies of its picture into the VRAM, after every pass (docs/machine/gpu.md, "Copies")
             gpuBlitMaterial.SetTexture("_GpuTarget", target);
             VRCGraphics.Blit(blackTexture, vram, gpuBlitMaterial, 16);
+            // and what is kept apart: the holodeck's frame, the display's picture (each blit keeps the old where it is not taken)
+            if (keepMaterial != null && holoMade != null && holoDrawIds != null && gpuShown != null)
+            {
+                keepMaterial.SetTexture("_State", state);
+                for (int i = 0; i < holoMade.Length; i++) VRCGraphics.Blit(made[i], holoMade[i], keepMaterial, i == 4 || i == 5 ? 1 : 0);
+                VRCGraphics.Blit(drawIds, holoDrawIds, keepMaterial, 1);
+            if (holoScratch != null) VRCGraphics.Blit(vram, holoScratch, keepMaterial, 3);
+                VRCGraphics.Blit(target, gpuShown, keepMaterial, 2);
+            }
         }
     }
 

@@ -295,6 +295,10 @@ public class EmuPointer : UdonSharpBehaviour
         float best = maxDistance;
         int found = Nothing, foundKey = -1;
         bool landed = false, tube = false, mainHit = false;
+        // where the beam landed on the holodeck's large screen or its plane: no dot there while the room shows a world (a
+        // shooter's own crosshair is the aim, and the dot stood apart from it)
+        bool onHoloScreen = false;
+        Vector3 holoScreenAt = Vector3.zero;
         Vector3 at = origin;
         // a beam that meets the open links panel is VRChat's to use, not the machine's pointer
         bool covered = linksPlate != null && machine.linksPanel.activeSelf && linksPlate.Raycast(ray, out hit, best);
@@ -392,6 +396,8 @@ public class EmuPointer : UdonSharpBehaviour
                 at = hit.point;
                 found = Nothing;
                 local = quad.InverseTransformPoint(hit.point);
+                onHoloScreen = true;
+                holoScreenAt = at;
             }
             int w = machine.OwnWidth(), ht = machine.OwnHeight();
             if (w > 0 && ht > 0 && (onQuad || OnPlane(quad, origin, direction, out local, out distance) && distance < best))
@@ -411,6 +417,8 @@ public class EmuPointer : UdonSharpBehaviour
                         best = distance;
                         at = origin + direction * distance;
                         behind = 0.1f;
+                        onHoloScreen = true;
+                        holoScreenAt = at;
                     }
                 }
             }
@@ -534,7 +542,8 @@ public class EmuPointer : UdonSharpBehaviour
             beams[h].SetPosition(0, origin);
             beams[h].SetPosition(1, at);
         }
-        dots[h].gameObject.SetActive(landed);
+        bool dotHidden = onHoloScreen && at == holoScreenAt && ownHolo >= 0 && !holoFlat;
+        dots[h].gameObject.SetActive(landed && !dotHidden);
         if (landed)
         {
             dots[h].position = at;
@@ -749,9 +758,11 @@ public class EmuPointer : UdonSharpBehaviour
             bool right = target[1] == Display, left = target[0] == Display;
             turnedOf[0] = right ? turnedOf[0] + stick * rate : 0f;
             turnedOf[1] = right ? turnedOf[1] + stickX * rate : 0f;
-            turnedOf[2] = left ? turnedOf[2] + moveY * rate : 0f;
-            turnedOf[3] = left ? turnedOf[3] + moveX * rate : 0f;
-            Still(player, (right && (stick != 0f || stickX != 0f)) || (left && (moveX != 0f || moveY != 0f)));
+            // (the left stick always walks: both beams are on the display wherever the player stands before it, and a
+            // left stick that scrolled there held them in place; its wheel, REL_DIAL and REL_MISC, is never turned)
+            turnedOf[2] = 0f;
+            turnedOf[3] = 0f;
+            Still(player, right && (stick != 0f || stickX != 0f));
         }
         for (int w = 0; w < 4; w++)
         {
@@ -766,6 +777,9 @@ public class EmuPointer : UdonSharpBehaviour
 
     private void Still(VRCPlayerApi player, bool on)
     {
+        // (a sitter's seat holds them, a station of Immobilize: an Immobilize(false) of ours there let the left stick move
+        // the avatar as well as the game; standing up, the keyboard's SetCapture(false) frees them)
+        if (away) { stilled = false; return; }
         if (on == stilled) return;
         stilled = on;
         player.Immobilize(on);
