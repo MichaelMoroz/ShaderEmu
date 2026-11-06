@@ -74,6 +74,13 @@ public class EmuMachine : UdonSharpBehaviour
     // of RAM from 0x80000000, its texels, its first texel of the ROM's texture).
     public Texture2D[] imageTextures;
     public Vector4 bootKernel, bootTree;
+    // Where the digit of the tree's "loglevel=" lies (its texel, its byte: ShaderEmuImages.WithLogLevel), and the level
+    // the reset writes there: the kernel's console prints messages under it. Chosen on the panel, from the next power on.
+    public Vector4 bootLog;
+    public int logLevel = 4;
+    public TextMeshProUGUI logLabel;
+    private int[] LogLevels = { 4, 5, 7, 8, 1 };
+    private string[] LogNames = { "errors (the default)", "warnings", "the boot log", "everything", "emergencies only" };
     public Texture2D blackTexture;
 
     // Pages for the guest's browser (docs/system/fetch.md). A world can only load the addresses it
@@ -108,6 +115,7 @@ public class EmuMachine : UdonSharpBehaviour
     public TextMeshProUGUI tickLabel;  // and how much of it core 0 really runs, lately
     public float minFrameRate = 45f;   // "steady" gives up instructions before frames come slower than this
     public bool powerOnAtStart;        // off until someone presses Power
+    public bool logStats;              // a test client's: the panel's numbers in the log every 10 s ([Machine] lines)
     // A real client's test (docs/system/fetch.md, "Hosts"): with fetchTest on, the
     // address is loaded as text and as a picture eight seconds after start, and what came is logged.
     public bool fetchTest;
@@ -270,6 +278,7 @@ public class EmuMachine : UdonSharpBehaviour
         if (speedSlider != null) SetRounds(RoundsOf(speedSlider.value));
         ShowLabels();
         if (powerOnAtStart) PowerOn();
+        if (logStats) SendCustomEventDelayedSeconds(nameof(LogStats), 10f);
         if (fetchTest && fetchTestUrl != null) SendCustomEventDelayedSeconds(nameof(FetchTestRun), 8f);
         else Say("The computer is off.\r\n\r\nPress the red POWER button on the computer\r\n(the tower by the desk's right end), or \"Power on\" on the panel.\r\n\r\n" + PowerWarning);
         if (statsText != null && !powered && !statsRemote) statsText.text = "off\n\n" + PowerWarning.Replace("\r", "");
@@ -393,8 +402,23 @@ public class EmuMachine : UdonSharpBehaviour
         tickMaterial.SetInt("_Ticks", ticks);
     }
 
+    // The panel's kernel log button: the next level, written into the device tree at the next power on or reset
+    public void LogLevelNext()
+    {
+        int i = 0;
+        while (i < LogLevels.Length && LogLevels[i] != logLevel) i++;
+        logLevel = LogLevels[(i + 1) % LogLevels.Length];
+        ShowLabels();
+    }
+
     private void ShowLabels()
     {
+        if (logLabel != null)
+        {
+            int i = 0;
+            while (i < LogLevels.Length && LogLevels[i] != logLevel) i++;
+            logLabel.text = "Kernel log: " + logLevel + ", " + (i < LogNames.Length ? LogNames[i] : "") + " (from the next power on)";
+        }
         if (speedLabel != null)
             speedLabel.text = steady ? targetIps.ToString("N0") + " a second, while frames keep to " + minFrameRate.ToString("F0") + " a second"
                                      : (rounds * ticks).ToString("N0") + " IPF: " + rounds + (rounds == 1 ? " tick" : " ticks") + " a frame";
@@ -456,6 +480,10 @@ public class EmuMachine : UdonSharpBehaviour
 
     private void ApplyImage()
     {
+        Vector4 log = new Vector4(bootLog.x, bootLog.y, bootLog.x > 0 ? '0' + Mathf.Clamp(logLevel, 0, 9) : 0, 0);
+        machineMaterial.SetVector("_BootLog", log);
+        pointsMaterial.SetVector("_BootLog", log);
+        if (pointsBlitMaterial != null) pointsBlitMaterial.SetVector("_BootLog", log);
         machineMaterial.SetVector("_BootKernel", bootKernel);
         machineMaterial.SetVector("_BootTree", bootTree);
         machineMaterial.SetTexture("_Data_ROM", Pick(1));
@@ -481,6 +509,13 @@ public class EmuMachine : UdonSharpBehaviour
             // samples are played from where they lie in the ROM
             sound.mixMaterial.SetTexture("_Data_ROM", Pick(1));
         }
+    }
+
+    public void LogStats()
+    {
+        Debug.Log("[Machine] " + Time.time.ToString("F0") + " s, " + (1f / Mathf.Max(Time.smoothDeltaTime, 1e-4f)).ToString("F0") + " frames a second: "
+                  + statsLine.Replace("\n", " | "));
+        SendCustomEventDelayedSeconds(nameof(LogStats), 10f);
     }
 
     public void PowerOn()

@@ -82,19 +82,19 @@ public static partial class ShaderEmuBuilder
     // The camera's six faces as they are in the scene: linear and HDR. (RenderToCubemap straight into a
     // Cubemap asset went through an 8-bit sRGB target: every value clamped at 1 and kept sRGB-encoded,
     // which the glass then read as linear, the city's dark walls 0.006 coming out 0.071: washed out.)
-    static Color[][] CaptureHdr(Camera camera, CubemapFace[] faces)
+    static Color[][] CaptureHdr(Camera camera, CubemapFace[] faces, int size)
     {
-        RenderTexture cube = new RenderTexture(256, 256, 24, RenderTextureFormat.ARGBHalf, RenderTextureReadWrite.Linear);
+        RenderTexture cube = new RenderTexture(size, size, 24, RenderTextureFormat.ARGBHalf, RenderTextureReadWrite.Linear);
         cube.dimension = UnityEngine.Rendering.TextureDimension.Cube;
         cube.Create();
         camera.RenderToCubemap(cube);
-        Texture2D face = new Texture2D(256, 256, TextureFormat.RGBAHalf, false, true);
+        Texture2D face = new Texture2D(size, size, TextureFormat.RGBAHalf, false, true);
         Color[][] result = new Color[faces.Length][];
         RenderTexture before = RenderTexture.active;
         for (int f = 0; f < faces.Length; f++)
         {
             Graphics.SetRenderTarget(cube, 0, faces[f]);
-            face.ReadPixels(new Rect(0, 0, 256, 256), 0, 0);
+            face.ReadPixels(new Rect(0, 0, size, size), 0, 0);
             face.Apply();
             result[f] = face.GetPixels();   // (in a Cubemap's own row order: checked against RenderToCubemap's)
         }
@@ -103,6 +103,28 @@ public static partial class ShaderEmuBuilder
         cube.Release();
         Object.DestroyImmediate(cube);
         return result;
+    }
+
+    // The city's two pictures are 1024 a face (a texel 0.09 degrees): its lamps are tiny and many times
+    // brighter than white (City.shader, "lamps"), and at 256 a face a drop showed each as a smear of a third
+    // of a degree. Kept as BC6H, 8 MB a picture with its mips (RGBAHalf would be 50); the room's stays 256.
+    const int CitySize = 1024, RoomSize = 256;
+
+    // the pictures into the cubemap asset at `path`, made anew (a compressed one takes no SetPixels) and
+    // copied over the asset so what refers to it keeps it
+    static Cubemap StoreCube(string path, Color[][] pictures, CubemapFace[] faces, int size, bool compress)
+    {
+        Cubemap made = new Cubemap(size, TextureFormat.RGBAHalf, true);
+        made.name = System.IO.Path.GetFileNameWithoutExtension(path);   // (CopySerialized brings the name too)
+        for (int f = 0; f < faces.Length; f++) made.SetPixels(pictures[f], faces[f]);
+        made.Apply(true);
+        if (compress) EditorUtility.CompressCubemapTexture(made, TextureFormat.BC6H, UnityEditor.TextureCompressionQuality.Best);
+        Cubemap asset = AssetDatabase.LoadAssetAtPath<Cubemap>(path);
+        if (asset == null) { AssetDatabase.CreateAsset(made, path); return made; }
+        EditorUtility.CopySerialized(made, asset);
+        Object.DestroyImmediate(made);
+        EditorUtility.SetDirty(asset);
+        return asset;
     }
 
     static void WindowProbe(Transform world, Material glass)
@@ -117,18 +139,12 @@ public static partial class ShaderEmuBuilder
         probe.size = new Vector3(0.3f, 2.2f, 4.2f);
         probe.boxProjection = false;
         probe.importance = 2;
-        probe.resolution = 256;
+        probe.resolution = CitySize;
         probe.hdr = true;
         probe.nearClipPlane = 0.05f;
         probe.farClipPlane = 3000f;
 
         string path = Generated + "/" + name + " picture.cubemap";
-        Cubemap picture = AssetDatabase.LoadAssetAtPath<Cubemap>(path);
-        if (picture == null)
-        {
-            picture = new Cubemap(256, TextureFormat.RGBAHalf, true);
-            AssetDatabase.CreateAsset(picture, path);
-        }
         Transform rain = world.Find("Models/City/Rain");
         bool rainOn = rain != null && rain.gameObject.activeSelf;
         if (rain != null) rain.gameObject.SetActive(false);
@@ -142,49 +158,28 @@ public static partial class ShaderEmuBuilder
         List<Renderer> panesAway = new List<Renderer>();
         foreach (Renderer renderer in Object.FindObjectsOfType<Renderer>())
             if (renderer.enabled && System.Array.IndexOf(renderer.sharedMaterials, glass) >= 0) { renderer.enabled = false; panesAway.Add(renderer); }
-        Color[][] whole = CaptureHdr(camera, faces);
+        Color[][] whole = CaptureHdr(camera, faces, RoomSize);
         foreach (Renderer renderer in panesAway) renderer.enabled = true;
         // again with nothing but the city and the sky
         Transform city = world.Find("Models/City");
         List<Renderer> hidden = new List<Renderer>();
         foreach (Renderer renderer in Object.FindObjectsOfType<Renderer>())
             if (renderer.enabled && (city == null || !renderer.transform.IsChildOf(city))) { renderer.enabled = false; hidden.Add(renderer); }
-        Color[][] cityOnly = CaptureHdr(camera, faces);
+        Color[][] cityOnly = CaptureHdr(camera, faces, CitySize);
         // and the city and the sky as a flash of 1 lights them (_UdonWeatherFlash, EmuWeather): the
         // drops show lightning as the window does. Everything lightning lights is linear in the flash,
         // so the glass mixes the two pictures by the flash and has what any flash shows
         int flashId = Shader.PropertyToID("_UdonWeatherFlash");
         float flashWas = Shader.GetGlobalFloat(flashId);
         Shader.SetGlobalFloat(flashId, 1f);
-        Color[][] cityLit = CaptureHdr(camera, faces);
+        Color[][] cityLit = CaptureHdr(camera, faces, CitySize);
         Shader.SetGlobalFloat(flashId, flashWas);
         foreach (Renderer renderer in hidden) renderer.enabled = true;
-        Cubemap lightning = AssetDatabase.LoadAssetAtPath<Cubemap>(LightningPath);
-        if (lightning == null)
-        {
-            lightning = new Cubemap(256, TextureFormat.RGBAHalf, true);
-            AssetDatabase.CreateAsset(lightning, LightningPath);
-        }
-        Cubemap room = AssetDatabase.LoadAssetAtPath<Cubemap>(RoomPath);
-        if (room == null)
-        {
-            room = new Cubemap(256, TextureFormat.RGBAHalf, true);
-            AssetDatabase.CreateAsset(room, RoomPath);
-        }
-        for (int f = 0; f < 6; f++)
-        {
-            picture.SetPixels(cityOnly[f], faces[f]);
-            lightning.SetPixels(cityLit[f], faces[f]);
-            room.SetPixels(whole[f], faces[f]);
-        }
-        lightning.Apply(true);
-        EditorUtility.SetDirty(lightning);
-        room.Apply(true);
-        EditorUtility.SetDirty(room);
+        Cubemap picture = StoreCube(path, cityOnly, faces, CitySize, true);
+        Cubemap lightning = StoreCube(LightningPath, cityLit, faces, CitySize, true);
+        Cubemap room = StoreCube(RoomPath, whole, faces, RoomSize, false);
         Object.DestroyImmediate(camera.gameObject);
         if (rain != null) rain.gameObject.SetActive(rainOn);
-        picture.Apply(true);
-        EditorUtility.SetDirty(picture);
         probe.mode = ReflectionProbeMode.Custom;
         probe.customBakedTexture = picture;
         probe.boxProjection = false;   // (a direction's colour: the city is far)
