@@ -142,7 +142,18 @@ public static class ShaderEmuImages
             if (File.Exists(old)) AssetDatabase.DeleteAsset(old);
         }
         AssetDatabase.Refresh();
-        Debug.Log("[ShaderEmu] boot images imported from " + Repo);
+        // the machine in the open scene copies the kernel and its tree from where they now lie: past a root file system of
+        // another size they moved, and a scene that kept the old places booted nothing (6 November 2026)
+        EmuMachine machine = Object.FindObjectOfType<EmuMachine>(true);
+        if (machine != null && !Application.isPlaying)
+        {
+            UdonSharpEditor.UdonSharpEditorUtility.CopyUdonToProxy(machine);
+            BootPieces(Images[0], out machine.bootKernel, out machine.bootTree, out machine.bootLog);
+            UdonSharpEditor.UdonSharpEditorUtility.CopyProxyToUdon(machine);
+            EditorUtility.SetDirty(machine);
+            UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(machine.gameObject.scene);
+        }
+        Debug.Log("[ShaderEmu] boot images imported from " + Repo + (machine != null ? "; the scene's machine boots from the kernel at texel " + machine.bootKernel.z : ""));
     }
 
     // The ROM's texels: the root file system, then the kernel and its tree, each padded to whole rows

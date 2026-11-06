@@ -600,13 +600,17 @@ public class EmuHolodeck : UdonSharpBehaviour
     // The keyboard hangs under the sitter's screen, the console's small one or the large one, in its plane tipped back
     // KeyboardTilt degrees, its top KeyboardGap below the screen's lower edge: seen wherever the screen is, never behind the
     // sitter's own body (before, it lay before the seat, under their hands). Where the floor is too near it tips further
-    // back, to 85 degrees, and then rises over the screen's edge, its lowest edge KeyboardFloor over the floor.
-    private const float KeyboardTilt = 25f, KeyboardGap = 0.04f, KeyboardFloor = 0.12f;
+    // back, to 85 degrees, and then rises over the screen's edge, its lowest edge KeyboardFloor over the floor. It is as wide
+    // as the screen, KeyboardWidth at least and KeyboardMost at most: under the large screen, 1.7 m off, one 0.54 m wide had
+    // keys too small to hit; under the largest (3.2 m, its edge 5 cm over the floor) it lies at 85 degrees, 12 cm up.
+    private const float KeyboardTilt = 25f, KeyboardGap = 0.04f, KeyboardFloor = 0.12f, KeyboardWidth = 0.54f, KeyboardMost = 1.6f;
 
     private void PlaceKeyboard(Transform screen, Transform frame)
     {
         if (keyboard == null) return;
         Transform kb = keyboard.transform;
+        float wide = Mathf.Clamp(screen.lossyScale.x, KeyboardWidth, KeyboardMost), parent = kb.parent != null ? kb.parent.lossyScale.x : 1f;
+        kb.localScale = Vector3.one * (wide / keyboard.panelWidth / parent);
         Vector3 edge = screen.TransformPoint(new Vector3(0f, -0.5f, 0f)) - screen.up * KeyboardGap;
         float floor = frame.position.y + KeyboardFloor;
         float tilt = KeyboardTilt, low = 0f;

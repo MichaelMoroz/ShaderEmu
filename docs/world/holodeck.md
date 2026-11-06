@@ -263,13 +263,15 @@ Doom, Quake, Quake III, ClassiCube and Half-Life read those words, each in its o
   the first of both grips (standing up) sends nothing. While the console is put away the screen answers no beam and no
   click (`EmuPointer.holoHidden`); it is still shown when the program's picture is flat.
 - **A keyboard under the screen** (`EmuHolodeck.keyboard`, "Holodeck keyboard"): the den's
-  display keyboard copied, 0.54 m wide, its caps and legends drawn by the canvas and unlit (the
+  display keyboard copied, as wide as the screen it is under (0.54 m to 1.6 m: under the large
+  screen, 1.7 m off, 0.54 m had keys too small to hit), its caps and legends drawn by the canvas and unlit (the
   restyle leaves it alone: the den's caps are a model's, and its canvas has none, so this one
   was black until 6 November 2026). It hangs under the sitter's screen, the console's small one
   or the large one, in the screen's plane tipped back 25 degrees, its top 4 cm under the
   screen's lower edge (`PlaceKeyboard`, again whenever the screen moves or is resized); where
   the floor is too near it tips back further, to 85 degrees, and then rises, its lowest edge
-  12 cm over the floor. Before, it lay at knee height before the seat (`keyboardAt`, unused
+  12 cm over the floor (the largest screen, 3.2 m, its edge 5 cm over the floor: the keyboard at 85 degrees, 12 cm
+  up, in play mode). Before, it lay at knee height before the seat (`keyboardAt`, unused
   now), where a sitter's own body hid it. It is seen wherever the screen is, the large one
   of a flat program with the console put away too. One
   for all rooms, moved to the sitter's when they sit, fed to their own machine as raw keys

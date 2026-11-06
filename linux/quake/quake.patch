@@ -21,7 +21,7 @@ index 550368e..a5d701d 100644
  		time = 1;
  	Con_Printf ("%i frames %5.1f seconds %5.1f fps\n", frames, time, frames/time);
 diff --git a/WinQuake/cl_main.c b/WinQuake/cl_main.c
-index 5812143..d437e2a 100644
+index 5812143..54730c3 100644
 --- a/WinQuake/cl_main.c
 +++ b/WinQuake/cl_main.c
 @@ -63,6 +63,10 @@ void CL_ClearState (void)
@@ -1763,7 +1763,7 @@ index 80ada45..c4f7382 100644
  	return r;
  }
 diff --git a/WinQuake/gl_rmain.c b/WinQuake/gl_rmain.c
-index d9bf41e..5ceac29 100644
+index d9bf41e..256501f 100644
 --- a/WinQuake/gl_rmain.c
 +++ b/WinQuake/gl_rmain.c
 @@ -69,6 +69,7 @@ mleaf_t		*r_viewleaf, *r_oldviewleaf;
@@ -2613,19 +2613,20 @@ index 11b5a01..14133c6 100644
  }
  
 diff --git a/WinQuake/gl_screen.c b/WinQuake/gl_screen.c
-index 8a0c096..ab8ec17 100644
+index 8a0c096..d0f8f87 100644
 --- a/WinQuake/gl_screen.c
 +++ b/WinQuake/gl_screen.c
-@@ -21,6 +21,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+@@ -21,6 +21,9 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
  // screen.c -- master for refresh, status bar, console, chat, notify, etc
  
  #include "quakedef.h"
 +#include "se_scene2d.h"	// (what the 2D screen reads: scene_shaderemu.c)
++int SE_Seated (void);	// vid_shaderemu.c: 1 a sitter in a headset, 2 at a desktop
 +extern int	se_scene_split;	// (scene_shaderemu.c: a frame drawn on a worker core)
  
  /*
  
-@@ -103,7 +105,7 @@ int			scr_fullupdate;
+@@ -103,7 +106,7 @@ int			scr_fullupdate;
  int			clearconsole;
  int			clearnotify;
  
@@ -2634,7 +2635,7 @@ index 8a0c096..ab8ec17 100644
  
  viddef_t	vid;				// global video state
  
-@@ -111,7 +113,7 @@ vrect_t		scr_vrect;
+@@ -111,7 +114,7 @@ vrect_t		scr_vrect;
  
  qboolean	scr_disabled_for_loading;
  qboolean	scr_drawloading;
@@ -2643,7 +2644,7 @@ index 8a0c096..ab8ec17 100644
  
  qboolean	block_drawing;
  
-@@ -142,6 +144,9 @@ for a few moments
+@@ -142,6 +145,9 @@ for a few moments
  */
  void SCR_CenterPrint (char *str)
  {
@@ -2653,7 +2654,7 @@ index 8a0c096..ab8ec17 100644
  	strncpy (scr_centerstring, str, sizeof(scr_centerstring)-1);
  	scr_centertime_off = scr_centertime.value;
  	scr_centertime_start = cl.time;
-@@ -328,6 +333,17 @@ static void SCR_CalcRefdef (void)
+@@ -328,6 +334,17 @@ static void SCR_CalcRefdef (void)
  
  	r_refdef.fov_x = scr_fov.value;
  	r_refdef.fov_y = CalcFov (r_refdef.fov_x, r_refdef.vrect.width, r_refdef.vrect.height);
@@ -2671,7 +2672,7 @@ index 8a0c096..ab8ec17 100644
  
  	scr_vrect = r_refdef.vrect;
  }
-@@ -444,7 +460,7 @@ SCR_DrawNet
+@@ -444,7 +461,7 @@ SCR_DrawNet
  */
  void SCR_DrawNet (void)
  {
@@ -2680,7 +2681,7 @@ index 8a0c096..ab8ec17 100644
  		return;
  	if (cls.demoplayback)
  		return;
-@@ -671,7 +687,7 @@ void SCR_BeginLoadingPlaque (void)
+@@ -671,7 +688,7 @@ void SCR_BeginLoadingPlaque (void)
  	scr_drawloading = false;
  
  	scr_disabled_for_loading = true;
@@ -2689,7 +2690,7 @@ index 8a0c096..ab8ec17 100644
  	scr_fullupdate = 0;
  }
  
-@@ -818,11 +834,72 @@ WARNING: be very careful calling this from elsewhere, because the refresh
+@@ -818,11 +835,72 @@ WARNING: be very careful calling this from elsewhere, because the refresh
  needs almost the entire 256k of stack space!
  ==================
  */
@@ -2762,7 +2763,7 @@ index 8a0c096..ab8ec17 100644
  	if (block_drawing)
  		return;
  
-@@ -833,7 +910,7 @@ void SCR_UpdateScreen (void)
+@@ -833,7 +911,7 @@ void SCR_UpdateScreen (void)
  
  	if (scr_disabled_for_loading)
  	{
@@ -2771,7 +2772,7 @@ index 8a0c096..ab8ec17 100644
  		{
  			scr_disabled_for_loading = false;
  			Con_Printf ("load failed.\n");
-@@ -871,8 +948,15 @@ void SCR_UpdateScreen (void)
+@@ -871,8 +949,15 @@ void SCR_UpdateScreen (void)
  //
  	SCR_SetUpToDrawConsole ();
  	
@@ -2787,7 +2788,16 @@ index 8a0c096..ab8ec17 100644
  	GL_Set2D ();
  
  	//
-@@ -911,6 +995,9 @@ void SCR_UpdateScreen (void)
+@@ -903,7 +988,7 @@ void SCR_UpdateScreen (void)
+ 	}
+ 	else
+ 	{
+-		if (crosshair.value)
++		if (crosshair.value && SE_Seated () != 1)	// (a headset sitter aims with the hand: a cross in the middle of the HUD aims nowhere)
+ 			Draw_Character (scr_vrect.x + scr_vrect.width/2, scr_vrect.y + scr_vrect.height/2, '+');
+ 		
+ 		SCR_DrawRam ();
+@@ -911,6 +996,9 @@ void SCR_UpdateScreen (void)
  		SCR_DrawTurtle ();
  		SCR_DrawPause ();
  		SCR_CheckDrawCenterString ();
@@ -2797,7 +2807,7 @@ index 8a0c096..ab8ec17 100644
  		Sbar_Draw ();
  		SCR_DrawConsole ();	
  		M_Draw ();
-@@ -921,3 +1008,61 @@ void SCR_UpdateScreen (void)
+@@ -921,3 +1009,61 @@ void SCR_UpdateScreen (void)
  	GL_EndRendering ();
  }
  
@@ -2825,7 +2835,7 @@ index 8a0c096..ab8ec17 100644
 +	sb_updates = 0;	// (as GL_BeginRendering has it)
 +	qglRecordBegin (vertices, quads, runs, most);
 +	SCR_TileClear ();
-+	if (crosshair.value)
++	if (crosshair.value && SE_Seated () != 1)	// (as above: not before a headset sitter)
 +		Draw_Character (scr_vrect.x + scr_vrect.width/2, scr_vrect.y + scr_vrect.height/2, '+');
 +	SCR_DrawRam ();
 +	SCR_DrawNet ();
@@ -3012,7 +3022,7 @@ index f3c253c..5470fa7 100644
  #define    TEXTURE0_SGIS				0x835E
  #define    TEXTURE1_SGIS				0x835F
 diff --git a/WinQuake/host.c b/WinQuake/host.c
-index 603f6b3..69bb32b 100644
+index 603f6b3..2820877 100644
 --- a/WinQuake/host.c
 +++ b/WinQuake/host.c
 @@ -37,10 +37,10 @@ quakeparms_t host_parms;
@@ -3568,7 +3578,7 @@ index 5f5d2cf..586674a 100644
  	for (pp = pollProcedureList; pp; pp = pp->next)
  	{
 diff --git a/WinQuake/net_udp.c b/WinQuake/net_udp.c
-index 3eded99..3bf66d2 100644
+index 3eded99..de018f2 100644
 --- a/WinQuake/net_udp.c
 +++ b/WinQuake/net_udp.c
 @@ -28,6 +28,34 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
@@ -3782,7 +3792,7 @@ index 544e01a..7944cb4 100644
  
  
 diff --git a/WinQuake/pr_exec.c b/WinQuake/pr_exec.c
-index 4f2aa36..1549d3a 100644
+index 4f2aa36..4336711 100644
 --- a/WinQuake/pr_exec.c
 +++ b/WinQuake/pr_exec.c
 @@ -293,32 +293,37 @@ Returns the new program statement counter
@@ -4539,7 +4549,7 @@ index e451827..ce4e587 100644
  void Host_ClientCommands (char *fmt, ...);
  void Host_ShutdownServer (qboolean crash);
 diff --git a/WinQuake/r_part.c b/WinQuake/r_part.c
-index 3db22ab..6af0f10 100644
+index 3db22ab..3364f81 100644
 --- a/WinQuake/r_part.c
 +++ b/WinQuake/r_part.c
 @@ -21,6 +21,19 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
@@ -5596,7 +5606,7 @@ index e13c0e4..de47f96 100644
  	vec3_t	point;
  	
 diff --git a/WinQuake/sv_user.c b/WinQuake/sv_user.c
-index 1163949..a81e198 100644
+index 1163949..b0fd5f9 100644
 --- a/WinQuake/sv_user.c
 +++ b/WinQuake/sv_user.c
 @@ -20,6 +20,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
@@ -5608,7 +5618,26 @@ index 1163949..a81e198 100644
  
  edict_t	*sv_player;
  
-@@ -459,6 +461,10 @@ void SV_ReadClientMove (usercmd_t *move)
+@@ -38,6 +40,7 @@ float	*origin;
+ float	*velocity;
+ 
+ qboolean	onground;
++int SE_Seated (void);	/* vid_shaderemu.c: the player sits in a holodeck */
+ 
+ usercmd_t	cmd;
+ 
+@@ -362,6 +365,10 @@ void SV_AirMove (void)
+ 	{
+ 		SV_UserFriction ();
+ 		SV_Accelerate ();
++		/* a sitter in a holodeck stops where the stick lets go: the half second of friction from a run
++		 * is a slide in a headset (docs/world/holodeck.md, "Played from the seat") */
++		if (SE_Seated () && !cmd.forwardmove && !cmd.sidemove)
++			velocity[0] = velocity[1] = 0;
+ 	}
+ 	else
+ 	{	// not on ground, so little effect on velocity
+@@ -459,6 +466,10 @@ void SV_ReadClientMove (usercmd_t *move)
  	
  // read buttons
  	bits = MSG_ReadByte ();
@@ -5619,7 +5648,7 @@ index 1163949..a81e198 100644
  	host_client->edict->v.button0 = bits & 1;
  	host_client->edict->v.button2 = (bits & 2)>>1;
  
-@@ -600,7 +606,9 @@ SV_RunClients
+@@ -600,7 +611,9 @@ SV_RunClients
  void SV_RunClients (void)
  {
  	int				i;
@@ -5700,7 +5729,7 @@ index ececf8c..9aa5eb6 100644
  
  	R_PushDlights ();
 diff --git a/WinQuake/world.c b/WinQuake/world.c
-index e1acfea..27b3ada 100644
+index e1acfea..3cb8246 100644
 --- a/WinQuake/world.c
 +++ b/WinQuake/world.c
 @@ -244,9 +244,39 @@ SV_ClearWorld

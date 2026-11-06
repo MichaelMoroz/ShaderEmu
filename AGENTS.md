@@ -305,6 +305,9 @@
   use of a hand's stick, or a new `Immobilize`, takes nothing from walking but while the player asks for it (a button
   held, a key captured), and is tried in a headset before it is called done. Seated, the station holds the player: the
   pointer's `Still` never calls `Immobilize` while `away`, as an `Immobilize(false)` there let the left stick move the avatar.
+- The world's camera (the scene descriptor's reference camera, `ShaderEmuModels.cs`) has a near clip of 0.01 m, always
+  (6 November 2026, the developer's rule): the least VRChat takes, so a hand, a keyboard or a HUD near the eye is never cut.
+  A builder or a change that makes or touches that camera keeps it.
 - What floats before a sitter (the holodeck's HUD layer) is drawn over the program's world, never over what is nearer of
   the room (`docs/world/holodeck.md`, "The HUD layer"): stencil bit 32 is "the world is in front here", set by
   `GpuHolodeck.shader`'s solid passes, and every other stencil test of 87 masks it out (`ReadMask` 223 or 95). A new

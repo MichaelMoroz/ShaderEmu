@@ -672,7 +672,7 @@ public static partial class ShaderEmuBuilder
             if (descriptor != null) descriptor.ReferenceCamera = camera.gameObject;
         }
         camera.allowHDR = true;
-        camera.nearClipPlane = 0.05f;
+        camera.nearClipPlane = 0.01f;   // the world's camera: always the least VRChat takes (AGENTS.md), or a hand or a key held near the eye is cut
         camera.farClipPlane = 3000f;
         PostProcessLayer layer = camera.GetComponent<PostProcessLayer>();
         if (layer == null) layer = camera.gameObject.AddComponent<PostProcessLayer>();
