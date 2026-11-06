@@ -138,8 +138,22 @@ A snapshot of the geometry of before 2 November 2026 (`SX86SNP2`) is laid out an
 goes by the guest's clock is not the card's at the same line (Quake III's frame 200 is 16 s in
 here), and a part measured just after `nano-X` starts is not settled: give it 10 s. Checked on the
 card against states reached there (card, 26 October 2026): Quake's timedemo 66.3 against 67.2 fps, nxray with its scene
-held still 19.4 against 19.2. It goes one way only: under `--cpu`,
-`--load-state` still restores only the texture and the processor boots afresh.
+held still 19.4 against 19.2.
+
+What a snapshot holds (6 November 2026): `SNAP` is the state texture (290 MB: a 32-byte header with
+the guest's time and the console's handshake, then every texel: RAM, the devices' and the GPU's
+memory, each core's slot), `SNAP.vram` the GPU's VRAM when anything was uploaded to it, and,
+from a `--cpu` run only, `SNAP.cpu`: the processor's whole state as `rvc_cpu --save` writes it
+(RAM, every core and worker as the interpreter keeps them, a worker's job and sleep, the
+geometry, the clock, the devices' counts and the console). `--cpu --load-state SNAP` goes on
+from `SNAP.cpu` with the texture under it (before, the processor booted afresh under a loaded
+texture: a black, idle machine whose workers never started) and refuses a snapshot without it,
+one made on the card or WARP: the shader's state is not turned back into the interpreter's.
+`--load-state` without `--cpu` reads the texture and the VRAM and ignores `SNAP.cpu`. Checked
+with Doom's `DOOM_HASH_TICS=100 doom -1 -timedemo demo1` saved at 35 s under `--cpu`: resumed
+under `--cpu --warp` its 26 sums after tic 2400 are those of a run from boot, and `DOOM_SUM=1
+DOOM_STOP_TIC=4000`'s held frame is the same list (`sum 25080585, in any order 092e29d0`);
+resumed on WARP without `--cpu`, tic 2500 and 2600 are the boot run's too.
 
 Not in this mode: D3D12. Sound has not been tried in it.
 The shader's own cores are not used (the cores are the interpreter's), so nothing here says
