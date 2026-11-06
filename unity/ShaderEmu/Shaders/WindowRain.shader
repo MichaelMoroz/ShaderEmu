@@ -293,7 +293,7 @@ Shader "ShaderEmu/WindowRain"
 
             #undef S
 
-            float4 _Sky_TexelSize;   // (x: 1 over a face's width)
+            float4 _Sky_TexelSize, _Room_TexelSize;   // (x: 1 over a face's width: the city's 1024, the room's 256)
 
             // the city in direction d, its mip from how far d moves from one pixel to the next (its screen
             // gradient: a drop's steep side turns the ray a lot a pixel, and takes the city in blurred)
@@ -368,7 +368,7 @@ Shader "ShaderEmu/WindowRain"
 
             // the room in direction d over a cone of `spread` radians, as SkyCone
             float3 RoomCone(float3 d, float spread) {
-                float lod = log2(max(spread * (_Layers.w > 0 ? _Layers.w : 1.0) / (1.5707963 * _Sky_TexelSize.x), 1.0));
+                float lod = log2(max(spread * (_Layers.w > 0 ? _Layers.w : 1.0) / (1.5707963 * _Room_TexelSize.x), 1.0));
                 return texCUBElod(_Room, float4(d, lod)).rgb;
             }
 

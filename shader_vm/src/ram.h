@@ -580,13 +580,20 @@ void ram_commit_amp_geom(point amp_d I[1], inout TriangleStream<ram_v2f> stream,
 // texture past the root file system. Each is (its first texel of RAM from 0x80000000, its
 // texels, its first texel in the ROM's texture), set by EmuMachine.
 float4 _BootKernel, _BootTree;
+// The digit of the tree's "loglevel=" (its texel, its byte in the texel, the character the panel chose; 0 leaves the
+// tree's own): the kernel's console prints its log to that level (ShaderEmuImages.WithLogLevel, EmuMachine.logLevel).
+float4 _BootLog;
 uint4 ram_boot_piece(uint lin, float4 piece) {
     uint off = lin - (uint)piece.x, t = (uint)piece.z + off;
     return off < (uint)piece.y ? asuint(_Data_ROM[uint2(t & 2047, t >> 11)]) : (uint4)0;
 }
 uint4 ram_init_texel(uint2 pos) {
     uint lin = RAM_LIN(pos.x, pos.y - 64);
-    return ram_boot_piece(lin, _BootKernel) | ram_boot_piece(lin, _BootTree);
+    uint4 v = ram_boot_piece(lin, _BootKernel) | ram_boot_piece(lin, _BootTree);
+    uint b = (uint)_BootLog.y, sh = 8 * (b & 3);
+    uint4 hit = uint4(0, 1, 2, 3) == (b >> 2) ? 0xffffffffu : 0u;
+    hit = lin == (uint)_BootLog.x && _BootLog.z > 0 ? hit : 0u;
+    return (v & ~(hit & (0xffu << sh))) | (hit & ((uint)_BootLog.z << sh));
 }
 #else
 uint4 ram_init_texel(uint2 pos) {

@@ -74,6 +74,7 @@ One file per subject. A doc names another by its file name, which is unique acro
 - [stations.md](world/stations.md) – The classroom's computers
 - [danger.md](world/danger.md) – The danger zone
 - [share.md](world/share.md) – Seeing each other's machines
+- [udon-net.md](world/udon-net.md) – How much Udon carries between clients (measured)
 - [gamepad.md](world/gamepad.md) – The game controllers
 - [volume.md](world/volume.md) – The volume display
 - [linux.md](world/linux.md) – The world on Linux

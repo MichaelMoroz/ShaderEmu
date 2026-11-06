@@ -32,7 +32,7 @@ the world, shown or not, and every client keeps what every sender brings: a scre
 turns to a player has their picture at once. It goes out on two
 ticks of three (6.7 packets a second) of at most 1,150 bytes: 7.7 KB/s, and the
 other fields beside it. VRChat's limit is for everything a client sends, whatever the
-object: 11 KB/s on paper, 8 to 10 in practice.
+object: 11 KB/s on paper, 8 to 10 in practice (`docs/world/udon-net.md` has what each channel carried).
 
 | Synced field | Contents |
 |---|---|

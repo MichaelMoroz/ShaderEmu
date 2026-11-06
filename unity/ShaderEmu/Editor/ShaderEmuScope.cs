@@ -120,7 +120,7 @@ public static partial class ShaderEmuBuilder
         TextMeshProUGUI unused;
         for (int i = 0; i < 4; i++)
         {
-            buttons[i] = MakeButton(panel, "Scope " + texts[i], texts[i], bx + i * 153, 618, 142, 60, 24, out unused);
+            buttons[i] = MakeButton(panel, "Scope " + texts[i], texts[i], bx + i * 153, 618, 142, 46, 24, out unused);   // (46: the kernel log button under them)
             scope.plates[i] = buttons[i].GetComponent<Image>();
         }
         Apply(scope);

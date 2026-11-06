@@ -50,17 +50,61 @@ public static class ShaderEmuImages
 
     static int Rows(long bytes) { return (int)((bytes + Row * 16 - 1) / (Row * 16)); }
 
-    // (first texel of RAM, texels, first texel of the ROM's texture) for the kernel and the tree; false without the files
-    public static bool BootPieces(BootImage image, out Vector4 kernel, out Vector4 tree)
+    // (first texel of RAM, texels, first texel of the ROM's texture) for the kernel and the tree, and where the digit of
+    // the command line's loglevel= lies (its texel of RAM, its byte in that texel); false without the files
+    public static bool BootPieces(BootImage image, out Vector4 kernel, out Vector4 tree, out Vector4 log)
     {
-        kernel = tree = Vector4.zero;
+        kernel = tree = log = Vector4.zero;
         string rom = Repo + "/" + image.rom, k = Repo + "/" + image.kernel, t = Repo + "/" + image.tree;
         if (!File.Exists(rom) || !File.Exists(k) || !File.Exists(t)) return false;
-        long kb = new FileInfo(k).Length, tb = new FileInfo(t).Length;
+        int digit;
+        long kb = new FileInfo(k).Length, tb = WithLogLevel(File.ReadAllBytes(t), out digit).Length;
         int kAt = Rows(new FileInfo(rom).Length) * Row, tAt = kAt + Rows(kb) * Row;
         kernel = new Vector4(KernelAt, (kb + 15) / 16, kAt, 0);
         tree = new Vector4(TreeAt, (tb + 15) / 16, tAt, 0);
+        log = new Vector4(TreeAt + digit / 16, digit % 16, 0, 0);
         return true;
+    }
+
+    // The device tree with "loglevel=4" on the kernel's command line (bootargs), and where its digit is: the reset
+    // writes the level chosen on the panel there (EmuMachine.logLevel), so the kernel's console prints that much of
+    // its log. 4 is the kernel's own default (linux/nommu/kernel.sh, CONFIG_CONSOLE_LOGLEVEL_DEFAULT): errors only.
+    // The property grows, so the struct block's size, the total and every block after it move (as image.py's with_seed).
+    public static byte[] WithLogLevel(byte[] dtb, out int digit)
+    {
+        System.Func<byte[], int, int> be = (b, i) => (b[i] << 24) | (b[i + 1] << 16) | (b[i + 2] << 8) | b[i + 3];
+        System.Action<byte[], int, int> put = (b, i, v) => { b[i] = (byte)(v >> 24); b[i + 1] = (byte)(v >> 16); b[i + 2] = (byte)(v >> 8); b[i + 3] = (byte)v; };
+        if (be(dtb, 0) != unchecked((int)0xd00dfeed)) throw new System.Exception("the device tree has no FDT header");
+        int structAt = be(dtb, 8), stringsAt = be(dtb, 12), at = structAt;
+        while (true)
+        {
+            int token = be(dtb, at);
+            if (token == 1) { at += 4; while (dtb[at] != 0) at++; at = (at + 4) & ~3; continue; }   // a node's name, NUL, padded
+            if (token == 2 || token == 4) { at += 4; continue; }
+            if (token != 3) throw new System.Exception("the device tree has no bootargs");
+            int length = be(dtb, at + 4), name = be(dtb, at + 8), n = stringsAt + name, value = at + 12;
+            string prop = "";
+            while (dtb[n] != 0) prop += (char)dtb[n++];
+            if (prop == "bootargs")
+            {
+                string args = System.Text.Encoding.ASCII.GetString(dtb, value, length).TrimEnd('\0');
+                int was = args.IndexOf("loglevel=");
+                if (was >= 0) { digit = value + was + 9; return dtb; }
+                byte[] text = System.Text.Encoding.ASCII.GetBytes(args + " loglevel=4\0");
+                int oldPadded = (length + 3) & ~3, newPadded = (text.Length + 3) & ~3, grow = newPadded - oldPadded;
+                byte[] o = new byte[dtb.Length + grow];
+                System.Array.Copy(dtb, o, value);
+                System.Array.Copy(text, 0, o, value, text.Length);
+                System.Array.Copy(dtb, value + oldPadded, o, value + newPadded, dtb.Length - value - oldPadded);
+                put(o, at + 4, text.Length);
+                put(o, 4, be(dtb, 4) + grow);                            // totalsize
+                for (int h = 8; h <= 16; h += 4) if (be(dtb, h) > at) put(o, h, be(dtb, h) + grow);   // the blocks after it
+                put(o, 36, be(dtb, 36) + grow);                          // size_dt_struct
+                digit = value + text.Length - 2;
+                return o;
+            }
+            at = value + ((length + 3) & ~3);
+        }
     }
 
     [MenuItem("ShaderEmu/Sync shader sources from the repository")]
@@ -104,13 +148,14 @@ public static class ShaderEmuImages
     // The ROM's texels: the root file system, then the kernel and its tree, each padded to whole rows
     static void WriteRom(BootImage image)
     {
-        Vector4 kernel, tree;
-        if (!BootPieces(image, out kernel, out tree))
+        Vector4 kernel, tree, log;
+        if (!BootPieces(image, out kernel, out tree, out log))
         {
             Debug.LogError("[ShaderEmu] " + Repo + "/" + image.rom + ", " + image.kernel + " or " + image.tree + " is missing: no ROM for '" + image.name + "'");
             return;
         }
-        byte[] k = File.ReadAllBytes(Repo + "/" + image.kernel), t = File.ReadAllBytes(Repo + "/" + image.tree);
+        int digit;
+        byte[] k = File.ReadAllBytes(Repo + "/" + image.kernel), t = WithLogLevel(File.ReadAllBytes(Repo + "/" + image.tree), out digit);
         using (FileStream rom = File.OpenRead(Repo + "/" + image.rom))
         using (FileStream to = File.Create(RomPath(image.name)))
         {

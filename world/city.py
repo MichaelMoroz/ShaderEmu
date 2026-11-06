@@ -37,11 +37,24 @@ class Batch:
         self.quad([(x0, y, z0), (x1, y, z0), (x1, y, z1), (x0, y, z1)], [(0.5, 0.5)] * 4, colour, (0, 1, 0))
 
 
-def box(batch, x0, x1, y0, y1, z0, z1, colour, uv=None, roof=None, every=False):
-    """The faces of a box that the window can see. `uv` gives a wall's (u0, v0, u1, v1) from its width."""
+LAMP, LINE, DASH = 100, 200, 300   # what City.shader draws on a lit box's faces (`light` of box)
+
+
+def box(batch, x0, x1, y0, y1, z0, z1, colour, uv=None, roof=None, every=False, light=None):
+    """The faces of a box that the window can see. `uv` gives a wall's (u0, v0, u1, v1) from its width.
+    `light` (kind, size) makes it a carrier of a light City.shader draws on its surface, anti-aliased by
+    the pixel's footprint: LAMP a disc in each face's middle `size` per cent of the face round, LINE a
+    line along the middle `size` per cent of its height, DASH the same in strokes. Its uv says so: u's
+    whole part kind + size, its fraction 0.05 to 0.95 across the face; v 0 to 1 up it. The box itself is
+    the light's dark housing; the colour is the light's."""
     def wall(a, b, normal, shade):
         wide = math.dist(a, b)
-        u0, v0, u1, v1 = uv(wide, y1 - y0) if uv else (0.5, 0.5, 0.5, 0.5)
+        if light:
+            k = light[0] + light[1]
+            u0, v0, u1, v1 = k + 0.05, 0.0, k + 0.95, 1.0
+            shade = 1.0
+        else:
+            u0, v0, u1, v1 = uv(wide, y1 - y0) if uv else (0.5, 0.5, 0.5, 0.5)
         corners = [(a[0], y0, a[1]), (b[0], y0, b[1]), (b[0], y1, b[1]), (a[0], y1, a[1])]
         batch.quad(corners, [(u0, v0), (u1, v0), (u1, v1), (u0, v1)], tuple(c * shade for c in colour), normal)
     wall((x0, z0), (x0, z1), (-1, 0, 0), 1.0)
@@ -52,8 +65,13 @@ def box(batch, x0, x1, y0, y1, z0, z1, colour, uv=None, roof=None, every=False):
     if every:
         wall((x1, z1), (x1, z0), (1, 0, 0), 0.5)
     if y1 < EYE[1] + 6 or every:
-        (roof or batch).quad([(x0, y1, z0), (x1, y1, z0), (x1, y1, z1), (x0, y1, z1)], [(0.5, 0.5)] * 4,
-                             (0.045, 0.047, 0.055) if roof else tuple(c * 0.8 for c in colour), (0, 1, 0))
+        if light and light[0] == LAMP:   # (seen from above: a lamp's top has it too)
+            k = light[0] + light[1]
+            batch.quad([(x0, y1, z0), (x1, y1, z0), (x1, y1, z1), (x0, y1, z1)],
+                       [(k + 0.05, 0.0), (k + 0.95, 0.0), (k + 0.95, 1.0), (k + 0.05, 1.0)], colour, (0, 1, 0))
+        else:
+            (roof or batch).quad([(x0, y1, z0), (x1, y1, z0), (x1, y1, z1), (x0, y1, z1)], [(0.5, 0.5)] * 4,
+                                 (0.045, 0.047, 0.055) if roof or light else tuple(c * 0.8 for c in colour), (0, 1, 0))
 
 
 def build(b):
@@ -116,21 +134,31 @@ def build(b):
 
     def mast(cx, cz, top, high):
         box(glow, cx - 0.2, cx + 0.2, top, top + high, cz - 0.2, cz + 0.2, (0.10, 0.10, 0.11), every=True)
-        box(glow, cx - 0.5, cx + 0.5, top + high, top + high + 1.0, cz - 0.5, cz + 0.5, (1.0, 0.10, 0.06), every=True)
+        box(glow, cx - 0.5, cx + 0.5, top + high, top + high + 1.0, cz - 0.5, cz + 0.5, (1.0, 0.10, 0.06), every=True,
+            light=(LAMP, 15))   # an obstruction light: a lamp 0.3 m round in its metre
+
+    lit_rng = random.Random(12)
+    neon = ((0.15, 0.9, 1.0), (1.0, 0.2, 0.7), (1.0, 0.8, 0.15), (0.3, 1.0, 0.4), (1.0, 0.3, 0.15))
 
     def crown(cx, cz, half_x, half_z, top):
+        """A ring of neon round a roof's edge, 16 cm high (one in three in a sign's colour), and on some a second under it."""
         colour = tuple(c * rng.uniform(0.6, 1.0) for c in rng.choice((warm, cool, (1.0, 0.9, 0.8))))
-        box(glow, cx - half_x - 0.2, cx + half_x + 0.2, top - 1.4, top - 0.2, cz - half_z - 0.2, cz + half_z + 0.2, colour)
+        if lit_rng.random() < 0.35:   # (lit_rng: the city's own draws stay as they were, the same city)
+            colour = tuple(c * lit_rng.uniform(0.6, 1.0) for c in lit_rng.choice(neon[:2]))
+        x0, x1, z0, z1 = cx - half_x - 0.2, cx + half_x + 0.2, cz - half_z - 0.2, cz + half_z + 0.2
+        box(glow, x0, x1, top - 1.4, top - 0.2, z0, z1, colour, light=(LINE, 13))   # a tube 16 cm high in its band
+        if lit_rng.random() < 0.4:
+            box(glow, x0, x1, top - 2.4, top - 1.6, z0, z1, tuple(c * 0.7 for c in colour), light=(LINE, 15))
 
     def sign(cx, cz, half, top):
-        colour = rng.choice(((0.15, 0.9, 1.0), (1.0, 0.2, 0.7), (1.0, 0.8, 0.15), (0.3, 1.0, 0.4), (1.0, 0.3, 0.15)))
+        colour = rng.choice(neon)
         w, h = min(half * 1.6, rng.uniform(5, 9)), rng.uniform(2.2, 4.0)
         x = cx - half + 0.4
         box(glow, x - 0.15, x, top + 1.2, top + 1.6 + h, cz - w / 2 - 0.3, cz + w / 2 + 0.3, (0.05, 0.05, 0.06))
-        for k in range(3):   # bands of light: a sign too far off to read
+        for k in range(3):   # lines of neon in strokes, a word too far off to read
             y = top + 1.5 + k * h / 3
             box(glow, x - 0.2, x - 0.15, y, y + h / 3 - 0.35, cz - w / 2 + rng.uniform(0, w * 0.2), cz + w / 2 - rng.uniform(0, w * 0.3),
-                tuple(c * rng.uniform(0.6, 1.0) for c in colour))
+                tuple(c * rng.uniform(0.6, 1.0) for c in colour), light=(DASH, 12))
 
     river_x0 = EYE[0] + 2.0 + RIVER[0] * BLOCK
     river_x1 = EYE[0] + 2.0 + RIVER[1] * BLOCK
@@ -207,9 +235,12 @@ def build(b):
     while z < EYE[2] + ACROSS * BLOCK:
         lamp = (1.0, 0.66, 0.30)
         dim = tuple(c * 0.5 for c in lamp)
-        glow.flat(river_x0 - 2.2, river_x0 - 0.4, z - 0.9, z + 0.9, GROUND + 0.3, lamp)
+        box(glow, river_x0 - 1.7, river_x0 - 0.9, GROUND + 4.6, GROUND + 5.4, z - 0.4, z + 0.4, lamp, every=True,
+            light=(LAMP, 25))   # a street lamp's head, 5 m up (a lamp 0.4 m round), and the light it casts
+        glow.flat(river_x0 - 2.2, river_x0 - 0.4, z - 0.9, z + 0.9, GROUND + 0.3, tuple(c * 0.25 for c in lamp))
         glow.flat(river_x0, river_x0 + 20, z - 0.7, z + 0.7, WATER_Y + 0.45, [dim, WATER, WATER, dim])   # (over the far bank's light)
-        glow.flat(river_x1 + 0.4, river_x1 + 2.2, z + 3.1, z + 4.9, GROUND + 0.3, lamp)
+        box(glow, river_x1 + 0.9, river_x1 + 1.7, GROUND + 4.6, GROUND + 5.4, z + 3.6, z + 4.4, lamp, every=True, light=(LAMP, 25))
+        glow.flat(river_x1 + 0.4, river_x1 + 2.2, z + 3.1, z + 4.9, GROUND + 0.3, tuple(c * 0.25 for c in lamp))
         glow.flat(river_x1 - 20, river_x1, z + 3.3, z + 4.7, WATER_Y + 0.6, [WATER, dim, dim, WATER])
         z += 9.0
     # two bridges, lamps along their rails
@@ -221,7 +252,8 @@ def build(b):
         x = river_x0 - 4
         while x < river_x1 + 4:
             for side in (-1, 1):
-                box(glow, x - 0.3, x + 0.3, GROUND + 7.2, GROUND + 7.8, cz + side * 4.7 - 0.3, cz + side * 4.7 + 0.3, (1.0, 0.85, 0.6), every=True)
+                box(glow, x - 0.3, x + 0.3, GROUND + 7.2, GROUND + 7.8, cz + side * 4.7 - 0.3, cz + side * 4.7 + 0.3, (1.0, 0.85, 0.6),
+                    every=True, light=(LAMP, 20))
             x += 7.0
         soft = (0.22, 0.16, 0.09)
         glow.flat(river_x0, river_x1, cz - 22, cz - 5, WATER_Y + 0.9, [WATER, WATER, soft, soft])

@@ -40,7 +40,8 @@
   nothing of a booted machine among Unity's assets. At reset RAM is zeros but for what a boot loader puts there, the kernel
   and its device tree, which lie in the ROM's texture past the root file system (`ShaderEmuImages.cs`, `EmuMachine.bootKernel`
   and `bootTree`) and are copied by the reset's commit (`RAM_BOOT_FROM_ROM`, `ram_init_texel` in `shader_vm/src/ram.h`):
-  the machine boots fully from there, every time.
+  the machine boots fully from there, every time. The tree's command line ends in `loglevel=4` (`WithLogLevel`), and the
+  reset writes the digit the panel's "Kernel log" button chose (`EmuMachine.logLevel`, `_BootLog`): 7 shows the boot log.
 - Every object the world's scripts model or texture follows a specification found online (5 November 2026, the developer's
   rule): its dimensions from a maker's sheet, a standard or a measured photo (a can's 211 x 413 body and 202 lid, a socket's
   CEE 7/3 plate and well, a chair's spec sheet), and its picture from the real thing of the decade (its print, its colours, its

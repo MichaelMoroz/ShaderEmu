@@ -165,6 +165,31 @@ public static partial class ShaderEmuBuilder
         return m;
     }
 
+    // The kernel's log level, under the sound's controls: each click the next level (EmuMachine.LogLevelNext), which
+    // the reset writes into the device tree's command line at the next power on.
+    static void KernelLogButton(RectTransform panel, EmuMachine machine)
+    {
+        Transform old = panel.Find("Kernel log");
+        if (old != null) Object.DestroyImmediate(old.gameObject);
+        Button button = MakeButton(panel, "Kernel log", "Kernel log: 4, errors (the default) (from the next power on)", 1060, 672, 600, 44, 20, out machine.logLabel);   // (under the scope's row)
+        OnClick(button, machine, "LogLevelNext");
+        EditorUtility.SetDirty(machine);
+    }
+
+    [MenuItem("ShaderEmu/Add the kernel log button to the open scene")]
+    static void KernelLogButtonHere()
+    {
+        EmuMachine machine = Object.FindObjectOfType<EmuMachine>(true);
+        GameObject panel = GameObject.Find("Control panel");
+        if (machine == null || panel == null) throw new System.Exception("no machine in the open scene: run ShaderEmu/Build world");
+        KernelLogButton(panel.GetComponent<RectTransform>(), machine);
+        ShaderEmuImages.BootImage boot = ShaderEmuImages.Images[0];
+        ShaderEmuImages.BootPieces(boot, out machine.bootKernel, out machine.bootTree, out machine.bootLog);
+        EditorUtility.SetDirty(machine);
+        UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(machine.gameObject.scene);
+        Debug.Log("[ShaderEmu] kernel log button added; the tree's loglevel digit at texel " + machine.bootLog.x + ", byte " + machine.bootLog.y);
+    }
+
     // A texture a material keeps under a name its shader no longer has still goes into the world's build:
     // the ROM's and RAM's four lanes of old (_Data_MTD_*, _Data_RAM_*, _Data_DTB_*) were 330 MB of it.
     public static int DropStaleTextures(Material m)
@@ -616,8 +641,8 @@ public static partial class ShaderEmuBuilder
     // the read-out's field once, over the registers.
     static void FetchLinePlace(TextMeshProUGUI label)
     {
-        label.rectTransform.anchoredPosition = new Vector2(1060, -690);
-        label.rectTransform.sizeDelta = new Vector2(600, 60);
+        label.rectTransform.anchoredPosition = new Vector2(1060, -722);   // (under the kernel log button)
+        label.rectTransform.sizeDelta = new Vector2(600, 36);
         label.fontSize = 20;
         label.alignment = TextAlignmentOptions.TopLeft;
         label.enableWordWrapping = true;
@@ -1237,7 +1262,7 @@ public static partial class ShaderEmuBuilder
         // its tree out of the ROM: AGENTS.md, 5 November 2026)
         textures.Add(null);
         textures.Add(AssetDatabase.LoadAssetAtPath<Texture2D>(ShaderEmuImages.RomPath(boot.name)));
-        if (textures[1] == null || !ShaderEmuImages.BootPieces(boot, out machine.bootKernel, out machine.bootTree))
+        if (textures[1] == null || !ShaderEmuImages.BootPieces(boot, out machine.bootKernel, out machine.bootTree, out machine.bootLog))
             Debug.LogError("[ShaderEmu] no boot image: run ShaderEmu/Import boot images first");
         machine.imageTextures = textures.ToArray();
 
@@ -1309,6 +1334,7 @@ public static partial class ShaderEmuBuilder
         PhysicalSwitch(panel, pointer);   // and the steady pointer's (ShaderEmuTouch.cs)
         Sharing(world, computer, panel, machine, new Vector3(1.28f, 1.82f, screenZ));
         Sound(world, panel, machine);
+        KernelLogButton(panel, machine);
         UnityEventTools.AddStringPersistentListener(slider.onValueChanged,
             UdonSharpEditorUtility.GetBackingUdonBehaviour(machine).SendCustomEvent, "SpeedChanged");
         UnityEventTools.AddStringPersistentListener(machine.tickSlider.onValueChanged,
