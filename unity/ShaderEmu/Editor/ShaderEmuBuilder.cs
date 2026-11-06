@@ -190,6 +190,28 @@ public static partial class ShaderEmuBuilder
         Debug.Log("[ShaderEmu] kernel log button added; the tree's loglevel digit at texel " + machine.bootLog.x + ", byte " + machine.bootLog.y);
     }
 
+    [MenuItem("ShaderEmu/Keep the GPU's pictures apart in the open scene")]
+    static void GpuKeepHere()
+    {
+        EmuMachine machine = Object.FindObjectOfType<EmuMachine>(true);
+        if (machine == null) throw new System.Exception("no machine in the open scene: run ShaderEmu/Build world");
+        GpuKeep(machine);
+        machine.displayMaterial.SetTexture("_GpuTarget", GpuShown());
+        EditorUtility.SetDirty(machine.displayMaterial);
+        foreach (string name in new[] { "GpuHolodeck", "GpuHolodeckHud", "HolodeckMask", "GpuVolume" })
+        {
+            Material m = AssetDatabase.LoadAssetAtPath<Material>(Generated + "/" + name + ".mat");
+            if (m == null) continue;
+            GpuHoloInputs(m);
+            EditorUtility.SetDirty(m);
+        }
+        Apply(machine);
+        EditorUtility.SetDirty(machine);
+        UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(machine.gameObject.scene);
+        AssetDatabase.SaveAssets();
+        Debug.Log("[ShaderEmu] the holodeck's frame and the display's picture are kept apart (GpuKeep)");
+    }
+
     // A texture a material keeps under a name its shader no longer has still goes into the world's build:
     // the ROM's and RAM's four lanes of old (_Data_MTD_*, _Data_RAM_*, _Data_DTB_*) were 330 MB of it.
     public static int DropStaleTextures(Material m)
@@ -423,6 +445,7 @@ public static partial class ShaderEmuBuilder
         machine.frontCamera = PassCamera(device, "GpuFront", FrontLayer, FrontTriangle(), frontMat);
         machine.frontMaterial = frontMat;
         GpuInputs(gpuBlitMat);
+        GpuKeep(machine);
         machine.gatherBlitMaterial = gatherBlitMat;
         machine.pointsBlitMaterial = pointsBlitMat;
         machine.gpuBlitMaterial = gpuBlitMat;
@@ -865,16 +888,38 @@ public static partial class ShaderEmuBuilder
         RenderTexture[] made = Made();
         for (int i = 0; i < made.Length; i++) m.SetTexture(MadeNames[i], made[i]);
     }
+    // ...and the holodeck's: the same, of the frame the volume words name, kept apart (GpuKeep.shader, EmuMachine.GpuDraw):
+    // the shared ones are every list's, the window system's too, and a smaller list wrote over a game's first vertices
+    public static void GpuHoloInputs(Material m)
+    {
+        m.SetTexture("_GpuVram", Vram());
+        m.SetTexture("_GpuDrawIds", DrawIds("Holo"));
+        RenderTexture[] made = Made("Holo");
+        for (int i = 0; i < made.Length; i++) m.SetTexture(MadeNames[i], made[i]);
+    }
+    // The picture the display shows: the GPU's target as the last list drawn to be seen left it (a list drawn SUBMIT_SIZED,
+    // a picture only for its copies into the VRAM, was a frame of something else on the screen)
+    static RenderTexture GpuShown() { return Target("GpuShown", 1280, 720, 0); }
+    // What EmuMachine.GpuDraw keeps apart, and the material that keeps it
+    public static void GpuKeep(EmuMachine machine)
+    {
+        Material keep = Mat("GpuKeep", "ShaderEmu/GpuKeep");
+        keep.SetTexture("_State", machine.state);
+        machine.keepMaterial = keep;
+        machine.holoMade = Made("Holo");
+        machine.holoDrawIds = DrawIds("Holo");
+        machine.gpuShown = GpuShown();
+    }
 
     // The front end's targets (shader_vm/src/gpu_draw.h, gpu_made): a texel a mesh vertex and a row past them for the frame,
     // floats but the two of words (signed, read by their bits).
-    static RenderTexture[] Made()
+    static RenderTexture[] Made(string prefix = "")
     {
         RenderTexture[] made = new RenderTexture[8];
         for (int i = 0; i < 8; i++)
         {
             RenderTextureFormat f = i == 4 || i == 5 ? RenderTextureFormat.ARGBInt : RenderTextureFormat.ARGBFloat;
-            RenderTexture rt = LoadOrCreate(Generated + "/" + MadeNames[i].Substring(1) + ".renderTexture",
+            RenderTexture rt = LoadOrCreate(Generated + "/" + prefix + MadeNames[i].Substring(1) + ".renderTexture",
                 () => new RenderTexture(512, 385, 0, f, RenderTextureReadWrite.Linear));
             rt.Release();
             rt.width = 512;
@@ -908,9 +953,9 @@ public static partial class ShaderEmuBuilder
 
     // The GPU's draw IDs (docs/machine/gpu.md, "Draw IDs"): a texel each of the mesh's 196,608 vertices, its command's texel and
     // the passes it is drawn in, two 32-bit integers (signed in Unity, read by their bits), loaded by texel, no levels.
-    static RenderTexture DrawIds()
+    static RenderTexture DrawIds(string prefix = "")
     {
-        RenderTexture rt = LoadOrCreate(Generated + "/GpuDrawIds.renderTexture",
+        RenderTexture rt = LoadOrCreate(Generated + "/" + prefix + "GpuDrawIds.renderTexture",
             () => new RenderTexture(512, 384, 0, RenderTextureFormat.RGInt, RenderTextureReadWrite.Linear));
         rt.Release();
         rt.width = 512;
@@ -930,7 +975,7 @@ public static partial class ShaderEmuBuilder
     {
         Material sceneMat = Mat("GpuVolume", "ShaderEmu/GpuVolume");
         sceneMat.SetTexture("_State", state);
-        GpuInputs(sceneMat);
+        GpuHoloInputs(sceneMat);
         sceneMat.SetVector("_ScreenSize", new Vector4(1.28f, 0.8f, 0, 0));
         return sceneMat;
     }
@@ -1074,7 +1119,7 @@ public static partial class ShaderEmuBuilder
         machineMat.SetTexture("_GpuTarget", gpuTarget);
         machineMat.SetTexture("_TickState", tickState);
         displayMat.SetTexture("_State", state);
-        displayMat.SetTexture("_GpuTarget", gpuTarget);
+        displayMat.SetTexture("_GpuTarget", GpuShown());   // (the target as the last list drawn to be seen left it: GpuKeep)
         heatMat.SetTexture("_State", state);
         heatMat.SetInt("_Strips", 3);
         memMat.SetTexture("_Heat", heat);

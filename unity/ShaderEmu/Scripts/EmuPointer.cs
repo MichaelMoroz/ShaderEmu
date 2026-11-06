@@ -295,6 +295,10 @@ public class EmuPointer : UdonSharpBehaviour
         float best = maxDistance;
         int found = Nothing, foundKey = -1;
         bool landed = false, tube = false, mainHit = false;
+        // where the beam landed on the holodeck's large screen or its plane: no dot there while the room shows a world (a
+        // shooter's own crosshair is the aim, and the dot stood apart from it)
+        bool onHoloScreen = false;
+        Vector3 holoScreenAt = Vector3.zero;
         Vector3 at = origin;
         // a beam that meets the open links panel is VRChat's to use, not the machine's pointer
         bool covered = linksPlate != null && machine.linksPanel.activeSelf && linksPlate.Raycast(ray, out hit, best);
@@ -392,6 +396,8 @@ public class EmuPointer : UdonSharpBehaviour
                 at = hit.point;
                 found = Nothing;
                 local = quad.InverseTransformPoint(hit.point);
+                onHoloScreen = true;
+                holoScreenAt = at;
             }
             int w = machine.OwnWidth(), ht = machine.OwnHeight();
             if (w > 0 && ht > 0 && (onQuad || OnPlane(quad, origin, direction, out local, out distance) && distance < best))
@@ -411,6 +417,8 @@ public class EmuPointer : UdonSharpBehaviour
                         best = distance;
                         at = origin + direction * distance;
                         behind = 0.1f;
+                        onHoloScreen = true;
+                        holoScreenAt = at;
                     }
                 }
             }
@@ -534,7 +542,8 @@ public class EmuPointer : UdonSharpBehaviour
             beams[h].SetPosition(0, origin);
             beams[h].SetPosition(1, at);
         }
-        dots[h].gameObject.SetActive(landed);
+        bool dotHidden = onHoloScreen && at == holoScreenAt && ownHolo >= 0 && !holoFlat;
+        dots[h].gameObject.SetActive(landed && !dotHidden);
         if (landed)
         {
             dots[h].position = at;

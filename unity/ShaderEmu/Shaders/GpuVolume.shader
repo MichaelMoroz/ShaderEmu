@@ -10,6 +10,16 @@ Shader "ShaderEmu/GpuVolume"
         _State ("Machine state texture", 2D) = "black" {}
         _Data_ROM ("ROM, a 16-byte texel a pixel (RGBAFloat, read by its bits)", 2D) = "black" {}
         _GpuVram ("The GPU's VRAM: textures the guest uploaded, with mip levels", 2D) = "black" {}
+        _GpuDrawIds ("Each mesh vertex's command and passes (512 x 384 RGInt)", 2D) = "black" {}
+        // the vertex front end's eight (GpuFront.shader; ShaderEmuBuilder.GpuInputs): declared, or what the builder sets is not kept
+        _GpuMadePos ("The vertex front end's pos (512 x 385)", 2D) = "black" {}
+        _GpuMadeColour ("The vertex front end's colour (512 x 385)", 2D) = "black" {}
+        _GpuMadeUv ("The vertex front end's uv (512 x 385)", 2D) = "black" {}
+        _GpuMadeEdge ("The vertex front end's edge (512 x 385)", 2D) = "black" {}
+        _GpuMadeTex ("The vertex front end's tex (512 x 385)", 2D) = "black" {}
+        _GpuMadeMore ("The vertex front end's more (512 x 385)", 2D) = "black" {}
+        _GpuMadeEye ("The vertex front end's eye (512 x 385)", 2D) = "black" {}
+        _GpuMadeProj ("The vertex front end's proj (512 x 385)", 2D) = "black" {}
         _ScreenSize ("Width and height of the screen", Vector) = (1.28, 0.8, 0, 0)
         _Plane ("Where the screen is between the near plane (0) and the far plane (1)", Range(0, 1)) = 0
     }
