@@ -80,8 +80,9 @@ Two more correctness items, not yet anywhere on RISC-V:
   asm-generic's path is safe for any alignment, so the RISC-V kernel stores a user `u32` as four `sb` and three `srl`
   (`__se_sys_getresuid` in the image) and loads one in about 7 instructions. Every futex word, ioctl argument and
   signal frame's word goes through it.
-- **The lazy list dropped a list** (4edb861): one submitted in a frame where none was drawn was never drawn. The fix in
-  `src/gpu.h` is under `GVM_RAM`, so RISC-V's opt-in `RVC_LIST_LAZY` (a4ff4d4) still has it: fix it or take it out.
+- **The lazy list dropped a list** (4edb861): one submitted in a frame where none was drawn was never drawn. Fixed for
+  RISC-V's opt-in `RVC_LIST_LAZY` (a4ff4d4) in `7430c4db` (`GPU_LIST_SKIP`, `_GpuListSkipped`); its timings are in
+  `docs/machine/tick-costs.md`, beside the round's parts.
 
 Check: `test_all.py` and `--races` on `main` as on `custom_isa`.
 
@@ -471,6 +472,6 @@ against 65: 62fc7fc); Quake III's `com_maxfps` 85 capped both machines before 24
 | zeroed static arrays (`#pragma static_noinit`) for the write cache | DXBC 190 KB to 173 KB | RISC-V's write cache is a local array already (`L1_LOCAL` under fxc2); `xr` is the one array left (the tick's table above) |
 | a hit with no texel fetch, a stored-texel bitmap, probing past two buckets | -5 to -15% | lost on gpu_vm |
 | silent stores, evicting at a full cache, overflow entries | passes longer, every bundle dearer | lost on gpu_vm |
-| the lazy GPU list | gpu_vm's default | RISC-V's Quake III slower with it (`gpu_vm/PROFILE_Q3.md`); weak evidence: those runs were under the 85 fps cap, on an `RVC_LIST_LAZY` with the dropped-list bug (section 0) |
+| the lazy GPU list | gpu_vm's default | RISC-V's Quake III slower with it (`gpu_vm/PROFILE_Q3.md`); weak evidence: those runs were under the 85 fps cap, on an `RVC_LIST_LAZY` with the dropped-list bug (section 0, fixed in `7430c4db`; the fixed one was faster on all six loads, `tick-costs.md`) |
 | a worker's budget cut to core 0's (`wad`) | +4-51% on gpu_vm | RISC-V's workers run their whole budget in 85-99% of passes |
 | RAM in strips, texel pairs, lanes warming the cache | code past 16 KB faster | games 1-6% slower |

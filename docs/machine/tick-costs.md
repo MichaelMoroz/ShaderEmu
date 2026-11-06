@@ -806,9 +806,26 @@ Where core 0's passes end with a budget of 32,768 (`--frame-log`, `python tools/
 
 The devices' 0.11 ms is the GPU device's list pass, drawn every round whether a list is due or not: 6.6 to 7.4% of a
 round in the harness, which draws the devices every round. The world draws them once a Unity frame (about 8 rounds), so
-there they are under 1% of a frame. `RVC_LIST_LAZY` (opt-in, `a4ff4d46`) still has the bug `riscv-backport-plan.md` names:
-a list submitted in a frame where none was drawn is never drawn; its fix is gpu_vm's, under `GVM_RAM` in `src/gpu.h`. It
-also means the pass's length is worth less in the world than in the harness: of a round's fixed 0.17 ms here only about
+there they are under 1% of a frame. `RVC_LIST_LAZY=1` (opt-in, `a4ff4d46`; off by default, the
+harness only) draws the list pass only in the four frames after a readback saw a list submitted. Its dropped list (one
+submitted in a frame where none was drawn was never drawn) is fixed since `7430c4db`: the harness sets `_GpuListSkipped`
+and the control zone takes the submit word back only from a frame that drew it (`GPU_LIST_SKIP` in `src/gpu.h`).
+
+On the card (RTX 5090, 5 November 2026, before the VRAM-only draws and at `--ticks 8192`), 12 s from one snapshot each
+way, pictures cropped to the picture: the GPU draw went from about 0.16 ms a round to 0.009 (Doom) and at most 0.11, and
+every picture was complete both ways (pixels that differ are what moved in 12 s):
+
+| Program | pixels differing | instructions a second, default | with `RVC_LIST_LAZY=1` |
+|---|---|---|---|
+| Doom | 0 | 2,264 k | 3,126 k |
+| Quake | 0 | 7,670 k | 7,826 k |
+| Quake III | 6,141 (the bots) | 9,659 k | 9,917 k |
+| glxgears | 89 (the gears' angle) | 4,704 k | 4,859 k |
+| Half-Life | 0 | 5,020 k | 5,292 k |
+| Desktop | 299 (the bar's memory figure) | 1,232 k | 2,406 k |
+
+It stays off: on, it changes the round every harness timing measures, and the world draws the list every Unity frame
+anyway. To be timed again at 12,288 and on the VRAM-only draws before it is made a default. It also means the pass's length is worth less in the world than in the harness: of a round's fixed 0.17 ms here only about
 0.056 (unpack, gather, the commit's rows and points) is a round's in the world, so 12,288 there would gain a third of 3.5%
 and the tick's own fixed part, not the harness's 4 to 6%.
 
