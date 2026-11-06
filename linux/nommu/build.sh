@@ -22,7 +22,7 @@ sed -i 's/^exec quake3.bin +set fs_basepath/exec quake3.bin +set com_hunkMegs 8 
 # busybox for a machine without an MMU
 grep -q 'set_option NOMMU y' "$R/linux/userland/busybox.sh" || sed -i 's/^set_option STATIC y$/set_option STATIC y\nset_option NOMMU y/' "$R/linux/userland/busybox.sh"
 ALL="userland/build.sh userland/busybox.sh nanox/build.sh libmedia/build.sh apps/build.sh play/build.sh video/build.sh
-     raytrace/build.sh imgui/build.sh pathtrace/build.sh physics/build.sh bench/build.sh chess/build.sh quickjs/build.sh micropython/build.sh ide/build.sh
+     imgui/build.sh raytrace/build.sh pathtrace/build.sh physics/build.sh bench/build.sh chess/build.sh quickjs/build.sh micropython/build.sh ide/build.sh
      quake/build.sh quake3/build.sh tdawn/build.sh ralert/build.sh classicube/build.sh nes/build.sh micropolis/build.sh openttd/build.sh
      nanox/doom.sh halflife/build.sh terminal/build.sh
      ports/dropbear.sh ports/sftp.sh ports/curl.sh ports/socat.sh ports/thttpd.sh ports/pcre.sh ports/lockfile.sh ports/iproute2.sh

@@ -16,8 +16,13 @@ store to the same 16 bytes. Everything else a job writes is its own; the scene i
 `linux/raytrace` (`build.sh` after Nano-X's; Start menu: Other, "Rays (every core)"). Six
 balls over a chequered ground, one light, shadows and two mirrorings, turning; 320 x 240.
 
-A bar under the picture has a button for each of these keys but the last, saying how each
-stands, and a line of figures (pictures and rays a second), as `nxphys` has:
+A bar under the picture, Dear ImGui's (`ray_panel.cpp`, through `linux/imgui/imgui_panel.h`; `docs/apps/imgui.md`,
+"A panel over a program's picture"), has a control for each of these keys but the last and a line of figures
+(pictures and rays a second): the size (a combo), the mirrors (a slider), Shadows and Cores (boxes to tick), Stop or
+Go, and the workers (a slider from none to all, the field where there is one, taken when it is let go). A window over
+the picture, "Figures", plots the milliseconds of the last 96 pictures and each worker's rays in the last one (none
+on the field, which has no worker's share). A control does what its key does, handed back from ImGui's frame and
+done by `act()`; the panel is put into every picture shown, a frame of ImGui's only when something changed:
 
     r   the next size of picture: 160 x 120, 240 x 180, 320 x 240, 480 x 360, 640 x 480
     m   how often a ray is mirrored: 2, 0, 1          h   shadows, on and off

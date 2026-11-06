@@ -17,6 +17,14 @@ void ImGui_ImplShaderEmu_RenderDrawData(ImDrawData* draw_data);
 // commands): nothing was done, and RenderDrawData() is to be called. IMGUI_COPY=inline: never.
 bool ImGui_ImplShaderEmu_RenderAhead(ImDrawData* draw_data);
 void ImGui_ImplShaderEmu_RenderFinish();
+// For a program that draws its frames more often than ImGui's change (a picture under a panel): with
+// KeepFrames(true) RenderDrawData() keeps what it gave the device, and RenderAgain() puts the same
+// triangles into the frame being built, with no frame of ImGui's: drawn where they are kept, in two
+// blocks of GPU memory KeepFrames() takes (96 KB each; call it before the program takes the rest), or
+// copied into the frame when they do not fit there. False: nothing kept
+// (none drawn yet, or more than it could keep, or no room in the frame): a frame of ImGui's is wanted.
+void ImGui_ImplShaderEmu_KeepFrames(bool keep);
+bool ImGui_ImplShaderEmu_RenderAgain();
 // Whether the workers have finished, so that RenderFinish() would not wait: a program asks now
 // and then while it makes its next frame, and shows the frame before as soon as it can.
 bool ImGui_ImplShaderEmu_RenderReady();

@@ -13,104 +13,26 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "imgui_impl_shaderemu.h"
+#include "imgui_panel.h"
 extern "C" {
 #include <nano-X.h>
 #include "panel.h"
 #include "scene.h"
 }
 
-static int frames_left;     // frames wanted after an input: a click and a release, a hover settling
-static unsigned last_ms;
 static int shown_tab = -1;  // the tab the frame before showed, and the list's row
 static int shown_row = -1;
 
-static unsigned now_ms()
-{
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (unsigned)ts.tv_sec * 1000u + (unsigned)ts.tv_nsec / 1000000u;
-}
-
-int panel_init(unsigned int window)
-{
-    ImGui::CreateContext();
-    ImGuiIO& io = ImGui::GetIO();
-    io.IniFilename = nullptr;   // (the disk is a ROM)
-    ImGui::StyleColorsDark();
-    ImGuiStyle& style = ImGui::GetStyle();
-    // ImGui smooths a line by a texture's soft edge, and the device takes the nearest texel: the
-    // same pixels as a plain line, whose quads the backend copies in half the instructions.
-    style.AntiAliasedLines = false;
-    style.WindowRounding = 0, style.WindowBorderSize = 0, style.WindowPadding = ImVec2(6, 6);
-    style.Colors[ImGuiCol_WindowBg].w = 1.0f;
-    if (!ImGui_ImplShaderEmu_Init(window)) return 0;
-    last_ms = now_ms();
-    return 1;
-}
-
-int panel_bar() { return (int)ImGui::GetFrameHeight(); }
-
-// A button's change waits until a frame has had the pointer where it is: a tab, which other items may lie over, takes
-// a click only where the pointer was the frame before, and a scripted click (nxkey) moves and presses at once.
-static int seen;                // frames since the pointer moved
-static int pending[8], pending_count;
-static float pointer_x = -1, pointer_y = -1;
-
-void panel_pointer(int x, int y)
-{
-    if ((float)x == pointer_x && (float)y == pointer_y) return;
-    pointer_x = (float)x, pointer_y = (float)y, seen = 0;
-    ImGui::GetIO().AddMousePosEvent(pointer_x, pointer_y), frames_left = 2;
-}
-
-// Presses queued and given to ImGui, and whether the last given found nothing of ImGui's under the pointer.
-static int downs_queued, downs_given;
-static bool down_free;
-
-int panel_button(int button, int down)
-{
-    if (pending_count < 8) pending[pending_count++] = button << 1 | (down != 0), downs_queued += down != 0;
-    frames_left = 3;
-    return downs_queued;
-}
-
-int panel_press_given(int press, int* free)
-{
-    *free = down_free;
-    return downs_given >= press;
-}
-void panel_wheel(int notches) { ImGui::GetIO().AddMouseWheelEvent(0, (float)notches), frames_left = 2; }
-
-void panel_key(int ch, int modifiers, int down)
-{
-    ImGuiIO& io = ImGui::GetIO();
-    const bool ctrl = (modifiers & MWKMOD_CTRL) != 0;
-    io.AddKeyEvent(ImGuiMod_Ctrl, ctrl);
-    io.AddKeyEvent(ImGuiMod_Shift, (modifiers & MWKMOD_SHIFT) != 0);
-    ImGuiKey key = ImGuiKey_None;
-    switch (ch) {
-        case MWKEY_LEFT: key = ImGuiKey_LeftArrow; break;
-        case MWKEY_RIGHT: key = ImGuiKey_RightArrow; break;
-        case MWKEY_UP: key = ImGuiKey_UpArrow; break;
-        case MWKEY_DOWN: key = ImGuiKey_DownArrow; break;
-        case MWKEY_HOME: key = ImGuiKey_Home; break;
-        case MWKEY_END: key = ImGuiKey_End; break;
-        case MWKEY_DELETE: key = ImGuiKey_Delete; break;
-        case MWKEY_BACKSPACE: key = ImGuiKey_Backspace; break;
-        case MWKEY_ENTER: key = ImGuiKey_Enter; break;
-        case MWKEY_ESCAPE: key = ImGuiKey_Escape; break;
-        case MWKEY_TAB: key = ImGuiKey_Tab; break;
-        default:
-            if (ctrl && ch >= 1 && ch <= 26) key = (ImGuiKey)(ImGuiKey_A + ch - 1);
-            else if (ch >= 'a' && ch <= 'z') key = (ImGuiKey)(ImGuiKey_A + ch - 'a');
-    }
-    if (key != ImGuiKey_None) io.AddKeyEvent(key, down != 0);
-    if (down && !ctrl && ch >= 32 && ch < 127) io.AddInputCharacter((unsigned)ch);
-    frames_left = 2;
-}
-
-int panel_wants_pointer() { return ImGui::GetIO().WantCaptureMouse; }
-int panel_busy() { return frames_left > 0 || pending_count > 0 || ImGui::GetCurrentContext()->InputEventsQueue.Size > 0; }
+// (the input, the frames wanted and a press's owner are imgui_panel.cpp's, as nxray's and nxphys's)
+int panel_init(unsigned int window) { return imp_init(window); }
+int panel_bar() { return imp_line(); }
+void panel_pointer(int x, int y) { imp_pointer(x, y); }
+int panel_button(int button, int down) { return imp_button(button, down); }
+int panel_press_given(int press, int* free) { return imp_press_given(press, free); }
+void panel_wheel(int notches) { imp_wheel(notches); }
+void panel_key(int ch, int modifiers, int down) { imp_key(ch, modifiers, down); }
+int panel_wants_pointer() { return imp_wants_pointer(); }
+int panel_busy() { return imp_busy(); }
 
 // ---- a frame ----
 
@@ -417,11 +339,11 @@ void panel_files(int kind, const char* title, const char* folder, const char* en
     snprintf(files.endings, sizeof files.endings, "%s", endings);
     snprintf(files.name, sizeof files.name, "%s", name ? name : "");
     list_folder();
-    frames_left = 3;
+    imp_wake(3);
 }
 
 const char* panel_files_path() { return files.path; }
-int panel_typing() { return ImGui::GetIO().WantTextInput || files.kind; }   // (the chooser has the keys: a name, Escape)
+int panel_typing() { return imp_typing() || files.kind; }   // (the chooser has the keys: a name, Escape)
 
 static void files_into(const char* name)
 {
@@ -608,37 +530,14 @@ static void status_line(const panel_frame* f)
 
 void panel_draw(panel_frame* f)
 {
-    ImGuiIO& io = ImGui::GetIO();
-    const unsigned now = now_ms();
     frame = f;
     f->moved = 0, f->asked_count = 0, f->controls = f->over = f->cut = f->lowest = 0;
-    io.DisplaySize = ImVec2((float)f->wide, (float)f->high);
-    io.DeltaTime = now != last_ms ? (float)(now - last_ms) * 0.001f : 0.001f;
-    last_ms = now;
-    if (frames_left > 0) frames_left--;
-    int downs = 0;
-    if (seen > 0) {
-        for (int i = 0; i < pending_count; i++) io.AddMouseButtonEvent(pending[i] >> 1, pending[i] & 1), downs += pending[i] & 1;
-        pending_count = 0;
-    }
-    seen++;
-    // (a frame for a change is followed by one more: ImGui lays out what appears, a tab bar, in one frame and draws it in the next)
-    static bool settling;
-    if (settling) settling = false;
-    else if (!frames_left) settling = true, frames_left = 1;
-    ImGui::NewFrame();
-    // (a press given now: whether it is the view's, as ImGui saw the pointer with the popups open before it)
-    if (downs) {
-        ImGuiContext& g = *ImGui::GetCurrentContext();
-        down_free = g.HoveredWindow == nullptr && g.OpenPopupStack.Size == 0;
-        downs_given += downs;
-    }
+    imp_begin(f->wide, f->high);
     const int bar = panel_bar();
     if (f->handles) f->moved = gizmo_draw(f->view, f->projection, f->matrix, f->what, bar, f->view_w, f->view_h, f->drag);
     menus();
     panel(f, bar);
     status_line(f);
     files_window(f);
-    ImGui::Render();
-    ImGui_ImplShaderEmu_RenderDrawData(ImGui::GetDrawData());
+    imp_end();
 }

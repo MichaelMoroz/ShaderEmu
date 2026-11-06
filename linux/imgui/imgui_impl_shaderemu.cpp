@@ -997,12 +997,75 @@ static void sum_runs(const run* runs, int count, unsigned* sum, unsigned* triang
     }
 }
 
+// The last frame's runs as the device has them, kept for ImGui_ImplShaderEmu_RenderAgain(): their tables and corners
+// in one block of words, each run's place in it. The block is GPU memory of its own, one of two in turn (a list still
+// drawn may read the other), drawn where it lies; a frame larger than that is kept in the program's memory and copied
+// into each frame.
+struct kept_run { int vertices, table, count, quads; GLuint name; };
+#define KEPT_BYTES (96u << 10)
+static bool keeping;
+static struct { ImVector<ImU32> words; ImVector<kept_run> runs; ImU32* gpu[2]; ImU32* at; int size, turn; bool whole; } kept;
+
+void ImGui_ImplShaderEmu_KeepFrames(bool keep)
+{
+    keeping = keep, kept.whole = false;
+    for (int i = 0; keep && i < 2; i++)
+        if (!kept.gpu[i] && seglMemoryLeft() >= KEPT_BYTES + (256u << 10)) kept.gpu[i] = (ImU32*)seglMemory(KEPT_BYTES);
+}
+
+static void keep_runs()
+{
+    kept.runs.resize(0);
+    kept.whole = !own.failed && own.run_count < MOST_RUNS;
+    // (the words it takes: a table of 256 for each table, four a corner)
+    int words = 0;
+    const ImU32* table = nullptr;
+    for (int i = 0; i < own.run_count; i++) {
+        if (own.runs[i].table != table) table = own.runs[i].table, words += 256;
+        words += 4 * own.runs[i].count;
+    }
+    kept.turn ^= 1;
+    if (kept.gpu[0] && kept.gpu[1] && (unsigned)words * 4 <= KEPT_BYTES) kept.at = kept.gpu[kept.turn];
+    else kept.words.resize(words), kept.at = kept.words.Data;
+    kept.size = words;
+    table = nullptr;
+    int at = 0, table_at = 0;
+    for (int i = 0; kept.whole && i < own.run_count; i++) {
+        const run& r = own.runs[i];
+        if (r.table != table) {
+            table = r.table, table_at = at;
+            memcpy(kept.at + at, table, 256 * 4), at += 256;
+        }
+        memcpy(kept.at + at, r.first, (size_t)r.count * 16);
+        kept.runs.push_back({at, table_at, r.count, r.quads, r.name});
+        at += 4 * r.count;
+    }
+}
+
+bool ImGui_ImplShaderEmu_RenderAgain()
+{
+    if (!kept.whole) return false;
+    if (!kept.runs.Size) return true;
+    ImU32* from = kept.at;
+    if (from == kept.words.Data) {
+        // (not GPU memory of its own: a copy in the frame)
+        const unsigned bytes = (unsigned)kept.size * 4;
+        from = bytes <= seglFrameLeft() ? (ImU32*)seglFrameSpace(bytes) : nullptr;
+        if (!from) return false;
+        memcpy(from, kept.words.Data, bytes);
+    }
+    for (const kept_run& r : kept.runs)
+        seglScreenCompactAt((const unsigned int*)(from + r.vertices), r.count, r.quads, r.name, (const unsigned int*)(from + r.table));
+    return true;
+}
+
 void ImGui_ImplShaderEmu_RenderDrawData(ImDrawData* draw_data)
 {
     static_assert(sizeof(ImDrawVert) == sizeof(corner) && sizeof(ImDrawIdx) == 2, "a corner is an ImDrawVert");
     static int asked;
     if (!asked) asked = 1, summing = getenv("IMGUI_SUM") != nullptr;
-    own.noted = summing, own.run_count = 0, own.failed = false;
+    own.noted = summing || keeping, own.run_count = 0, own.failed = false;
+    kept.whole = false;
     lines_last.list = nullptr;
     if (deferring && draw_data->CmdListsCount) {
         own.later = &later_lists[MOST_AHEAD];
@@ -1030,6 +1093,7 @@ void ImGui_ImplShaderEmu_RenderDrawData(ImDrawData* draw_data)
         }
     }
     if (open && own.out.to) own.flush(own.out.quads);
+    if (keeping && own.out.to) keep_runs();
     if (summing) {
         unsigned sum = 0, triangles = 0;
         sum_runs(own.runs, own.run_count, &sum, &triangles);

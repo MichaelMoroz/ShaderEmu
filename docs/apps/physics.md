@@ -15,10 +15,11 @@ machine has none to give.
     c  each box in its core's colour     p  stop and go            q, Escape  leave
     9  all the workers             0  core 0 alone           W  the workers asked for, or none
 
-The bar under the picture has a button for some of those, and a line of figures. In the
+The bar under the picture (Dear ImGui's, "The panel" below) has a control for some of those and a line of
+figures, and a window over the picture has the gravity, the heap's boxes and plots of how it goes. In the
 picture the pointer takes a box by where it is pressed, carries it and throws it; from a
 holodeck's seat both hands do. All of it is in "The controls" below. The window may be any
-size: the picture has all of it but the bar, and the buttons share the bar's width.
+size: the picture has all of it but the bar, and the bar's controls share its width.
 
 ## What the workers allow
 
@@ -115,11 +116,18 @@ What it is not: a solver that converges. A load takes a substep a layer to arriv
 stack sinks a few millimetres before it holds, and a body resting on another does not press
 on it as it should. Piles, walls and things knocked over look right; a see-saw would not.
 
-## The bar, and a box in the hand
+## The panel, and a box in the hand
 
-The window is a plain Nano-X window with the picture a window inside it, as the video
-player's is: the bar is `ui.h`'s buttons (`linux/apps`), drawn by the window system, and the
-GPU's picture never meets it. A button does what its key does (`act`).
+The window is one OpenGL surface (since 7 November 2026): the boxes above, and at its foot Dear ImGui's bar
+(`phys_panel.cpp`, through `linux/imgui/imgui_panel.h`; `docs/apps/imgui.md`, "A panel over a program's picture"):
+the scene (a combo), Again, Throw, Stop or Go, Cores, the workers (a slider, taken when it is let go), and the line
+of figures. A window over the picture, "The boxes", has the gravity (a slider, given to the boxes at a launch of its
+own, kind 5, at a look's substep where every share waits: they all make the next substep's poses with it), the
+heap's boxes (a new heap when let go), and three plots, a point a second: substeps a second, the boxes' energy
+(half of mass times speed squared, summed), and the boxes by speed from 0 to 20 m/s. A control does what its key
+does (`act`), handed back from ImGui's frame (`put_panel`) and done in `events()`. The panel is put into every
+picture shown, a frame of ImGui's only when something changed, and never into a holodeck sitter's: the holodeck
+shows the boxes as it did. A move or a press over the boxes is not ImGui's and wants no frame of it.
 
 - **Which box.** A press in the picture is a ray from the eye through that pixel
   (`ray`, from the view's own three directions), tried against every box in the box's own
@@ -290,14 +298,13 @@ without stopping the shares").
   says PASS; `nxphys & sleep 6; nxkey q; sleep 2; pidof nxphys` finds none.
 - **The bar and the hand.** `PHYS_SCENE=1 PHYS_STILL=1 PHYS_PICK=350,222 PHYS_STEPS=120 nxphys`
   says `box 117 held` and at its end that the held point is some millimetres from where it is
-  wanted; `PHYS_PICK=20,20` holds none. `PHYS_SAY=1 nxphys & sleep 6; nxkey 181,462` (the Towers button,
-  the window where the window system first puts it) and the next `physstat:` line has 109
-  boxes. The whole way from the pointer: `rvc_cpu --pointer-sweep 0 --pointer-circle
+  wanted; `PHYS_PICK=20,20` holds none. `PHYS_SAY=1 nxphys & sleep 10; nxkey at:100,462 300 100,462 1500 at:74,440 300 74,440`
+  (the scene's combo, then "A heap", the window where the window system first puts it) says
+  `launched` and the next `physstat:` lines have 400 boxes. The whole way from the pointer: `rvc_cpu --pointer-sweep 0 --pointer-circle
   400,300,12 --pointer-button 1,6,20` with `PHYS_SAY=1 PHYS_STILL=1 nxphys` says a box is held,
   then let go. On the shader machine, the screen of a snapshot (`tools\snapshot_screen.py`):
   `nxkey - - - -` leaves the boxes 0.018 of the picture where they were 0.046, and
-  `nxkey drag:684,501:560,420` (the frame's corner) leaves a picture of 516 x 319 with the bar
-  under it and seven buttons 72 apart.
+  `nxkey drag:684,501:560,420` (the frame's corner) leaves a smaller picture with the bar under it.
 
 - **Hands, whoever computes them.** `PHYS_SCENE=1 PHYS_STILL=1 PHYS_STEPS=150
   PHYS_HANDS="10:1,-240,4760,0,1 50:1,-240,6500,3000,1 70:1,-240,6500,7000,0

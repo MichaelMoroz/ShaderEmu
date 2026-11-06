@@ -184,9 +184,35 @@ counts (its docstring has the steps). The sources are named from the build's fol
 the tree lies. After a change to the patch or the backend, make them again: a function whose code changed has none.
 `IMGUI_AUTO`/`IMGUI_GROWTH` set the inlining (120 and 200; 60 and 80 were 1.2% more, 250 and 500 the same).
 
+## A panel over a program's picture
+
+`nxpath`, `nxray` and `nxphys` draw their controls with ImGui over what they draw with OpenGL, through
+`imgui_panel.h` (`linux/imgui/imgui_panel.cpp`, built into the library's folder with the backend). It feeds ImGui the
+program's own window's events (`imp_event`: a move or a press over the program's picture is not told to ImGui, which
+would want frames for it; a move that leaves ImGui's windows is, once), holds a press until a frame has had the
+pointer where it is (a tab, which other items may lie over, takes a click only where the pointer was the frame
+before), and says when ImGui wants a frame (`imp_busy`: an input settling, or the program's `imp_wake` when what
+the panel shows changed, its figures once a second).
+
+`nxpath` makes a frame of ImGui's every time it draws (`imp_begin`, `imp_end`). `nxray` and `nxphys` show pictures
+far more often than their panels change, so `imp_frame` makes one only when it is wanted: in between the frame made
+last is put into each picture's list again, `ImGui_ImplShaderEmu_RenderAgain()`. With `KeepFrames(true)` the
+backend keeps what `RenderDrawData()` gave the device, its runs' tables and corners, in one of two blocks of GPU
+memory of its own in turn (96 KB each, taken by `imp_keep()` before the program takes the rest; a list still being
+drawn reads the other), and a picture's list then draws them where they lie: no copy and no frame of ImGui's. A
+frame that does not fit there is kept in the program's memory and copied into the frame. A frame for an input is
+followed by one more (what it opens, a popup, is laid out in one and drawn in the next); one for the program's
+figures is not. Both programs make it on the first core, without workers (theirs trace and move boxes): one
+frame a second of figures cost `nxray` 7 to 13 thousand of the first core's instructions a picture (36 to 42
+thousand before, 43 to 55 after, 255 workers, 320 x 240; rays a second within their spread), and `nxphys` its
+pictures a second from 27 to 25 or 26 (the heap, 255 workers; substeps kept at 60 a second). The copy of the kept
+words into each list, tried first, cost nothing that showed: those instructions were ImGui's frames, two a second
+until a frame for figures had no second one. A program whose OpenGL library is 16.16 builds `gles.c` with floats
+(`SEGL_FLOAT`), as the backend writes ImGui's floats: its own 16.16 calls are taken as they were.
+
 ## Not done
 
-A frame only when something changed; the device reading ImGui's own buffers (a vertex kind with
+A frame only when something changed for `imdemo` and `nxpath`; the device reading ImGui's own buffers (a vertex kind with
 an index buffer and a clip rectangle a command: the copy would be two of the machine's copies,
 and it is the device's shader, its model and Unity's copy of it that change); ImGui's lines
 without anti-aliasing (`AntiAliasedLines`, `AntiAliasedFill`: a different picture); and pictures

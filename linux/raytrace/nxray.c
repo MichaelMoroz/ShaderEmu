@@ -6,7 +6,8 @@
  * Core 0 traces nothing. Where the machine has the lanes' field, a picture is one job of its lanes,
  * given while core 0 makes the next picture's scene. Else every worker has a job for all the
  * pictures (trace_pictures), its share of each a band of texels made on its own lanes, and goes
- * from one to the next. The bar under the picture has a button for each of these keys but the last:
+ * from one to the next. The bar under the picture (Dear ImGui's, ray_panel.cpp) has a control for each of these keys
+ * but the last, and a window over the picture plots the figures:
  *   r   the next size of picture     m   how often a ray is mirrored (0 to 2)     h   shadows
  *   space  stop and go     w   each share's first texels in its core's colour
  *   W   all the workers (the field where there is one), one, none (a, 1, 0: each by itself)     q, Escape  leave
@@ -25,6 +26,8 @@
 #include <GLES/segl.h>
 #include "ui.h"
 #include "mcw.h"
+#include "imgui_panel.h"
+#include "ray_panel.h"
 
 #define ONE 65536
 #define SPHERES 6
@@ -414,14 +417,12 @@ static int keys_after(int wait_ms);
 
 /* ---- core 0 ---- */
 
-#define BAR 54		/* the bar under the picture: a row of buttons and a line of figures */
-#define BUTTONS 6
+#define BAR 48		/* the bar under the picture as ImGui's default font makes it (ray_panel_bar()): a line of controls and one of figures */
 #define SIZES 5
 static const int sizes[SIZES][2] = {{160, 120}, {240, 180}, {320, 240}, {480, 360}, {640, 480}};
-static const int button_keys[BUTTONS] = {'r', 'm', 'h', ' ', 'w', 'W'};
-static GR_WINDOW_ID window, picture;
+static GR_WINDOW_ID window;
 static GLuint texture[OUT];
-static int bar_y, wide, button_step = 90;
+static int bar_y, wide, bar = BAR;
 static char status[120] = "";
 static int width = 320, height = 240, room;	/* the picture, and how many pixels its memory holds */
 static int depth = DEPTH, shadows = 1;
@@ -798,24 +799,70 @@ publish(float t, uint32_t done)
 	go.frame = frame;
 }
 
-/* The bar under the picture: a button for what the keys do, saying how each stands, and a line of figures. */
+/* The panel's figures: the last pictures' times, and each worker's rays in the last one. */
+static float took_ms[RAY_FIGURES], worker_rays[MC_MAX_CORES];
+static int took_count, worker_count;
+/* What the panel asked for in its last frame, for keys() to do. */
+static int panel_keys[8], panel_key_count, panel_size = -1, panel_workers = -1;
+
+/* (the panel's figures in words are new: a frame of ImGui's with the next frame shown) */
 static void
 draw_bar(void)
 {
-	char label[BUTTONS][24];
+	imp_wake(1);
+}
+
+static void
+note_took(unsigned ms)
+{
+	if (took_count == RAY_FIGURES)
+		memmove(took_ms, took_ms + 1, (RAY_FIGURES - 1) * sizeof took_ms[0]), took_count--;
+	took_ms[took_count++] = (float)ms;
+}
+
+/* The panel over the frame being built (ray_panel.h), and what it asked for kept. */
+static void
+put_panel(void)
+{
+	struct ray_panel p;
 	int k;
 
-	snprintf(label[0], sizeof label[0], " %d x %d", width, height);
-	snprintf(label[1], sizeof label[1], " Mirrors: %d", depth - 1);
-	snprintf(label[2], sizeof label[2], " Shadows");
-	snprintf(label[3], sizeof label[3], stopped ? " Go" : " Stop");
-	snprintf(label[4], sizeof label[4], " Cores");
-	snprintf(label[5], sizeof label[5], wanted > 1 ? " All workers" : wanted ? " One worker" : " No workers");
-	ui_fill(window, 0, bar_y, wide, BAR, UI_FACE);
-	for (k = 0; k < BUTTONS; k++)
-		ui_button(window, 5 + button_step * k, bar_y + 5, button_step - 4, 22, label[k], (k == 2 && shadows) || (k == 3 && stopped) || (k == 4 && owners));
-	ui_text(window, 8, bar_y + 33, status, -1, BLACK, 0);
-	GrFlush();
+	memset(&p, 0, sizeof p);
+	p.width = width, p.height = height, p.sizes = SIZES, p.size_list = sizes, p.size_at = -1;
+	for (k = 0; k < SIZES; k++)
+		if (sizes[k][0] == width && sizes[k][1] == height)
+			p.size_at = k;
+	p.depth = depth, p.depth_most = DEPTH, p.shadows = shadows, p.stopped = stopped, p.owners = owners;
+	p.wanted = wanted, p.workers = workers, p.most_workers = MC_MAX_CORES, p.field = use_field;
+	p.status = status;
+	p.took = took_ms, p.took_count = took_count;
+	p.worker_rays = worker_rays, p.worker_count = use_field ? 0 : worker_count;
+	if (!ray_panel_put(&p, wide, bar_y + bar))
+		return;
+	for (k = 0; k < p.key_count && panel_key_count < 8; k++)
+		panel_keys[panel_key_count++] = p.keys[k];
+	if (p.size_asked >= 0)
+		panel_size = p.size_asked;
+	if (p.workers_asked >= 0)
+		panel_workers = p.workers_asked;
+}
+
+static const GLfixed corners[12] = {0, 0, 0, ONE, 0, 0, ONE, ONE, 0, 0, ONE, 0}, uv[8] = {0, 0, ONE, 0, ONE, ONE, 0, ONE};
+enum { SHOW_EARLY, SHOW_WAIT, SHOW_FILLING };
+
+/* A picture shown, with the panel over it: not waited for (its pixels are written again only after
+ * publish() settles), waited for, or a picture filling in (not counted in the caption's rate). */
+static void
+show(uint32_t slot, int how)
+{
+	seglQuad(corners, uv, texture[slot], 255, 255, 0);
+	put_panel();
+	if (how == SHOW_FILLING)
+		seglNotAFrame();
+	if (how == SHOW_EARLY)
+		seglSwapEarly();
+	else
+		seglSwap();
 }
 
 /* The window is so large now: the picture has all of it but the bar, the buttons its width. */
@@ -825,12 +872,11 @@ set_window(int w, int h)
 	int view_w, view_h;
 
 	wide = w;
-	bar_y = h > BAR + 40 ? h - BAR : 40;
-	button_step = wide > 10 + 20 * BUTTONS ? (wide - 10) / BUTTONS : 20;
-	GrResizeWindow(picture, wide, bar_y);
+	bar_y = h > bar + 40 ? h - bar : 40;
 	seglWindowChanged();
 	seglSize(&view_w, &view_h);
-	glViewport(0, 0, view_w, view_h);
+	/* (the picture above the bar: OpenGL counts rows from the bottom) */
+	glViewport(0, view_h - bar_y, view_w, bar_y);
 	view_stale = 1;
 }
 
@@ -867,11 +913,14 @@ next_size(int *w, int *h)
 }
 
 static int want_w, want_h;	/* the size asked for with the picture given up */
+static int act_result;		/* (act()'s last, for the panel's keys) */
+static int act_key(int key);
+#define act(key) (act_result = act_key(key))
 
 /* What a key or its button does; what keys() is to return for it: 1 the picture given up
  * for a new one, with 2 other workers taken, with 4 another size. */
 static int
-act(int key)
+act_key(int key)
 {
 	switch (key) {
 	case 'q': case MWKEY_ESCAPE: go.stop = go.leave = 1; exit(0);
@@ -898,6 +947,22 @@ keys_after(int wait_ms)
 	GR_EVENT e;
 	int again = 0, k;
 
+	/* what the panel asked for in its last frame */
+	for (k = 0; k < panel_key_count; k++)
+		if (act(panel_keys[k]) >= 0)
+			again |= act_result;
+	panel_key_count = 0;
+	if (panel_size >= 0) {
+		want_w = sizes[panel_size][0], want_h = sizes[panel_size][1];
+		reg_set_int("rays.width", want_w), reg_set_int("rays.height", want_h);
+		again |= want_w != width || want_h != height ? 5 : 0, panel_size = -1;
+	}
+	if (panel_workers >= 0) {
+		again |= panel_workers != wanted ? 3 : 0;
+		wanted = panel_workers, panel_workers = -1;
+	}
+	if (again)
+		draw_bar();
 	for (;;) {
 		if (wait_ms)
 			GrGetNextEventTimeout(&e, wait_ms), wait_ms = 0;
@@ -914,14 +979,13 @@ keys_after(int wait_ms)
 			draw_bar();
 		}
 		if (e.type == GR_EVENT_TYPE_EXPOSURE && e.exposure.wid == window)
-			draw_bar();
+			view_stale = 1;
+		/* (the panel's: the pointer over it, a press it took, a key while it types) */
+		if (imp_event(&e))
+			continue;
 		k = -1;
 		if (e.type == GR_EVENT_TYPE_KEY_DOWN)
 			k = act(e.keystroke.ch);
-		else if (e.type == GR_EVENT_TYPE_BUTTON_DOWN && (e.button.changebuttons & GR_BUTTON_L) && e.button.y >= bar_y + 5 &&
-			 e.button.y < bar_y + 27 && e.button.x >= 5 && (e.button.x - 5) % button_step < button_step - 4 &&
-			 (e.button.x - 5) / button_step < BUTTONS)
-			k = act(button_keys[(e.button.x - 5) / button_step]);
 		if (k < 0)
 			continue;
 		again |= k;
@@ -939,7 +1003,6 @@ int
 main(void)
 {
 	static const GLfixed whole[16] = {2 * ONE, 0, 0, 0, 0, -2 * ONE, 0, 0, 0, 0, -ONE, 0, -ONE, ONE, 0, ONE};
-	static const GLfixed corners[12] = {0, 0, 0, ONE, 0, 0, ONE, ONE, 0, 0, ONE, 0}, uv[8] = {0, 0, ONE, 0, ONE, ONE, 0, ONE};
 	const char *text;
 	GR_SCREEN_INFO info;
 	int scale_by, frame = 0, i;
@@ -980,19 +1043,22 @@ main(void)
 		;
 	ui_init();
 	wide = width * scale_by, bar_y = height * scale_by;
-	button_step = (wide - 10) / BUTTONS;
 	window = GrNewWindowEx(GR_WM_PROPS_APPWINDOW, "Rays", GR_ROOT_WINDOW_ID, -1, -1, wide, bar_y + BAR, UI_FACE);
-	GrSelectEvents(window, GR_EVENT_MASK_EXPOSURE | GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_BUTTON_DOWN | GR_EVENT_MASK_CLOSE_REQ | GR_EVENT_MASK_UPDATE);
-	picture = GrNewWindow(window, 0, 0, wide, bar_y, 0, BLACK, BLACK);
-	GrMapWindow(picture);
+	GrSelectEvents(window, GR_EVENT_MASK_EXPOSURE | GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_KEY_UP | GR_EVENT_MASK_BUTTON_DOWN |
+		       GR_EVENT_MASK_BUTTON_UP | GR_EVENT_MASK_MOUSE_MOTION | GR_EVENT_MASK_CLOSE_REQ | GR_EVENT_MASK_UPDATE);
 	GrMapWindow(window);
 	GrSetFocus(window);
 	ui_framed();
-	draw_bar();
-	if (seglInit(picture) < 0) {
+	if (seglInit(window) < 0) {
 		fprintf(stderr, "nxray: this machine has no GPU\n");
 		return 1;
 	}
+	if (!ray_panel_init(window)) {
+		fprintf(stderr, "nxray: no room for the panel\n");
+		return 1;
+	}
+	if ((bar = ray_panel_bar()) != BAR)
+		GrResizeWindow(window, wide, bar_y + bar);
 	/* a picture is a texture where it lies, one rectangle over the window; up to OUT of them,
 	 * one shown while the others are traced, as many as GPU memory has room for (two at least) */
 	/* (their memory is for the largest size the button gives, or this one's if it is larger) */
@@ -1014,14 +1080,13 @@ main(void)
 	if (getenv("RAY_SHARES"))
 		fprintf(stderr, "raystat: %u pictures out at once at most, %u bytes of GPU memory left\n", (unsigned)outs, seglMemoryLeft());
 	set_size(width, height);
-	set_window(wide, bar_y + BAR);
+	set_window(wide, bar_y + bar);
 	glMatrixMode(GL_PROJECTION);
 	glLoadMatrixx(whole);
 	glMatrixMode(GL_MODELVIEW);
 	glLoadIdentity();
 	glDisable(GL_DEPTH_TEST);
-	seglQuad(corners, uv, texture[0], 255, 255, 0);
-	seglSwap();
+	show(0, SHOW_WAIT);
 
 	atexit(mcw_close);
 	atexit(end_jobs);	/* (first: the workers' jobs end only when told) */
@@ -1083,12 +1148,11 @@ main(void)
 				go.stop = 0;
 				rested = 1;
 			}
-			if (view_stale && done) {
-				seglQuad(corners, uv, texture[done % outs], 255, 255, 0);
-				seglSwapEarly();
-			}
+			/* (the panel settling an input: a frame of it soon, over the last picture) */
+			if (view_stale || imp_busy())
+				show(done % outs, SHOW_EARLY);
 			view_stale = 0;
-			k = keys_after(1000);
+			k = keys_after(imp_busy() ? 20 : 1000);
 			if (k & 4) {
 				seglSettle();
 				set_size(want_w, want_h);
@@ -1115,12 +1179,15 @@ main(void)
 			}
 			if (now - shown >= 200 && now - began_at[at % outs] >= 1500) {
 				/* a picture is shown when it is whole; one that takes long, as it fills */
-				seglQuad(corners, uv, texture[at % outs], 255, 255, 0);
-				seglNotAFrame();	/* (a picture filling in: the caption counts whole ones) */
-				seglSwap();
+				show(at % outs, SHOW_FILLING);	/* (a picture filling in: the caption counts whole ones) */
+				shown = now;
+			} else if (imp_busy() && now - shown >= 40) {
+				/* the panel settling an input: over the last whole picture, or the one filling in where that one's
+				 * memory is being traced again */
+				show(go.frame - done < outs ? done % outs : at % outs, SHOW_FILLING);
 				shown = now;
 			}
-			if (now - keys_at >= 200) {
+			if (now - keys_at >= (imp_busy() ? 40u : 200u)) {
 				keys_at = now;
 				if ((k = keys()) != 0)
 					again |= k, go.stop = 1;
@@ -1140,12 +1207,13 @@ main(void)
 					continue;
 				now = now_ms();
 				if (now - shown >= 200 && now - began_at[at % outs] >= 1500) {
-					seglQuad(corners, uv, texture[at % outs], 255, 255, 0);
-					seglNotAFrame();
-					seglSwap();
+					show(at % outs, SHOW_FILLING);
+					shown = now;
+				} else if (imp_busy() && now - shown >= 40) {
+					show(go.frame - done < outs ? done % outs : at % outs, SHOW_FILLING);
 					shown = now;
 				}
-				if (now - keys_at >= 200) {
+				if (now - keys_at >= (imp_busy() ? 40u : 200u)) {
 					keys_at = now;
 					again |= keys();
 				}
@@ -1166,12 +1234,13 @@ main(void)
 			next = to;
 			now = now_ms();
 			if (now - shown >= 200 && now - began_at[at % outs] >= 1500) {
-				seglQuad(corners, uv, texture[at % outs], 255, 255, 0);
-				seglNotAFrame();
-				seglSwap();
+				show(at % outs, SHOW_FILLING);
+				shown = now;
+			} else if (imp_busy() && now - shown >= 40) {
+				show(go.frame - done < outs ? done % outs : at % outs, SHOW_FILLING);
 				shown = now;
 			}
-			if (now - keys_at >= 200) {
+			if (now - keys_at >= (imp_busy() ? 40u : 200u)) {
 				keys_at = now;
 				again |= keys();
 			}
@@ -1205,12 +1274,15 @@ main(void)
 		now = now_ms();
 		took = ahead > 1 ? now - whole_at : now - began_at[at % outs];
 		whole_at = now;
-		for (k = 1; k <= workers && sc->traced_by; k++)
+		worker_count = sc->traced_by ? workers : 0;
+		for (k = 1; k <= workers && sc->traced_by; k++) {
+			worker_rays[k - 1] = sc->plan[k] != NO_SHARE ? (float)slots[at % outs][k].rays * 0.001f : 0.0f;
 			if (sc->plan[k] != NO_SHARE)
 				rays += slots[at % outs][k].rays;
+		}
+		note_took(took);
 		/* (shown, and not waited for: its pixels are written again by the picture after the next, which publish() holds until this is drawn) */
-		seglQuad(corners, uv, texture[at % outs], 255, 255, 0);
-		seglSwapEarly();
+		show(at % outs, SHOW_EARLY);
 		done = at;
 		/* (the sum is a test's: 300 thousand pixels are half a second of this core, with every worker waiting;
 		 * a texel's rays in its first pixel's top byte are not of the picture) */

@@ -1,5 +1,6 @@
 /* nxphys: rigid boxes, every worker core moving its share of them (docs/apps/physics.md).
- * Keys, and the bar's buttons: 1 2 3 a wall, towers, a heap; space the heavy box thrown; p stop;
+ * Keys, and the controls of the bar under the picture (Dear ImGui's, phys_panel.cpp, with a window of the
+ * boxes' gravity and figures over the picture): 1 2 3 a wall, towers, a heap; space the heavy box thrown; p stop;
  * c each box in its core's colour; 9 / 0 all the workers, none; r again; w a s d walk; q leave.
  * The pointer and a holodeck sitter's hands carry boxes and throw them ("The controls" there). */
 #include <math.h>
@@ -11,6 +12,8 @@
 #include "ui.h"
 #include "mcwx.h"
 #include "physics.h"
+#include "imgui_panel.h"
+#include "phys_panel.h"
 
 #define MAX_BODIES 2048
 #define ROOM 12.0f		/* the walls are this far from the middle */
@@ -238,16 +241,12 @@ share_job(uint32_t s, uint32_t worker)
 
 /* ---- core 0 ---- */
 
-#define BAR 54			/* the bar under the picture: a row of buttons and a line of figures */
-#define BUTTONS 7
+#define BAR 48			/* the bar under the picture as ImGui's default font makes it (phys_panel_bar()): controls and figures */
 #define LENS 0.6f		/* how far the view opens up and down at one unit ahead */
-static const struct { const char *label; int key; } buttons[BUTTONS] = {
-	{" Wall", '1'}, {" Towers", '2'}, {" Heap", '3'}, {" Throw", ' '}, {" Stop", 'p'}, {" Cores", 'c'}, {" Workers", 'W'},
-};
 #define REACH 60.0f		/* how far along a hand's or a sitter's aim a box is taken */
 #define WALK 6.0f		/* what the keys move the view by, a second */
-static GR_WINDOW_ID window, picture;
-static int bar_y, wide, button_step = 90;	/* (the buttons share the bar's width) */
+static GR_WINDOW_ID window;
+static int bar_y, wide, bar = BAR, panel;	/* the picture's height above the bar, the window's width; whether the panel is there */
 static char status[120] = "";
 static float eye[3], ahead[3], right[3], up[3];
 /* the button held in the picture: where the window is on the display, where the pointer was
@@ -274,6 +273,8 @@ static unsigned pictures;	/* pictures shown since the shares began */
 /* A launch (act()'s 1, 3 or 4) is made when every share waits at substep launch_at, their jobs
  * kept; launch_old (PHYS_LAUNCH_OLD): by stopping and starting them, as it was. */
 static int launch_kind, launch_old;
+static float gravity_wanted;	/* a launch of kind 5: the gravity the panel asked for */
+static void put_panel(void);
 static uint32_t launch_at, launch_then;
 static GLuint texture;
 /* The workers asked for: all of them. With more than the bodies need, some have the grid and
@@ -656,7 +657,7 @@ launch_ask(int kind)
 	if (!launch_kind || kind == 1)
 		launch_kind = kind;
 	/* (a box at a substep without a look, which needs only the box's own: the scene at a look's) */
-	if ((launch_kind == 1) == (launch_at & 1) && ++launch_at > sim.limit)
+	if ((launch_kind == 1 || launch_kind == 5) == (launch_at & 1) && ++launch_at > sim.limit)
 		sim.limit = launch_at;
 	if (kind == 4 && talk)
 		fprintf(stderr, "nxphys: a box fired from %d %d %d\n", (int)(fire_from[0] * 1000.0f), (int)(fire_from[1] * 1000.0f),
@@ -683,6 +684,8 @@ launch(void)
 		jobs_changed = 1, shown_so_far = 0;
 	} else if (launch_kind == 3)
 		throw_box(buffer);
+	else if (launch_kind == 5)
+		sim.w.gravity = gravity_wanted;	/* (every share waits: the next substep's poses are made with it) */
 	else
 		fire_box(buffer);
 	/* (before a look, all a look needs; else the box's own: the grid the next look reads is made from it) */
@@ -746,6 +749,7 @@ show_picture(int again)
 	seglKeptMatrices();
 	glClearColor(0.06f, 0.07f, 0.10f, 1.0f);
 	glClear(GL_COLOR_BUFFER_BIT);
+	put_panel();
 	seglSwapEarly();	/* (no waiting for it: ask_picture() settles before that buffer is written again) */
 }
 
@@ -810,7 +814,9 @@ set_view(void)
 	m[14] = ahead[0] * eye[0] + ahead[1] * eye[1] + ahead[2] * eye[2];
 	m[15] = 1.0f;
 	seglSize(&width, &height);
-	glViewport(0, 0, width, height);
+	/* (the picture above the bar: OpenGL counts rows from the bottom) */
+	glViewport(0, height - bar_y, width, bar_y);
+	height = bar_y;
 	glMatrixMode(GL_PROJECTION);
 	glLoadIdentity();
 	glFrustumf(-LENS * 0.5f * (float)width / (float)(height > 0 ? height : 1), LENS * 0.5f * (float)width / (float)(height > 0 ? height : 1), -LENS * 0.5f,
@@ -827,6 +833,7 @@ ray(int px, int py, float *way)
 	float x, y, len = 0.0f;
 
 	seglSize(&width, &height);
+	height = bar_y;
 	x = (2.0f * ((float)px + 0.5f) / (float)(width > 0 ? width : 1) - 1.0f) * LENS * (float)width / (float)(height > 0 ? height : 1);
 	y = (1.0f - 2.0f * ((float)py + 0.5f) / (float)(height > 0 ? height : 1)) * LENS;
 	for (k = 0; k < 3; k++)
@@ -839,12 +846,10 @@ ray(int px, int py, float *way)
 static void
 set_size(int width, int height)
 {
-	if (width == wide && height == bar_y + BAR)
+	if (width == wide && height == bar_y + bar)
 		return;
 	wide = width;
-	bar_y = height > BAR + 40 ? height - BAR : 40;
-	button_step = wide > 10 + 20 * BUTTONS ? (wide - 10) / BUTTONS : 20;
-	GrResizeWindow(picture, wide, bar_y);
+	bar_y = height > bar + 40 ? height - bar : 40;
 	seglWindowChanged();
 	set_view();
 	view_moved = 1;
@@ -879,20 +884,72 @@ zoom(int out)
 	view_moved = 1;
 }
 
-/* The bar under the picture: a button for what the keys do, and a line of figures. */
+/* The panel's figures, a second a point: substeps a second, the boxes' energy; their speeds now. */
+static float rates_seen[PHYS_FIGURES], energy_seen[PHYS_FIGURES], speeds_seen[PHYS_SPEEDS];
+static int figures_seen;
+#define SPEED_MOST 20.0f
+/* What the panel asked for in its last frame, for events() to do. */
+static int panel_keys[8], panel_key_count, panel_workers = -1, panel_heap = -1;
+static float panel_gravity = -1.0f;
+
+/* (the panel's figures are new: a frame of ImGui's with the next picture shown) */
 static void
 draw_bar(void)
 {
+	imp_wake(1);
+}
+
+/* A second's figures for the plots: the substeps made, and from the boxes as they stand their energy and speeds. */
+static void
+note_figures(unsigned rate, int buffer)
+{
+	const struct body_state *st = sim.w.states[buffer];
+	float energy = 0.0f;
+	int i;
+
+	if (figures_seen == PHYS_FIGURES) {
+		memmove(rates_seen, rates_seen + 1, (PHYS_FIGURES - 1) * sizeof rates_seen[0]);
+		memmove(energy_seen, energy_seen + 1, (PHYS_FIGURES - 1) * sizeof energy_seen[0]);
+		figures_seen--;
+	}
+	memset(speeds_seen, 0, sizeof speeds_seen);
+	for (i = 0; i < sim.w.bodies; i++) {
+		float v2 = st[i].vel[0] * st[i].vel[0] + st[i].vel[1] * st[i].vel[1] + st[i].vel[2] * st[i].vel[2], speed = sqrtf(v2);
+		int bin = (int)(speed * (PHYS_SPEEDS / SPEED_MOST));
+
+		if (sim.w.shapes[i].inv_mass > 0.0f)
+			energy += 0.5f * v2 / sim.w.shapes[i].inv_mass;
+		speeds_seen[bin < PHYS_SPEEDS ? bin : PHYS_SPEEDS - 1] += 1.0f;
+	}
+	rates_seen[figures_seen] = (float)rate, energy_seen[figures_seen++] = energy;
+	draw_bar();
+}
+
+/* The panel over the frame being built (phys_panel.h), and what it asked for kept. */
+static void
+put_panel(void)
+{
+	struct phys_panel p;
 	int k;
 
-	ui_fill(window, 0, bar_y, wide, BAR, UI_FACE);
-	for (k = 0; k < BUTTONS; k++) {
-		int key = buttons[k].key, down = (key == 'p' && stopped) || (key == 'c' && sim.owners) || (key == 'W' && workers > 0);
-
-		ui_button(window, 5 + button_step * k, bar_y + 5, button_step - 4, 22, key == 'p' && stopped ? " Go" : buttons[k].label, down);
-	}
-	ui_text(window, 8, bar_y + 33, status, -1, BLACK, 0);
-	GrFlush();
+	if (!panel || seated)
+		return;
+	memset(&p, 0, sizeof p);
+	p.scene = scene, p.stopped = stopped, p.owners = sim.owners, p.wanted = wanted, p.workers = workers, p.most_workers = MC_MAX_CORES;
+	p.boxes = sim.w.bodies, p.heap_boxes = bodies_wanted, p.most_boxes = MAX_BODIES - 1;
+	p.gravity = sim.w.gravity, p.speed_most = SPEED_MOST;
+	p.status = status;
+	p.rates = rates_seen, p.energy = energy_seen, p.figure_count = figures_seen, p.speeds = speeds_seen;
+	if (!phys_panel_put(&p, wide, bar_y + bar))
+		return;
+	for (k = 0; k < p.key_count && panel_key_count < 8; k++)
+		panel_keys[panel_key_count++] = p.keys[k];
+	if (p.workers_asked >= 0)
+		panel_workers = p.workers_asked;
+	if (p.heap_asked >= 2)
+		panel_heap = p.heap_asked;
+	if (p.gravity_asked >= 0.0f)
+		panel_gravity = p.gravity_asked;
 }
 
 /* ---- boxes in the hand: the pointer's is hold 0, a sitter's hands' 1 and 2 ---- */
@@ -1239,7 +1296,7 @@ key_bit(int key)
 }
 
 /* What a key or its button does. 1: the scene again; 2: other workers; 3: the heavy box
- * thrown; 4: fired the way a sitter looks. */
+ * thrown; 4: fired the way a sitter looks; (the panel's) 5: another gravity. */
 static int
 act(int key)
 {
@@ -1353,6 +1410,29 @@ events(void)
 	GR_EVENT e;
 	int again = 0, k;
 
+	/* what the panel asked for in its last frame */
+	for (k = 0; k < panel_key_count; k++) {
+		int asked = act(panel_keys[k]);
+
+		if (asked)
+			again = asked;
+	}
+	panel_key_count = 0;
+	if (panel_workers >= 0) {
+		if (panel_workers != wanted)
+			wanted = panel_workers, again = 2;
+		panel_workers = -1;
+	}
+	if (panel_heap >= 2) {
+		bodies_wanted = panel_heap, panel_heap = -1;
+		if (scene == 3)
+			again = 1;
+	}
+	if (panel_gravity >= 0.0f) {
+		gravity_wanted = panel_gravity, panel_gravity = -1.0f;
+		if (!again)
+			again = 5;
+	}
 	for (;;) {
 		GrCheckNextEvent(&e);
 		if (e.type == GR_EVENT_TYPE_NONE)
@@ -1363,7 +1443,10 @@ events(void)
 			exit(0);
 		}
 		if (e.type == GR_EVENT_TYPE_EXPOSURE && e.exposure.wid == window)
-			draw_bar();
+			view_moved = 1;
+		/* (the panel's: the pointer over it, a press it took, a key while it types) */
+		if (panel && !seated && imp_event(&e))
+			continue;
 		if (e.type == GR_EVENT_TYPE_KEY_DOWN) {
 			if (key_bit(e.keystroke.ch))
 				keys_down |= key_bit(e.keystroke.ch);
@@ -1395,10 +1478,6 @@ events(void)
 			 * top left corner) */
 			ui_window_origin(window, &origin_x, &origin_y);
 			press((int)*control(0x20) - origin_x, (int)*control(0x24) - origin_y, e.button.changebuttons & GR_BUTTON_L ? 1 : 2);
-		} else if ((e.button.changebuttons & GR_BUTTON_L) && e.button.y >= bar_y + 5 && e.button.y < bar_y + 27 && e.button.x >= 5 &&
-			   (e.button.x - 5) % button_step < button_step - 4 && (e.button.x - 5) / button_step < BUTTONS) {
-			if ((k = act(buttons[(e.button.x - 5) / button_step].key)) != 0)
-				again = k;
 		}
 	}
 }
@@ -1658,18 +1737,15 @@ main(void)
 	if (height > info.rows - 60 - BAR) height = info.rows - 60 - BAR;
 	ui_init();
 	bar_y = height, wide = width;
-	button_step = (wide - 10) / BUTTONS;
 	window = GrNewWindowEx(GR_WM_PROPS_APPWINDOW, "Physics", GR_ROOT_WINDOW_ID, -1, -1, width, height + BAR, UI_FACE);
-	/* (not the pointer's moves: while the button is down its place is read from the machine's words) */
+	/* (the pointer's moves for the panel's controls; while the button is down in the picture its place is read
+	 * from the machine's words) */
 	GrSelectEvents(window, GR_EVENT_MASK_EXPOSURE | GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_KEY_UP | GR_EVENT_MASK_FOCUS_OUT | GR_EVENT_MASK_BUTTON_DOWN |
-		GR_EVENT_MASK_CLOSE_REQ | GR_EVENT_MASK_UPDATE);
-	picture = GrNewWindow(window, 0, 0, width, height, 0, BLACK, BLACK);
-	GrMapWindow(picture);
+		GR_EVENT_MASK_BUTTON_UP | GR_EVENT_MASK_MOUSE_MOTION | GR_EVENT_MASK_CLOSE_REQ | GR_EVENT_MASK_UPDATE);
 	GrMapWindow(window);
 	GrSetFocus(window);
 	ui_framed();
-	draw_bar();
-	if (seglInit(picture) < 0) {
+	if (seglInit(window) < 0) {
 		fprintf(stderr, "nxphys: this machine has no GPU\n");
 		return 1;
 	}
@@ -1713,6 +1789,9 @@ main(void)
 		if (sim.costs)
 			there(sim.costs, MC_MAX_CORES * sim.cost_row * 4);
 	}
+	/* the panel, in the GPU memory the boxes left (without it the boxes are as they were) */
+	if ((panel = phys_panel_init(window)) != 0 && (bar = phys_panel_bar()) != BAR)
+		GrResizeWindow(window, wide, bar_y + bar);
 	make_table(table);
 	glGenTextures(1, &texture);
 	glBindTexture(GL_TEXTURE_2D, texture);
@@ -1788,7 +1867,7 @@ main(void)
 			input = *control(0x28) ^ *control(0x2c) << 8;
 			hot_at = now;
 		}
-		if (now - keys_at >= 150 || now - hot_at < 120) {
+		if (now - keys_at >= 150 || now - hot_at < 120 || (panel && imp_busy() && now - keys_at >= 30)) {
 			int was = stopped;
 
 			keys_at = now;
@@ -1809,7 +1888,8 @@ main(void)
 				again = wanted_again;
 			wanted_again = 0;
 		}
-		if (view_moved && now - drawn_at >= 30) {
+		/* (the view turned, or the panel settling an input: the picture shown last again, with the panel) */
+		if ((view_moved || (panel && !seated && imp_busy())) && now - drawn_at >= 30) {
 			show_picture(1);
 			drawn_at = now;
 		}
@@ -1847,6 +1927,8 @@ main(void)
 					fprintf(stderr, "nxphys: a box fired from %d %d %d\n", (int)(fire_from[0] * 1000.0f), (int)(fire_from[1] * 1000.0f),
 						(int)(fire_from[2] * 1000.0f));
 			}
+			if (again == 5)
+				sim.w.gravity = gravity_wanted;	/* (every share waits) */
 			if (again == 2)
 				take_workers();
 			else if (again == 1)
@@ -1888,7 +1970,7 @@ main(void)
 
 			snprintf(status, sizeof status, "%d boxes on %d workers: %u substeps a second, %u.%02u of real time, %u pictures a second", sim.w.bodies,
 				workers, rate, rate / PHYS_HZ, rate % PHYS_HZ * 100 / PHYS_HZ, (unsigned)frames * 1000u / span);
-			draw_bar();
+			note_figures(rate, state_now());
 			if (talk)
 				fprintf(stderr, "physstat: %d boxes, %d shares on %d workers: %u substeps a second, %u pictures a second\n", sim.w.bodies, sim.nshares,
 				workers, rate, (unsigned)frames * 1000u / span);

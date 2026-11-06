@@ -12,7 +12,7 @@ IMGUI=$WORK/src/imgui
 LIB=$WORK/src/imgui-build        # Dear ImGui and its backend, as linux/imgui built them: for the handles only
 BUILD=$WORK/src/pathtrace-build
 OUT=${PATHTRACE_OUT:-$REPO/build/images/linux/root}   # (PATHTRACE_OUT: a private image's overlay)
-[ -f "$LIB/imgui.o" ] || { echo "run linux/imgui/build.sh first"; exit 1; }
+[ -f "$LIB/imgui_panel.o" ] || { echo "run linux/imgui/build.sh first"; exit 1; }
 mkdir -p "$BUILD" "$OUT/usr/bin" "$OUT/usr/share/pathtrace" "$OUT/root/Models"
 # the example meshes: the Utah teapot as Stanford's course has it, the Stanford rabbit at its
 # third size (fetched once), and a knot made here
@@ -60,7 +60,7 @@ done
 rv32-cc -O2 -fno-pie -Wall -Wno-unused-function -fsingle-precision-constant -fno-math-errno $INC -c "$HERE/nxpath.c" -o "$BUILD/nxpath.o"
 rv32-cc -O2 -fno-pie -w $INC -c "$REPO/programs/mc/mcw.c" -o "$BUILD/mcw.o"
 rv32-c++ $TUNE --param=max-inline-insns-auto=60 --param=inline-unit-growth=80 -flto=auto -w "$BUILD/nxpath.o" "$BUILD/tracer.o" "$BUILD/bvh.o" "$BUILD/mesh.o" \
-    "$BUILD/gizmo.o" "$BUILD/panel.o" "$BUILD/ImGuizmo.o" "$BUILD/mcw.o" "$LIB/imgui.o" "$LIB/imgui_draw.o" "$LIB/imgui_tables.o" "$LIB/imgui_widgets.o" \
+    "$BUILD/gizmo.o" "$BUILD/panel.o" "$LIB/imgui_panel.o" "$BUILD/ImGuizmo.o" "$BUILD/mcw.o" "$LIB/imgui.o" "$LIB/imgui_draw.o" "$LIB/imgui_tables.o" "$LIB/imgui_widgets.o" \
     "$LIB/imgui_impl_shaderemu.o" "$LIB/cxxrt.o" "$BUILD/gles.o" "$MW/src/lib/libnano-X.a" -lm -o "$BUILD/nxpath"
 riscv32-linux-strip -o "$OUT/usr/bin/nxpath" "$BUILD/nxpath"
 echo "Other/Path tracer (every core)=nxpath" > "$OUT/usr/share/nxapps.83-pathtrace"

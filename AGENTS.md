@@ -410,7 +410,11 @@
   made turns `ImDrawListFlags_Deferred` off around it, and a place that makes two commands one adds their
   `UserCallbackData` and `UserCallbackDataSize` (the shares' work). After a change, `test_all.py imdemo-sum
   imdemo-sum-inline` must give the library's own sum, and the counts are made again (`linux/imgui/counts.py`).
-  `nxpath`'s window is ImGui's (`panel.cpp`): what a control asks for is done after the frame.
+  `nxpath`'s window is ImGui's (`panel.cpp`): what a control asks for is done after the frame. `nxray`'s and `nxphys`'s
+  panels are too, through `linux/imgui/imgui_panel.h` (`docs/apps/imgui.md`, "A panel over a program's picture"): a frame
+  of ImGui's on the first core only when something changed, the kept one drawn again from GPU memory in between, and
+  none in a holodeck sitter's picture; what changes how the boxes move (`nxphys`'s gravity) is given at a launch, never
+  mid-substep.
 - The browser opens `http` of the machine's own network over its own sockets (`linux/apps/web_net.h`, `docs/apps/web.md`,
   "Addresses the machine reaches itself"), never waiting in a call: the rest goes to the host. A change there runs
   `tools/web_net_test.c` on the host and `tools/test_all.py web`, and a capture of a form (`NXWEB_CHECK` sees no strip with a field).
