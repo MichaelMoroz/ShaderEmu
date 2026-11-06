@@ -14,21 +14,22 @@ extern "C" {
 #define PANEL 250		/* the panel's width, right of the picture */
 #define STATUS 22		/* the line of figures along the bottom */
 #define ROWS 6			/* of the scene's list */
-enum { TAB_OBJECT, TAB_MATERIAL, TAB_RENDER };
+enum { TAB_OBJECT, TAB_MATERIAL, TAB_RENDER, TAB_VIEW, TABS };
 
-/* The sliders by number: a value from 0 to its most, and where it is kept. */
-enum {
-	S_RED, S_GREEN, S_BLUE, S_RADIUS, S_POWER, S_SAMPLES, S_TURNS, S_SKY, S_ROUGH, S_METAL, S_GLASS, S_IOR, S_DENSITY, S_GLOW,
-	S_SKY_RED, S_SKY_GREEN, S_SKY_BLUE, SLIDERS
-};
+/* The sliders of nxpath.c's own settings by number: a step from 0 to its most. The scene's numbers (a place, a
+ * colour, a material's, the camera's) the panel edits where they lie in `sc` (scene.h). */
+enum { S_SAMPLES, S_TURNS, SLIDERS };
 
 /* What a control of the panel or a row of a menu does. */
 enum {
 	A_NONE, A_IMPORT, A_EXPORT, A_CLOSE, A_PLANE, A_BOX, A_BALL, A_LIGHT, A_DUPLICATE, A_DELETE, A_SCENE, A_PICTURE, A_WHOLE, A_RENDER,
-	A_STOP, A_LIVE, A_TAB, A_DETAIL = A_TAB + 3, A_WHAT, A_MATERIAL = A_WHAT + 3, A_LESS = A_MATERIAL + 6, A_MORE = A_LESS + 9, A_SLIDER = A_MORE + 9,
-	A_OPEN = A_SLIDER + SLIDERS, A_SAVE, A_EXAMPLES, A_EXAMPLE, A_CHOOSE = A_EXAMPLE + 64, A_SLIDE = A_CHOOSE + 256, A_SMOOTH = A_SLIDE + SLIDERS, A_FILES
-	/* A_CHOOSE + row: a row of the list clicked; A_SLIDE + slider: let go (its settings kept); A_FILES: a file chosen
-	 * (panel_files_path), its value the action that asked for it */
+	A_STOP, A_LIVE, A_SMOOTH, A_TAB, A_DETAIL = A_TAB + TABS, A_WHAT, A_MATERIAL = A_WHAT + 3, A_SLIDER = A_MATERIAL + 6,
+	A_SLIDE = A_SLIDER + SLIDERS, A_EDITED = A_SLIDE + SLIDERS, A_EDIT_DONE, A_CAMERA, A_RENAMED, A_OPEN, A_SAVE, A_FILES, A_EXAMPLE,
+	A_CHOOSE = A_EXAMPLE + 64
+	/* A_DETAIL: its value the detail chosen; A_SLIDER + slider: its value the step; A_SLIDE + slider: let go (its
+	 * settings kept); A_EDITED: a number of the scene changed in place (the picture is of another scene); A_EDIT_DONE:
+	 * such a number let go; A_CAMERA: the camera's changed; A_RENAMED: a thing's name typed; A_FILES: a file chosen
+	 * (panel_files_path), its value the action that asked for it; A_CHOOSE + row: a row of the list clicked */
 };
 
 /* ---- nxpath.c, for the frame ---- */
@@ -39,12 +40,11 @@ int path_object(void);			/* the object or the light selected, or -1 */
 int path_light(void);
 int path_tab(void);			/* the panel's tab, what the handles do */
 int path_what(void);
-float *path_line(int line, float *step);	/* an object's place, turn or size (0, 1, 2), a light's place (0) */
-int path_slider(int n, int set, int value);	/* a slider's value now (-1: none here), or set to `value` */
+int path_slider(int n, int set, int value);	/* a slider's step now, or set to `value` */
 int path_slider_most(int n);
 void path_slider_text(int n, char *text, int size);
-const float *path_colour(void);		/* what is selected: its colour */
-const char *path_detail(void);		/* the Render tab: Detail's words, the picture's size, what the two buttons say */
+const char *path_detail(int i);		/* the Render tab: detail i's words (-1: the one chosen, NULL past the last), the */
+int path_detail_at(void);		/* one chosen, the picture's size, what the two buttons say */
 void path_picture_size(int *w, int *h);
 int path_live(void);
 int path_smooth(void);			/* the picture shown smoothed while it has few samples (the lanes' job) */
@@ -52,6 +52,12 @@ int path_tracing(void);			/* shares out and not stopped: the button says Stop */
 int path_showing(void);			/* the view shows a traced picture: the button shows the scene */
 int path_greyed(int id);		/* a menu's row that cannot be done now */
 const char *path_example(int i);	/* File, Examples: a scene's name, NULL past the last */
+/* The Render tab's figures: thousands of rays a second at each step of the samples (their count), the picture's
+ * pixels by their light, a share of them in each of `count` bins (0: no picture yet), the scene's figures, the workers. */
+int path_rates(const float **values);
+int path_light_shares(float *bins, int count, float *most);
+void path_figures(char *text, int size);
+int path_workers(void);
 const char *path_status(void);		/* the line of figures, and the picture's bar: its words and how much of it is filled */
 void path_bar(char *text, int size, float *fill);
 

@@ -119,11 +119,19 @@ by OpenGL, and path traced by the worker cores under a tree of boxes that they b
   (3,851) and `knot.obj` (5,040, `make_knot.py`).
 - **The window** (`nxpath.c`, `panel.cpp`): Dear ImGui's menus along the top (File, Add, View, Render), the view
   on the left, a panel on the right, and along the bottom a line of figures with the picture's bar ("The window",
-  below). The panel is the scene's list and three tabs. "Object" (or "Light"): what the handles do (move, turn, size), the
-  three numbers of each with a button down and up (a light: its place, radius, power,
-  colour), Duplicate, Delete. "Render": Detail, samples a pixel (1 to 512, or no end), turns
-  of a path, the background's light, "Traced when the view is still", "Smoothed while it has few samples", Render
-  or Stop, the scene or the picture, Export (a PPM file). In the view the left button picks
+  below). The panel is the scene's list and four tabs of ImGui's own widgets. "Object" (or "Light"): the name typed, what
+  the handles do (radio buttons: move, turn, size), the place, turn and size each three numbers dragged or typed
+  (Ctrl and a click; a size's drag is a hundredth of its largest a pixel), the mesh and its triangles (a light: its
+  place, a radius and a power slider, the power's logarithmic, its colour), Duplicate, Delete. "Material": a kind to
+  start from (a combo), the colour (`ColorEdit3`: three numbers, and a click on the swatch opens a hue wheel), a
+  slider for each of the six numbers, and a plot of how much its coat or glass mirrors from straight on to a grazing
+  look (Schlick's, by its index). "Render": Detail (a combo, with the picture's size), samples a pixel (1 to 512, or
+  no end), turns of a path, "Traced when the view is still", "Smoothed at few samples", Render or Stop, the scene or
+  the picture, and how it goes: a plot of the thousands of rays a second at each step of the samples (96 kept), a
+  histogram of the picture's pixels by their light (32 bins, every 7th pixel, made again when a sample is added),
+  the triangles, boxes and workers. "View": the camera (the point it looks at as three numbers, round and up in
+  degrees, how far away, the lens) and the whole scene in view, the background's colour and power. Export (a PPM
+  file) is File's. In the view the left button picks
   what is clicked and turns the view while held, the right one moves it, the wheel goes
   nearer. Keys: g, r, s the handles, Delete, Ctrl+D a copy, Home the whole scene in view, L
   tracing when still, F5 renders or goes on, Escape stops.
@@ -183,9 +191,13 @@ popup open: a menu's row over the view is the menu's).
 
 - **What a control asks for is done after the frame**: `panel_draw()` hands back `asked` (the `A_*` of `panel.h`,
   a slider's change with its value, a row chosen) and `nxpath.c` does them, so no dialog, no scene change and no
-  new frame happens inside one. What a frame shows is read from `nxpath.c`'s `path_*` functions.
+  new frame happens inside one. What a frame shows is read from `nxpath.c`'s `path_*` functions. The scene's
+  numbers (a place, a colour, a material's, the camera's, a name) the widgets edit where they lie in `sc`, and ask
+  `A_EDITED` (`A_CAMERA` for the camera's, `A_RENAMED` for a name) while they change, `A_EDIT_DONE` when let go:
+  `nxpath.c` then makes the matrices and the view's tables again and the picture is of another scene, as a drag of the
+  handles does. Samples and turns are steps of `nxpath.c`'s own (`path_slider`).
 - **Input**: `nxpath.c`'s events feed ImGui (the pointer from the machine's words when it moves, the buttons, the
-  wheel, keys only while a slider is typed into); a press is the view's where ImGui does not want the pointer
+  wheel, keys only while a field is typed into); a press is the view's where ImGui does not want the pointer
   (`panel_wants_pointer`) and the handles do not have it. A button's change waits until a frame has had the pointer
   where it is: a tab takes a click only where the pointer was the frame before, and `nxkey` moves and presses at once.
 - **When a frame is drawn**: the view changed, ImGui is settling an input (`panel_busy`: a click and its release, a
@@ -235,12 +247,12 @@ picture larger than the view (a window made larger is the way to one).
   the light's ball fills from there, evenly by solid angle. `power` is of the whole ball (`shine`): a
   smaller light is as bright on the ground and brighter to look at. Lights start at 0.12 and
   0.1 of radius.
-- **The background gives no light** unless asked: its colour and power are the Render tab's,
+- **The background gives no light** unless asked: its colour and power are the View tab's,
   and the registry's `pathtrace.background` and `.background.colour`.
 - **Turns** are 1 to 16, 8 at first (glass uses two a thing), and from the third on any path
   that carries little ends by chance, not only one off a matt surface.
-- **The panel** has a third tab, Material: the six starting points, the colour, and a slider
-  with its number for each of the six.
+- **The panel** has a tab Material: the six starting points, the colour, and a slider for each
+  of the six numbers.
 
 Not done: a roughened glass, a glass mesh that is not closed, more than one light; a rough shine's light is
 weighed by a rule (Phong's) that is not the one its next way is drawn by, and nothing has compared it with a

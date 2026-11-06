@@ -328,6 +328,8 @@ static int world_built;
 static uint32_t world_of;
 
 static void draw_panel(void);
+static void rates_begin(void);
+static void rates_note(void);
 
 /* The picture's bar along the bottom (panel.h): its words, and how much of it is filled. */
 void
@@ -514,6 +516,7 @@ start_phase(int p)
 				mcw_wait(s);
 	memset(busy, 0, sizeof busy);
 	next_tile = sample = out = 0, rays = 0;
+	rates_begin();
 	field_on = workers_on = -1, batch_state[0] = batch_state[1] = 0, batch_next = 0, batch_from = 0;
 	/* (the batches once, when the field or the self-test first wants them: 59 MB; touched, as the workers store to them) */
 	for (s = 0; (use_field || getenv("NXPATH_PROBE")) && s < 2; s++) {
@@ -763,7 +766,7 @@ trace_on(void)
 				fprintf(stderr, "nxpath: the picture %d x %d has a sample after %u ms\n", pt.width, pt.height, now_ms() - began);
 		}
 		if (sample != before)
-			draw_bar();
+			rates_note(), draw_bar();
 		return;
 	}
 	if (pt.stop == 2 || (phase == 0 && pt.stop)) {
@@ -955,73 +958,18 @@ row_label(int row)
 	return text;
 }
 
-/* The values a line of three shows and its small buttons change: an object's place, turn
- * or size, or a light's place. */
-static float *
-line_values(int line, float *step)
-{
-	int o = chosen_object(), l = chosen_light();
-
-	*step = line == 0 ? 0.1f : line == 1 ? 15.0f : 0.0f;
-	if (o >= 0)
-		return line == 0 ? sc.objects[o].place : line == 1 ? sc.objects[o].turn : sc.objects[o].size;
-	return l >= 0 && line == 0 ? sc.lights[l].place : NULL;
-}
-
 static int
 slider_most(int n)
 {
-	return n == S_SAMPLES ? SAMPLE_STEPS - 1 : n == S_TURNS ? TURNS - 1 : 255;
-}
-
-/* A slider's number of the selected thing or of the scene: where it is, and from what it goes how far. */
-static float *
-slider_place(int n, float *least, float *span)
-{
-	struct sc_object *o = chosen_object() >= 0 ? &sc.objects[chosen_object()] : NULL;
-	struct sc_light *l = chosen_light() >= 0 ? &sc.lights[chosen_light()] : NULL;
-
-	*least = 0.0f, *span = 1.0f;
-	switch (n) {
-	case S_RED: case S_GREEN: case S_BLUE: return o ? &o->colour[n] : l ? &l->colour[n] : NULL;
-	case S_RADIUS: *least = 0.02f, *span = 0.98f; return l ? &l->radius : NULL;
-	case S_POWER: *span = 100.0f; return l ? &l->power : NULL;
-	case S_SKY: *span = 2.0f; return &sc.sky_power;
-	case S_SKY_RED: case S_SKY_GREEN: case S_SKY_BLUE: return &sc.sky[n - S_SKY_RED];
-	case S_ROUGH: return o ? &o->rough : NULL;
-	case S_METAL: return o ? &o->metal : NULL;
-	case S_GLASS: return o ? &o->glass : NULL;
-	case S_IOR: *least = 1.0f, *span = 1.5f; return o ? &o->ior : NULL;
-	case S_DENSITY: *span = 10.0f; return o ? &o->density : NULL;
-	case S_GLOW: *span = 20.0f; return o ? &o->glow : NULL;
-	}
-	return NULL;
+	return n == S_SAMPLES ? SAMPLE_STEPS - 1 : TURNS - 1;
 }
 
 static int
 slider_value(int n, int set, int value)
 {
-	float least, span, *f;
-
 	if (n == S_SAMPLES) { if (set) samples_at = value; return samples_at; }
-	if (n == S_TURNS) { if (set) bounces = value + 1; return bounces - 1; }
-	f = slider_place(n, &least, &span);
-	if (!f)
-		return -1;
-	if (set)
-		*f = least + (float)value * span / 255.0f;
-	value = (int)((*f - least) * 255.0f / span + 0.5f);
-	return value < 0 ? 0 : value > 255 ? 255 : value;
-}
-
-static void
-number_text(char *text, int size, float v)
-{
-	int whole = (int)(v < 0.0f ? -v : v), part = (int)(((v < 0.0f ? -v : v) - (float)whole) * 100.0f + 0.5f);
-
-	if (part == 100)
-		whole++, part = 0;
-	snprintf(text, (size_t)size, "%s%d.%02d", v < 0.0f ? "-" : "", whole, part);
+	if (set) bounces = value + 1;
+	return bounces - 1;
 }
 
 /* What panel.cpp reads (panel.h). */
@@ -1032,45 +980,103 @@ int path_object(void) { return chosen_object(); }
 int path_light(void) { return chosen_light(); }
 int path_tab(void) { return tab; }
 int path_what(void) { return what; }
-float *path_line(int line, float *step) { return line_values(line, step); }
 int path_slider(int n, int set, int value) { return slider_value(n, set, value); }
 int path_slider_most(int n) { return slider_most(n); }
 int path_live(void) { return live; }
 int path_smooth(void) { return smooth; }
 int path_tracing(void) { return tracing && !pt.stop; }
 int path_showing(void) { return showing; }
-const char *path_detail(void) { return detail_names[detail_at] + 1; }
+const char *path_detail(int i) { return i < 0 ? detail_names[detail_at] + 1 : i < DETAILS ? detail_names[i] + 1 : NULL; }
+int path_detail_at(void) { return detail_at; }
 void path_picture_size(int *w, int *h) { picture_size(w, h); }
 const char *path_example(int i) { return i < EXAMPLE_COUNT ? examples[i].label : NULL; }
 
-const float *
-path_colour(void)
-{
-	int o = chosen_object(), l = chosen_light();
-
-	return o >= 0 ? sc.objects[o].colour : l >= 0 ? sc.lights[l].colour : NULL;
-}
-
-/* A slider's value in words: a colour's part as it is counted, a whole number of a light's power, the others to hundredths. */
+/* A slider's value in words: the samples a picture is given, the turns of a path. */
 void
 path_slider_text(int n, char *text, int size)
 {
-	float least, span, *f = slider_place(n, &least, &span);
-
-	text[0] = 0;
 	if (n == S_SAMPLES && sample_steps[samples_at])
 		snprintf(text, (size_t)size, "%d", sample_steps[samples_at]);
 	else if (n == S_SAMPLES)
 		snprintf(text, (size_t)size, "no end");
-	else if (n == S_TURNS)
+	else
 		snprintf(text, (size_t)size, "%d", bounces);
-	else if (f && (n <= S_BLUE || n >= S_SKY_RED))
-		snprintf(text, (size_t)size, "%d", slider_value(n, 0, 0));
-	else if (f && n == S_POWER)
-		snprintf(text, (size_t)size, "%d", (int)(*f + 0.5f));
-	else if (f)
-		number_text(text, size, *f);
 }
+
+/* ---- the Render tab's figures (panel.h): the rays a second by the samples, the picture's light by its share ---- */
+
+#define RATES 96
+static float rates[RATES];		/* thousands of rays a second, at each step of the samples */
+static int rate_count, rate_sample;
+static unsigned rate_rays, rate_ms;
+
+/* (a picture begun: its rates from now) */
+static void
+rates_begin(void)
+{
+	rate_count = rate_sample = 0, rate_rays = 0, rate_ms = now_ms();
+}
+
+/* (the samples went on: the rays since the last step over its time) */
+static void
+rates_note(void)
+{
+	unsigned now = now_ms();
+
+	if (sample <= rate_sample || now == rate_ms)
+		return;
+	if (rate_count == RATES)
+		memmove(rates, rates + 1, (RATES - 1) * sizeof rates[0]), rate_count--;
+	rates[rate_count++] = (float)(rays - rate_rays) / (float)(now - rate_ms);
+	rate_sample = sample, rate_rays = rays, rate_ms = now;
+}
+
+int
+path_rates(const float **values)
+{
+	*values = rates;
+	return rate_count;
+}
+
+/* How much of the traced picture is at each of `bins` steps of light (of its pixels as shown, every 7th), the
+ * most of them in `*most`; 0 while there is no picture. Made again only when the picture has more samples. */
+int
+path_light_shares(float *bins, int count, float *most)
+{
+	static float made[64];
+	static int made_sample = -1, made_count;
+	static uint32_t *made_of;
+	int i, n = pt.width * pt.height;
+
+	if (!traced || stale || phase != 1 || !pt.pixels || count > 64)
+		return 0;
+	if (made_sample != sample || made_of != pt.pixels || made_count != count) {
+		int seen = 0;
+
+		memset(made, 0, sizeof made);
+		for (i = 0; i < n; i += 7, seen++) {
+			uint32_t c = pt.pixels[i], y = ((c >> 16 & 255) * 54 + (c >> 8 & 255) * 183 + (c & 255) * 19) >> 8;
+
+			made[y * (uint32_t)count >> 8] += 1.0f;
+		}
+		for (i = 0; i < count; i++)
+			made[i] = seen ? made[i] * 100.0f / (float)seen : 0.0f;
+		made_sample = sample, made_of = pt.pixels, made_count = count;
+	}
+	*most = 0.0f;
+	for (i = 0; i < count; i++)
+		bins[i] = made[i], *most = made[i] > *most ? made[i] : *most;
+	return 1;
+}
+
+/* The scene's figures in words: its triangles and its tree's boxes. */
+void
+path_figures(char *text, int size)
+{
+	snprintf(text, (size_t)size, "%d triangles, %d boxes", sc_world.triangle_count, sc_world.node_count);
+}
+
+int path_workers(void) { return workers; }
 
 /* A menu's row that cannot be done now. */
 int
@@ -1560,19 +1566,6 @@ act(int id)
 {
 	int o = chosen_object();
 
-	if (id >= A_LESS && id < A_SLIDER) {
-		int up = id >= A_MORE, n = id - (up ? A_MORE : A_LESS), line = n / 3, k = n % 3;
-		float step, *v = line_values(line, &step);
-
-		if (!v)
-			return;
-		if (line == 2)	/* (a size grows by a tenth of itself, all three ways at once) */
-			v[0] *= up ? 1.1f : 1.0f / 1.1f, v[1] *= up ? 1.1f : 1.0f / 1.1f, v[2] *= up ? 1.1f : 1.0f / 1.1f;
-		else
-			v[k] += up ? step : -step;
-		changed();
-		return;
-	}
 	switch (id) {
 	case A_OPEN: open_dialog(NULL); break;
 	case A_SAVE: save_dialog(NULL); break;
@@ -1602,8 +1595,10 @@ act(int id)
 		break;
 	case A_LIVE: live = !live, still_since = now_ms(), keep_settings(), tell(), draw_panel(); break;
 	case A_SMOOTH: smooth = !smooth, view_dirty = 1, keep_settings(), draw_panel(); break;
-	case A_TAB: case A_TAB + 1: case A_TAB + 2: tab = id - A_TAB, tell(), draw_panel(); break;
-	case A_DETAIL: detail_at = (detail_at + 1) % DETAILS, keep_settings(), invalidate(), tell(), draw_panel(); break;
+	case A_TAB: case A_TAB + 1: case A_TAB + 2: case A_TAB + 3: tab = id - A_TAB, tell(), draw_panel(); break;
+	case A_EDITED: changed(); break;	/* (a number of the scene's, changed by the panel in place) */
+	case A_CAMERA: invalidate(), draw_panel(); break;
+	case A_RENAMED: tell(), draw_panel(); break;
 	case A_WHAT: case A_WHAT + 1: case A_WHAT + 2: what = id - A_WHAT, view_dirty = 1, draw_panel(); break;
 	default:
 		if (id >= A_EXAMPLE && id < A_EXAMPLE + EXAMPLE_COUNT) {
@@ -1641,12 +1636,15 @@ asked(const struct panel_frame *f)
 			else if (!trace_more())
 				invalidate();
 			draw_panel();
-		} else if (id >= A_SLIDE && id < A_SLIDE + SLIDERS) {
-			/* (a slider let go: the picture's settings kept, and the still view's clock from now) */
-			if (tab == TAB_RENDER)
+		} else if ((id >= A_SLIDE && id < A_SLIDE + SLIDERS) || id == A_EDIT_DONE) {
+			/* (a slider or a number let go: the picture's settings kept, and the still view's clock from now) */
+			if (tab == TAB_RENDER || tab == TAB_VIEW)
 				keep_settings();
 			still_since = now_ms();
-		} else if (id >= A_CHOOSE && id < A_SLIDE)
+		} else if (id == A_DETAIL) {
+			if (f->values[i] != detail_at && f->values[i] >= 0 && f->values[i] < DETAILS)
+				detail_at = f->values[i], keep_settings(), invalidate(), tell(), draw_panel();
+		} else if (id >= A_CHOOSE && id < A_CHOOSE + 256)
 			choose(id - A_CHOOSE);
 		else if (id == A_FILES) {
 			/* (a file chosen: its dialog, by the action that asked) */
