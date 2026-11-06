@@ -478,6 +478,17 @@ a row under the board on the den's left wall (`ShaderEmuPens.cs`, "ShaderEmu/Put
 the open scene"). It is a package of its own (`world/install_packages.py`), its prefab put in
 as it is, outside "ShaderEmu", so the restyle leaves its keys alone. Nothing of it is baked.
 
+## What "Build world" makes
+
+"ShaderEmu/Build world" builds the open scene when it is a world already (the copy uploaded as ShaderEmu v2 too),
+else `ShaderEmuWorld.unity`, and stops before taking anything down when the boot image is missing. It makes every
+part of the world: the "Add ... to the open scene" menus put one part into a scene as it is, without a rebuild,
+and a new part is made by both. The storage sign, the power warning, the danger zone, the network's panel and the
+corridor's gate were made by their menus alone until 6 November 2026, and a rebuild had left both scenes without
+them (no `/persistence`). In `Build()` the storage sign comes before the power warning, which hangs over it; the
+danger zone after `Scope`, which its laser points at; the network's panel after `Sharing`, whose hub it reads; the
+gate last, as it takes the parts there are then.
+
 ## The danger zone
 
 On the den's right wall, between the room's switches and the rack: a panel whose keys harm

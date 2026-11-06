@@ -20,8 +20,8 @@ Shader "ShaderEmu/WindowRain"
         _Sky ("The city at infinity (the window probe's picture)", CUBE) = "black" {}
         _SkyFlash ("The same as a flash of lightning of 1 lights it", CUBE) = "black" {}
         _Room ("The room as the pane sees it (what the water's surface reflects back in)", CUBE) = "black" {}
-        _Mist ("Mist on the dry glass: the city behind it blurred (Heartfelt's fog; drops and trails clear it)", Range(0, 1)) = 0.5
-        _MistBlur ("The mist's blur, degrees", Float) = 4
+        _Mist ("Mist on the dry glass: the city behind it blurred (Heartfelt's fog; drops and trails clear it)", Range(0, 1)) = 0.15
+        _MistBlur ("The mist's blur, degrees", Float) = 4.47
         _Scale ("Metres of glass a unit of Heartfelt's picture", Float) = 0.84
         _Rain ("Heartfelt's rain amount", Range(0,1)) = 1
         _Height ("The water's height where Heartfelt's value is 1 (mm)", Float) = 0.83

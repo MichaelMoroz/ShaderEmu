@@ -64,8 +64,8 @@ public static partial class ShaderEmuBuilder
         glass.SetFloat("_IOR", 1.333f);
         glass.SetColor("_Clear", new Color(0.93f, 0.96f, 1f, 1f));
         glass.SetFloat("_Rim", 1f);
-        glass.SetFloat("_Mist", 0.5f);       // Heartfelt's fog on the dry glass, which drops and trails clear
-        glass.SetFloat("_MistBlur", 4f);
+        glass.SetFloat("_Mist", 0.15f);      // Heartfelt's fog on the dry glass, which drops and trails clear (as tuned in the editor, 6 November 2026)
+        glass.SetFloat("_MistBlur", 4.47f);
         glass.SetFloat("_Debug", 0f);
         glass.renderQueue = -1;
         glass.globalIlluminationFlags = MaterialGlobalIlluminationFlags.EmissiveIsBlack;

@@ -20,6 +20,15 @@ public static partial class ShaderEmuBuilder
         GameObject root = GameObject.Find("ShaderEmu");
         if (root == null) throw new System.Exception("no ShaderEmu in the open scene: run ShaderEmu/Build world");
         CreateProgramAssets();
+        Gate(root);
+        AssetDatabase.SaveAssets();
+        EditorSceneManager.MarkSceneDirty(root.scene);
+    }
+
+    // The gate over every part with a behaviour or a station: made last, as it takes the parts there are then
+    // (Build world calls it at its end).
+    static void Gate(GameObject root)
+    {
         Transform old = root.transform.Find("Gate");
         if (old != null) Object.DestroyImmediate(old.gameObject);
 
@@ -40,8 +49,6 @@ public static partial class ShaderEmuBuilder
         Apply(script);
         foreach (EmuPointer pointer in root.GetComponentsInChildren<EmuPointer>(true)) { pointer.gate = script; Apply(pointer); }
         foreach (EmuPersist persist in root.GetComponentsInChildren<EmuPersist>(true)) { persist.gate = script; Apply(persist); }
-        AssetDatabase.SaveAssets();
-        EditorSceneManager.MarkSceneDirty(root.scene);
         Debug.Log("[ShaderEmu] the gate holds " + parts.Count + " parts: " + string.Join(", ", parts.ConvertAll(p => p.name)));
     }
 }
