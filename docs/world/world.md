@@ -301,6 +301,13 @@ lightmap, which shows a line wherever two pieces of a wall meet and at every cor
 - The city (`world/city.py`) is boxes with windows from three tiling textures, roofs, lights and
   the river in a white one tinted by vertex colour, and streets from four kinds of block in one
   texture. Only faces the window can see are made. A vertex's alpha is its haze.
+  Its point lights are drawn on the surface of a box that carries them (`box(light=...)`, `City.shader`'s
+  `CarriedLight`; 6 November 2026), the box their dark housing: a mast's obstruction light a disc 0.3 m round
+  on a metre box, the bridges' and the banks' lamps discs on theirs, a roof's crown a neon tube 16 cm high in
+  a band of 1.2 m, a sign neon in strokes. Each is box-filtered by the pixel's footprint (`fwidth`): under a
+  pixel it is its share of the light, so it never winks out between pixels, at 80 times its colour
+  (`_LampBright`) for the bloom. A light shows only where its carrier is drawn: the metre box is a pixel
+  at the city's far edge, 900 m off at 1080p.
 - The room's two clocks run (the wall's by the door, the alarm clock on the desk). `hands=` of
   `b.asset` makes each hand an object of its own, its origin the dial's middle and its mesh
   pointing at twelve (`spawn_hands` in `world/assets.py`); the builder gives it
@@ -348,7 +355,7 @@ lightmap, which shows a line wherever two pieces of a wall meet and at every cor
   the city looked up in that direction in the window probe's picture, given to the material as `_Sky`
   (a camera's picture taken outside the pane, `WindowProbe`, linear and HDR: captured into a half-float
   cube target, as `RenderToCubemap` into the asset gave 8-bit sRGB values the glass read as linear, the
-  city washed out), and what the surface reflects mirrored back out (`_Rim`). Between the drops the pane
+  city washed out; 1024 a face and BC6H since 6 November 2026, the city's lights being points), and what the surface reflects mirrored back out (`_Rim`). Between the drops the pane
   is clear. Against aliasing: no screen derivatives in the water (taken over 2 x 2 blocks of pixels they
   drew a grid); a drop is never narrower than a pixel's footprint, from the projection; the water is
   taken on a 3 x 3 lattice across the pixel with Heartfelt's exact gradient at each point (`HeartfeltD`,
