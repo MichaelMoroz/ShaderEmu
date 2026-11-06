@@ -2,6 +2,8 @@
 // figures and the handles, one frame of ImGui over the view OpenGL drew. What a control asks for is handed back
 // in the frame's `asked`, for nxpath.c to do after the frame.
 #include <dirent.h>
+#include <float.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,6 +16,7 @@
 extern "C" {
 #include <nano-X.h>
 #include "panel.h"
+#include "scene.h"
 }
 
 static int frames_left;     // frames wanted after an input: a click and a release, a hover settling
@@ -148,109 +151,87 @@ static void head(const char* words)
     note(nullptr);
 }
 
-// A slider with its name before it and its value in it, as the panel's lines had them.
-static void slider_line(int n, const char* name)
+// A control's name before it, and the control the rest of the line.
+static const float NAMED = 62;
+static void named(const char* name)
 {
-    char value[32], format[40];
-    int v = path_slider(n, 0, 0);
-    if (v < 0) return;
-    path_slider_text(n, value, sizeof value);
-    // (the value is the slider's words: a '%' in them is written twice)
-    int k = 0;
-    for (const char* c = value; *c && k < (int)sizeof format - 2; c++) {
-        if (*c == '%') format[k++] = '%';
-        format[k++] = *c;
-    }
-    format[k] = 0;
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted(name);
     note(name);
-    ImGui::SameLine(58);
+    ImGui::SameLine(NAMED);
     ImGui::SetNextItemWidth(-1);
+}
+
+// What a control that edits one of the scene's numbers in place asks for: `id` while it changes (A_EDITED, the
+// camera's A_CAMERA), A_EDIT_DONE when it is let go.
+static void edited(bool changed, int id = A_EDITED)
+{
+    if (changed) ask(id);
+    if (ImGui::IsItemDeactivatedAfterEdit()) ask(A_EDIT_DONE);
+    note(nullptr);
+}
+
+// One of nxpath.c's sliders (samples, turns): steps, the value's words in it.
+static void slider_line(int n, const char* name)
+{
+    char value[32];
+    int v = path_slider(n, 0, 0);
+    path_slider_text(n, value, sizeof value);
+    named(name);
     ImGui::PushID(n);
-    if (ImGui::SliderInt("##slider", &v, 0, path_slider_most(n), format)) ask(A_SLIDER + n, v);
+    if (ImGui::SliderInt("##slider", &v, 0, path_slider_most(n), value, ImGuiSliderFlags_NoInput)) ask(A_SLIDER + n, v);
     if (ImGui::IsItemDeactivatedAfterEdit()) ask(A_SLIDE + n);
     note(value);
     ImGui::PopID();
 }
 
-static void swatch_head(const char* words)
+static void nothing_selected()
 {
-    // (its words and the colour beside them, then the line: the swatch is not over the heading's line)
-    const float* c = path_colour();
-    const float right = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted(words);
-    note(words);
-    if (c) {
-        ImGui::SameLine(right - 26);
-        ImGui::ColorButton("##colour", ImVec4(c[0], c[1], c[2], 1), ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoPicker, ImVec2(26, 16));
-        note(nullptr);
-    }
-    ImGui::Separator();
+    ImGui::TextWrapped("Nothing is selected: click a thing in the picture or in the list.");
+    note(nullptr);
+    ImGui::TextWrapped("Add has a plane, a box, a ball and a light; File imports a mesh.");
+    note(nullptr);
 }
 
 static void object_tab(int o, int l)
 {
-    static const char* const lines[3] = {"Place", "Turn", "Size"};
     static const char* const what_names[3] = {"Move", "Turn", "Size"};
-    const float third = (ImGui::GetContentRegionAvail().x - 2 * ImGui::GetStyle().ItemSpacing.x) / 3;
-    if (o < 0 && l < 0) {
-        ImGui::TextWrapped("Nothing is selected: click a thing in the picture or in the list.");
-        note(nullptr);
-        ImGui::TextWrapped("Add has a plane, a box, a ball and a light; File imports a mesh.");
-        note(nullptr);
-        return;
-    }
-    head(path_row(path_selected()) + (l >= 0 ? 2 : 0));
+    if (o < 0 && l < 0) return nothing_selected();
+    named("Name");
+    if (ImGui::InputText("##name", o >= 0 ? sc.objects[o].name : sc.lights[l].name, SC_NAME)) ask(A_RENAMED);
+    note(nullptr);
     if (o >= 0) {
+        sc_object& ob = sc.objects[o];
+        named("Handles");
         for (int i = 0; i < 3; i++) {
             if (i) ImGui::SameLine();
-            if (button(what_names[i], third, 0, path_what() == i)) ask(A_WHAT + i);
+            if (ImGui::RadioButton(what_names[i], path_what() == i)) ask(A_WHAT + i);
+            note(what_names[i]);
         }
-    }
-    // the three numbers of each line with a button down and up
-    const float x0 = 46, step = (ImGui::GetContentRegionAvail().x - x0) / 3;
-    ImGui::Dummy(ImVec2(0, 0));
-    for (int k = 0; k < 3; k++) {
-        ImGui::SameLine(x0 + k * step + step / 2 - 3);
-        ImGui::TextUnformatted(k == 0 ? "x" : k == 1 ? "y" : "z");
-    }
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(2, 0));    // (narrow buttons: a number between each two)
-    for (int i = 0; i < (o >= 0 ? 3 : 1); i++) {
-        float st, *v = path_line(i, &st);
-        if (!v) continue;
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted(lines[i]);
-        note(lines[i]);
-        for (int k = 0; k < 3; k++) {
-            char text[24];
-            const float f = v[k] < 0 ? -v[k] : v[k];
-            int whole = (int)f, part = (int)((f - (float)whole) * 100.0f + 0.5f);
-            if (part == 100) whole++, part = 0;
-            snprintf(text, sizeof text, "%s%d.%02d", v[k] < 0 ? "-" : "", whole, part);
-            ImGui::PushID(i * 3 + k);
-            ImGui::SameLine(x0 + k * step);
-            if (ImGui::SmallButton("-")) ask(A_LESS + i * 3 + k);
-            note("-");
-            const float w = ImGui::CalcTextSize(text).x;
-            ImGui::SameLine(x0 + k * step + (step - w) / 2);
-            ImGui::TextUnformatted(text);
+        head("Where it is");
+        named("Place");
+        edited(ImGui::DragFloat3("##place", ob.place, 0.01f, -1000.0f, 1000.0f, "%.2f"));
+        named("Turn");
+        edited(ImGui::DragFloat3("##turn", ob.turn, 0.5f, -360.0f, 360.0f, "%.0f"));
+        named("Size");
+        const float largest = fmaxf(ob.size[0], fmaxf(ob.size[1], ob.size[2]));
+        edited(ImGui::DragFloat3("##size", ob.size, fmaxf(largest * 0.01f, 0.0001f), 0.0001f, 1000.0f, "%.3g", ImGuiSliderFlags_AlwaysClamp));
+        if (ob.mesh >= 0 && ob.mesh < sc.mesh_count) {
+            ImGui::TextDisabled("%s, %d triangles", sc.meshes[ob.mesh].name, sc.meshes[ob.mesh].triangles);
             note(nullptr);
-            ImGui::SameLine(x0 + (k + 1) * step - 13);
-            if (ImGui::SmallButton("+")) ask(A_MORE + i * 3 + k);
-            note("+");
-            ImGui::PopID();
         }
-    }
-    ImGui::PopStyleVar();
-    if (l >= 0) {
-        slider_line(S_RADIUS, "Radius");
-        slider_line(S_POWER, "Power");
-        swatch_head("Colour");
-        slider_line(S_RED, "Red");
-        slider_line(S_GREEN, "Green");
-        slider_line(S_BLUE, "Blue");
+    } else {
+        sc_light& li = sc.lights[l];
+        head("Where it is");
+        named("Place");
+        edited(ImGui::DragFloat3("##place", li.place, 0.01f, -1000.0f, 1000.0f, "%.2f"));
+        named("Radius");
+        edited(ImGui::SliderFloat("##radius", &li.radius, 0.02f, 1.0f, "%.2f"));
+        head("Its light");
+        named("Power");
+        edited(ImGui::SliderFloat("##power", &li.power, 0.0f, 100.0f, "%.1f", ImGuiSliderFlags_Logarithmic));
+        named("Colour");
+        edited(ImGui::ColorEdit3("##colour", li.colour, ImGuiColorEditFlags_PickerHueWheel));
     }
     ImGui::Spacing();
     const float half = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) / 2;
@@ -262,66 +243,117 @@ static void object_tab(int o, int l)
 static void material_tab(int o, int l)
 {
     static const char* const kinds[6] = {"Matt", "Plastic", "Metal", "Mirror", "Glass", "Glow"};
-    static const char* const made[6] = {"Rough", "Metal", "Glass", "Index", "Density", "Glow"};
-    if (o < 0 && l < 0) {
-        ImGui::TextWrapped("Nothing is selected: click a thing in the picture or in the list.");
-        note(nullptr);
-        return;
-    }
-    head(path_row(path_selected()) + (l >= 0 ? 2 : 0));
+    if (o < 0 && l < 0) return nothing_selected();
     if (o < 0) {
         ImGui::TextWrapped("A light has no material: its size, power and colour are under Light.");
         note(nullptr);
         return;
     }
-    const float third = (ImGui::GetContentRegionAvail().x - 2 * ImGui::GetStyle().ItemSpacing.x) / 3;
-    for (int i = 0; i < 6; i++) {
-        if (i % 3) ImGui::SameLine();
-        if (button(kinds[i], third)) ask(A_MATERIAL + i);
+    sc_object& ob = sc.objects[o];
+    named("Kind");
+    if (ImGui::BeginCombo("##kind", "a kind of thing...")) {
+        for (int i = 0; i < 6; i++)
+            if (ImGui::Selectable(kinds[i])) ask(A_MATERIAL + i);
+        ImGui::EndCombo();
     }
-    swatch_head("Colour");
-    slider_line(S_RED, "Red");
-    slider_line(S_GREEN, "Green");
-    slider_line(S_BLUE, "Blue");
+    note(nullptr);
+    named("Colour");
+    edited(ImGui::ColorEdit3("##colour", ob.colour, ImGuiColorEditFlags_PickerHueWheel));
     head("What it is made of");
-    for (int i = 0; i < 6; i++) slider_line(S_ROUGH + i, made[i]);
+    named("Rough");
+    edited(ImGui::SliderFloat("##rough", &ob.rough, 0.0f, 1.0f, "%.2f"));
+    named("Metal");
+    edited(ImGui::SliderFloat("##metal", &ob.metal, 0.0f, 1.0f, "%.2f"));
+    named("Glass");
+    edited(ImGui::SliderFloat("##glass", &ob.glass, 0.0f, 1.0f, "%.2f"));
+    named("Index");
+    edited(ImGui::SliderFloat("##ior", &ob.ior, 1.0f, 2.5f, "%.2f"));
+    named("Density");
+    edited(ImGui::SliderFloat("##density", &ob.density, 0.0f, 10.0f, "%.2f"));
+    named("Glow");
+    edited(ImGui::SliderFloat("##glow", &ob.glow, 0.0f, 20.0f, "%.2f", ImGuiSliderFlags_Logarithmic));
+    // how much its coat or glass mirrors, from straight on to a grazing look (Schlick's, by its index)
+    head("Mirrored by the angle");
+    float mirrored[32];
+    const float r0 = ((ob.ior - 1) / (ob.ior + 1)) * ((ob.ior - 1) / (ob.ior + 1));
+    for (int i = 0; i < 32; i++) {
+        const float c = cosf((float)i / 31.0f * 1.5707963f), m = 1 - c, m5 = m * m * m * m * m;
+        mirrored[i] = r0 + (1 - r0) * m5;
+    }
+    char words[40];
+    snprintf(words, sizeof words, "%.0f%% straight on", r0 * 100.0f);
+    ImGui::PlotLines("##mirrored", mirrored, 32, 0, words, 0.0f, 1.0f, ImVec2(-1, 44));
+    note(nullptr);
 }
 
 static void render_tab()
 {
-    char text[40];
+    char text[80];
     int w, h;
     head("The picture");
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("Detail");
-    note("Detail");
-    ImGui::SameLine(58);
-    if (button(path_detail(), 86)) ask(A_DETAIL);
     path_picture_size(&w, &h);
-    snprintf(text, sizeof text, "%d x %d", w, h);
-    ImGui::SameLine();
-    ImGui::TextUnformatted(text);
-    note(text);
+    snprintf(text, sizeof text, "%s, %d x %d", path_detail(-1), w, h);
+    named("Detail");
+    if (ImGui::BeginCombo("##detail", text)) {
+        for (int i = 0; path_detail(i); i++)
+            if (ImGui::Selectable(path_detail(i), i == path_detail_at())) ask(A_DETAIL, i);
+        ImGui::EndCombo();
+    }
+    note(nullptr);
     slider_line(S_SAMPLES, "Samples");
     slider_line(S_TURNS, "Turns");
-    head("The background's light");
-    slider_line(S_SKY_RED, "Red");
-    slider_line(S_SKY_GREEN, "Green");
-    slider_line(S_SKY_BLUE, "Blue");
-    slider_line(S_SKY, "Power");
-    ImGui::Spacing();
     bool live = path_live() != 0;
     if (ImGui::Checkbox("Traced when the view is still", &live)) ask(A_LIVE);
     note("Traced when the view is still");
     bool smooth = path_smooth() != 0;
-    if (ImGui::Checkbox("Smoothed while it has few samples", &smooth)) ask(A_SMOOTH);
-    note("Smoothed while it has few samples");
+    if (ImGui::Checkbox("Smoothed at few samples", &smooth)) ask(A_SMOOTH);
+    note("Smoothed at few samples");
     const float half = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) / 2;
     const bool going = path_tracing() != 0, shown = path_showing() != 0;
     if (button(going ? "Stop" : "Render", half, 26, going)) ask(going ? A_STOP : A_RENDER);
     ImGui::SameLine();
     if (button(shown ? "Show the scene" : "Show the picture", half, 26)) ask(shown ? A_SCENE : A_PICTURE);
-    if (button("Export...", half)) ask(A_EXPORT);
+    // the rays a second as the samples went, the picture's pixels by their light, the scene's figures
+    head("How it goes");
+    const float* rates;
+    const int n = path_rates(&rates);
+    float most = 0;
+    for (int i = 0; i < n; i++) most = rates[i] > most ? rates[i] : most;
+    if (n) snprintf(text, sizeof text, "%.0f thousand rays a second", rates[n - 1]);
+    else snprintf(text, sizeof text, "rays a second, as it traces");
+    ImGui::PlotLines("##rates", rates, n, 0, text, 0.0f, most * 1.25f + 1.0f, ImVec2(-1, 52));
+    note(nullptr);
+    float bins[32];
+    if (!path_light_shares(bins, 32, &most)) memset(bins, 0, sizeof bins), most = 0;
+    ImGui::PlotHistogram("##light", bins, 32, 0, most > 0 ? "its pixels, dark to light" : "its pixels: no picture yet", 0.0f, most * 1.25f + 0.01f,
+                         ImVec2(-1, 52));
+    note(nullptr);
+    path_figures(text, sizeof text);
+    ImGui::TextDisabled("%s, %d workers", text, path_workers());
+    note(nullptr);
+}
+
+// The camera and the background's light.
+static void view_tab()
+{
+    sc_camera& c = sc.camera;
+    head("The camera");
+    named("Looks at");
+    edited(ImGui::DragFloat3("##target", c.target, 0.01f, -1000.0f, 1000.0f, "%.2f"), A_CAMERA);
+    named("Round");
+    edited(ImGui::DragFloat("##turn", &c.turn, 0.5f, -3600.0f, 3600.0f, "%.0f degrees"), A_CAMERA);
+    named("Up");
+    edited(ImGui::SliderFloat("##tilt", &c.tilt, -89.0f, 89.0f, "%.0f degrees"), A_CAMERA);
+    named("Away");
+    edited(ImGui::DragFloat("##far", &c.far, 0.02f, 0.1f, 200.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_Logarithmic), A_CAMERA);
+    named("Lens");
+    edited(ImGui::SliderFloat("##lens", &c.lens, 0.1f, 2.0f, "%.2f"), A_CAMERA);
+    if (button("The whole scene in view", -1)) ask(A_WHOLE);
+    head("The background's light");
+    named("Colour");
+    edited(ImGui::ColorEdit3("##sky", sc.sky, ImGuiColorEditFlags_PickerHueWheel));
+    named("Power");
+    edited(ImGui::SliderFloat("##sky_power", &sc.sky_power, 0.0f, 2.0f, "%.2f"));
 }
 
 // ---- a file chosen (panel_files): ImGui's window over the panel, in place of the window system's dialogs ----
@@ -530,8 +562,8 @@ static void panel(const panel_frame* f, int bar)
         note(nullptr);
         const int o = path_object(), l = path_light(), tab = path_tab();
         if (ImGui::BeginTabBar("##tabs")) {
-            static const char* const names[3] = {"Object", "Material", "Render"};
-            for (int k = 0; k < 3; k++) {
+            static const char* const names[TABS] = {"Object", "Material", "Render", "View"};
+            for (int k = 0; k < TABS; k++) {
                 // (a tab chosen by the program, not by a click: as the panel says)
                 const ImGuiTabItemFlags flags = tab != shown_tab && k == tab ? ImGuiTabItemFlags_SetSelected : 0;
                 const char* name = k == TAB_OBJECT && o < 0 && l >= 0 ? "Light###Object" : names[k];
@@ -539,7 +571,8 @@ static void panel(const panel_frame* f, int bar)
                     if (k != tab && tab == shown_tab) ask(A_TAB + k);
                     if (k == TAB_OBJECT) object_tab(o, l);
                     else if (k == TAB_MATERIAL) material_tab(o, l);
-                    else render_tab();
+                    else if (k == TAB_RENDER) render_tab();
+                    else view_tab();
                     ImGui::EndTabItem();
                 }
             }
