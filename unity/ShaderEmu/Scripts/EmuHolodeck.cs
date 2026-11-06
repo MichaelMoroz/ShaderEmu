@@ -54,7 +54,7 @@ public class EmuHolodeck : UdonSharpBehaviour
     public GameObject consolesModel, consolesGuard;
     public GameObject seatsModel, seatsGuard;   // the chairs go with it: one mesh for all the rooms too
     public EmuKeyboard keyboard;               // a keyboard before the seat, the sitter's own machine's: one, moved to their room
-    public Vector3 keyboardAt, keyboardTurn;   // in a room's frame
+    public Vector3 keyboardAt, keyboardTurn;   // (before 6 November 2026 its place in a room's frame: now it hangs under the screen, PlaceKeyboard)
     public GameObject[] plates, plateGuards, keyPlates, showButtons;
     public Texture2D blackTexture;
     public float plane = 0.35f;        // the world's scale: the plane of the program's view that is 1.28 m wide
@@ -144,8 +144,8 @@ public class EmuHolodeck : UdonSharpBehaviour
         flat = false;
         if (keyboard != null)
         {
-            keyboard.transform.SetPositionAndRotation(frame.TransformPoint(keyboardAt), frame.rotation * Quaternion.Euler(keyboardTurn));
             keyboard.Feed(machine, true);
+            placed[room] = -1;   // (the screen placed again, and the keyboard under it: PlaceKeyboard)
         }
         Arrange();
         if (pointer != null) pointer.ownHolo = room;
@@ -311,10 +311,12 @@ public class EmuHolodeck : UdonSharpBehaviour
         if (consolesGuard != null) consolesGuard.SetActive(!hidden);
         if (seatsModel != null) seatsModel.SetActive(!hidden);
         if (seatsGuard != null) seatsGuard.SetActive(!hidden);
-        if (keyboard != null && keyboard.gameObject.activeSelf != (seated && !hidden))
+        // (the keyboard is seen wherever the sitter's screen is: under it)
+        bool keys = seated && (!hidden || flat);
+        if (keyboard != null && keyboard.gameObject.activeSelf != keys)
         {
-            if (!(seated && !hidden)) { keyboard.Release(0); keyboard.Release(1); }   // (a key held as it goes comes up)
-            keyboard.gameObject.SetActive(seated && !hidden);
+            if (!keys) { keyboard.Release(0); keyboard.Release(1); }   // (a key held as it goes comes up)
+            keyboard.gameObject.SetActive(keys);
         }
         for (int k = 0; k < count; k++)
         {
@@ -522,6 +524,7 @@ public class EmuHolodeck : UdonSharpBehaviour
                     screenGuards[k].SetPositionAndRotation(screen.position, screen.rotation);
                     screenGuards[k].localScale = screen.lossyScale;
                 }
+                if (me) PlaceKeyboard(screen, frames[k]);
             }
 
             string who = occupant[k] == 0 ? "FREE" : me ? Networking.LocalPlayer.displayName : NameOf(occupant[k]);
@@ -594,6 +597,33 @@ public class EmuHolodeck : UdonSharpBehaviour
 
     // The HUD layer before the sitter's eyes: on a desktop it turns and tilts with the view at once; in a headset it follows
     // the head's turn about the upright and its tilt up and down a little late (a layer fixed to the face is tiring), its roll never.
+    // The keyboard hangs under the sitter's screen, the console's small one or the large one, in its plane tipped back
+    // KeyboardTilt degrees, its top KeyboardGap below the screen's lower edge: seen wherever the screen is, never behind the
+    // sitter's own body (before, it lay before the seat, under their hands). Where the floor is too near it tips further
+    // back, to 85 degrees, and then rises over the screen's edge, its lowest edge KeyboardFloor over the floor.
+    private const float KeyboardTilt = 25f, KeyboardGap = 0.04f, KeyboardFloor = 0.12f;
+
+    private void PlaceKeyboard(Transform screen, Transform frame)
+    {
+        if (keyboard == null) return;
+        Transform kb = keyboard.transform;
+        Vector3 edge = screen.TransformPoint(new Vector3(0f, -0.5f, 0f)) - screen.up * KeyboardGap;
+        float floor = frame.position.y + KeyboardFloor;
+        float tilt = KeyboardTilt, low = 0f;
+        Vector3 centre = edge;
+        while (true)
+        {
+            kb.rotation = screen.rotation * Quaternion.Euler(tilt, 0f, 0f);
+            Vector3 up = kb.TransformVector(new Vector3(0f, keyboard.panelHeight, 0f));
+            centre = edge - up * 0.5f;
+            low = centre.y - Mathf.Abs(up.y) * 0.5f;
+            if (low >= floor || tilt >= 85f) break;
+            tilt += 5f;
+        }
+        if (low < floor) centre.y += floor - low;
+        kb.position = centre;
+    }
+
     private void PlaceHud(VRCPlayerApi player, VRCPlayerApi.TrackingData head)
     {
         if (hud == null || !hud.gameObject.activeSelf) return;

@@ -773,7 +773,8 @@ public static partial class ShaderEmuBuilder
             Hidden[canvas] = onlyNew || !shown;
             canvas.gameObject.SetActive(true);   // one that opens later is drawn as it will be
             EmuKeyboard keyboard = canvas.GetComponent<EmuKeyboard>();
-            if (keyboard != null) KeyboardLook(keyboard, bold, monoBold);
+            // (the holodeck's has no model under it: its caps are its canvas's own, ShaderEmuHolodeck.AddHoloKeyboard)
+            if (keyboard != null) { if (canvas.name != "Holodeck keyboard") KeyboardLook(keyboard, bold, monoBold); }
             else if (paper) PaperLook(canvas, paperSprite, mono, monoBold);
             else if (canvas.name == "Signs" || canvas.name.EndsWith(" name")) TapeLook(canvas, monoBold, changing);
             else if (canvas.name == "Memory legend" || canvas.name == "GPU legend" || canvas.name == "CPU sign" || canvas.name == "Speed sign")   // drawn over a screen: part of a display

@@ -716,10 +716,12 @@ public static partial class ShaderEmuBuilder
             plate.pixelsPerUnitMultiplier = 1.3f;
             colours[i] = CapColour;
             TextMeshProUGUI label = plate.GetComponentInChildren<TextMeshProUGUI>(true);
-            if (label != null) Letters(label, bold, Ink, true);
+            if (label != null) { label.gameObject.SetActive(true); label.enabled = true; Letters(label, bold, Ink, true); }
         }
+        // (the den's keyboard is a model's: the restyle left its canvas no plate and no legends, ShaderEmuRetro.KeyboardLook;
+        // this one has no model under it and draws them, or it is black)
         Transform back = copy.transform.Find("Back");
-        if (back != null) Picture(back.GetComponent<Image>(), UiSprite("Raised", 6), Faceplate);
+        if (back != null) { Picture(back.GetComponent<Image>(), UiSprite("Raised", 6), Faceplate); back.GetComponent<Image>().enabled = true; }
         foreach (string name in new[] { "Title", "Modifiers" })
         {
             Transform t = copy.transform.Find(name);

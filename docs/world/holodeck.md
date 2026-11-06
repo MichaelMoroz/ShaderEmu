@@ -262,13 +262,20 @@ Doom, Quake, Quake III, ClassiCube and Half-Life read those words, each in its o
   (`EmuMachine.keysOwn`). A single grip's key waits 0.15 s, or is a tap when let go sooner, so
   the first of both grips (standing up) sends nothing. While the console is put away the screen answers no beam and no
   click (`EmuPointer.holoHidden`); it is still shown when the program's picture is flat.
-- **A keyboard before the seat** (`EmuHolodeck.keyboard`, "Holodeck keyboard"): the den's
-  display keyboard copied, 0.54 m wide, at knee height before the sitter and tipped up to
-  them (`keyboardAt`, `keyboardTurn`), its caps and legends drawn by the canvas and unlit. One
+- **A keyboard under the screen** (`EmuHolodeck.keyboard`, "Holodeck keyboard"): the den's
+  display keyboard copied, 0.54 m wide, its caps and legends drawn by the canvas and unlit (the
+  restyle leaves it alone: the den's caps are a model's, and its canvas has none, so this one
+  was black until 6 November 2026). It hangs under the sitter's screen, the console's small one
+  or the large one, in the screen's plane tipped back 25 degrees, its top 4 cm under the
+  screen's lower edge (`PlaceKeyboard`, again whenever the screen moves or is resized); where
+  the floor is too near it tips back further, to 85 degrees, and then rises, its lowest edge
+  12 cm over the floor. Before, it lay at knee height before the seat (`keyboardAt`, unused
+  now), where a sitter's own body hid it. It is seen wherever the screen is, the large one
+  of a flat program with the console put away too. One
   for all rooms, moved to the sitter's when they sit, fed to their own machine as raw keys
   (`Feed`), pressed by beams and by a desktop's view and click as any keyboard of the world
-  (`EmuPointer.holoKeyboard`, its place in `keyboards`), and put away with the console: a key
-  held as it goes comes up. A mark of its own (`HoloGuard.shader`) keeps the program's world
+  (`EmuPointer.holoKeyboard`, its place in `keyboards`), and put away with the console when no
+  screen is shown: a key held as it goes comes up. A mark of its own (`HoloGuard.shader`) keeps the program's world
   off it. "ShaderEmu/Add the holodecks' keyboard to the open scene" makes it, and Build world
   runs it.
   On `rvc_cpu` with the words of a desktop's sitter (`--host 00000112,0,0,0,0,00007f00,0,0`)
