@@ -141,28 +141,4 @@ public static partial class ShaderEmuBuilder
         OnClick(mode, machine, "SpeedMode");
     }
 
-    // Into the scene as it is, without building the world again (which would need a bake).
-    [MenuItem("ShaderEmu/Add the memory screen's views and speed modes to the open scene")]
-    public static void AddScope()
-    {
-        EmuMachine machine = Object.FindObjectOfType<EmuMachine>();
-        GameObject panel = GameObject.Find("Control panel");
-        if (machine == null || panel == null) throw new System.Exception("no machine in the open scene: run ShaderEmu/Build world");
-        CreateProgramAssets();
-        Scope(machine.transform.parent, Den(), panel.GetComponent<RectTransform>(), machine);
-        // the room's look for what Scope made again, as Retro gives it, without new plates
-        RetroInPlace(GameObject.Find("ShaderEmu").transform, new System.Collections.Generic.List<Canvas> { panel.GetComponent<Canvas>() });
-        TMP_FontAsset monoBold = RetroFont("IBMPlexMono-Bold");
-        foreach (string over in new[] { "Memory legend", "GPU legend", "CPU sign" })
-            foreach (TextMeshProUGUI label in Den().Find(over).GetComponentsInChildren<TextMeshProUGUI>(true))
-            { label.font = monoBold; label.fontSharedMaterial = monoBold.material; EditorUtility.SetDirty(label); }
-        EmuScope scope = Object.FindObjectOfType<EmuScope>();
-        scope.plain = Color.clear;
-        scope.picked = LitUp;
-        Apply(scope);
-        AssetDatabase.SaveAssets();
-        EditorSceneManager.MarkSceneDirty(machine.gameObject.scene);
-        EditorSceneManager.SaveScene(machine.gameObject.scene);
-        Debug.Log("[ShaderEmu] memory screen views and speed modes added");
-    }
 }

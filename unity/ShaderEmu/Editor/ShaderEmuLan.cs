@@ -30,58 +30,6 @@ public static partial class ShaderEmuBuilder
         Apply(lan);
     }
 
-    [MenuItem("ShaderEmu/Add the network's panel to the open scene")]
-    public static void AddLan()
-    {
-        EmuMachine machine = Object.FindObjectOfType<EmuMachine>();
-        if (machine == null) throw new System.Exception("no machine in the open scene: run ShaderEmu/Build world");
-        CreateProgramAssets();
-        UdonSharpEditorUtility.CopyUdonToProxy(machine);
-        Lan(machine.transform.parent, machine);
-        RetroNewPanels();
-        AssetDatabase.SaveAssets();
-        EditorSceneManager.MarkSceneDirty(machine.gameObject.scene);
-        Debug.Log("[ShaderEmu] the network's panel is on the right wall (the scene is not saved)");
-    }
 
-    // The control panel's read-out has the registers under it: room for seventeen lines.
-    static void StatsRoom(Transform world)
-    {
-        foreach (TextMeshProUGUI label in world.GetComponentsInChildren<TextMeshProUGUI>(true))
-        {
-            if (label.name != "Stats" || label.transform.parent.name != "Control panel") continue;
-            RectTransform rect = label.rectTransform;
-            rect.sizeDelta = new Vector2(rect.sizeDelta.x, 486);
-            label.fontSize = 22;
-            label.enableWordWrapping = false;
-            EditorUtility.SetDirty(label);
-            // (its sunken field, if the panel is styled: the label's rectangle and ten more each way)
-            Transform field = label.transform.parent.Find("Stats field");
-            if (field != null) ((RectTransform)field).sizeDelta = rect.sizeDelta + new Vector2(20, 20);
-        }
-    }
 
-    // A baked scene from before 12 October 2026, without building the world again: the streams'
-    // sixteen slots and the players' panel made again, the consoles of the holodecks, the
-    // network's panel, the read-out's room. Run it after "Put the modelled room into the open
-    // scene" (the classroom is that command's); the plates it makes want a bake.
-    [MenuItem("ShaderEmu/Bring the open scene up to 12 October")]
-    public static void October12()
-    {
-        EmuMachine machine = Object.FindObjectOfType<EmuMachine>();
-        if (machine == null) throw new System.Exception("no machine in the open scene: run ShaderEmu/Build world");
-        Transform world = machine.transform.parent;
-        AddSharing();
-        UdonSharpEditorUtility.CopyUdonToProxy(machine);
-        Lan(world, machine);
-        StatsRoom(world);
-        ConsolesAgain();
-        Canvas control = GameObject.Find("Control panel").GetComponent<Canvas>();
-        Transform plate = control.transform.Find("Control panel plate");
-        if (plate != null) Object.DestroyImmediate(plate.gameObject);   // drawn again, for the read-out's larger field
-        RetroNewPanels();
-        AssetDatabase.SaveAssets();
-        EditorSceneManager.MarkSceneDirty(machine.gameObject.scene);
-        Debug.Log("[ShaderEmu] the scene has the 12 October fixes (not saved; its new plates want a bake)");
-    }
 }

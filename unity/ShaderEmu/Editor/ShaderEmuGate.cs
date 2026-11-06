@@ -14,16 +14,6 @@ public static partial class ShaderEmuBuilder
 {
     static readonly string[] Ungated = { "Light volume" };   // LTCGI is gated: it looks for its screens once, at start
 
-    [MenuItem("ShaderEmu/Add the corridor's gate to the open scene")]
-    public static void AddGate()
-    {
-        GameObject root = GameObject.Find("ShaderEmu");
-        if (root == null) throw new System.Exception("no ShaderEmu in the open scene: run ShaderEmu/Build world");
-        CreateProgramAssets();
-        Gate(root);
-        AssetDatabase.SaveAssets();
-        EditorSceneManager.MarkSceneDirty(root.scene);
-    }
 
     // The gate over every part with a behaviour or a station: made last, as it takes the parts there are then
     // (Build world calls it at its end).

@@ -334,8 +334,8 @@ machine with its own `--uart-log`. Start them from PowerShell.
   then (from 110 s) both send batches as events and ping again at 115 and 140 s; then each finds
   the other with `nxnet`, lists its Home and fetches a picture. Each client's log has the
   `round-trip` lines and the `[Lan] times` lines. Turn both switches off and the clients back to
-  1 before saving the scene. "ShaderEmu/Add the network's player object to the open scene" adds what
-  a scene lacks.
+  1 before saving the scene. "Build world" makes the
+  player object (`NetPlayer`).
 - `QUAKE_SUM` leaves a player's name out, as it leaves the world's model out: its place is counted from
   QuakeC's strings, which the network drivers' console commands move.
 

@@ -92,19 +92,4 @@ public static partial class ShaderEmuBuilder
         }
     }
 
-    // Into the scene as it is, without building the world again (which would need a bake).
-    [MenuItem("ShaderEmu/Add the danger zone to the open scene")]
-    public static void AddDanger()
-    {
-        EmuMachine machine = Object.FindObjectOfType<EmuMachine>();
-        Transform computer = Den();
-        if (machine == null || computer == null) throw new System.Exception("no machine in the open scene: run ShaderEmu/Build world");
-        CreateProgramAssets();
-        UdonSharpEditorUtility.CopyUdonToProxy(machine);
-        Danger(machine.transform.parent, computer, machine);
-        RetroNewPanels();   // never left as a bare canvas
-        AssetDatabase.SaveAssets();
-        EditorSceneManager.MarkSceneDirty(machine.gameObject.scene);
-        Debug.Log("[ShaderEmu] the danger zone is on the right wall (the scene is not saved)");
-    }
 }

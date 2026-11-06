@@ -669,8 +669,7 @@ fxc2 (`Data\Tools\fxc2_d3dcompiler.dll`), so a round costs what a pass costs in 
 beyond its rounds (the room's cameras, the editor's own drawing, the frame's end), so more rounds a frame come nearer the harness's speed.
 A guest's wait for something the host gives once a Unity frame shows as rounds that end at once to the frame's end.
 
-"ShaderEmu/Add the tick's and the commit's cameras to the open scene" puts the cameras, their meshes and the targets into a scene without
-building the world again.
+"Build world" makes the cameras, their meshes and the targets (`MachineCameras`).
 
 ## Switches
 

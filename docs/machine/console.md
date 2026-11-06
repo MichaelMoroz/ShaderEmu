@@ -67,9 +67,7 @@ To check it in the harness (`--send` knows `\xNN` there, not in `rvc_cpu`):
   of text takes a while. "Open Link" has
   the machine open the field's text as an address (`docs/system/open.md`).
 - What other players see of the console (`docs/world/share.md`) is the terminal shown, at its end.
-- "ShaderEmu/Add the console's tabs and paste field to the open scene" puts both into a
-  scene without building the world again (run it twice the first time: a behaviour's
-  program has to exist before it can be filled in).
+- "Build world" makes both (`Console` in `ShaderEmuConsole.cs`).
 
 To test in play mode: `SendCustomEvent("Tab2")` on "Terminal screen", set the field's text
 on "Console paste" and send `SendLine`, then read the terminal's `grid` (row `r` of terminal

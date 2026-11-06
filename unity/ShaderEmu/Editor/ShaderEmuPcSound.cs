@@ -35,12 +35,4 @@ public static partial class ShaderEmuBuilder
         Apply(pc);
     }
 
-    [MenuItem("ShaderEmu/Add the computer's sounds to the open scene")]
-    public static void AddPcSounds()
-    {
-        GameObject world = GameObject.Find("ShaderEmu");
-        if (world == null) throw new System.Exception("no world in the open scene: run ShaderEmu/Build world");
-        PcSounds(world.transform);
-        UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(world.scene);
-    }
 }

@@ -309,6 +309,10 @@
   sitter must see"): from the eye point every panel, key, screen and keyboard meant for the sitter has a free line of sight, no
   other panel or thing over it. "ShaderEmu/Check lines of sight in the open scene" (`ShaderEmuSight.Check`) must say 0 covered
   after a change that places any of them, and a new one is a target of it (it found the holodeck keyboard over the console's keys).
+- "Build world" makes every part of the world (6 November 2026; `docs/world/world.md`, "What Build world makes"): a new part
+  goes into `Build()` in the order its references need, never into an "Add ... to the open scene" menu of its own, and a
+  change to a part is a rebuild and a bake. Forty-six such menus had grown, and five parts made only by them were lost
+  by a rebuild (`/persistence` among them).
 - The world's camera (the scene descriptor's reference camera, `ShaderEmuModels.cs`) has a near clip of 0.01 m, always
   (6 November 2026, the developer's rule): the least VRChat takes, so a hand, a keyboard or a HUD near the eye is never cut.
   A builder or a change that makes or touches that camera keeps it.

@@ -160,23 +160,6 @@ public static partial class ShaderEmuBuilder
         deck.largeSize = new Vector3(wide, wide / aspect, 1f);
     }
 
-    [MenuItem("ShaderEmu/Add the holodecks' large screens to the open scene")]
-    public static void AddLargeScreens()
-    {
-        Transform world = GameObject.Find("ShaderEmu").transform;
-        foreach (EmuHolodeck deck in world.GetComponentsInChildren<EmuHolodeck>(true))
-        {
-            UdonSharpEditorUtility.CopyUdonToProxy(deck);
-            Transform small = deck.screens[0];
-            deck.screenTurn = small.localEulerAngles;
-            LargeScreen(deck, deck.screenSize.x / deck.screenSize.y, deck.roomSize.x);
-            Apply(deck);
-        }
-        HoloGuards(world);
-        UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(world.gameObject.scene);
-        AssetDatabase.SaveAssets();
-        Debug.Log("[ShaderEmu] the holodecks have their large screens (the scene is not saved)");
-    }
 
     // The console's keys: x, y, width, height on its face of ConsoleWide by ConsoleHigh, and the
     // event of EmuHolodeck each sends. A sitter's controls are picked by the game (EmuGamepad).
@@ -387,135 +370,13 @@ public static partial class ShaderEmuBuilder
         }
     }
 
-    // A key added to a console whose plate is drawn already: a cap and lettering of its own in
-    // the plate's look, unlit (lit by the room's light volume they were black in a holodeck).
-    static void OwnCap(Button key)
-    {
-        Image image = key.targetGraphic as Image;
-        if (image == null) return;
-        Picture(image, UiSprite("Keycap", 16, true), CapColour);
-        image.pixelsPerUnitMultiplier = 1.3f;
-        ColorBlock colours = key.colors;
-        colours.normalColor = colours.selectedColor = Color.white;
-        colours.highlightedColor = new Color(1f, 0.95f, 0.7f);
-        colours.pressedColor = new Color(0.6f, 0.6f, 0.6f);
-        colours.colorMultiplier = 1f;
-        key.colors = colours;
-        foreach (TextMeshProUGUI label in key.GetComponentsInChildren<TextMeshProUGUI>(true))
-            Letters(label, RetroFont("IBMPlexSansCondensed-Bold"), Ink, true);
-        EditorUtility.SetDirty(key);
-    }
 
-    // The beams and their key on each console, beside Hide; that key and Hide get their caps.
-    // Nothing here wants a bake, and no plate is made again.
-    [MenuItem("ShaderEmu/Add the holodecks' hand beams to the open scene")]
-    public static void AddHandBeams()
-    {
-        Transform world = GameObject.Find("ShaderEmu").transform;
-        TextMeshProUGUI unused;
-        int keys = 0;
-        foreach (EmuHolodeck deck in world.GetComponentsInChildren<EmuHolodeck>(true))
-        {
-            UdonSharpEditorUtility.CopyUdonToProxy(deck);
-            for (int k = 0; k < deck.frames.Length; k++)
-            {
-                Transform plate = deck.frames[k].Find("Holodeck " + (k + 1) + " plate");
-                if (plate == null) continue;
-                if (plate.Find("ToggleBeam") == null)
-                {
-                    OnClick(MakeButton((RectTransform)plate, "ToggleBeam", "Beam", ConsoleKeys[20], ConsoleKeys[21], ConsoleKeys[22], ConsoleKeys[23], 18,
-                                       out unused), deck, "ToggleBeam");
-                    keys++;
-                }
-                foreach (string name in new[] { "ToggleBeam", "HideConsole" })
-                {
-                    Transform key = plate.Find(name);
-                    if (key != null) OwnCap(key.GetComponent<Button>());
-                }
-            }
-            deck.beam = true;
-            Apply(deck);
-            HandBeams(world, deck);
-        }
-        UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(world.gameObject.scene);
-        AssetDatabase.SaveAssets();
-        Debug.Log("[ShaderEmu] the holodecks have their hand beams, and " + keys + " consoles a Beam key (the scene is not saved)");
-    }
 
-    // The consoles laid out again where they stand (ConsoleKeys): the 3D key under Screen, the
-    // Volume and Voices sliders under the others, and each plate drawn again onto itself, keeping
-    // its place in the lightmap. Nothing here wants a bake.
-    [MenuItem("ShaderEmu/Lay out the holodecks' consoles again in the open scene")]
-    public static void ConsolesInPlace()
-    {
-        Transform world = GameObject.Find("ShaderEmu").transform;
-        int count = 0;
-        List<Canvas> redraw = new List<Canvas>();
-        foreach (EmuHolodeck deck in world.GetComponentsInChildren<EmuHolodeck>(true))
-        {
-            UdonSharpEditorUtility.CopyUdonToProxy(deck);
-            int rooms = deck.frames.Length;
-            if (deck.worldLabels == null || deck.worldLabels.Length != rooms) deck.worldLabels = new TextMeshProUGUI[rooms];
-            ConsoleArrays(deck);
-            for (int k = 0; k < rooms; k++)
-            {
-                RectTransform plate = (RectTransform)deck.frames[k].Find("Holodeck " + (k + 1) + " plate");
-                if (plate == null) continue;
-                for (int i = 0; i < ConsoleEvents.Length; i++)
-                {
-                    float x = ConsoleKeys[i * 4], y = ConsoleKeys[i * 4 + 1], w = ConsoleKeys[i * 4 + 2], h = ConsoleKeys[i * 4 + 3];
-                    RectTransform thing = (RectTransform)plate.Find(ConsoleEvents[i]);
-                    if (ConsoleEvents[i].EndsWith("Slide"))
-                    {
-                        if (thing == null) { ConsoleSlider(plate, deck, k, i); continue; }
-                        Place(thing, x, y, w, h);
-                        Place((RectTransform)plate.Find(ConsoleEvents[i] + " name"), 12, y, x - 18, h);
-                        Place((RectTransform)plate.Find(ConsoleEvents[i] + " value"), x + w + 6, y, ConsoleWide - x - w - 18, h);
-                        continue;
-                    }
-                    if (thing == null)
-                    {
-                        TextMeshProUGUI label;
-                        Button key = MakeButton(plate, ConsoleEvents[i], ConsoleNames[i], x, y, w, h, 18, out label);
-                        OnClick(key, deck, ConsoleEvents[i]);
-                        if (ConsoleEvents[i] == "ToggleWorld") deck.worldLabels[k] = label;
-                        continue;
-                    }
-                    Place(thing, x, y, w, h);
-                    foreach (TextMeshProUGUI text in thing.GetComponentsInChildren<TextMeshProUGUI>(true))
-                    {
-                        Place(text.rectTransform, 0, 0, w, h);
-                        if (i == 0) text.fontSize = 18;
-                    }
-                }
-                redraw.Add(plate.GetComponent<Canvas>());
-                count++;
-            }
-            Apply(deck);
-        }
-        foreach (EmuPointer pointer in world.GetComponentsInChildren<EmuPointer>(true))
-        {
-            UdonSharpEditorUtility.CopyUdonToProxy(pointer);
-            ConsoleKeyTable(pointer);
-            Apply(pointer);
-        }
-        RetroInPlace(world, redraw);
-        UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(world.gameObject.scene);
-        Debug.Log("[ShaderEmu] " + count + " consoles laid out again and drawn onto their plates (the scene is not saved)");
-    }
 
-    static void Place(RectTransform rect, float x, float y, float w, float h)
-    {
-        if (rect == null) return;
-        rect.anchoredPosition = new Vector2(x, -y);
-        rect.sizeDelta = new Vector2(w, h);
-        EditorUtility.SetDirty(rect);
-    }
 
     // A console can be put away: a Hide key on each plate, and in the console's place a small
     // translucent button that brings it back (EmuHolodeck.HideConsole, ShowConsole). The plates
     // stay as they are; nothing here wants a bake.
-    [MenuItem("ShaderEmu/Add the holodecks' console switch to the open scene")]
     public static void ConsoleSwitch()
     {
         Transform world = GameObject.Find("ShaderEmu").transform, models = world.Find("Models");
@@ -594,97 +455,12 @@ public static partial class ShaderEmuBuilder
         Debug.Log("[ShaderEmu] the holodecks' consoles can be put away (the scene is not saved)");
     }
 
-    // The consoles' faces made again where they are, in a scene from before their keys were the
-    // beams' and the controls the game's: new plates, which take the probes' light until the next bake.
-    [MenuItem("ShaderEmu/Make the holodecks' consoles again in the open scene")]
-    public static void ConsolesAgain()
-    {
-        Transform world = GameObject.Find("ShaderEmu").transform;
-        int count = 0;
-        foreach (EmuHolodeck deck in world.GetComponentsInChildren<EmuHolodeck>(true))
-        {
-            UdonSharpEditorUtility.CopyUdonToProxy(deck);
-            List<KeyValuePair<Button, string>> keys = new List<KeyValuePair<Button, string>>();
-            for (int k = 0; k < deck.frames.Length; k++)
-            {
-                Transform frame = deck.frames[k], old = frame.Find("Holodeck " + (k + 1) + " plate");
-                if (old == null) continue;
-                Vector3 at = old.localPosition, turn = old.localEulerAngles;
-                Object.DestroyImmediate(old.gameObject);
-                ConsolePanel(frame, k, at, turn, deck, keys);
-                count++;
-            }
-            ConsoleBeams(world, deck);
-            Apply(deck);
-            foreach (KeyValuePair<Button, string> key in keys) OnClick(key.Key, deck, key.Value);
-        }
-        RetroNewPanels();
-        HoloGuards(world);
-        UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(world.gameObject.scene);
-        Debug.Log("[ShaderEmu] " + count + " consoles are made again (the scene is not saved; their plates want a bake)");
-    }
 
-    // The World and Screen size sliders in place of World + and -: the consoles made again, and
-    // what the holodeck keeps of them and of their marks found anew. No bake needed to work.
-    [MenuItem("ShaderEmu/Put the holodecks' size sliders into the open scene")]
-    public static void SizeSliders()
-    {
-        ConsolesAgain();
-        Transform world = GameObject.Find("ShaderEmu").transform, guards = world.Find("Holodeck").Find("Holodeck guards");
-        foreach (EmuHolodeck deck in world.GetComponentsInChildren<EmuHolodeck>(true))
-        {
-            UdonSharpEditorUtility.CopyUdonToProxy(deck);
-            int rooms = deck.frames.Length;
-            if (deck.plates == null || deck.plates.Length != rooms) deck.plates = new GameObject[rooms];
-            if (deck.plateGuards == null || deck.plateGuards.Length != rooms) deck.plateGuards = new GameObject[rooms];
-            if (deck.keyPlates == null || deck.keyPlates.Length != rooms) deck.keyPlates = new GameObject[rooms];
-            Transform all = guards.Find("Holo consoles guard"), chairs = guards.Find("Holo seats guard");
-            deck.consolesGuard = all != null ? all.gameObject : null;
-            deck.seatsGuard = chairs != null ? chairs.gameObject : null;
-            for (int k = 0; k < rooms; k++)
-            {
-                Transform frame = deck.frames[k], plate = frame.Find("Holodeck " + (k + 1) + " plate"), keysPlate = frame.Find("Keys plate");
-                Transform guard = guards.Find("Holodeck " + (k + 1) + " plate guard");
-                deck.plates[k] = plate != null ? plate.gameObject : null;
-                deck.keyPlates[k] = keysPlate != null ? keysPlate.gameObject : null;
-                deck.plateGuards[k] = guard != null ? guard.gameObject : null;
-            }
-            Apply(deck);
-        }
-        UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(world.gameObject.scene);
-        Debug.Log("[ShaderEmu] the holodecks' consoles have the World and Screen size sliders (the scene is not saved)");
-    }
 
-    // A scene from before the seats waited on the floor (EmuSeat): each put there, its reach left where it was.
-    [MenuItem("ShaderEmu/Make the holodecks' seats rise under their sitters in the open scene")]
-    public static void SeatsRise()
-    {
-        Transform world = GameObject.Find("ShaderEmu").transform;
-        int count = 0;
-        foreach (EmuSeat sits in world.GetComponentsInChildren<EmuSeat>(true))
-        {
-            UdonSharpEditorUtility.CopyUdonToProxy(sits);
-            sits.height = SeatHeight;
-            sits.settle = 0.5f;
-            Apply(sits);
-            Transform seat = sits.transform;
-            seat.localPosition = new Vector3(seat.localPosition.x, 0, seat.localPosition.z);
-            BoxCollider reach = seat.GetComponent<BoxCollider>();
-            if (reach != null) reach.center = new Vector3(0, 0.15f + SeatHeight, 0);
-            // (the program's camera stands at the sitter's eyes: it comes with them)
-            Transform eye = seat.parent.Find("Seat eye");
-            if (eye != null) eye.localPosition = new Vector3(eye.localPosition.x, SeatHeight + 0.7f, eye.localPosition.z);
-            EditorUtility.SetDirty(seat);
-            count++;
-        }
-        UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(world.gameObject.scene);
-        Debug.Log("[ShaderEmu] " + count + " seats wait on the floor and rise under their sitters (the scene is not saved)");
-    }
 
     // A keyboard before the seat (EmuHolodeck.keyboard): the den's display keyboard copied, its
     // caps drawn by the canvas (the den's are a model's) and unlit, a mark of its own for the
     // world's depth. One for all rooms, moved to the sitter's and put away with the console.
-    [MenuItem("ShaderEmu/Add the holodecks' keyboard to the open scene")]
     public static void AddHoloKeyboard()
     {
         Transform world = GameObject.Find("ShaderEmu").transform;
@@ -778,17 +554,6 @@ public static partial class ShaderEmuBuilder
         EditorUtility.SetDirty(m);
     }
 
-    [MenuItem("ShaderEmu/Give the holodecks' world the ROM")]
-    public static void GiveHolodecksRom()
-    {
-        foreach (string name in new[] { "GpuHolodeck", "GpuVolume" })
-        {
-            Material m = AssetDatabase.LoadAssetAtPath<Material>(Generated + "/" + name + ".mat");
-            if (m != null) GiveRom(m);
-        }
-        AssetDatabase.SaveAssets();
-        Debug.Log("[ShaderEmu] the holodecks' world reads the ROM");
-    }
 
     // The HUD layer (GpuHolodeckHud.shader; docs/world/holodeck.md, "The HUD layer"): the program's flat draws on a unit quad
     // before the sitter, the world's point mesh and machine state; off until somebody sits in a world (EmuHolodeck.Arrange).
@@ -801,7 +566,6 @@ public static partial class ShaderEmuBuilder
         GiveRom(hudMat);
         hudMat.SetFloat("_HudFlip", 1f);
         hudMat.renderQueue = -1;   // the shader's: after the world, before the room's transparent things (it was 3010, over them)
-        hudMat.renderQueue = 3010;   // after the world (2503), the beams and the seal (2505), and the room's transparent things
         EditorUtility.SetDirty(hudMat);
         GameObject layer = new GameObject("Holodeck HUD", typeof(MeshFilter), typeof(MeshRenderer));
         layer.transform.SetParent(holodeck, false);
@@ -816,43 +580,7 @@ public static partial class ShaderEmuBuilder
         return layer.transform;
     }
 
-    [MenuItem("ShaderEmu/Add the holodecks' HUD layer to the open scene")]
-    public static void AddHudLayer()
-    {
-        Transform world = GameObject.Find("ShaderEmu").transform, holodeck = world.Find("Holodeck");
-        Mesh points = AssetDatabase.LoadAssetAtPath<Mesh>(Generated + "/HolodeckPoints.asset");
-        Material sceneMat = AssetDatabase.LoadAssetAtPath<Material>(Generated + "/GpuHolodeck.mat");
-        if (holodeck == null || points == null || sceneMat == null) { Debug.LogError("[ShaderEmu] no holodeck to add the HUD layer to: build the world first"); return; }
-        Transform layer = HudLayer(holodeck, points, sceneMat);
-        foreach (EmuHolodeck deck in holodeck.GetComponentsInChildren<EmuHolodeck>(true))
-        {
-            deck.hud = layer;
-            UdonSharpEditorUtility.CopyProxyToUdon(deck);
-            EditorUtility.SetDirty(deck);
-        }
-        UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(world.gameObject.scene);
-        UnityEditor.SceneManagement.EditorSceneManager.SaveOpenScenes();
-        AssetDatabase.SaveAssets();
-        Debug.Log("[ShaderEmu] the holodecks' HUD layer is in the scene");
-    }
 
-    [MenuItem("ShaderEmu/Add the holodecks' guards to the open scene")]
-    public static void AddHoloGuards()
-    {
-        Transform world = GameObject.Find("ShaderEmu").transform;
-        HoloGuards(world);
-        foreach (string name in new[] { "GpuHolodeck", "VolumeSeal" })
-        {
-            Material m = AssetDatabase.LoadAssetAtPath<Material>(Generated + "/" + name + ".mat");
-            if (m == null) continue;
-            m.renderQueue = name == "GpuHolodeck" ? 2503 : 2505;   // (2504: the hand beams, between the world and its seal)
-            EditorUtility.SetDirty(m);
-        }
-        UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(world.gameObject.scene);
-        UnityEditor.SceneManagement.EditorSceneManager.SaveOpenScenes();
-        AssetDatabase.SaveAssets();
-        Debug.Log("[ShaderEmu] the holodecks' own things are guarded");
-    }
 
     static void Annex(Transform world, Transform models, Dictionary<string, Material> materials)
     {

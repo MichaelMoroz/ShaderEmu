@@ -199,7 +199,9 @@ public static partial class ShaderEmuBuilder
         }
     }
 
-    [MenuItem("ShaderEmu/Give the windows' glass its rain again in the open scene")]
+
+    // The glass made again in the open scene: its material, the probe's picture and the anchors (ShaderEmuGlass.Hold, when a
+    // scene's glass has lost its shader).
     public static void GlassAgain()
     {
         GameObject world = GameObject.Find("ShaderEmu");
@@ -207,7 +209,6 @@ public static partial class ShaderEmuBuilder
         WindowProbe(world.transform, GlassMaterial());
         AssetDatabase.SaveAssets();
         UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(world.scene);
-        Debug.Log("[ShaderEmu] the windows' glass is Fake Glass with rain, with a probe of its own outside the pane");
     }
 
     static AudioSource Sound(Transform parent, string name, Vector3 at, AudioClip clip, float volume, float near, float far, bool loop)
@@ -260,17 +261,6 @@ public static partial class ShaderEmuBuilder
         OnClick(volumesKey, storm, "ToggleVolumes");
     }
 
-    [MenuItem("ShaderEmu/Add the room's switches to the open scene")]
-    public static void AddRoomSwitches()
-    {
-        GameObject world = GameObject.Find("ShaderEmu");
-        EmuWeather storm = Object.FindObjectOfType<EmuWeather>();
-        if (world == null || storm == null) throw new System.Exception("no weather in the open scene: run ShaderEmu/Put the modelled room into the open scene");
-        UdonSharpEditorUtility.CopyUdonToProxy(storm);
-        storm.thunder.volume = 0.3f;
-        RoomSwitches(world.transform, storm.transform, storm);
-        UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(world.scene);
-    }
 
     static void Weather(Transform world, Transform computer)
     {

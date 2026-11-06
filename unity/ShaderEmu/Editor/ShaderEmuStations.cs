@@ -194,35 +194,7 @@ public static partial class ShaderEmuBuilder
         }
     }
 
-    [MenuItem("ShaderEmu/Add the wall's speed counter to the open scene")]
-    public static void AddWallSpeed()
-    {
-        Transform computer = Den();
-        if (computer == null) { Debug.LogError("[ShaderEmu] no Computer in the open scene: run ShaderEmu/Build world"); return; }
-        WallSpeed(computer);
-        AssetDatabase.SaveAssets();
-        UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(computer.gameObject.scene);
-        Debug.Log("[ShaderEmu] the wall's speed counter is in the scene (not saved)");
-    }
 
-    // The 12 October 2026 changes to a scene that is built: the fetch's line out of the read-out's
-    // field, and the classroom strip made again with a line of its own. No bake: the strip opens later.
-    [MenuItem("ShaderEmu/Move the fetch's line and remake the classroom strip in the open scene")]
-    public static void FetchLines()
-    {
-        EmuMachine machine = Object.FindObjectOfType<EmuMachine>();
-        EmuStations stations = Object.FindObjectOfType<EmuStations>();
-        if (machine == null || stations == null) { Debug.LogError("[ShaderEmu] no machine or classroom in the open scene: run ShaderEmu/Build world"); return; }
-        CreateProgramAssets();
-        UdonSharpEditorUtility.CopyUdonToProxy(machine);
-        UdonSharpEditorUtility.CopyUdonToProxy(stations);
-        if (machine.fetchLabel != null) FetchLinePlace(machine.fetchLabel);
-        StationFields(stations.transform, stations, machine);
-        Apply(stations);
-        RetroNewPanels();
-        UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(machine.gameObject.scene);
-        Debug.Log("[ShaderEmu] the fetch's line is under the scope's keys and the classroom strip has its own (the scene is not saved)");
-    }
 
     // A lamp that flickers (Blink.shader), a hair before a model's dull lens: a material of its
     // own, whose sixteen bits EmuStations writes. `turn` about the upright: 180 for a tower's back.

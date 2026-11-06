@@ -62,8 +62,7 @@ program's world is not crossed by them. The corridor's furniture is in `holodeck
   the middle), Volume and Voices ("A flat screen in place of the world"). A slider is
   VRChat's own for a desktop's sitter (`WorldSlid`, `ScreenSlid`) and the beams' in a headset
   (an event ending in "Slide" is sent again while the trigger is held, with where the beam is
-  across it: `EmuPointer.holoSlide`). "ShaderEmu/Put the holodecks' size sliders into the open
-  scene" makes the consoles again with them (new plates, lit by the probes until a bake).
+  across it: `EmuPointer.holoSlide`). "Build world" makes the consoles with them.
   There is no key for the controls: they are the game's (`docs/world/gamepad.md`).
 - **A sitter in a headset presses those keys with their own beams** (`EmuPointer`, `holoPlates`:
   a plate a hair before the console's face, the keys' rectangles, a mark on the key a beam is
@@ -147,9 +146,8 @@ side (400 m both, or 0 and 25 m); nothing is synced.
   turn about up), as Doom lays it on its flat picture.
 - A program sends only what its own camera sees. Behind the seat there is usually nothing.
 - A program's textures, light maps and vertices may be files in the ROM (Quake III Arena's all
-  are, `docs/games/quake3.md`): the pass reads the ROM's texture as the GPU's does, and the
-  two materials are given them by "ShaderEmu/Give the holodecks' world the ROM" (the first
-  image's; a second boot image would need them set when it is chosen).
+  are, `docs/games/quake3.md`): the pass reads the ROM's texture as the GPU's does, and the two materials are given them by the builder (`GiveRom`: the first image's; a second boot
+  image would need them set when it is chosen).
 
 ## The room's own things before the program's world
 
@@ -159,8 +157,7 @@ and consoles' models, of each screen's glass and of each console's panel ("Holod
 `HoloGuards` in `ShaderEmuHolodeck.cs`): it draws nothing but a mark in the stencil (87 + 128)
 where the thing itself is seen, after the room's mask and before the program's world (queue
 2502; the builder moves the world's and the seal's materials one later), and no pass of the
-world draws on a pixel so marked. "ShaderEmu/Add the holodecks' guards to the open scene"
-makes them without putting the room in again. One copy has all eight rooms' things, and
+world draws on a pixel so marked. "Build world" makes them (`HoloGuards`). One copy has all eight rooms' things, and
 only those inside the box of the room this visitor sits in mark (`_UdonHoloMin`,
 `_UdonHoloMax`, which `EmuHolodeck` sets when they sit down and empties when they get up):
 the next room's seat and console, behind a wall the mask has emptied the depth of, would show
@@ -281,8 +278,8 @@ Doom, Quake, Quake III, ClassiCube and Half-Life read those words, each in its o
   (`Feed`), pressed by beams and by a desktop's view and click as any keyboard of the world
   (`EmuPointer.holoKeyboard`, its place in `keyboards`), and put away with the console when no
   screen is shown: a key held as it goes comes up. A mark of its own (`HoloGuard.shader`) keeps the program's world
-  off it. "ShaderEmu/Add the holodecks' keyboard to the open scene" makes it, and Build world
-  runs it.
+  off it. "Build world" makes it
+  (`AddHoloKeyboard`).
   On `rvc_cpu` with the words of a desktop's sitter (`--host 00000112,0,0,0,0,00007f00,0,0`)
   each game walks on from where it stands, and stands still with the word 0.
 - **A beam shows where a hand points** (`HandBeam.shader`), in a headset only: a ribbon 3.5 mm
@@ -299,9 +296,8 @@ Doom, Quake, Quake III, ClassiCube and Half-Life read those words, each in its o
   physics demo, 8; ClassiCube, 3). The console's Beam key turns it off and on (`ToggleBeam`), until the visitor
   leaves the world; it is on at first. Only the sitter sees it, as only they see the world.
   A sitter without a headset has none: their aim is the middle of their view.
-  "ShaderEmu/Add the holodecks' hand beams to the open scene" puts the two ribbons, the
-  key and the seal's queue into a scene, without a bake; it also gives that key and Hide
-  the caps of the room's panels, which Hide had not. In play mode on a desktop `debugBeam`, which nothing but a test
+  "Build world" makes the two ribbons, the
+  key and the seal's queue (`HandBeams`). In play mode on a desktop `debugBeam`, which nothing but a test
   sets, invents hands before the head.
 - **Stopped at once, no cross-hair** (6 November 2026): in the four shooters a seated player on the ground with no move
   asked stops where the stick lets go, not after the friction's half second from a run (a slide in a headset), and a sitter
@@ -440,8 +436,7 @@ below them (`hudDistance`, `hudDrop`), 1.0 m wide at the picture's shape (`hudWi
 the view, in a headset it follows the head's turn about the upright and its tilt up and down at `hudFollow` (2.5 a second), never
 its roll (5 November 2026: before, it kept level, so a sitter who looked down had the HUD above the view). A menu
 or a load is flat, and then the whole picture is on the large screen instead. `_HudFlip` (-1) turns it over if a
-platform's clip space is upside down there. "ShaderEmu/Add the holodecks' HUD layer to the open scene" puts it into a
-built scene. Compiled with fxc against Unity's includes (the same warnings as `GpuVolumePass.cginc`) and the Editor and
+platform's clip space is upside down there. "Build world" makes it (`HudLayer`). Compiled with fxc against Unity's includes (the same warnings as `GpuVolumePass.cginc`) and the Editor and
 runtime scripts with csc; not run in Unity or a headset.
 
 A picture of the layer without Unity (4 November 2026): `rvc_harness --cpu --host 00000112,0,0,0,0,00007f00,0,0 ... --save-state F.snap
@@ -506,8 +501,8 @@ ClassiCube, Quake III, nxphys, Half-Life and Jedi Outcast, by the number of the 
 `linux/apps/gameid.h`); any other program is on the large screen however it draws, as on a
 desktop. Tiberian Dawn and Red Alert draw their pages by a GPU list, which is no world to stand in. The
 console's 3D key, under Screen, gives every program's list a world for this visitor ("3D: every
-program") and back ("3D: games only", `ToggleWorld`). "ShaderEmu/Lay out the holodecks' consoles
-again in the open scene" puts it on consoles made already, without a bake.
+program") and back ("3D: games only", `ToggleWorld`). "Build world" lays it out with the
+console.
 
 Under the World and Screen size sliders are Volume, the machine's sound (the sound panel's own
 slider, `EmuSound`, which the console's follows), and Voices, how loud the other players are to
@@ -523,8 +518,7 @@ Its Hide key, or Home while a world is drawn (on a flat screen Home is the progr
 and the marks of both (one mesh each for all eight rooms, so the other rooms' go too, for this
 visitor alone; the chair's baked shadow stays on the floor), the room's plate, keys and screen. A small translucent button stands where the plate
 was and brings it back (`HideConsole`, `ShowConsole`, `Arrange`; a beam presses it by
-`EmuPointer.holoShow`). Standing up brings it back. "ShaderEmu/Add the holodecks' console
-switch to the open scene" puts both into a scene, without a bake; Build world runs it. The Hide and Beam keys and the small button have caps and lettering of
+`EmuPointer.holoShow`). Standing up brings it back. "Build world" makes both (`ConsoleSwitch`). The Hide and Beam keys and the small button have caps and lettering of
 their own that the room does not light (`OwnCap`): the room's light volume would leave them black in a client.
 
 On `rvc_cpu` (`--host W0,...,W7` gives the eight words, `--host-mouse N` a mouse going right, `--host-wheel N` the wheel turning up, `--host-from S W0,...,W7` other words from guest second S, up to four times;
@@ -571,8 +565,8 @@ The host's words in play mode: `EmuMachine`'s `row` (the readback) has them at t
 on a desktop, standing, word 0 is `0x00010102` and word 2's upper half the head's height.
 
 A sitter's hips are put 0.23 m over the floor (`SeatHeight` in `ShaderEmuHolodeck.cs`) and the program's camera 0.7 m over that.
-"ShaderEmu/Make the holodecks' seats rise under their sitters in the open scene" puts a
-changed height into a scene, the eye points with it.
+"Build world" puts a
+changed height into the scene, the eye points with it.
 
 In play mode: seated, `_UdonHoloMax` is the room's far corner and the console says "Your keys
 play. End: stand up" on a desktop (`plateLabels` in `EmuHolodeck`); with the keys given

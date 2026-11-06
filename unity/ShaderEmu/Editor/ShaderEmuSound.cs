@@ -88,19 +88,4 @@ public static partial class ShaderEmuBuilder
         Apply(machine);
     }
 
-    // Into the scene as it is, without building the world again (which would need a bake).
-    [MenuItem("ShaderEmu/Add sound to the open scene")]
-    public static void AddSound()
-    {
-        EmuMachine machine = Object.FindObjectOfType<EmuMachine>();
-        GameObject panel = GameObject.Find("Control panel");
-        if (machine == null || panel == null) throw new System.Exception("no machine in the open scene: run ShaderEmu/Build world");
-        SyncShaders();
-        CreateProgramAssets();
-        Sound(machine.transform.parent, panel.GetComponent<RectTransform>(), machine);
-        AssetDatabase.SaveAssets();
-        EditorSceneManager.MarkSceneDirty(machine.gameObject.scene);
-        EditorSceneManager.SaveScene(machine.gameObject.scene);
-        Debug.Log("[ShaderEmu] sound added");
-    }
 }

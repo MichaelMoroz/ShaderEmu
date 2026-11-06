@@ -416,11 +416,6 @@ public static partial class ShaderEmuBuilder
         EditorUtility.SetDirty(onto);
     }
 
-    // The canvas as it stands, without its print, drawn into a picture and hung on a plate with a
-    // lightmap just behind it; the print is the plate's lettering, and leaves the canvas.
-    // A plate drawn again onto the one it has, which keeps its place in the lightmap (no bake)
-    static bool PlateInPlace;
-
     // A panel a behaviour moves while the world runs: its plate is never static. A static plate is batched into the
     // room where it was built and stays there: the links panel (EmuMachine.PlaceLinks, before a classroom tube) went
     // to the tube with its fields and colliders while its picture stayed before the wall's display.
@@ -429,41 +424,14 @@ public static partial class ShaderEmuBuilder
         return canvas.name == "Links panel";
     }
 
-    // A plate made static before: lit by the probes, as a panel that opens later is.
-    public static void Unstatic(MeshRenderer renderer)
-    {
-        if (renderer == null) return;
-        GameObjectUtility.SetStaticEditorFlags(renderer.gameObject, 0);
-        renderer.receiveGI = ReceiveGI.LightProbes;
-        renderer.lightmapIndex = -1;
-        EditorUtility.SetDirty(renderer);
-        EditorUtility.SetDirty(renderer.gameObject);
-    }
-
-    [MenuItem("ShaderEmu/Unbatch the plates of moving panels")]
-    static void UnstaticMoving()
-    {
-        int n = 0;
-        foreach (Canvas canvas in Object.FindObjectsOfType<Canvas>(true))
-        {
-            if (!Moves(canvas)) continue;
-            Transform plate = canvas.transform.Find(canvas.name + " plate");
-            if (plate == null || GameObjectUtility.GetStaticEditorFlags(plate.gameObject) == 0) continue;
-            Unstatic(plate.GetComponent<MeshRenderer>());
-            n++;
-        }
-        if (n > 0) UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(UnityEngine.SceneManagement.SceneManager.GetActiveScene());
-        Debug.Log("[Retro] plates no longer static: " + n);
-    }
-
+    // The canvas as it stands, without its print, drawn into a picture and hung on a plate with a
+    // lightmap just behind it; the print is the plate's lettering, and leaves the canvas.
     static void Plate(Canvas canvas, string name, bool shown = true, List<Graphic> print = null)
     {
         RectTransform rect = (RectTransform)canvas.transform;
         string plateName = canvas.name + " plate";
         Transform old = canvas.transform.Find(plateName);
-        bool inPlace = PlateInPlace && old != null;
-        if (inPlace) old.gameObject.SetActive(false);   // (out of its own picture)
-        else if (old != null) Object.DestroyImmediate(old.gameObject);
+        if (old != null) Object.DestroyImmediate(old.gameObject);
         Vector2 size = rect.sizeDelta;
         float scale = Mathf.Min(2f, (size.x > 3000f ? 4096f : 2048f) / Mathf.Max(size.x, size.y));   // the strip of names is seven metres
         int wide = Mathf.CeilToInt(size.x * scale), high = Mathf.CeilToInt(size.y * scale);
@@ -491,13 +459,6 @@ public static partial class ShaderEmuBuilder
         material.SetFloat("_Bold", paper ? 0.07f : 0.05f);   // thin strokes were hard to read across the room
         Lettering(canvas, name, print, material);
         if (print != null) foreach (Graphic graphic in print) graphic.enabled = false;
-        if (inPlace)
-        {
-            if (Moves(canvas)) Unstatic(old.GetComponent<MeshRenderer>());
-            old.gameObject.SetActive(true);
-            old.GetComponent<MeshRenderer>().sharedMaterial = material;
-            return;
-        }
 
         GameObject plate = GameObject.CreatePrimitive(PrimitiveType.Quad);   // it faces -z, as a canvas does
         plate.name = plateName;
@@ -840,31 +801,6 @@ public static partial class ShaderEmuBuilder
         }
     }
 
-    // Panels restyled after a change to their keys, each drawn onto the plate it has (no bake).
-    static void RetroInPlace(Transform world, List<Canvas> canvases)
-    {
-        Sprite raised = UiSprite("Raised", 6), sunken = UiSprite("Sunken", 6), cap = UiSprite("Keycap", 16, true);
-        TMP_FontAsset sans = RetroFont("IBMPlexSansCondensed-Medium"), bold = RetroFont("IBMPlexSansCondensed-Bold");
-        TMP_FontAsset mono = RetroFont("IBMPlexMono-Regular"), monoBold = RetroFont("IBMPlexMono-Bold");
-        HashSet<Object> changing = new HashSet<Object>(), painted = new HashSet<Object>();
-        Changing(world, changing, painted);
-        FontSheet(sans, bold, mono, monoBold);
-        PlateInPlace = true;
-        try
-        {
-            foreach (Canvas canvas in canvases)
-            {
-                if (canvas == null) continue;
-                bool shown = canvas.gameObject.activeSelf;
-                Hidden[canvas] = !shown;
-                canvas.gameObject.SetActive(true);
-                PanelLook(canvas, raised, sunken, cap, sans, bold, mono, changing, painted);
-                canvas.gameObject.SetActive(shown);
-            }
-        }
-        finally { PlateInPlace = false; }
-        AssetDatabase.SaveAssets();
-    }
 
     // For whatever adds a panel to a scene that is baked: the room's look for it, at once.
     public static void RetroNewPanels()
@@ -876,27 +812,6 @@ public static partial class ShaderEmuBuilder
         EditorSceneManager.MarkSceneDirty(world.scene);
     }
 
-    // The board's lettering again, on the plate it has (a plate made again loses its place in the
-    // lightmap): after a label of the board was moved or reworded.
-    [MenuItem("ShaderEmu/Letter the board again in the open scene")]
-    public static void LetterBoardAgain()
-    {
-        GameObject world = GameObject.Find("ShaderEmu");
-        Canvas about = null;
-        if (world != null)
-            foreach (Canvas canvas in world.GetComponentsInChildren<Canvas>(true))
-                if (canvas.name == "About") about = canvas;
-        if (about == null) { Debug.LogError("[ShaderEmu] no board in the open scene"); return; }
-        TMP_FontAsset mono = RetroFont("IBMPlexMono-Regular"), monoBold = RetroFont("IBMPlexMono-Bold");
-        FontSheet(RetroFont("IBMPlexSansCondensed-Medium"), RetroFont("IBMPlexSansCondensed-Bold"), mono, monoBold);
-        List<Graphic> print = new List<Graphic>();
-        foreach (TextMeshProUGUI label in about.GetComponentsInChildren<TextMeshProUGUI>(true)) print.Add(label);
-        Lettering(about, "About", print, Mat("Plate About", "ShaderEmu/Plate"));
-        foreach (Graphic graphic in print) graphic.enabled = false;
-        AssetDatabase.SaveAssets();
-        EditorSceneManager.MarkSceneDirty(world.scene);
-        Debug.Log("[ShaderEmu] the board is lettered again");
-    }
 
     [MenuItem("ShaderEmu/Restyle the panels in the open scene")]
     public static void RetroOpenScene()

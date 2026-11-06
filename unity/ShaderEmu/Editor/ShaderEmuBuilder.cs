@@ -176,41 +176,7 @@ public static partial class ShaderEmuBuilder
         EditorUtility.SetDirty(machine);
     }
 
-    [MenuItem("ShaderEmu/Add the kernel log button to the open scene")]
-    static void KernelLogButtonHere()
-    {
-        EmuMachine machine = Object.FindObjectOfType<EmuMachine>(true);
-        GameObject panel = GameObject.Find("Control panel");
-        if (machine == null || panel == null) throw new System.Exception("no machine in the open scene: run ShaderEmu/Build world");
-        KernelLogButton(panel.GetComponent<RectTransform>(), machine);
-        ShaderEmuImages.BootImage boot = ShaderEmuImages.Images[0];
-        ShaderEmuImages.BootPieces(boot, out machine.bootKernel, out machine.bootTree, out machine.bootLog);
-        EditorUtility.SetDirty(machine);
-        UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(machine.gameObject.scene);
-        Debug.Log("[ShaderEmu] kernel log button added; the tree's loglevel digit at texel " + machine.bootLog.x + ", byte " + machine.bootLog.y);
-    }
 
-    [MenuItem("ShaderEmu/Keep the GPU's pictures apart in the open scene")]
-    static void GpuKeepHere()
-    {
-        EmuMachine machine = Object.FindObjectOfType<EmuMachine>(true);
-        if (machine == null) throw new System.Exception("no machine in the open scene: run ShaderEmu/Build world");
-        GpuKeep(machine);
-        machine.displayMaterial.SetTexture("_GpuTarget", GpuShown());
-        EditorUtility.SetDirty(machine.displayMaterial);
-        foreach (string name in new[] { "GpuHolodeck", "GpuHolodeckHud", "HolodeckMask", "GpuVolume" })
-        {
-            Material m = AssetDatabase.LoadAssetAtPath<Material>(Generated + "/" + name + ".mat");
-            if (m == null) continue;
-            GpuHoloInputs(m);
-            EditorUtility.SetDirty(m);
-        }
-        Apply(machine);
-        EditorUtility.SetDirty(machine);
-        UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(machine.gameObject.scene);
-        AssetDatabase.SaveAssets();
-        Debug.Log("[ShaderEmu] the holodeck's frame and the display's picture are kept apart (GpuKeep)");
-    }
 
     // A texture a material keeps under a name its shader no longer has still goes into the world's build:
     // the ROM's and RAM's four lanes of old (_Data_MTD_*, _Data_RAM_*, _Data_DTB_*) were 330 MB of it.
@@ -506,19 +472,6 @@ public static partial class ShaderEmuBuilder
         return renderer;
     }
 
-    [MenuItem("ShaderEmu/Add the tick's and the commit's cameras to the open scene")]
-    public static void AddMachineCameras()
-    {
-        Transform world = GameObject.Find("ShaderEmu").transform;
-        EmuMachine machine = world.GetComponentInChildren<EmuMachine>(true);
-        UdonSharpEditorUtility.CopyUdonToProxy(machine);
-        MachineCameras(world, machine);
-        Apply(machine);
-        UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(world.gameObject.scene);
-        UnityEditor.SceneManagement.EditorSceneManager.SaveOpenScenes();
-        AssetDatabase.SaveAssets();
-        Debug.Log("[ShaderEmu] the tick's and the commit's cameras are in the scene");
-    }
 
     static Mesh GpuMesh()
     {
@@ -652,13 +605,6 @@ public static partial class ShaderEmuBuilder
 
     static readonly Color KeyColour = new Color(0.17f, 0.18f, 0.21f), KeyText = new Color(0.9f, 0.92f, 0.95f);
 
-    // The den's wall of screens in the open scene: the world's own child. Not by name alone:
-    // the model Models/Computer has the same one.
-    static Transform Den()
-    {
-        EmuMachine machine = Object.FindObjectOfType<EmuMachine>();
-        return machine == null ? null : machine.transform.parent.Find("Computer");
-    }
 
     // The fetch's line on the control panel: under the scope's keys, two lines of it. It lay in
     // the read-out's field once, over the registers.

@@ -115,9 +115,8 @@ doing and a bar; without one it prints lines.
   `OnPlayerRestored`, which `EmuGate` hears for it while it is off, until the visitor leaves the
   corridor they arrive in: `EmuGate.restored`), `EmuMachine.PersistStep`, and `PersistRead.shader`, which a save draws
   once: the guest's bytes out of the state, a pixel a word, read back into a byte array.
-  "ShaderEmu/Add the storage sign to the open scene" makes the behaviour, its target and the
-  sign over the power button into a scene as it is; "Build world" makes them too (6 November 2026:
-  before, only that menu did, and a rebuilt world kept nothing). A world without the sign
+  "Build world" makes the behaviour, its target and the sign over the power button
+  (`Persist`; 6 November 2026: before, only a menu of its own did, and a rebuilt world kept nothing). A world without the sign
   answers 404 at once.
 - `rvc_cpu --persist FILE` and `rvc_harness --persist FILE` (`rvc_persist.h`): the bytes are
   the file, `FILE.auto` holds the switch. These and `host:name` (below) are the only addresses

@@ -23,11 +23,4 @@ public static partial class ShaderEmuBuilder
         pens.transform.SetPositionAndRotation(new Vector3(-4.38f, 0.70f, -1.05f), Quaternion.Euler(0f, -90f, 0f));
     }
 
-    [MenuItem("ShaderEmu/Put the pens into the open scene")]
-    public static void AddPens()
-    {
-        Pens();
-        EditorSceneManager.MarkSceneDirty(EditorSceneManager.GetActiveScene());
-        Debug.Log("[ShaderEmu] the pens are under the board (the scene is not saved)");
-    }
 }

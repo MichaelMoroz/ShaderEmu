@@ -41,28 +41,6 @@ public static partial class ShaderEmuBuilder
         "machine starts there; the slider on its tower sets its speed (Snail to Turbo), EXIT gives the place " +
         "up. PENS under this board draw in the air.";
 
-    // The board's words written again into a scene that has a board, each at the largest size at
-    // which it fits its box, and the plate lettered from them (no bake: the plate keeps its place).
-    [MenuItem("ShaderEmu/Write the board's words again in the open scene")]
-    public static void WriteBoardAgain()
-    {
-        GameObject board = GameObject.Find("About");
-        if (board == null) { Debug.LogError("[ShaderEmu] no board in the open scene"); return; }
-        foreach (var words in new[] { ("What", WhatText, 33f), ("Do", DoText, (float)DoSize), ("Credits", CreditsText, 27f) })
-        {
-            Transform at = board.transform.Find(words.Item1);
-            TextMeshProUGUI text = at != null ? at.GetComponent<TextMeshProUGUI>() : null;
-            if (text == null) { Debug.LogWarning("[ShaderEmu] the board has no " + words.Item1); continue; }
-            text.text = words.Item2;
-            text.fontSize = words.Item3;
-            float room = text.rectTransform.rect.height;
-            while (text.fontSize > 12 && text.GetPreferredValues(words.Item2, text.rectTransform.rect.width, 0).y > room) text.fontSize -= 0.5f;
-            Debug.Log("[ShaderEmu] the board's " + words.Item1 + ": size " + text.fontSize + ", " +
-                      Mathf.CeilToInt(text.GetPreferredValues(words.Item2, text.rectTransform.rect.width, 0).y) + " of " + Mathf.RoundToInt(room));
-            EditorUtility.SetDirty(text);
-        }
-        LetterBoardAgain();
-    }
 
     // A controller in hand was a model once, two on every player's object: there is none now
     // (the stand's line and the notice over the hand say what is held).
@@ -83,15 +61,6 @@ public static partial class ShaderEmuBuilder
         }
     }
 
-    [MenuItem("ShaderEmu/Take the controllers' models out of the open scene")]
-    public static void RemoveControllerModels()
-    {
-        Transform world = GameObject.Find("ShaderEmu").transform;
-        NoControllerModels(world);
-        NoDeskControllers(world, world.Find("Computer"));   // (and the board's words, which named their colours)
-        EditorSceneManager.MarkSceneDirty(world.gameObject.scene);
-        Debug.Log("[ShaderEmu] no controller models (the scene is not saved)");
-    }
 
     // The two controllers that lay on the den's desk, their names and their station: gone.
     static void NoDeskControllers(Transform world, Transform computer)

@@ -683,15 +683,4 @@ public static partial class ShaderEmuBuilder
         if (descriptor != null) EditorUtility.SetDirty(descriptor);
     }
 
-    [MenuItem("ShaderEmu/Put the modelled room into the open scene")]
-    public static void RemodelOpenScene()
-    {
-        GameObject world = GameObject.Find("ShaderEmu");
-        if (world == null) { Debug.LogError("[ShaderEmu] no ShaderEmu object: run ShaderEmu/Build world first"); return; }
-        Remodel(world.transform);
-        RetroNewPanels();   // the stations' panels are made again: never left as bare canvases
-        AssetDatabase.SaveAssets();
-        EditorSceneManager.MarkSceneDirty(world.scene);
-        Debug.Log("[ShaderEmu] the modelled room is in the scene. Now run ShaderEmu/Bake lighting.");
-    }
 }

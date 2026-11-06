@@ -82,7 +82,7 @@ A lamp over LINKS ON is lit while the owner's browser wants addresses pasted.
 The links panel moves (`EmuMachine.PlaceLinks`), so its restyled plate is never static (`Moves` in
 `ShaderEmuRetro.cs`): a static plate is batched where the world was built, and from the restyle until 6 November
 2026 the panel's picture stayed before the wall's display while its fields and colliders went to the tube, an
-invisible panel there. "ShaderEmu/Unbatch the plates of moving panels" clears a scene made before.
+invisible panel there. A rebuild clears a scene made before.
 
 POWER has its name over it in lit letters, and a bar under it that beckons while the place is
 free (`beacons`). The capture key is the keyboard's.
@@ -141,8 +141,8 @@ volume/Volume slider"'s value: the panel's Volume follows; set the panel's: the 
 **The pointer's switches** stand either side of the volume (`StationSwitches`, "Station N physical"
 and "Station N steady"): Physical buttons and Steady pointer, the control panel's switches
 (`EmuPointer.PhysicalButtons`, `SteadyPointer`), every visitor's own at any place; all the labels
-follow (`physicalLabels`, `steadyLabels`). "ShaderEmu/Add the monitors' pointer switches to the
-open scene" puts them into a built scene, without a bake.
+follow (`physicalLabels`, `steadyLabels`). "Build world" makes them
+(`StationSwitches`).
 
 To test in play mode: `SendCustomEvent("ResetKey")` and the like on "Station N tower hot" and
 "Station N monitor hot" of one's own place and of another; only one's own may change
