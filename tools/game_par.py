@@ -65,8 +65,10 @@ QUAKE_RATE = lines_rate(r'quakestat: (\d+) frames in (\d+) ms', skip=1)
 
 # (800 x 600, the way before: the scenes that say AOE_SIZE=800, and the state sum's script)
 AOE_PLAY = '3000 click 400 245;3000 click 400 172;3000 click 237 568;2000 click 369 118;1000 rclick 505 170;1000 click 370 215;1000 click 163 508'
-# (the window of 640 x 480 the game opens as: menus' buttons x 0.8, the view's middle 80 and 60 less, the bottom panel 120 up)
-AOE_PLAY_640 = '3000 click 320 196;3000 click 320 138;3000 click 190 454;2000 click 289 58;1000 rclick 425 110;1000 click 290 155;1000 click 163 388'
+# (the window of 640 x 480 the game opens as: menus' buttons x 0.8, the view's middle 80 and 60 less, the bottom panel 120 up; the
+# first click in the game 8 s after its screen, past the first world update: at 2 s the clicks fell in that update's stall in a build
+# before 6 November 2026 and were lost there, and two builds played two scenes)
+AOE_PLAY_640 = '3000 click 320 196;3000 click 320 138;3000 click 190 454;8000 click 289 58;1000 rclick 425 110;1000 click 290 155;1000 click 163 388'
 # (the trial unpacked from its installer in the ROM first, its licence answered on the terminal: docs/system/install.md)
 AOE_UNPACK = 'echo yes | aoe --unpack > /dev/null; '
 AOE_FRAMES = lambda log: int(re.search(r'aoe: mark ends, (\d+) frames', log)[1])
@@ -180,12 +182,14 @@ GAMES = {
 }
 # (units busy in the window: food, wood and quick building by the game's cheats, three houses, nine villagers trained, the twelve
 # boxed and ordered to and fro across the view every 6 s, measured over 150 updates from the first order; docs/games/aoe.md,
-# "The world in slices")
-AOE_BUSY_640 = ('3000 click 320 196;3000 click 320 138;3000 click 190 454;3000 chat PEPPERONI PIZZA;2000 chat STEROIDS;2000 chat WOODSTOCK;'
+# "The world in slices". The first chat comes 10 s after the game screen: at 3 s it fell in the first world update's stall of a build
+# before 6 November 2026, the cheats were lost, and the box took 2 or 3 villagers; "Twice as fast". The box is the whole view: one of
+# 400 x 180 took 4 villagers or 11 by where they stood when the walk's lists were made, which goes by the build's timing)
+AOE_BUSY_640 = ('3000 click 320 196;3000 click 320 138;3000 click 190 454;10000 chat PEPPERONI PIZZA;2000 chat STEROIDS;2000 chat WOODSTOCK;'
                 '2000 click 560 300;' + '1000 click 157 122;1000 click 163 388;1000 click 163 388;1000 click {};'.format('380 250') +
                 '1000 click 157 122;1000 click 163 388;1000 click 163 388;1000 click 440 280;'
                 '1000 click 157 122;1000 click 163 388;1000 click 163 388;1000 click 330 300;6000 click 295 165;1000 click 163 388;'
-                + '300 click 163 388;' * 8 + '10000 box 20 60 420 240;2000 rclick 560 300;10 mark 150;'
+                + '300 click 163 388;' * 8 + '10000 box 4 24 636 340;2000 rclick 560 300;10 mark 150;'
                 + '6000 rclick 120 120;6000 rclick 560 300;' * 4)
 GAMES['aoe-busy-640'] = dict(
     what='twelve villagers ordered at once to and fro across the view in the window, 150 updates from the first order',

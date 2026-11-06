@@ -649,6 +649,11 @@ LRESULT DispatchMessage(const MSG* m) {
     if (m->message == AOE_WM_LAYOUT) { aoe_layout_switch((int) m->wParam); return 0; }
     // an input that changes the game waits for the world's update out to end (port/aoe_world.cpp); a move does not
     if (m->message != WM_MOUSEMOVE && m->message != WM_PAINT && m->message != WM_TIMER && aoe_world_busy()) aoe_world_finish();
+    // and a button waits for the view's job: a pick reads the view's lists of the last picture (pick_multi_objects, pick_objects), which
+    // the job puts in place at its end; one in flight left the picture before, and what a box or a right click took went by the timing
+    if ((m->message == WM_LBUTTONDOWN || m->message == WM_LBUTTONUP || m->message == WM_RBUTTONDOWN || m->message == WM_RBUTTONUP
+         || m->message == WM_LBUTTONDBLCLK) && aoe_view_busy())
+        aoe_view_join();
     // the keys go to an edit control with the focus, as on Windows; the game subclasses its edits (TEditPanel::sub_wnd_proc,
     // which sends a chat at Enter), so the control is known by its class, not its procedure: a char typed into the chat went
     // to the game's hotkeys before, and Enter opened the chat again
@@ -766,12 +771,13 @@ int main(int argc, char** argv) {
     _exit(r);
 }
 
-static unsigned rand_state = 1;
-extern "C" int aoe_rand(void) { rand_state = rand_state * 214013 + 2531011; return (rand_state >> 16) & 0x7fff; }
+// (the state is aoe_prefix.h's: rand and debug_rand are inline there, 33 instructions a call less; a million calls in a map's making)
+extern "C" { unsigned aoe_rand_word = 1; }
+extern "C" int aoe_rand(void) { return aoe_rand_inline(); }
 // AOE_SEED=N: every seeding takes N, not the clock's: the same map and the same start in a run on the real clock (game_par.py)
 extern "C" void aoe_srand(unsigned s) {
     static int fixed = -1; static unsigned seed;
     if (fixed < 0) { const char* e = getenv("AOE_SEED"); fixed = e != 0; seed = e ? (unsigned) atol(e) : 0; }
-    rand_state = fixed ? seed : s;
+    aoe_rand_word = fixed ? seed : s;
 }
-unsigned aoe_rand_state(void) { return rand_state; }
+unsigned aoe_rand_state(void) { return aoe_rand_word; }

@@ -46,3 +46,29 @@ int aoe_path_dist_slow(int d2) {
     }
     return r;
 }
+
+/* The random map's roots without doubles (docs/games/aoe.md, "The load"). (long) sqrt((double) n) of a whole n is floor(sqrt(n)),
+ * as above: a whole root found from the card's estimate (fsqrt.s is not correctly rounded there) and set right in whole numbers,
+ * so the same number whatever the estimate. Callers pass dx * dx + dy * dy of map tiles. */
+long aoe_isqrt_more(long n) {   /* (aoe_prefix.h's aoe_isqrt: the table inline once it is made) */
+    if (n <= 0) return n < 0 ? (long) sqrt((double) n) : 0;
+    if (n < N) {   /* (the path's table is floor(16 sqrt(n)): its sixteenth is floor(sqrt(n))) */
+        if (!aoe_path_made) make();
+        return aoe_path_table[n] >> 4;
+    }
+    unsigned u = (unsigned) n, s = (unsigned) __builtin_sqrtf((float) n);
+    if (s > 65535) s = 65535;
+    while (s && s * s > u) s--;
+    while ((s + 1) * (s + 1) <= u && s < 65535) s++;
+    return (long) s;
+}
+/* (float) sqrt((double) n) of a whole n: the same bits from a table filled at each value's first use by the doubles (find_path's
+ * cost to the goal at every tile it takes); past the table, the doubles. */
+float aoe_sqrt_whole(long n) {
+    static float* table;
+    if (n <= 0 || n >= N) return (float) sqrt((double) n);
+    if (!table && !(table = (float*) calloc(N, sizeof(float)))) return (float) sqrt((double) n);
+    float f = table[n];
+    if (f == 0.0f) table[n] = f = (float) sqrt((double) n);
+    return f;
+}

@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 #include "../include/drawarea.h"
 #include "aoe_cores.h"
 
@@ -23,9 +24,22 @@ struct AsmState {
     RowIndex indexes_[INDEXES];
     int index_next_;
 } __attribute__((aligned(64)));
-static AsmState states[2];
+// and the raster's band workers' (aoe_view.cpp's aoe_raster_levels: the view's last draws by bands of rows, each worker clipped to its
+// band), each found by its stack
+enum { ASM_BANDS = AOE_RASTER_BANDS };
+static AsmState states[2 + ASM_BANDS];
+struct AoeBandStack aoe_band_stack[ASM_BANDS];
+int aoe_bands_on;
 extern "C" int mcw_on_worker(void);
-static inline AsmState* asm_state(void) { return states + aoe_view_core(); }
+static inline AsmState* asm_state(void) {
+    int c = aoe_view_core();
+    if (c || !aoe_bands_on) return states + c;
+    unsigned sp;
+    __asm__("mv %0, sp" : "=r"(sp));
+    for (int k = 0; k < ASM_BANDS; k++)
+        if (sp - aoe_band_stack[k].lo < aoe_band_stack[k].hi - aoe_band_stack[k].lo) return states + 2 + k;
+    return states;
+}
 #define surface_offsets A->surface_offsets_
 #define span_heads A->span_heads_
 #define span_tails A->span_tails_
@@ -40,6 +54,15 @@ static inline AsmState* asm_state(void) { return states + aoe_view_core(); }
 #define indexes A->indexes_
 #define index_next A->index_next_
 #define AS AsmState* A = asm_state();
+// A band worker starts as the view's worker stands at its last draws
+void aoe_asm_for_band(int k) {
+    AsmState* b = &states[2 + k];
+    RowIndex ix[INDEXES]; memcpy(ix, b->indexes_, sizeof ix);
+    int next = b->index_next_;
+    *b = states[1];
+    memcpy(b->indexes_, ix, sizeof ix);
+    b->index_next_ = next;
+}
 // The worker starts as the first core stands
 void aoe_asm_for_worker(void) {
     RowIndex keep[INDEXES]; memcpy(keep, states[1].indexes_, sizeof keep);
@@ -213,27 +236,93 @@ static const RowIndex* row_index(AsmState* A, unsigned char* base, const unsigne
     return x;
 }
 
-extern "C" void ASMDraw_Sprite(void* base_, long x, long y, long width, long height, long data_offsets, long outline_offset, int flags) { AS
-    unsigned char* base = (unsigned char*) base_;
-    long skip = 0;
-    long last = height + y - 1;
-    if (last < min_line || y > max_line) return;
-    if (y < min_line) {
-        skip = min_line - y;
-        y = 0;
-        height -= skip;
+// A big picture drawn again (a menu's or a status screen's background, drawn three times as a panel comes: its focus, its redraw
+// and UpdateWindow; the game screen's bands): its rows kept as pixels and runs the first time (docs/games/aoe.md, "The load"). A
+// row of copies, fills and skips is then drawn as its runs of pixels, each copied within the spans: the same bytes put_run writes,
+// and what a skip leaves untouched is untouched. Other rows (a player's colour, a transformed fill, a shadow), a fogged or mirrored
+// drawing and the view's worker draw as before. The first core's only: AOE_PLAIN=0 is the way before.
+enum { PLAINS = 16, PLAIN_NOT = 0x40000000 };
+struct PlainRun { short a, b; };
+struct Plain { const unsigned* data; long width, height; unsigned check, used, xf; unsigned char* pix; int* first; PlainRun* runs; };
+static Plain plains[PLAINS];
+static unsigned plain_clock;
+static int plain_on = -1;
+// A row into pixels and runs as the drawing below reads it (not mirrored): the number of runs, or -1 for a row drawn as before
+static int plain_row(const unsigned char* s, long width, unsigned short lpad, unsigned char* out, PlainRun* runs, int room, unsigned char xf) {
+    if (lpad & 0x8000) return 0;
+    long at = lpad;
+    int k = 0;
+    for (;;) {
+        unsigned c = *s++;
+        long n, fill = -1;
+        switch (c & 15) {
+            case 0: case 4: case 8: case 12: n = c >> 2; break;
+            case 2: n = (c & 0xf0) << 4 | *s++; break;
+            case 7: n = c >> 4; if (!n) n = *s++; fill = *s++; break;
+            case 6: {   // (a player's colour: the pixels or'd with the colour's transform, as put_run's OP_XFORM)
+                n = c >> 4; if (!n) n = *s++;
+                if (n <= 0) continue;
+                if (at < 0 || at + n > width) return -1;
+                for (long i = 0; i < n; i++) out[at + i] = s[i] | xf;
+                s += n;
+                if (k && runs[k - 1].b == at - 1) runs[k - 1].b = (short) (at + n - 1);
+                else { if (k == room) return -1; runs[k].a = (short) at; runs[k].b = (short) (at + n - 1); k++; }
+                at += n;
+                continue;
+            }
+            case 10: n = c >> 4; if (!n) n = *s++; fill = *s++ | xf; break;   // (OP_XFILL)
+            case 1: case 5: case 9: case 13: at += c >> 2; continue;
+            case 3: at += (c & 0xf0) << 4 | *s++; continue;
+            case 15: return k;
+            default: return -1;   // a player's colour, a transformed fill, a shadow, an outline, a command passed over
+        }
+        if (n <= 0) continue;
+        if (at < 0 || at + n > width) return -1;
+        if (fill >= 0) memset(out + at, (int) fill, n);
+        else { memcpy(out + at, s, n); s += n; }
+        if (k && runs[k - 1].b == at - 1) runs[k - 1].b = (short) (at + n - 1);
+        else { if (k == room) return -1; runs[k].a = (short) at; runs[k].b = (short) (at + n - 1); k++; }
+        at += n;
     }
-    if (last > max_line) height -= last - max_line;
-    if (x > max_span) return;
-    long right = x + width - 1;
-    if (right < min_span) return;
-    unsigned* data = (unsigned*) (base + data_offsets) + skip;
-    unsigned short* outline = (unsigned short*) (base + outline_offset) + skip * 2;
-    int fog = flags & 1, mirror = flags & 2;
-    unsigned m = 0xffffffff, v = 0;
-    const RowIndex* index = !mirror && width >= INDEX_FROM && height + skip > 0 ? row_index(A, base, data - skip, width, height + (last > max_line ? last - max_line : 0) + skip) : 0;
+}
+static const Plain* plain_get(unsigned char* base, const unsigned* data, const unsigned short* outline, long width, long height, unsigned char xf) {
+    if (plain_on < 0) { const char* e = getenv("AOE_PLAIN"); plain_on = !(e && !strcmp(e, "0")); }
+    if (!plain_on || height <= 0 || aoe_view_core()) return 0;
+    unsigned check = data[0] * 31 + data[height / 2] * 7 + data[height - 1] + (unsigned) width * 65599 + (unsigned) height;
+    Plain* old = &plains[0];
+    for (int i = 0; i < PLAINS; i++) {
+        Plain* p = &plains[i];
+        if (p->data == data && p->check == check && p->width == width && p->height == height && p->xf == xf) { p->used = ++plain_clock; return p; }
+        if (p->used < old->used) old = p;
+    }
+    free(old->pix); free(old->first); free(old->runs);
+    memset(old, 0, sizeof *old);
+    enum { ROOM = 64 };   // (runs a row at most: more and the row is drawn as before)
+    old->pix = (unsigned char*) malloc(width * height);
+    old->first = (int*) malloc((height + 1) * sizeof(int));
+    PlainRun* tmp = (PlainRun*) malloc(height * ROOM * sizeof(PlainRun));
+    if (!old->pix || !old->first || !tmp) { free(old->pix); free(old->first); free(tmp); memset(old, 0, sizeof *old); return 0; }
+    long total = 0, kept_rows = 0;
+    for (long r = 0; r < height; r++) {
+        int k = plain_row(base + data[r], width, outline[r * 2], old->pix + r * width, tmp + total, ROOM, xf);
+        old->first[r] = (int) total | (k < 0 ? PLAIN_NOT : 0);   // (a row drawn as before: marked, its runs none)
+        if (k >= 0) { total += k; kept_rows++; }
+    }
+    old->first[height] = (int) total;
+    old->runs = (PlainRun*) realloc(tmp, (total ? total : 1) * sizeof(PlainRun));
+    old->data = data; old->width = width; old->height = height; old->check = check; old->used = ++plain_clock; old->xf = xf;
+    if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: a picture of %ld x %ld kept, %ld rows of runs, %ld runs\n", width, height, kept_rows, total);
+    return old;
+}
 
+// The rows of a sprite; with PLAIN, those a big picture keeps are copied (Plain): two copies of the loop, so that the drawing of
+// every other sprite (the view's walk and raster) has no test of its own at each row
+template <int PLAIN>
+static inline void sprite_rows(AsmState* A, unsigned char* base, long x, long y, long width, long height, long skip, long right,
+                               unsigned* data, unsigned short* outline, int fog, int mirror, const RowIndex* index, const Plain* plain) {
+    unsigned m = 0xffffffff, v = 0;
     for (long row = 0; row < height; row++) {
+        if (!(row & 15) && A == states && aoe_copy_asked.v == 1) aoe_view_copy_serve();   // (the view's scroll copy, made at once: aoe_view.cpp)
         long line = y + row;
         Span* span = (mirror ? span_tails : span_heads)[line];
         if (!span) continue;
@@ -251,6 +340,22 @@ extern "C" void ASMDraw_Sprite(void* base_, long x, long y, long width, long hei
         } else {
             while (span && span->x0 > rt) span = span->prev;
             if (!span || left > span->x1) continue;
+        }
+        if (PLAIN && !(plain->first[row + skip] & PLAIN_NOT)) {   // (copies, fills and skips: its runs as kept)
+            const unsigned char* px = plain->pix + (row + skip) * width - x;
+            const PlainRun* r = plain->runs + plain->first[row + skip];
+            const PlainRun* end = plain->runs + (plain->first[row + skip + 1] & ~PLAIN_NOT);
+            Span* t = span;
+            for (; r < end && t; r++) {
+                long a = x + r->a, b = x + r->b;
+                while (t && t->x1 < a) t = t->next;
+                for (Span* u = t; u && u->x0 <= b; u = u->next) {
+                    long p = a < u->x0 ? u->x0 : a, q = b > u->x1 ? u->x1 : b;
+                    if (p <= q) memcpy(line_base + p, px + p, q - p + 1);
+                    if (b <= u->x1) break;
+                }
+            }
+            continue;
         }
         long at = mirror ? rt : left;  // the column the next command starts at
         if (index && span->x0 - left >= INDEX_STEP) {
@@ -327,10 +432,39 @@ extern "C" void ASMDraw_Sprite(void* base_, long x, long y, long width, long hei
     }
 }
 
+extern "C" void ASMDraw_Sprite(void* base_, long x, long y, long width, long height, long data_offsets, long outline_offset, int flags) { AS
+    unsigned char* base = (unsigned char*) base_;
+    long skip = 0;
+    long last = height + y - 1;
+    if (last < min_line || y > max_line) return;
+    if (y < min_line) {
+        skip = min_line - y;
+        y = A >= states + 2 ? min_line : 0;   // (0 as the drawing always had it, where the first line is 0; a band of the raster's
+                                               // begins lower: its first row at its first line)
+        height -= skip;
+    }
+    if (last > max_line) height -= last - max_line;
+    if (x > max_span) return;
+    long right = x + width - 1;
+    if (right < min_span) return;
+    unsigned* data = (unsigned*) (base + data_offsets) + skip;
+    unsigned short* outline = (unsigned short*) (base + outline_offset) + skip * 2;
+    int fog = flags & 1, mirror = flags & 2;
+    const RowIndex* index = A < states + 2 && !mirror && width >= INDEX_FROM && height + skip > 0 ? row_index(A, base, data - skip, width, height + (last > max_line ? last - max_line : 0) + skip) : 0;
+    // (kept: the first core's big pictures, and since 6 November 2026 its sprites of 1,024 pixels or more, a player's colours with them)
+    const Plain* plain = !fog && !mirror && A == states && (index || width * (height + skip) >= 1024)
+                             ? plain_get(base, data - skip, outline - skip * 2, width, height + (last > max_line ? last - max_line : 0) + skip,
+                                         (unsigned char) color_xform)
+                             : 0;
+
+    if (plain) sprite_rows<1>(A, base, x, y, width, height, skip, right, data, outline, fog, mirror, index, plain);
+    else sprite_rows<0>(A, base, x, y, width, height, skip, right, data, outline, fog, mirror, index, 0);
+}
+
 // -----------------------------------------------------------------------------------------------
 // Inf32: a whole stream at the first call (it is one file's, read whole by rge_fio.cpp), then 64 KB a call.
 
-struct Inf { const unsigned char* in; const unsigned char* end; unsigned bits; int nbits; unsigned char* out; long len, cap; };
+struct Inf { const unsigned char* in; const unsigned char* end; unsigned bits; int nbits; unsigned char* out; long len, cap; int fixed, bad; };
 
 static int inf_bit(Inf* z, int n) {
     while (z->nbits < n) {
@@ -368,11 +502,14 @@ static inline int huff_get(Inf* z, const Huff* h) {
     return -1;
 }
 
-static void inf_room(Inf* z, long n) {
+// (a fixed buffer on a worker, which may not allocate: one too small leaves the stream to the first core, as before)
+static int inf_room(Inf* z, long n) {
     if (z->len + n > z->cap) {
+        if (z->fixed) { z->bad = 1; return 0; }
         z->cap = (z->len + n) * 2;
         z->out = (unsigned char*) realloc(z->out, z->cap);
     }
+    return 1;
 }
 
 static void inflate_all(Inf* z) {
@@ -381,7 +518,7 @@ static void inflate_all(Inf* z) {
     static const unsigned short dbase[] = {1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577};
     static const unsigned char dext[] = {0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13};
     static const unsigned char order[] = {16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15};
-    static Huff hl, hd;
+    Huff hl, hd;   // (on the stack: the stream ahead is inflated on a worker, docs/games/aoe.md "The load")
     int final;
     do {
         final = inf_bit(z, 1);
@@ -390,7 +527,7 @@ static void inflate_all(Inf* z) {
             z->bits = 0; z->nbits = 0;
             int n = z->in[0] | z->in[1] << 8;
             z->in += 4;
-            inf_room(z, n);
+            if (!inf_room(z, n)) return;
             memcpy(z->out + z->len, z->in, n);
             z->in += n; z->len += n;
             continue;
@@ -425,13 +562,13 @@ static void inflate_all(Inf* z) {
         for (;;) {
             int sym = huff_get(z, &hl);
             if (sym < 0) return;
-            if (sym < 256) { inf_room(z, 1); z->out[z->len++] = sym; continue; }
+            if (sym < 256) { if (!inf_room(z, 1)) return; z->out[z->len++] = sym; continue; }
             if (sym == 256) break;
             sym -= 257;
             int n = lbase[sym] + inf_bit(z, lext[sym]);
             int ds = huff_get(z, &hd);
             int dist = dbase[ds] + inf_bit(z, dext[ds]);
-            inf_room(z, n);
+            if (!inf_room(z, n)) return;
             unsigned char* o = z->out + z->len;
             for (int i = 0; i < n; i++) o[i] = o[i - dist];
             z->len += n;
@@ -442,6 +579,59 @@ static void inflate_all(Inf* z) {
 static unsigned char* inf_data;
 static long inf_len, inf_at;
 
+// The game's data inflated ahead (docs/games/aoe.md, "The load"): Empires.dat is read and inflated at Start Game, 22 million
+// instructions on the first core. At the main menu the first core reads the file and a worker inflates it into a buffer of its own;
+// the first stream that is the same bytes takes that buffer (waiting for the job if it is not done), any other stream is inflated
+// as before. AOE_AHEAD=0 is the way before.
+extern "C" { int mcw_wait(int k); void mcw_post(int k, void (*fn)(uint32_t, uint32_t), uint32_t a0, uint32_t a1); void mcw_touch(void*, unsigned); }
+static struct { unsigned char* in; long in_len; unsigned char* out; long cap, len; int bad, worker; } ahead __attribute__((aligned(16)));
+static void ahead_job(uint32_t, uint32_t) {
+    Inf z;
+    memset(&z, 0, sizeof z);
+    z.in = ahead.in; z.end = ahead.in + ahead.in_len;
+    z.out = ahead.out; z.cap = ahead.cap; z.fixed = 1;
+    inflate_all(&z);
+    ahead.len = z.len;
+    ahead.bad = z.bad || z.in > z.end;
+}
+void aoe_inflate_ahead(const char* path, int worker) {
+    const char* e = getenv("AOE_AHEAD");
+    if (ahead.worker || worker <= 0 || (e && !strcmp(e, "0"))) return;
+    FILE* f = fopen(path, "rb");
+    if (!f) return;
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    unsigned char* in = n > 0 ? (unsigned char*) malloc(n) : 0;
+    long cap = n * 16 + 65536;   // (deflate's data ratio: the trial's 142,050 bytes are 758,114)
+    unsigned char* out = in ? (unsigned char*) malloc(cap) : 0;
+    if (!out || fread(in, 1, n, f) != (size_t) n) { fclose(f); free(in); free(out); return; }
+    fclose(f);
+    mcw_touch(out, cap);   // (stored to by the first core first: the worker never waits for a page)
+    ahead.in = in; ahead.in_len = n; ahead.out = out; ahead.cap = cap; ahead.len = 0; ahead.bad = 0; ahead.worker = worker;
+    mcw_post(worker, ahead_job, 0, 0);
+}
+static int ahead_take(const void* compressed, int size) {
+    if (!ahead.worker || !ahead.in || ahead.in_len != size || memcmp(ahead.in, compressed, size)) return 0;
+    mcw_wait(ahead.worker);
+    free(ahead.in); ahead.in = 0;
+    if (ahead.bad) { free(ahead.out); ahead.out = 0; return 0; }
+    if (getenv("AOE_AHEAD") && !strcmp(getenv("AOE_AHEAD"), "check")) {   // (inflated here too, and compared)
+        Inf z;
+        memset(&z, 0, sizeof z);
+        z.in = (const unsigned char*) compressed; z.end = z.in + size;
+        inflate_all(&z);
+        fprintf(stderr, "aoe: inflated ahead %ld bytes, here %ld: %s\n", ahead.len, z.len,
+                z.len == ahead.len && !memcmp(z.out, ahead.out, z.len) ? "the same" : "DIFFER");
+        free(z.out);
+    }
+    free(inf_data);
+    inf_data = ahead.out; inf_len = ahead.len; inf_at = 0;
+    ahead.out = 0;
+    if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: %ld bytes inflated ahead taken\n", inf_len);
+    return 1;
+}
+
 extern "C" int Inf32BufSize(void) { return 16; }
 extern "C" int Inf32Decode(void* compressed, int offset, void* file_size, void* buffer, int zero, void* buffer_size, void* state, int one) {
     int* in_size = (int*) file_size;
@@ -449,6 +639,7 @@ extern "C" int Inf32Decode(void* compressed, int offset, void* file_size, void* 
     int* started = (int*) state;   // cleared by the file's opening
     if (!*started) {
         *started = 1;
+        if (ahead_take(compressed, *in_size)) goto inflated;
         Inf z;
         memset(&z, 0, sizeof z);
         z.in = (const unsigned char*) compressed;
@@ -459,6 +650,7 @@ extern "C" int Inf32Decode(void* compressed, int offset, void* file_size, void* 
         inf_len = z.len;
         inf_at = 0;
     }
+inflated:
     long n = inf_len - inf_at;
     if (n > *out_size) n = *out_size;
     memcpy(buffer, inf_data + inf_at, n);

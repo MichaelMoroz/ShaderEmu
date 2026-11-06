@@ -110,8 +110,11 @@ static void lat_write(void) {
     aoe_window_close();
     _exit(0);
 }
+static int present_told = 1;   // (AOE_DEBUG: the first picture shown after a panel came, the menu as a player sees it)
+static char present_panel[40];
 void aoe_present(void) {
     frames++;
+    if (!present_told) { present_told = 1; fprintf(stderr, "aoe: shown at %lu, frame %ld, %s\n", timeGetTime(), frames, present_panel); }
     { extern void aoe_sound_look(void); aoe_sound_look(); }
     aoe_lat('P', 0, 0);
     // AOE_PICSUM=N: a sum of the picture every N frames, to compare two ways of drawing it
@@ -237,9 +240,18 @@ extern unsigned long aoe_updates, aoe_world_ms;
 extern "C" int aoe_layout_waiting(void);
 extern "C" int aoe_layout_remakes(const char* name);
 extern "C" int aoe_layout_height_wrong(const char* name);
+extern void aoe_inflate_ahead(const char* path, int worker);
+extern int aoe_view_third_worker(void);
 void aoe_panel_changed(const char* n) {
     step_from = timeGetTime();
-    if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: panel %s at %lu, frame %ld\n", n, step_from, frames);
+    // the game's data inflated on a worker while the menus show (aoe_asm.cpp): Start Game then only reads it
+    if (!strcmp(n, "Main Menu")) {
+        char p[300];
+        const char* d = getenv("AOE_DATA");
+        snprintf(p, sizeof p, "%s/Empires.dat", d ? d : "/usr/share/aoe");
+        aoe_inflate_ahead(p, aoe_view_third_worker());
+    }
+    if (getenv("AOE_DEBUG")) { fprintf(stderr, "aoe: panel %s at %lu, frame %ld\n", n, step_from, frames); present_told = 0; snprintf(present_panel, sizeof present_panel, "%s", n); }
     // a layout that waited at a menu (port/aoe_layout.cpp): made where the next message is handled
     int waiting = aoe_layout_waiting();
     if (waiting && (!strcmp(n, "Game Screen") || aoe_layout_remakes(n))) aoe_post(AOE_WM_LAYOUT, waiting, 0);
@@ -292,6 +304,8 @@ void aoe_events(void) {
             aoe_updates - stats_updates, aoe_world_ms - stats_world);
         stats_at = timeGetTime(); stats_frames = frames; stats_updates = aoe_updates; stats_world = aoe_world_ms;
     }
+    // AOE_DEBUG: when the first world updates end (the load's end as a player has it: the first makes the zone tables)
+    { static unsigned long told; if (aoe_updates != told && told < 2 && getenv("AOE_DEBUG")) { told = aoe_updates; fprintf(stderr, "aoe: update %lu at %lu\n", told, timeGetTime()); } }
     // AOE_MARK=A,B: the span of world updates A to B, for tools/game_par.py and tools/prof.py
     if (!mark_read) { const char* e = getenv("AOE_MARK"); mark_read = 1; if (e) sscanf(e, "%d,%d", &mark_a, &mark_b); }
     if (mark_a) {

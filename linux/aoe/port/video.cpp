@@ -81,6 +81,11 @@ HRESULT IDirectDrawSurface::Lock(LPRECT r, LPDDSURFACEDESC d, DWORD, HANDLE) {
     return DD_OK;
 }
 HRESULT IDirectDrawSurface::Unlock(LPVOID) { return DD_OK; }
+static int aoe_fill_whole(void) {   // AOE_FILL=rows: a fill row by row, the way before
+    static int on = -1;
+    if (on < 0) { const char* e = getenv("AOE_FILL"); on = !(e && !strcmp(e, "rows")); }
+    return on;
+}
 HRESULT IDirectDrawSurface::Blt(LPRECT dr, IDirectDrawSurface* src, LPRECT sr, DWORD fl, LPDDBLTFX fx) {
     RECT all = {0, 0, w, h};
     if (!dr) dr = &all;
@@ -93,6 +98,11 @@ HRESULT IDirectDrawSurface::Blt(LPRECT dr, IDirectDrawSurface* src, LPRECT sr, D
         return DD_OK;
     }
     if (fl & DDBLT_COLORFILL) {
+        // (whole rows one after another are one memset: the C library fills 2 KB and more by the machine's fill, a pass, where row by
+        // row, 640 bytes each, a screen's clear filled the first core's write cache 57 passes: docs/machine/gpu.md, "A program's copy")
+        if (aoe_fill_whole() && dr->left == 0 && dr->right == w && pitch == w && dr->bottom > dr->top)
+            memset(bits + dr->top * pitch, fx->dwFillColor, (size_t) (dr->bottom - dr->top) * pitch);
+        else
         for (int y = dr->top; y < dr->bottom; y++) memset(bits + y * pitch + dr->left, fx->dwFillColor, dr->right - dr->left);
     } else if (src) {
         RECT sall = {0, 0, src->w, src->h};
@@ -317,10 +327,24 @@ static void draw_text(Dc* d, int x, int y, const char* s, int n) {
         int gw = aoe_glyph_width(f, ch);
         const unsigned char* bits = aoe_glyph_bits(f, ch);
         int stride = (gw + 7) / 8;
+        // (a glyph inside the clip across: a byte of its bits at a time, an empty one passed over, no test of each column; the same
+        // pixels as the bit at a time below. The menus draw a few hundred strings a panel; docs/games/aoe.md, "The menus")
+        int inside = x >= c.left && x + gw <= c.right;
         for (int r = 0; r < f->height; r++, bits += stride) {
             int yy = y + r;
             if (yy < c.top || yy >= c.bottom) continue;
             unsigned char* row = d->s->bits + yy * d->s->pitch;
+            if (inside) {
+                unsigned char* o = row + x;
+                for (int k = 0, base = 0; k < stride; k++, base += 8) {
+                    unsigned v = bits[k];
+                    if (!v) continue;
+                    int lim = gw - base < 8 ? gw - base : 8;
+                    for (int bb = 0; bb < lim; bb++)
+                        if (v & (0x80 >> bb)) o[base + bb] = color;
+                }
+                continue;
+            }
             for (int b = 0; b < gw; b++) {
                 if (!(bits[b >> 3] & (0x80 >> (b & 7)))) continue;
                 int xx = x + b;

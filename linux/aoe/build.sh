@@ -29,6 +29,22 @@ mkdir -p "$SRC/third_party"; rsync -a --delete "$UP/third_party/" "$SRC/third_pa
 # Asm_draw.asm, Inf32.asm and Drawarea_asm.asm are in port/aoe_asm.cpp; getdxver.cpp asks Windows what it has
 OUTS="${AOE_OUTS:-getdxver.cpp Dsutil.c}"
 COMMON="${AOE_OPT:--O2} -fno-pie -w -fsigned-char -fno-strict-aliasing -fwrapv -fno-delete-null-pointer-checks -fno-tree-vectorize -g -DAOE_SHADEREMU"
+# What played games ran, for the compiler (linux/userland/pgo/gcov.c; docs/games/aoe.md, "Twice as fast"): AOE_PROFILE=count builds
+# the program that counts, in a folder of its own (its counts written at kill -USR2); otherwise aoe.profile's counts, AOE_PROFILE=off
+# without. The counts go by the source's path: built from $SRC as the counting run was.
+PGO=""; COUNTS=""
+if [ "${AOE_PROFILE:-}" = count ]; then
+    OBJ=$WORK/src/aoe-count-build
+    mkdir -p "$WORK/src/nogcov" && riscv32-linux-ar rc "$WORK/src/nogcov/libgcov.a"
+    rv32-cc -O2 -fno-pie -Wall -c "$REPO/linux/userland/pgo/gcov.c" -o "$WORK/src/aoe-gcov.o"
+    PGO="-fprofile-generate -fprofile-update=single"; COUNTS="-L$WORK/src/nogcov $WORK/src/aoe-gcov.o"
+elif [ -f "$HERE/aoe.profile" ] && [ "${AOE_PROFILE:-}" != off ]; then
+    mkdir -p "$OBJ"
+    python3 "$REPO/linux/tdawn/profile.py" put "$HERE/aoe.profile" "$OBJ" | tail -1
+    PGO="-fprofile-use -fprofile-partial-training -fprofile-correction -Wno-missing-profile -Wno-coverage-mismatch"
+    PGO_SUM=$(md5sum "$HERE/aoe.profile" | cut -c1-12)
+fi
+COMMON="$COMMON $PGO"
 INC="-I$HERE/win -I$SRC/include -I$WORK/src/microwindows/src/include -I$REPO/linux/userland -idirafter $REPO/programs/linux/include"
 FLAGS="$COMMON -fpermissive -std=gnu++98 -fms-extensions -fno-lifetime-dse -include $HERE/win/aoe_prefix.h $INC"
 CFLAGS="$COMMON -include $HERE/win/aoe_prefix.h $INC"
@@ -46,7 +62,7 @@ if [ "${AOE_CHECK:-}" = 1 ]; then
     exit 0
 fi
 # Objects: a file again when it, a header or the flags changed
-echo "$FLAGS" > "$OBJ/flags.new"; cmp -s "$OBJ/flags.new" "$OBJ/flags" || { rm -f "$OBJ"/*.o; mv "$OBJ/flags.new" "$OBJ/flags"; }
+mkdir -p "$OBJ"; echo "$FLAGS ${PGO_SUM:-}" > "$OBJ/flags.new"; cmp -s "$OBJ/flags.new" "$OBJ/flags" || { rm -f "$OBJ"/*.o; mv "$OBJ/flags.new" "$OBJ/flags"; }
 newest=$(ls -t "$SRC"/include/*.h "$HERE"/win/*.h | sed -n 1p)   # (not head: under pipefail ls then dies of SIGPIPE, exit 141)
 one() {
     f=$1; o=$OBJ/$(basename "${f%.*}").o
@@ -69,14 +85,14 @@ rv32-cc -O2 -fno-pie -w -DNDEBUG -DSHADEREMU -idirafter $REPO/programs/linux/inc
     -fno-common -fdata-sections -msmall-data-limit=0 -c "$REPO/programs/linux/gles.c" -o "$WORK/src/aoe-gles.o"
 rv32-cc -O2 -fno-pie -w -idirafter $REPO/programs/linux/include -I$REPO/programs/mc -c "$REPO/programs/mc/mcw.c" -o "$WORK/src/aoe-mcw.o"
 LIBS="$WORK/src/aoe-gles.o $WORK/src/aoe-mcw.o $WORK/src/microwindows/src/lib/libnano-X.a"
-rv32-c++ -O2 -fno-pie -g "$OBJ"/*.o $LIBS -lm -o "$OBJ/aoe.elf" 2>"$OBJ/link.log" || true
+rv32-c++ -O2 -fno-pie -g $PGO "$OBJ"/*.o $LIBS $COUNTS -lm -o "$OBJ/aoe.elf" 2>"$OBJ/link.log" || true
 grep -oE "undefined reference to .*" "$OBJ/link.log" | sort | uniq -c | sort -rn | head -"${AOE_CHECK_TOP:-300}" || true
 grep -v "undefined reference\|in function" "$OBJ/link.log" | head -20 || true
 [ -f "$OBJ/aoe.elf" ] && ! grep -q 'undefined reference' "$OBJ/link.log" || { echo "does not link"; exit 1; }
 # the same objects for qemu-riscv32 (a flat program's start relies on the loader's relocations)
 S="$WORK/sysroot/lib"
 riscv32-linux-gcc -march=rv32imaf -mabi=ilp32 -O1 -ffreestanding -fno-builtin -fno-tree-loop-distribute-patterns -c "$HERE/host_mem.c" -o "$WORK/src/aoe-host-mem.o"
-riscv32-linux-g++ -march=rv32imaf -mabi=ilp32 -static -no-pie -nostdlib -L"$S" -g "$S/crt1.o" "$S/crti.o" "$WORK/src/aoe-host-mem.o" "$OBJ"/*.o $LIBS \
+[ "${AOE_PROFILE:-}" = count ] || riscv32-linux-g++ -march=rv32imaf -mabi=ilp32 -static -no-pie -nostdlib -L"$S" -g "$S/crt1.o" "$S/crti.o" "$WORK/src/aoe-host-mem.o" "$OBJ"/*.o $LIBS \
     -lm -Wl,--start-group -lc -lcompiler_rt -Wl,--end-group "$S/crtn.o" -o "$OBJ/aoe-q.elf" 2>"$OBJ/linkq.log" || head -5 "$OBJ/linkq.log"
 riscv32-linux-nm -n "$OBJ/aoe.elf" > "$WORK/src/aoe.nm"
 echo "linked: $(riscv32-linux-size "$OBJ/aoe.elf" | tail -1)"

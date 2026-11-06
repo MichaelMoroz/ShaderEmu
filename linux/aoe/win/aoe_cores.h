@@ -54,8 +54,19 @@ static inline int aoe_view_core(void) {
     __asm__("mv %0, sp" : "=r"(sp));
     return sp - aoe_view_stack.lo < aoe_view_stack.hi - aoe_view_stack.lo;
 }
-// The machine's copy of a scroll, made by the first core: 0 when there is none (then by words)
+// The machine's copy of a scroll, made by the first core: 0 when there is none (then by words). The first core makes one the view's job
+// asks for wherever it looks (aoe_view_copy_serve): between panels and every 16 rows of its sprites
 int aoe_view_first_copy(const void* src, void* dst, unsigned bytes);
+struct AoeCopyAsked { volatile unsigned v; char pad[12]; } __attribute__((aligned(16)));
+extern struct AoeCopyAsked aoe_copy_asked;
+void aoe_view_copy_serve(void);
+// The raster's band workers (aoe_view.cpp, aoe_raster_levels): the view's last draws by bands of rows, the view's worker the first band
+// and these the others, each with its own drawing state (aoe_asm.cpp), found by the stack its job notes
+#define AOE_RASTER_BANDS 7
+struct AoeBandStack { unsigned lo, hi; char pad[8]; } __attribute__((aligned(16)));
+extern struct AoeBandStack aoe_band_stack[AOE_RASTER_BANDS];
+extern int aoe_bands_on;
+void aoe_asm_for_band(int k);
 #define fog_next_shape (aoe_core_words[aoe_view_core()].fog)
 #define SDI_Capture_Info (aoe_core_words[aoe_view_core()].capture)
 #ifdef __cplusplus

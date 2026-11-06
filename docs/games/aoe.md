@@ -344,6 +344,108 @@ What only the world can confirm: that the copy a worker asked for was the one no
 otherwise), and the picture while dragging with a hand. The drag by the machine's pointer words (`--pointer-button`) logged no press in
 two runs under `nano-X -p` and was not followed further.
 
+### Twice as fast: the load, the menus and play (6 November 2026)
+
+The aim of this round was twice the speed of the last commit's program in the load, the menus, scrolling and units acting (an idle
+menu and an idle game left out). Measured on `rvc_cpu` on the card's model (calibrated), the last commit's program built in the same
+home against this one, on the same scenes:
+
+| | The last commit | This round | |
+|---|---|---|---|
+| Start Game to the game's screen (by `AOE_DEBUG`'s `panel` and `step` lines, `AOE_SEED=1`) | 89.33 s | 42.27 s | 2.11x |
+| Start Game to the first world update's end | 95.73 s | 43.24 s | 2.21x |
+| Single Player, click to the menu shown (the game's fade out, 0.13 s, in it as before) | 0.512 s | 0.251 s | 2.04x |
+| Random Map's setup, click to shown | 1.717 s | 0.627 s | 2.74x |
+| `aoe-busy-640`, pictures a second (3 salted runs) | 7.7 | 19.0 to 20.2 | 2.47x to 2.62x |
+| `aoe-drag-scroll`, pictures a second (3 salted runs) | 15.4 | 31.3 to 32.0 | 2.03x to 2.08x |
+
+A menu's last step was a clear of the whole page row by row (`Blt`'s colour fill: 640 bytes a `memset`, under the 2 KB from which the C library
+asks for the machine's fill), which filled the first core's write cache in 57 of a menu's 124 passes; whole rows one after another are one
+`memset` now (`AOE_FILL=rows` the way before). The game's fades are as they were (0.13 s out and in); the menu is shown before its fade in.
+
+The busy scene on the fixed game clock (`AOE_TICK_MS=33`: one update a picture, the same game in any build) with the view on its
+workers, the machine's time a picture: 117.2 ms before, about 80 ms after the bands, before the walk was split.
+
+**The load** (Start Game to the game's screen) was the random map's making and the first update. What paid, each checked by its own
+switch or sum:
+
+- The map's elevation passes (`pre_clean_elevation`, `clean_elevation`, `post_clean_elevation` in `map.cpp`) skip tiles that cannot
+  change, and `create_terrain_object` skips the random draws a placement that cannot fit would have thrown away while keeping the
+  generator's sequence (`place_owed`); `AOE_MAPSUM` prints the map's tiles' sum after its making, `1c29de41` before and after.
+- The land and path searches of the map's making (`rmm_land`, `rmm_base`) keep their open lists in bands of their cost (`land_push`,
+  `fp_push`): the same nodes come out in the same order; whole square roots by `aoe_isqrt` (`port/aoe_path.c`).
+- The zone maps (`zone_map.cpp`) are flooded by scanlines (`aoe_area`; `AOE_ZONES=old` the way before) and the map's zone maps made at the
+  first update on the job workers at once (`aoe_zone_maps_all`): `AOE_ZONE_CHECK=1` compares each with the old flood, 0 cells differ.
+- The game's data is inflated ahead on worker 3 from the main menu (`aoe_inflate_ahead`; `AOE_AHEAD=0` the way before, `=check` compares).
+- `rge_read` of a file in memory is inline (`aoe_rge_read`), and the random numbers' generator too.
+
+**The menus**: a menu's palette made its colour tables again, a million instructions each: they are kept (8, by palette, colour and amount),
+and one not kept is made by eight jobs, each colour's search stopping at a distance of 0 (`color.cpp`; into a table of its own on 16 bytes,
+copied into the game's: two jobs' entries shared a texel of the game's table, which `RVC_RACES` found). A dialog's shadow box is shaded by
+the job workers (`DrawShadowBox`). A menu's 0.26 s of fades are the game's own timers and stay.
+
+**Play.** The view's job is now four parts on nine of the program's sixteen workers (`port/aoe_view.cpp`, view.cpp; the others are a
+song's, the data inflated ahead and five for `aoe_view_jobs`):
+
+- *The walk* (the view's worker) captures the objects on the visible tiles, as before, and before that copies what the tiles' drawing reads
+  of the world: the visibility words under the view and each tile's view bytes (`last_drawn_as` to `last_drawn_shape2`; `aoe_sp`). The world
+  is given back after it.
+- *The tiles* (a worker of their own, `aoe_terrain_loop`) decide from those copies which tiles to draw again, with their masks, and record
+  what they would draw (`aoe_tr`: the terrain masks' regions and mini lists, each tile's shapes with their shadowing and fog) while the first
+  core updates the world. The tiles' view bytes are written back by the first core at the join (`aoe_view_tiles_settle`): the world writes a
+  tile's other bytes (its objects, `draw_as`) in the same texels. What the world asks of the view bytes meanwhile (`request_redraw`,
+  `clear_map_view_info`) is told (`aoe_view_tiles_event`) and done again after the write back, as it came after the walk. `AOE_WALK=whole`
+  is the loop whole in the walk.
+- *The clip mask* (the lines of what changed since the last picture) and *the last draws* by eight bands of lines (the view's worker and
+  seven band workers): each band replays the tiles' record on its own lines, clears its rows of the strips a scroll uncovered, builds its lines
+  of the masks from span nodes of its own, copies its lines of the terrain and draws its rows of every level (`aoe_band_frame`,
+  `aoe_terrain_band`). Every one of those works line by line, so each line gets the same work in the same order. The bands divide by what each
+  would draw (`aoe_band_split`), on 4 lines so that no texel of the masks' arrays has two writers. `AOE_TERRAIN=walk` and `AOE_BANDS=lines`
+  are the ways back of the record and the split.
+- The scroll's machine copy, which only the first core may ask for, is made as soon as the walk asks: the first core looks between panels
+  and every 16 rows of its own sprites (`aoe_view_copy_serve`, `aoe_copy_asked`; `AOE_COPY_WAIT=1` has it stay after the post until the job
+  is past its scroll). The tiles are begun before that copy, as soon as the strips' rectangles are known (`aoe_walk_split_begin` in `draw`),
+  and the strips are cleared by the bands; where the walk is not split they are cleared where they always were.
+
+Two fixes the measures needed: an old node matched in the clip mask was marked in its `Node_Type`, which the box's pick reads on the first
+core meanwhile (a box took 1 villager or 12 by the timing); the match is kept in a list now. And a button joins the view's job before its pick
+(`DispatchMessage`): a pick reads the lists the job puts in place at its end. The busy scene's box is the whole view (`game_par.py`): one of
+400 x 180 took 4 villagers or 11 by where they stood.
+
+The world's own parts: the computer players' building places are weighed by the job workers, a column of cells at a time, and the best
+taken in the scan's order on the first core as before (`aoePlaceValue`, `taiinfmd.cpp`). The program is compiled with played counts
+(`AOE_PROFILE=count` builds the counting program; `linux/aoe/aoe.profile`, from the busy and the drag scene: `build.sh`).
+
+Checks: `test_all.py aoe` (`5032c153` at 1000), the 436 pictures of a fixed-clock run with the view inline as the last commit's,
+the busy scene's state sums on the fixed clock as the last commit's to update 900 (`622ac680`), `AOE_MAPSUM`, `AOE_ZONE_CHECK`,
+`AOE_AHEAD=check`, the script's `check` (every picture against one drawn whole) on the drag, the busy scene and pictest's play: 0 pixels.
+On the real clock a check right after a right click can find the move marker one frame on (642 pixels): its animation goes by the clock,
+which runs between the check's two draws; on the fixed clock 0. `RVC_RACES` with `RVC_RACES_NEAR=4` on the drag and the busy scene: 0 undone.
+
+The last steps of the drag, each measured (calibrated, 3 runs): the tiles' view bytes written back only where changed (`aoe_tset`; 25.3
+pictures a second), the first core's sprites of 1,024 pixels or more kept as pixels and runs, a player's colours with them (`plain_get`
+keyed by the colour's transform; 26.7), the walk's copies made by the tiles' worker as it begins and the terrain masks' reset with them
+(`aoe_sp_copy`; 27.4), the bands following the tiles' record while it is written (`aoe_tr_pub`; 29.1), the walk's objects loop only at tiles
+with objects (29.6), the scroll's copy asked and not waited for until the raster (`aoe_view_copy_settle`; 30.4), the played counts made again
+(31.6). And two races `RVC_RACES` found: the view's lists swapped by the first core at the join (`aoe_view_swap_lists`: the swap at the
+job's end shared a texel with the first core's hover pick, `UC_ObjectTouched`), and the phase counters cleared only with the job joined.
+A bug the inline pictures found on the way: the strips a scroll uncovers were cleared before the save area's offsets were set where the
+walk was not split (they are kept and cleared where they were). With the view inline the 436 pictures are the last commit's but for the
+top bar in four (331 to 334, the stock counts and the clock drawn at another picture: the game's sums are the same).
+
+What bounded the drag before those steps, at 1.6 times: by the job's own lines (`aoephase:` at a mark's end), a scrolled picture's
+job has its tiles begun 5.6 ms after its start and done at 21 ms (98 thousand instructions on their worker), the walk done at 14 ms,
+the split and the bands' go at about 25 ms and the bands done at about 34 ms (the slowest of eight): 39 ms from the post. The first core
+joins 48 ms after the post: its own chain is the longer now, the walk it waits for (16 ms from the post), the world's update (15 ms a
+picture), its panels (9 ms) and the picture's end. Three pictures are presented for every two the view draws (285 and 188 in a run).
+The first core's join is done 6.7 ms after the job's end (`aoephase: a join done`): it rests (`mcw_rest`) while it waits, and the
+kernel runs another program then; ending its passes by a worker's `mc_end_pass` word in those waits was slower (it does not end a
+pass of the first core, which spun 47 thousand instructions a frame), and `mcw_rest` is the rule there.
+The tiles' decisions are a chain from tile to tile (a tile drawn marks its neighbours, `draw_attribute`'s 0x40, for the next rows), so
+they were not shared out; the per tile loop is 55 thousand of their instructions, `draw_tile` 49 thousand, the masks 10 thousand. The
+next steps would be the tiles' loop made leaner (masks kept while the visibility under them is as it was), and a picture's job begun
+before the last one's bands end (the page and the save area twice).
+
 ## The view on a worker
 
 `RGE_View::draw`, the walk and the raster, is one job on a worker (`port/aoe_view.cpp`). The first core draws the other

@@ -1,7 +1,31 @@
+diff --git a/include/Shape.h b/include/Shape.h
+index fcdf781b..b9bc0c81 100644
+--- a/include/Shape.h
++++ b/include/Shape.h
+@@ -83,7 +83,9 @@ class TShape {
+     ~TShape();
+ 
+   private:
+-    byte Check_shape(long shape_num, char* proc);
++  public:
++    byte Check_shape(long shape_num, char* proc);   // (public for the port: view.cpp keeps a tile's shape for the bands)
++  private:
+ 
+   public:
+     int is_loaded();
 diff --git a/include/basegame.h b/include/basegame.h
-index ace2f53a..bb040047 100644
+index ace2f53a..6ff08d5c 100644
 --- a/include/basegame.h
 +++ b/include/basegame.h
+@@ -321,7 +321,7 @@ class RGE_Base_Game {
+     friend class TMessageDialog;
+     friend class THelpDialog;
+     friend class Time_Line_Panel;
+-    friend int __cdecl debug_rand(char*, int);
++    friend int __cdecl aoe_debug_rand_log(char*, int);
+     friend void __cdecl debug_srand(char*, int, unsigned int);
+     friend void* __cdecl ReadPalette(char*, long, int);
+     friend void __cdecl color_log(unsigned char, unsigned char, int);
 @@ -338,6 +338,9 @@ class RGE_Base_Game {
      friend class TCommunications_Handler;
      friend class RGE_Communications_Synchronize;
@@ -42,6 +66,58 @@ index 591015c5..e370f5db 100644
      TSpan_List_Manager* SpanList;        // +0xCC
      TSpan_List_Manager* CurSpanList;     // +0xD0
      int Float_X_Delta;                   // +0xD4
+diff --git a/include/rmm_base.h b/include/rmm_base.h
+index eb6239c9..04af20b7 100644
+--- a/include/rmm_base.h
++++ b/include/rmm_base.h
+@@ -51,9 +51,33 @@ class RGE_Random_Map_Module {
+     void init_stack(Map_Stack& stack);
+     void deinit_stack(Map_Stack& stack);
+     void push_stack(Map_Stack& stack, long x, long y, float cost, float tot_cost);
++    void fp_push(Map_Stack& stack, long x, long y, float cost, float tot_cost);
++    Map_Stack* fp_pop(Map_Stack& stack, long& x, long& y, float& cost);
++    void fp_remove(Map_Stack& stack, Map_Stack* node);
+     Map_Stack* pop_stack(Map_Stack& stack, long& x, long& y, float& cost);
+-    void add_stack_node(Map_Stack* stack, Map_Stack* new_stack);
+-    void remove_stack_node(Map_Stack* stack);
++    // (the port: inline, docs/games/aoe.md "The load")
++    void add_stack_node(Map_Stack* stack, Map_Stack* new_stack) {
++        if ((new_stack->next != 0) || (new_stack->prev != 0)) {
++            this->remove_stack_node(new_stack);
++        }
++        Map_Stack* next = stack->next;
++        new_stack->prev = stack;
++        new_stack->next = next;
++        if (stack->next != 0) {
++            stack->next->prev = new_stack;
++        }
++        stack->next = new_stack;
++    }
++    void remove_stack_node(Map_Stack* stack) {
++        if (stack->prev != 0) {
++            stack->prev->next = stack->next;
++        }
++        if (stack->next != 0) {
++            stack->next->prev = stack->prev;
++        }
++        stack->next = 0;
++        stack->prev = 0;
++    }
+     void clear_stack();
+     uchar check_stack(Map_Stack* stack);
+     void randomize_stack(Map_Stack* stack);
+diff --git a/include/taiinfmd.h b/include/taiinfmd.h
+index 2d7d6cbc..80f947a6 100644
+--- a/include/taiinfmd.h
++++ b/include/taiinfmd.h
+@@ -168,6 +168,7 @@ class TribeInformationAIModule : public InformationAIModule {
+     BuildingLot* availableLot(int typeID);
+     int invalidLot(int typeID, unsigned char x, unsigned char y);
+     int undesirableLot(int typeID, unsigned char xRange, unsigned char yRange, int coordOffset);
++    int aoePlaceValue(struct AoePlaceColumn* c, int y);   // (the port: one cell's value of influencePlaceStructure's scan)
+     void storeLot(int typeID, unsigned char x, unsigned char y, unsigned char status);
+     void removeLot(int typeID, unsigned char x, unsigned char y, unsigned char newStatus);
+     void setupWalls(
 diff --git a/include/tribegam.h b/include/tribegam.h
 index d47ed773..913cb4f2 100644
 --- a/include/tribegam.h
@@ -59,7 +135,7 @@ index d47ed773..913cb4f2 100644
  // Square map dimensions, in tiles. MapSize stores a separate option index.
  #define TRIBE_MAP_DIMENSION_TINY      72
 diff --git a/include/view.h b/include/view.h
-index 912300f4..994de736 100644
+index 912300f4..7b2aa99c 100644
 --- a/include/view.h
 +++ b/include/view.h
 @@ -141,11 +141,9 @@ class DClipInfo_List {
@@ -85,6 +161,49 @@ index 912300f4..994de736 100644
      int pick_touched_object(DClipInfo_List* obj_list, int Xpos, int Ypos, int min_level, int max_level, int& touched_object_id);
      int sprite_check(unsigned char* Shape_Base, Shape_Info* Shape, int check_x, int check_y);
      void draw_terrain_shape(
+@@ -352,6 +354,11 @@ class RGE_View : public TPanel {
+     void Add_GDI_Clip_Mask(DClipInfo_Node* SDI, TSpan_List_Manager* Clip_Mask);
+     void Draw_GDI_Object(DClipInfo_Node* SDI, TDrawArea* render_area);
+     int get_tile_mask_num(int map_col, int map_row, int map_width, int map_height, unsigned long VisibleMask);
++    void aoe_draw_levels(long line_lo, long line_hi);   // (the port: the last draws, of one band of rows)
++    void aoe_band_frame(long line_lo, long line_hi, TSpan_List_Manager* m, TSpan_List_Manager* tm, TSpan_List_Manager* fm);   // (the port: a band's terrain, clip mask, copy and last draws)
++    void aoe_terrain_band(long line_lo, long line_hi, TSpan_List_Manager* tm, TSpan_List_Manager* fm);   // (the port: the walk's terrain work, of one band)
++    void aoe_terrain_loop();   // (the port: the walk's tiles after it, from its copies: view.cpp, aoe_sp)
++    void aoe_walk_split_begin();   // (the port: the walk's copies made and its tiles begun, from draw: view.cpp, aoe_sp)
+ };
+ 
+ typedef char view_size_check[(sizeof(RGE_View) == 0x360) ? 1 : -1];
+diff --git a/include/zone_map.h b/include/zone_map.h
+index 46635943..a54755aa 100644
+--- a/include/zone_map.h
++++ b/include/zone_map.h
+@@ -24,6 +24,8 @@ class RGE_Zone_Map {
+ 
+     RGE_Zone_Map(int infile, RGE_Map* new_map);
+     RGE_Zone_Map(RGE_Map* new_map, float* new_terrain_rules, long new_terrain_rules_num);
++    RGE_Zone_Map(RGE_Map* new_map, float* new_terrain_rules, long new_terrain_rules_num, int flood);
++    uchar aoe_flood(int* list);
+     ~RGE_Zone_Map();
+     void save(int outfile);
+     uchar do_zone_map();
+@@ -36,6 +38,7 @@ class RGE_Zone_Map {
+ 
+   private:
+     void do_zone_map_area(long x, long y, uchar group, uchar zone);
++    void aoe_area(long x, long y, uchar zone, const uchar* same, int* list);
+ };
+ 
+ class RGE_Zone_Map_List {
+@@ -54,6 +57,9 @@ class RGE_Zone_Map_List {
+     void delete_zone_maps();
+ };
+ 
++// the port: the zone maps a world's terrains want, made at its first update and flooded at once (zone_map.cpp)
++void aoe_zone_maps_all(RGE_Zone_Map_List* list, float** terrains, int terrain_num, long terrain_size);
++
+ typedef char rge_zone_map_size_check[(sizeof(RGE_Zone_Map) == 0x51C) ? 1 : -1];
+ typedef char rge_zone_map_list_size_check[(sizeof(RGE_Zone_Map_List) == 0x0C) ? 1 : -1];
+ 
 diff --git a/src/Mouseptr.cpp b/src/Mouseptr.cpp
 index 26c48c44..9b3f3f49 100644
 --- a/src/Mouseptr.cpp
@@ -103,7 +222,7 @@ index 26c48c44..9b3f3f49 100644
      lplpDDClipper = 0;
      if (this->active != 0 && this->custom_draw != 0 && this->GameMode != 0 && this->GameEnabled != 0) {
 diff --git a/src/Panel.cpp b/src/Panel.cpp
-index 6fcfc515..3e39581a 100644
+index 6fcfc515..998c1a2d 100644
 --- a/src/Panel.cpp
 +++ b/src/Panel.cpp
 @@ -1,3 +1,4 @@
@@ -134,6 +253,14 @@ index 6fcfc515..3e39581a 100644
      dc = render_area->DrawDc;
      if (dc != 0) {
          SelectClipRgn(dc, clip_rgn);
+@@ -1258,6 +1264,7 @@ long TPanel::handle_paint() {
+     }
+ 
+     for (PanelNode* node = this->first_child_node; node != 0; node = node->next_node) {
++        aoe_view_copy_serve();   // (the port: a scroll's copy the view's worker asks of this core, made at once: aoe_view.cpp)
+         node->panel->handle_paint();
+     }
+ 
 diff --git a/src/Panel_ez.cpp b/src/Panel_ez.cpp
 index 1b7ed184..92c13257 100644
 --- a/src/Panel_ez.cpp
@@ -208,7 +335,7 @@ index 5dc3f00a..f4278b85 100644
      return insert_line((int) num_lines, text_in, text2_in, id_in);
  }
 diff --git a/src/Shape.cpp b/src/Shape.cpp
-index 1d6e5603..74907c6f 100644
+index 1d6e5603..b7261263 100644
 --- a/src/Shape.cpp
 +++ b/src/Shape.cpp
 @@ -1,3 +1,4 @@
@@ -216,7 +343,95 @@ index 1d6e5603..74907c6f 100644
  
  #include "../include/Shape.h"
  #include <fcntl.h>
-@@ -434,7 +435,6 @@ byte TShape::shape_draw(TDrawArea* drawarea, long x, long y, long shape_num, byt
+@@ -396,6 +397,87 @@ byte TShape::shape_check(long check_x, long check_y, long shape_num) {
+     return 0;
+ }
+ 
++// The port: a big picture of the older format (a status screen's background, drawn four times as two come) kept as its rows' pixels
++// and runs the first time it is drawn plainly, then copied run by run within the clip: the pixels shape_draw_unclipped writes, and what a
++// skip passes over untouched (docs/games/aoe.md, "The load"). The first core's, pictures 256 wide or more; AOE_PLAIN=0 the way before.
++#include "aoe_cores.h"
++struct AoeOldRun { short a, b; };
++struct AoeOldShape { const void* header; long width, height; unsigned used; unsigned char* pix; int* first; AoeOldRun* runs; };
++enum { AOE_OLD_SHAPES = 4 };
++static AoeOldShape aoe_old_shapes[AOE_OLD_SHAPES];
++static unsigned aoe_old_clock;
++static const AoeOldShape* aoe_old_shape(Shape_Header* sh) {
++    static int on = -1;
++    if (on < 0) { const char* e = getenv("AOE_PLAIN"); on = !(e && !strcmp(e, "0")); }
++    long width = sh->xmax - sh->xmin + 1, height = sh->ymax - sh->ymin + 1;
++    if (!on || width < 256 || height <= 0 || width > 4096 || aoe_view_core()) return 0;
++    AoeOldShape* old = &aoe_old_shapes[0];
++    for (int i = 0; i < AOE_OLD_SHAPES; i++) {
++        AoeOldShape* k = &aoe_old_shapes[i];
++        if (k->header == sh && k->width == width && k->height == height) { k->used = ++aoe_old_clock; return k; }
++        if (k->used < old->used) old = k;
++    }
++    free(old->pix); free(old->first); free(old->runs);
++    memset(old, 0, sizeof *old);
++    long cap = height * 8 + 64, total = 0;
++    old->pix = (unsigned char*) malloc(width * height);
++    old->first = (int*) malloc((height + 1) * sizeof(int));
++    old->runs = (AoeOldRun*) malloc(cap * sizeof(AoeOldRun));
++    if (!old->pix || !old->first || !old->runs) { free(old->pix); free(old->first); free(old->runs); memset(old, 0, sizeof *old); return 0; }
++    const unsigned char* p = (const unsigned char*) (sh + 1);
++    for (long r = 0; r < height; r++) {
++        unsigned char* out = old->pix + r * width;
++        long at = 0;
++        old->first[r] = (int) total;
++        for (;;) {
++            unsigned char command = *p++, c = command >> 1;
++            long n = 0;
++            if (command & 1) {
++                if (c == 0) { at += *p++; continue; }
++                n = c;
++                if (at >= 0 && at + n <= width) memcpy(out + at, p, n);
++                p += c;
++            } else {
++                if (c == 0) break;
++                n = c;
++                if (at >= 0 && at + n <= width) memset(out + at, *p, n);
++                p++;
++            }
++            if (at < 0 || at + n > width) { free(old->pix); free(old->first); free(old->runs); memset(old, 0, sizeof *old); return 0; }
++            if (total > old->first[r] && old->runs[total - 1].b == at - 1) old->runs[total - 1].b = (short) (at + n - 1);
++            else {
++                if (total == cap) {
++                    cap *= 2;
++                    AoeOldRun* grown = (AoeOldRun*) realloc(old->runs, cap * sizeof(AoeOldRun));
++                    if (!grown) { free(old->pix); free(old->first); free(old->runs); memset(old, 0, sizeof *old); return 0; }
++                    old->runs = grown;
++                }
++                old->runs[total].a = (short) at; old->runs[total].b = (short) (at + n - 1); total++;
++            }
++            at += n;
++        }
++    }
++    old->first[height] = (int) total;
++    old->header = sh; old->width = width; old->height = height; old->used = ++aoe_old_clock;
++    return old;
++}
++// its rows clip_y0 to clip_y1 and columns clip_x0 to clip_x1 into the area, the picture's corner at shape_x0, shape_y0
++static void aoe_old_draw(const AoeOldShape* k, TDrawArea* drawarea, long shape_x0, long shape_y0, long clip_x0, long clip_y0, long clip_x1, long clip_y1) {
++    long pitch = drawarea->AlignedWidth() * drawarea->Orien;
++    for (long y = clip_y0; y <= clip_y1; y++) {
++        long r = y - shape_y0;
++        if (r < 0 || r >= k->height) continue;
++        unsigned char* row = drawarea->Orien < 1 ? drawarea->Bits + (y - drawarea->Height + 1) * pitch : drawarea->Bits + y * pitch;
++        const unsigned char* px = k->pix + r * k->width;
++        for (int i = k->first[r]; i < k->first[r + 1]; i++) {
++            long a = shape_x0 + k->runs[i].a, b = shape_x0 + k->runs[i].b;
++            if (a < clip_x0) a = clip_x0;
++            if (b > clip_x1) b = clip_x1;
++            if (a <= b) memcpy(row + a, px + (a - shape_x0), b - a + 1);
++        }
++    }
++}
++
+ byte TShape::shape_draw(TDrawArea* drawarea, long x, long y, long shape_num, byte flags, byte* color_table) {
+     long shape_y1;
+     byte ret_num = 0;
+@@ -434,7 +516,6 @@ byte TShape::shape_draw(TDrawArea* drawarea, long x, long y, long shape_num, byt
                  this->FShape, x - info->Hotspot_X, y - info->Hotspot_Y, info->Width, info->Height, info->Shape_Data_Offsets,
                  info->Shape_Outline_Offset, fog_next_shape
              );
@@ -224,7 +439,21 @@ index 1d6e5603..74907c6f 100644
              return 1;
          }
  
-@@ -1288,7 +1288,6 @@ byte TShape::shape_mirror(TDrawArea* drawarea, long x, long y, long shape_num, b
+@@ -470,6 +551,13 @@ byte TShape::shape_draw(TDrawArea* drawarea, long x, long y, long shape_num, byt
+                 y = drawarea->Height - 1;
+ 
+             if (x <= clip_x1 && clip_y0 <= y) {
++                if ((flags == 0 || ((flags == 1 || flags == 2) && color_table == 0))) {   // (the port: a plain drawing, kept: above)
++                    const AoeOldShape* kept = aoe_old_shape(this->shape_header);
++                    if (kept) {
++                        aoe_old_draw(kept, drawarea, shape_x0, raw_y0, x, clip_y0, clip_x1, y);
++                        return 1;
++                    }
++                }
+                 if (x != shape_x0 || clip_y0 != raw_y0 || clip_x1 != shape_x1 || y != shape_y1) {
+                     switch ((unsigned char) flags) {
+                         case 2:
+@@ -1288,7 +1376,6 @@ byte TShape::shape_mirror(TDrawArea* drawarea, long x, long y, long shape_num, b
                  this->FShape, info->Hotspot_X + x - info->Width, y - info->Hotspot_Y, info->Width, info->Height,
                  info->Shape_Data_Offsets, info->Shape_Outline_Offset, fog_next_shape + 2
              );
@@ -292,7 +521,7 @@ index f99cb6f1..7e582312 100644
  
                  if (frame_looped != 0) {
 diff --git a/src/basegame.cpp b/src/basegame.cpp
-index 2ec74351..2e16c172 100644
+index 2ec74351..113afc60 100644
 --- a/src/basegame.cpp
 +++ b/src/basegame.cpp
 @@ -1,3 +1,5 @@
@@ -360,8 +589,130 @@ index 2ec74351..2e16c172 100644
      if (this->custom_mouse != 0 && this->windows_mouse == 0) {
          this->mouse_pointer->draw(1);
          this->erase_mouse = 1;
+@@ -3986,7 +4019,7 @@ void debug_random_write(void) {
+     wrote_debug_random_log = 1;
+ }
+ 
+-int __cdecl debug_rand(char* source_name, int source_line) {
++int __cdecl aoe_debug_rand_log(char* source_name, int source_line) {
+     int rv = rand();
+     if (do_debug_random && debug_random_on) {
+         char temp_name[9];
+diff --git a/src/color.cpp b/src/color.cpp
+index bd6f51d8..2dbbbe50 100644
+--- a/src/color.cpp
++++ b/src/color.cpp
+@@ -194,6 +194,38 @@ RGE_Color_Table::RGE_Color_Table(char* filename) {
+     }
+ }
+ 
++// The port: entries from to to of a colour table, each the first of the palette's colours nearest to its wanted colour, as the loop
++// of RGE_Color_Table's constructor found it: a colour whose red, or red and green, are already no nearer than the best is passed
++// over (its distance could not be smaller), and none can be nearer than one at no distance. A job of aoe_view_jobs' (port/aoe_view.cpp):
++// it writes its own entries of the table, 32 of them, two texels.
++static struct { tagPALETTEENTRY* palette; tagPALETTEENTRY* wanted; unsigned char* table; } aoe_color_job;
++static unsigned char aoe_color_out[256] __attribute__((aligned(16)));
++static void aoe_color_nearest(unsigned from, unsigned to) {
++    const tagPALETTEENTRY* palette = aoe_color_job.palette;
++    for (unsigned index1 = from; index1 < to; index1++) {
++        int red = aoe_color_job.wanted[index1].peRed;
++        int green = aoe_color_job.wanted[index1].peGreen;
++        int blue = aoe_color_job.wanted[index1].peBlue;
++        int best_distance = 20000, temp_color = 0;
++        for (int i = 0; i <= 0xff; i++) {
++            int red_difference = red - palette[i].peRed;
++            int distance = red_difference * red_difference;
++            if (distance >= best_distance) continue;
++            int green_difference = green - palette[i].peGreen;
++            distance += green_difference * green_difference;
++            if (distance >= best_distance) continue;
++            int blue_difference = blue - palette[i].peBlue;
++            distance += blue_difference * blue_difference;
++            if (distance < best_distance) {
++                best_distance = distance;
++                temp_color = i;
++                if (distance == 0) break;
++            }
++        }
++        aoe_color_job.table[index1] = (unsigned char) temp_color;
++    }
++}
++
+ RGE_Color_Table::RGE_Color_Table(TDrawArea* surface, long amount, tagPALETTEENTRY* in_color, tagPALETTEENTRY* palette1) {
+     long temp_color;
+     tagPALETTEENTRY palette[256];
+@@ -229,32 +261,45 @@ RGE_Color_Table::RGE_Color_Table(TDrawArea* surface, long amount, tagPALETTEENTR
+     this->type = 0;
+     memset(this->table, 0, 256);
+ 
+-    RGE_translate_palette(palette, temp_palette, color, amount, -1, -1);
+-
+-    index1 = 0;
+-    do {
+-        temp_color = 0;
+-        int i = 0;
+-        int best_distance = 20000;
+-        int red = temp_palette[index1].peRed;
+-        int green = temp_palette[index1].peGreen;
+-        int blue = temp_palette[index1].peBlue;
+-
+-        for (; i <= 0xff; i++) {
+-            int red_difference = red - palette[i].peRed;
+-            int green_difference = green - palette[i].peGreen;
+-            int blue_difference = blue - palette[i].peBlue;
+-            int distance =
+-                red_difference * red_difference + green_difference * green_difference + blue_difference * blue_difference;
+-            if (distance < best_distance) {
+-                best_distance = distance;
+-                temp_color = i;
+-            }
++    // (the port: a table made before from the same palette, colour and amount is that table: each menu's palette makes its tables
++    // again, a million instructions each; docs/games/aoe.md, "The menus")
++    struct Kept { tagPALETTEENTRY palette[256]; tagPALETTEENTRY color; long amount; unsigned char table[256]; int used; };
++    enum { KEPT = 8 };
++    static Kept kept[KEPT];
++    static int kept_clock;
++    for (int k = 0; k < KEPT; k++) {
++        if (kept[k].used && kept[k].amount == amount && !memcmp(&kept[k].color, &color, sizeof color)
++            && !memcmp(kept[k].palette, palette, sizeof palette)) {
++            memcpy(this->table, kept[k].table, 256);
++            kept[k].used = ++kept_clock;
++            return;
+         }
++    }
++
++    RGE_translate_palette(palette, temp_palette, color, amount, -1, -1);
+ 
+-        this->table[index1] = (unsigned char) temp_color;
+-        index1++;
+-    } while (index1 <= 0xff);
++    // (the port: each entry's nearest colour by aoe_color_nearest, eight runs of 32 entries on the job workers at once:
++    // docs/games/aoe.md, "The menus")
++    aoe_color_job.palette = palette;
++    aoe_color_job.wanted = temp_palette;
++    aoe_color_job.table = aoe_color_out;   // (a table's two jobs' entries shared a texel: this->table lies on no 16 bytes)
++    {
++        extern void aoe_view_jobs(void (*fn)(unsigned, unsigned), const unsigned* a0, const unsigned* a1, int n);
++        unsigned from[8], to[8];
++        for (int k = 0; k < 8; k++) { from[k] = k * 32; to[k] = k * 32 + 32; }
++        aoe_view_jobs(aoe_color_nearest, from, to, 8);
++    }
++    memcpy(this->table, aoe_color_out, 256);
++
++    {
++        Kept* k = &kept[0];
++        for (int i = 1; i < KEPT; i++) if (kept[i].used < k->used) k = &kept[i];
++        memcpy(k->palette, palette, sizeof palette);
++        k->color = color;
++        k->amount = amount;
++        memcpy(k->table, this->table, 256);
++        k->used = ++kept_clock;
++    }
+ }
+ 
+ RGE_Color_Table::~RGE_Color_Table() {
 diff --git a/src/drawarea.cpp b/src/drawarea.cpp
-index 9f77ab2e..e7e4a8bc 100644
+index 9f77ab2e..d369bb85 100644
 --- a/src/drawarea.cpp
 +++ b/src/drawarea.cpp
 @@ -1,3 +1,4 @@
@@ -479,7 +830,47 @@ index 9f77ab2e..e7e4a8bc 100644
      int y = this->ClipRect.top;
      if (y <= this->ClipRect.bottom) {
          do {
-@@ -2286,3 +2345,9 @@ void TDrawArea::take_snapshot(char* filespec, int& index_no) {
+@@ -2134,6 +2193,18 @@ void TDrawArea::SetShadowTable(RGE_Color_Table* color_table_in) {
+     this->shadow_color_table = color_table_in;
+ }
+ 
++extern "C" int mcw_on_worker(void);
++// The port: rows from to to of a shadow box (DrawShadowBox), each pixel through the table: a job of aoe_view_jobs' (port/aoe_view.cpp)
++static struct { const unsigned char* table; unsigned char* first; int row_size, width; } aoe_shadow_job;
++static void aoe_shadow_rows(unsigned from, unsigned to) {
++    const unsigned char* table = aoe_shadow_job.table;
++    for (unsigned r = from; r < to; r++) {
++        unsigned char* p = aoe_shadow_job.first + (long) r * aoe_shadow_job.row_size;
++        unsigned char* e = p + aoe_shadow_job.width;
++        for (; p < e; ++p) *p = table[*p];
++    }
++}
++
+ void TDrawArea::DrawShadowBox(long x1, long y1, long x2, long y2) {
+     if (this->shadow_color_table == 0 || this->Bits == 0)
+         return;
+@@ -2174,6 +2245,20 @@ void TDrawArea::DrawShadowBox(long x1, long y1, long x2, long y2) {
+         end -= x1;
+         end += x2;
+ 
++        // (the port: a big box by bands of rows on the job workers, each row's pixels through the table as below; rows lie whole
++        // texels apart, so no texel has two writers: docs/games/aoe.md, "The menus")
++        if (y2 - y1 + 1 >= 64 && ((unsigned) this->Bits & 15) == 0 && (row_size & 15) == 0 && !mcw_on_worker()) {
++            extern void aoe_view_jobs(void (*fn)(unsigned, unsigned), const unsigned* a0, const unsigned* a1, int n);
++            aoe_shadow_job.table = table->table;
++            aoe_shadow_job.first = start;
++            aoe_shadow_job.row_size = row_size;
++            aoe_shadow_job.width = x2 - x1 + 1;
++            unsigned rows = y2 - y1 + 1, from[8], to[8];
++            for (int k = 0; k < 8; k++) { from[k] = rows * k / 8; to[k] = rows * (k + 1) / 8; }
++            aoe_view_jobs(aoe_shadow_rows, from, to, 8);
++            return;
++        }
++
+         if (y1 <= y2) {
+             int rows = y2 - y1 + 1;
+             unsigned char* row_start = start;
+@@ -2286,3 +2371,9 @@ void TDrawArea::take_snapshot(char* filespec, int& index_no) {
      }
      free(row);
  }
@@ -513,7 +904,7 @@ index 62726c19..37b9e144 100644
  int SDI_Draw_Line = 0;
  void* StringTableX = 0;
 diff --git a/src/m_s_obj.cpp b/src/m_s_obj.cpp
-index 09564326..bd589eb2 100644
+index 09564326..cce98eaa 100644
 --- a/src/m_s_obj.cpp
 +++ b/src/m_s_obj.cpp
 @@ -863,8 +863,8 @@ unsigned char RGE_Master_Static_Object::check_placement(
@@ -527,6 +918,28 @@ index 09564326..bd589eb2 100644
          return 7;
      }
  
+@@ -1008,7 +1008,7 @@ unsigned char RGE_Master_Static_Object::check_placement(
+         object_max_y = (short) map->map_height - 1;
+     }
+ 
+-    if (check_objects != 0 && (can_be_built_on_flag != 0 || this->radius_z > g_static_object_zero)
++    if (check_objects != 0 && (can_be_built_on_flag != 0 || this->radius_z > 0.0f)
+         && object_min_y <= object_max_y) {
+         for (short y_index = object_min_y; y_index <= object_max_y; y_index++) {
+             RGE_Tile* tile = &map->map_row_offset[y_index][object_min_x];
+@@ -1023,9 +1023,9 @@ unsigned char RGE_Master_Static_Object::check_placement(
+                         float object_radius_x = master->radius_x;
+                         float object_radius_y = master->radius_y;
+                         float object_radius_z = master->radius_z;
+-                        if (object_radius_x > g_static_object_zero && object_radius_y > g_static_object_zero
+-                            && ((object_radius_z > g_static_object_zero && this->radius_z > g_static_object_zero)
+-                                || (!(object_radius_z > g_static_object_zero) && !(this->radius_z > g_static_object_zero)))) {
++                        if (object_radius_x > 0.0f && object_radius_y > 0.0f
++                            && ((object_radius_z > 0.0f && this->radius_z > 0.0f)
++                                || (!(object_radius_z > 0.0f) && !(this->radius_z > 0.0f)))) {
+                             float distance_y = object->world_y - row;
+                             float distance_x = object->world_x - col;
+                             if (distance_y < g_static_object_zero_float) {
 diff --git a/src/main.cpp b/src/main.cpp
 index b672d36a..24d97d6f 100644
 --- a/src/main.cpp
@@ -559,6 +972,156 @@ index b672d36a..24d97d6f 100644
      info.zone_guid = ZONE_GUID;
  
      strcpy(info.data_dir, "data2\\");
+diff --git a/src/map.cpp b/src/map.cpp
+index f91bcd3d..cbbd9fdd 100644
+--- a/src/map.cpp
++++ b/src/map.cpp
+@@ -323,8 +323,10 @@ void RGE_Map::clear_map(unsigned char terrain, unsigned char elev) {
+     this->set_map_screen_pos(0, 0, this->map_width - 1, this->map_height - 1);
+ }
+ 
++extern void aoe_view_tiles_event(int kind, int x1, int y1, int x2, int y2, int attr);
+ void RGE_Map::request_redraw(int x1, int y1, int x2, int y2, unsigned char attribute) {
+     RGE_Map* self = this;
++    aoe_view_tiles_event(0, x1, y1, x2, y2, attribute);   // (the port: done again after the view's tiles are written back, view.cpp)
+ 
+     if (x1 > x2) {
+         int t = x1;
+@@ -368,6 +370,7 @@ void RGE_Map::clear_map_view_info() {
+     int col;
+     int row = 0;
+     RGE_Tile* tile_row;
++    aoe_view_tiles_event(1, 0, 0, 0, 0, 0);   // (the port: as request_redraw)
+ 
+     if (0 < this->map_height) {
+         do {
+@@ -552,10 +555,33 @@ unsigned char RGE_Map::postclean_elevation(long x1, long y1, long x2, long y2, u
+             return was_bad;
+ 
+         RGE_Tile* tile = this->map_row_offset[y1] + x1;
++        int row_inside = y1 > 0 && y1 < this->map_height - 1;
+         for (index1 = x1; index1 <= x2; ++index1) {
+             bool bad = false;
+             unsigned char current_height = tile->height;
+             unsigned short new_height = current_height;
++            // (the port: inside the map, a tile at the height is never bad, nor one below it no neighbour of which is above one more
++            // than it; docs/games/aoe.md, "The load")
++            if (row_inside && index1 > 0 && index1 < this->map_width - 1) {
++                if (current_height == elevation_height) { ++tile; continue; }
++                if (current_height < elevation_height) {
++                    unsigned h = current_height + 1u;
++                    if ((tile + offset_north)->height <= h && (tile + offset_south)->height <= h && tile[-1].height <= h
++                        && tile[1].height <= h && (tile + offset_northwest)->height <= h && (tile + offset_northeast)->height <= h
++                        && (tile + offset_southwest)->height <= h && (tile + offset_southeast)->height <= h) {
++                        ++tile;
++                        continue;
++                    }
++                } else {
++                    unsigned h = current_height - 1u;
++                    if ((tile + offset_north)->height >= h && (tile + offset_south)->height >= h && tile[-1].height >= h
++                        && tile[1].height >= h && (tile + offset_northwest)->height >= h && (tile + offset_northeast)->height >= h
++                        && (tile + offset_southwest)->height >= h && (tile + offset_southeast)->height >= h) {
++                        ++tile;
++                        continue;
++                    }
++                }
++            }
+ 
+             if (current_height < elevation_height) {
+                 ++new_height;
+@@ -640,8 +666,15 @@ void RGE_Map::preclean_elevation(long x1, long y1, long x2, long y2, unsigned ch
+ 
+         for (index1 = y1; index1 <= y2; ++index1) {
+             RGE_Tile* tile = this->map_row_offset[index1] + x1;
++            int row_inside = index1 > 0 && index1 < this->map_height - 1;
+             for (index2 = x1; index2 <= x2; ++tile, ++index2) {
+                 unsigned char tile_height = tile->height;
++                // (the port: inside the map, a tile with no higher neighbours on two opposite sides has no conflict and changes
++                // nothing; docs/games/aoe.md, "The load")
++                if (row_inside && index2 > 0 && index2 < this->map_width - 1
++                    && !((tile + offset2)->height > tile_height && (tile + offset_south)->height > tile_height)
++                    && !(tile[-1].height > tile_height && tile[1].height > tile_height))
++                    continue;
+                 short place1 = 0;
+                 short place3 = 0;
+                 short place4 = 0;
+@@ -744,7 +777,16 @@ void RGE_Map::clean_elevation(long x1, long y1, long x2, long y2, unsigned char
+ 
+         for (long row = y1; row <= y2; ++row) {
+             RGE_Tile* tile = this->map_row_offset[row] + x1;
++            int row_inside = row > 0 && row < this->map_height - 1;
+             for (long col = x1; col <= x2; ++tile, ++col) {
++                // (the port: inside the map, a tile no neighbour of which is higher is fixed by nothing)
++                if (row_inside && col > 0 && col < this->map_width - 1) {
++                    unsigned char h = tile->height;
++                    if (tile[offset_n].height <= h && tile[width].height <= h && tile[-1].height <= h && tile[1].height <= h
++                        && tile[offset_nw].height <= h && tile[offset_ne].height <= h && tile[offset_sw].height <= h
++                        && tile[offset_se].height <= h)
++                        continue;
++                }
+                 short north_west = 0;
+                 short north = 0;
+                 short north_east = 0;
+@@ -1179,6 +1221,17 @@ void RGE_Map::map_generate2(RGE_Game_World* gworld, long new_width, long new_hei
+ 
+     int after_seed = debug_rand((char*) "C:\\msdev\\work\\age1_x1\\map.cpp", 1509);
+     L->Log("After Random Map Generation random number is %d", after_seed);
++    // (the port: AOE_MAPSUM=1 says the map made, its tiles' terrain, height and shape and the random state after it; the speed work
++    // on the generators keeps it, docs/games/aoe.md "The load")
++    if (getenv("AOE_MAPSUM")) {
++        unsigned h = 2166136261u;
++        for (long r = 0; r < this->map_height; r++)
++            for (long c = 0; c < this->map_width; c++) {
++                RGE_Tile* t = &this->map_row_offset[r][c];
++                h = (h ^ (t->terrain_type | t->height << 8 | t->tile_type << 16)) * 16777619u;
++            }
++        fprintf(stderr, "aoemap: %ld x %ld, tiles %08x, after %d\n", this->map_width, this->map_height, h, after_seed);
++    }
+ 
+     this->game_world->game_state = old_state;
+ }
+@@ -1694,7 +1747,30 @@ void RGE_Map::create_terrain_object(
+ 
+                 if (master_obj != 0 && obj_density > 0) {
+                     int density_left = obj_density;
++                    int place_owed = 0;   // (the port: the place's numbers drawn but not yet made into x and y)
++                    unsigned place_s1 = 0, place_s2 = 0;
+                     do {
++                        if (obj_flag == 0 && obj_density < 1000 && !do_debug_random) {
++                            // the port: the place's two numbers and the chance's at once, x and y made only for an object placed (or
++                            // at the end, for what follows): the same numbers drawn, in the same order (docs/games/aoe.md, "The load")
++                            unsigned s1 = aoe_rand_word * 214013u + 2531011u, s2 = s1 * 214013u + 2531011u, s3 = s2 * 214013u + 2531011u;
++                            aoe_rand_word = s3;
++                            place_s1 = s1;
++                            place_s2 = s2;
++                            place_owed = 1;
++                            int random_value = (int) ((s3 >> 16) & 0x7fff);
++                            if (((random_value * 1000) / 0x7fff) < density_left) {
++                                x = (float) (int) col - (float) (int) ((s1 >> 16) & 0x7fff) * -3.051851e-05f;
++                                y = (float) (int) row - (float) (int) ((s2 >> 16) & 0x7fff) * -3.051851e-05f;
++                                place_owed = 0;
++                                if (!master_obj->check_placement(obj_owner, x, y, 0, 0, 1, 0, 1, 0, 1))
++                                    master_obj->make_new_obj(obj_owner, x, y, 0);
++                            }
++                            obj_density -= 1000;
++                            density_left -= 1000;
++                            continue;
++                        }
++                        place_owed = 0;
+                         if (obj_flag == 0) {
+                             x = (float) (int) col
+                                 - (float) debug_rand((char*) "C:\\msdev\\work\\age1_x1\\map.cpp", 2067) * -3.051851e-05f;
+@@ -1720,6 +1796,10 @@ void RGE_Map::create_terrain_object(
+                         obj_density -= 1000;
+                         density_left -= 1000;
+                     } while (obj_density > 0);
++                    if (place_owed) {
++                        x = (float) (int) col - (float) (int) ((place_s1 >> 16) & 0x7fff) * -3.051851e-05f;
++                        y = (float) (int) row - (float) (int) ((place_s2 >> 16) & 0x7fff) * -3.051851e-05f;
++                    }
+                 }
+             }
+         }
 diff --git a/src/move_obj.cpp b/src/move_obj.cpp
 index 8833dbaf..08971e8b 100644
 --- a/src/move_obj.cpp
@@ -778,6 +1341,262 @@ index 6dab12a1..735b27ca 100644
                                      return 0;
                                  }
                              }
+diff --git a/src/rge_fio.cpp b/src/rge_fio.cpp
+index cc3742ca..d9954949 100644
+--- a/src/rge_fio.cpp
++++ b/src/rge_fio.cpp
+@@ -24,16 +24,18 @@ extern "C" int __cdecl deflate_data(void* state, void* source, int size, int flu
+ extern "C" void __cdecl deflate_deinit(void* state);
+ 
+ static int compression_point;
+-static int current_handle;
+-static unsigned char flags;
+-static long point;
+ static unsigned char* compression_buffers;
+ static unsigned char* buffers;
+ static int bl;
+-static unsigned char* current;
+ static int file_size;
+ static unsigned char* file_buffers;
+ extern int ENABLE_COMPRESSION;
++// (the port: what aoe_prefix.h's rge_read reads, inline at each call: docs/games/aoe.md, "The load")
++AoeRge aoe_rge;
++#define current_handle aoe_rge.handle
++#define flags aoe_rge.flags
++#define point aoe_rge.point
++#define current aoe_rge.current
+ 
+ int __cdecl rge_fake_open(int file_handle, int fake_size) {
+     if (file_handle >= 0) {
+@@ -147,7 +149,7 @@ void __cdecl rge_write_uncompressed(int handle, void* data, int size) {
+     }
+ }
+ 
+-void __cdecl rge_read(int handle, void* data, int size) {
++void aoe_rge_read_more(int handle, void* data, int size) {
+     int temp_size;
+     int temp_max;
+     void* temp = data;
+diff --git a/src/rmm_base.cpp b/src/rmm_base.cpp
+index 92c48a66..d170a79a 100644
+--- a/src/rmm_base.cpp
++++ b/src/rmm_base.cpp
+@@ -325,34 +325,23 @@ Map_Stack* RGE_Random_Map_Module::pop_stack(Map_Stack& stack, long& x, long& y,
+     return node;
+ }
+ 
+-void RGE_Random_Map_Module::add_stack_node(Map_Stack* stack, Map_Stack* new_stack) {
+-    if ((new_stack->next != 0) || (new_stack->prev != 0)) {
+-        this->remove_stack_node(new_stack);
+-    }
+-    Map_Stack* next = stack->next;
+-    new_stack->prev = stack;
+-    new_stack->next = next;
+-    if (stack->next != 0) {
+-        stack->next->prev = new_stack;
+-    }
+-    stack->next = new_stack;
+-}
+ 
+-void RGE_Random_Map_Module::remove_stack_node(Map_Stack* stack) {
+-    if (stack->prev != 0) {
+-        stack->prev->next = stack->next;
+-    }
+-    if (stack->next != 0) {
+-        stack->next->prev = stack->prev;
+-    }
+-    stack->next = 0;
+-    stack->prev = 0;
+-}
+ 
+ void RGE_Random_Map_Module::clear_stack() {
+     int y;
+     int x;
+ 
++    // (the port: the rows lie one after another in stack_array, create_shared_resources: one loop over them)
++    if (this->map_height > 0 && this->map_width > 0
++        && this->stack_offsets[this->map_height - 1] == this->stack_offsets[0] + (this->map_height - 1) * this->map_width) {
++        Map_Stack* node = this->stack_offsets[0];
++        Map_Stack* end = node + this->map_height * this->map_width;
++        for (; node < end; ++node) {
++            node->next = 0;
++            node->prev = 0;
++        }
++        return;
++    }
+     for (y = 0; y < this->map_height; ++y) {
+         for (x = 0; x < this->map_width; ++x) {
+             this->stack_offsets[y][x].next = 0;
+@@ -406,12 +395,68 @@ uchar RGE_Random_Map_Module::find_path(long x, long y, long& end_x, long& end_y,
+     return result;
+ }
+ 
++// find_path's open list (docs/games/aoe.md, "The load"): the same list push_stack makes, a node before the first of the list whose cost
++// is not less than its own, found from an index of the first node in each band of cost and not by a walk from the head (a large map's
++// shallows paths had lists of thousands). The bands rise with the cost, so every node before a band's first is cheaper than anything
++// in that band, and the walk from it stops where the walk from the head would. The list is find_path's own: fresh at each call, and
++// changed by these alone.
++enum { FP_BANDS = 2048 };
++static Map_Stack* fp_first[FP_BANDS];
++static unsigned fp_bits[FP_BANDS / 32];
++static Map_Stack* fp_tail;
++static inline int fp_band(float c) {
++    if (!(c > 0.0f)) return 0;
++    if (c >= (FP_BANDS - 1) * 0.25f) return FP_BANDS - 1;
++    return (int) (c * 4.0f);
++}
++void RGE_Random_Map_Module::fp_remove(Map_Stack& stack, Map_Stack* node) {
++    int b = fp_band(node->tot_cost);
++    if (fp_first[b] == node) {
++        Map_Stack* n = node->next;
++        fp_first[b] = n && fp_band(n->tot_cost) == b ? n : 0;
++        if (!fp_first[b]) fp_bits[b >> 5] &= ~(1u << (b & 31));
++    }
++    if (fp_tail == node) fp_tail = node->prev == &stack ? 0 : node->prev;
++    this->remove_stack_node(node);
++}
++void RGE_Random_Map_Module::fp_push(Map_Stack& stack, long x, long y, float cost, float tot_cost) {
++    Map_Stack* node = &this->stack_offsets[y][x];
++    if (node->prev != 0 || node->next != 0) this->fp_remove(stack, node);
++    int b = fp_band(tot_cost);
++    Map_Stack* at = fp_first[b];   // the first node not cheaper than this one, or none: the list's end
++    if (at) {
++        while (at != 0 && at->tot_cost < tot_cost) at = at->next;
++    } else {
++        int w = (b + 1) >> 5;
++        unsigned bits = (b + 1) & 31 ? fp_bits[w] & ~((1u << ((b + 1) & 31)) - 1) : (w < FP_BANDS / 32 ? fp_bits[w] : 0);
++        while (!bits && ++w < FP_BANDS / 32) bits = fp_bits[w];
++        at = bits ? fp_first[w * 32 + __builtin_ctz(bits)] : 0;
++    }
++    Map_Stack* before = at ? at->prev : (fp_tail ? fp_tail : &stack);
++    this->add_stack_node(before, node);
++    *(long*) &node->cost = *(long*) &cost;
++    node->tot_cost = tot_cost;
++    if (!fp_first[b] || fp_first[b] == at) { fp_first[b] = node; fp_bits[b >> 5] |= 1u << (b & 31); }
++    if (!at) fp_tail = node;
++}
++Map_Stack* RGE_Random_Map_Module::fp_pop(Map_Stack& stack, long& x, long& y, float& cost) {
++    Map_Stack* node = stack.next;
++    if (node == 0) return 0;
++    x = node->x;
++    y = node->y;
++    cost = node->cost;
++    this->fp_remove(stack, node);
++    return node;
++}
++
+ uchar RGE_Random_Map_Module::find_path(Map_Stack& path_stack, long x, long y, long& end_x, long& end_y, float* terrain) {
+     long max_x = this->map_width - 1;
+     long max_y = this->map_height - 1;
+     float path_cost = 0.0f;
+ 
+     this->clear_stack();
++    memset(fp_first, 0, sizeof fp_first); memset(fp_bits, 0, sizeof fp_bits); fp_tail = 0;
++    path_stack.next = 0;   // (fresh from the one caller: the index starts empty)
+     memset(this->search_map, 0, this->map_height * this->map_width);
+ 
+     this->search_map_rows[y][x] = 3;
+@@ -425,9 +470,9 @@ uchar RGE_Random_Map_Module::find_path(Map_Stack& path_stack, long x, long y, lo
+     for (;;) {
+         long dx = x - end_x;
+         long dy = y - end_y;
+-        float cost = (float) sqrt((double) (dx * dx + dy * dy));
++        float cost = aoe_sqrt_whole(dx * dx + dy * dy);
+ 
+-        if (cost == 0.0) {
++        if (cost == 0.0f) {
+             if (path_stack.next != 0) {
+                 path_stack.next->prev = 0;
+             }
+@@ -449,10 +494,10 @@ uchar RGE_Random_Map_Module::find_path(Map_Stack& path_stack, long x, long y, lo
+             state = this->search_map_rows[next_y][x];
+             if (state == 0) {
+                 tile_type = this->map_row_offset[next_y][x].terrain_type;
+-                if (terrain[tile_type] > 0.0) {
++                if (terrain[tile_type] > 0.0f) {
+                     calc_cost = path_cost + terrain[tile_type];
+                     this->search_map_rows[next_y][x] = 7;
+-                    this->push_stack(path_stack, x, next_y, calc_cost, calc_cost + hcost);
++                    this->fp_push(path_stack, x, next_y, calc_cost, calc_cost + hcost);
+                     down = 1;
+                 } else {
+                     this->search_map_rows[next_y][x] = 1;
+@@ -476,10 +521,10 @@ uchar RGE_Random_Map_Module::find_path(Map_Stack& path_stack, long x, long y, lo
+             state = this->search_map_rows[next_y][x];
+             if (state == 0) {
+                 tile_type = this->map_row_offset[next_y][x].terrain_type;
+-                if (terrain[tile_type] > 0.0) {
++                if (terrain[tile_type] > 0.0f) {
+                     calc_cost = path_cost + terrain[tile_type];
+                     this->search_map_rows[next_y][x] = 6;
+-                    this->push_stack(path_stack, x, next_y, calc_cost, calc_cost + hcost);
++                    this->fp_push(path_stack, x, next_y, calc_cost, calc_cost + hcost);
+                     up = 1;
+                 } else {
+                     this->search_map_rows[next_y][x] = 1;
+@@ -506,7 +551,7 @@ uchar RGE_Random_Map_Module::find_path(Map_Stack& path_stack, long x, long y, lo
+                 if (terrain[tile_type] > 0.0f) {
+                     calc_cost = path_cost + terrain[tile_type];
+                     this->search_map_rows[y][next_x] = 4;
+-                    this->push_stack(path_stack, next_x, y, calc_cost, calc_cost + hcost);
++                    this->fp_push(path_stack, next_x, y, calc_cost, calc_cost + hcost);
+                     side = 1;
+                 } else {
+                     this->search_map_rows[y][next_x] = 1;
+@@ -531,7 +576,7 @@ uchar RGE_Random_Map_Module::find_path(Map_Stack& path_stack, long x, long y, lo
+                     } else if (up && side) {
+                         calc_cost = path_cost - terrain[tile_type] * g_rmm_path_terrain_cost_adjustment;
+                         this->search_map_rows[next_y][next_x] = 8;
+-                        this->push_stack(
++                        this->fp_push(
+                             path_stack, next_x, next_y, calc_cost,
+                             calc_cost
+                                 + (hcost
+@@ -557,7 +602,7 @@ uchar RGE_Random_Map_Module::find_path(Map_Stack& path_stack, long x, long y, lo
+                     } else if (down && side) {
+                         calc_cost = path_cost - terrain[tile_type] * g_rmm_path_terrain_cost_adjustment;
+                         this->search_map_rows[next_y][next_x] = 9;
+-                        this->push_stack(
++                        this->fp_push(
+                             path_stack, next_x, next_y, calc_cost,
+                             calc_cost
+                                 + (hcost
+@@ -583,7 +628,7 @@ uchar RGE_Random_Map_Module::find_path(Map_Stack& path_stack, long x, long y, lo
+                 if (terrain[tile_type] > 0.0f) {
+                     calc_cost = path_cost + terrain[tile_type];
+                     this->search_map_rows[y][next_x] = 5;
+-                    this->push_stack(path_stack, next_x, y, calc_cost, calc_cost + hcost);
++                    this->fp_push(path_stack, next_x, y, calc_cost, calc_cost + hcost);
+                     side = 1;
+                 } else {
+                     this->search_map_rows[y][next_x] = 1;
+@@ -608,7 +653,7 @@ uchar RGE_Random_Map_Module::find_path(Map_Stack& path_stack, long x, long y, lo
+                     } else if (up && side) {
+                         calc_cost = path_cost - terrain[tile_type] * g_rmm_path_terrain_cost_adjustment;
+                         this->search_map_rows[next_y][next_x] = 10;
+-                        this->push_stack(
++                        this->fp_push(
+                             path_stack, next_x, next_y, calc_cost,
+                             calc_cost
+                                 + (hcost
+@@ -634,7 +679,7 @@ uchar RGE_Random_Map_Module::find_path(Map_Stack& path_stack, long x, long y, lo
+                     } else if (down && side) {
+                         calc_cost = path_cost - terrain[tile_type] * g_rmm_path_terrain_cost_adjustment;
+                         this->search_map_rows[next_y][next_x] = 11;
+-                        this->push_stack(
++                        this->fp_push(
+                             path_stack, next_x, next_y, calc_cost,
+                             calc_cost
+                                 + (hcost
+@@ -651,7 +696,7 @@ uchar RGE_Random_Map_Module::find_path(Map_Stack& path_stack, long x, long y, lo
+             }
+         }
+ 
+-        if (this->pop_stack(path_stack, x, y, path_cost) == 0) {
++        if (this->fp_pop(path_stack, x, y, path_cost) == 0) {
+             return 0;
+         }
+     }
 diff --git a/src/rmm_dbct.cpp b/src/rmm_dbct.cpp
 index f3e0cf3a..212817f2 100644
 --- a/src/rmm_dbct.cpp
@@ -796,8 +1615,266 @@ index f3e0cf3a..212817f2 100644
      this->number_of_players = player_num;
      this->update_map_info(in_map);
      this->create_shared_resources();
+diff --git a/src/rmm_elev.cpp b/src/rmm_elev.cpp
+index 790be639..e47d4838 100644
+--- a/src/rmm_elev.cpp
++++ b/src/rmm_elev.cpp
+@@ -220,7 +220,7 @@ void RGE_RMM_Elevation_Generator::generate_modifiers() {
+                             if (dy < 0)
+                                 dy = -dy;
+ 
+-                            long distance = (long) sqrt((double) (dx * dx + dy * dy));
++                            long distance = aoe_isqrt(dx * dx + dy * dy);
+                             long contribution = hot_spot[1] - distance;
+                             if (contribution > 0)
+                                 modifier += hot_spot[2] * contribution;
+diff --git a/src/rmm_land.cpp b/src/rmm_land.cpp
+index 004ff63d..fa152add 100644
+--- a/src/rmm_land.cpp
++++ b/src/rmm_land.cpp
+@@ -55,27 +55,23 @@ unsigned char RGE_RMM_Land_Generator::check_terrain_and_zone(uchar target, uchar
+                     count += 5;
+                 }
+             } else if (row < this->map_height) {
+-                long column = x0;
+-                if (column <= x1) {
+-                    do {
+-                        if (column < 0) {
+-                            if (column > cx0) {
+-                                ++count;
+-                            }
+-                        } else if (column < this->map_width) {
+-                            uchar state = this->search_map_rows[row][column];
+-                            if (state == zone) {
+-                                if (row >= cy0 && row <= cy1 && column >= cx0 && column <= cx1) {
+-                                    ++count;
+-                                }
+-                            } else if (state < this->info.land_num) {
+-                                return 0;
+-                            }
+-                        } else if (column < cx1) {
+-                            ++count;
+-                        }
+-                        ++column;
+-                    } while (column <= x1);
++                // (the port: the columns outside the map counted as before, those inside in one loop, the 5 x 5 middle's
++                // own after it: the answer is 0 if any tile is another land's, whichever comes first; docs/games/aoe.md, "The load")
++                for (long column = x0; column <= x1 && column < 0; ++column)
++                    if (column > cx0) ++count;
++                for (long column = this->map_width > x0 ? this->map_width : x0; column <= x1; ++column)
++                    if (column < cx1) ++count;
++                long a = x0 < 0 ? 0 : x0, b = x1 >= this->map_width ? this->map_width - 1 : x1;
++                const uchar* states = this->search_map_rows[row];
++                long lands = this->info.land_num;
++                for (long column = a; column <= b; ++column) {
++                    uchar state = states[column];
++                    if (state != zone && state < lands) return 0;
++                }
++                if (row >= cy0 && row <= cy1) {
++                    long ca = cx0 > a ? cx0 : a, cb = cx1 < b ? cx1 : b;
++                    for (long column = ca; column <= cb; ++column)
++                        if (states[column] == zone) ++count;
+                 }
+             } else if (row < cy1) {
+                 count += 5;
+@@ -139,6 +135,72 @@ unsigned char RGE_RMM_Land_Generator::chance(long x, long y, long land_type) {
+     return 0;
+ }
+ 
++// base_land_generate's stacks (docs/games/aoe.md, "The load"): the lists push_stack makes, a node before the first whose cost is not
++// less than its own, found from each stack's index of the first node in each band of cost (whole numbers here) and not by a walk from
++// the head: a large map's lands had stacks of hundreds, 1.64 million steps. Every list here is changed by these alone and stays in
++// order; a push takes the node off whichever land's stack has it, as push_stack's remove_stack_node did, and that stack's index with it.
++enum { LAND_BANDS = 2048, LAND_OFF = 512 };
++struct LandIndex { Map_Stack* first[LAND_BANDS]; unsigned bits[LAND_BANDS / 32]; Map_Stack* tail; };
++static LandIndex* land_ix;
++static unsigned char* land_owner;
++static long land_w;
++static inline int land_band(float c) {
++    if (!(c > -(float) LAND_OFF)) return 0;
++    if (c >= (float) (LAND_BANDS - 1 - LAND_OFF)) return LAND_BANDS - 1;
++    return (int) (c + (float) LAND_OFF);
++}
++static void land_remove(Map_Stack* heads, Map_Stack* node) {
++    unsigned char* o = &land_owner[node->y * land_w + node->x];
++    if (*o) {
++        LandIndex* ix = &land_ix[*o - 1];
++        int b = land_band(node->tot_cost);
++        if (ix->first[b] == node) {
++            Map_Stack* n = node->next;
++            ix->first[b] = n && land_band(n->tot_cost) == b ? n : 0;
++            if (!ix->first[b]) ix->bits[b >> 5] &= ~(1u << (b & 31));
++        }
++        if (ix->tail == node) ix->tail = node->prev == &heads[*o - 1] ? 0 : node->prev;
++        *o = 0;
++    }
++    if (node->prev != 0) node->prev->next = node->next;
++    if (node->next != 0) node->next->prev = node->prev;
++    node->next = 0;
++    node->prev = 0;
++}
++static void land_push(Map_Stack* heads, int k, Map_Stack* node, float cost, float tot_cost) {
++    land_remove(heads, node);
++    LandIndex* ix = &land_ix[k];
++    int b = land_band(tot_cost);
++    Map_Stack* at = ix->first[b];   // the first node not cheaper than this one, or none: the list's end
++    if (at) {
++        while (at != 0 && at->tot_cost < tot_cost) at = at->next;
++    } else {
++        int w = (b + 1) >> 5;
++        unsigned bits = (b + 1) & 31 ? ix->bits[w] & ~((1u << ((b + 1) & 31)) - 1) : (w < LAND_BANDS / 32 ? ix->bits[w] : 0);
++        while (!bits && ++w < LAND_BANDS / 32) bits = ix->bits[w];
++        at = bits ? ix->first[w * 32 + __builtin_ctz(bits)] : 0;
++    }
++    Map_Stack* before = at ? at->prev : (ix->tail ? ix->tail : &heads[k]);
++    node->prev = before;
++    node->next = before->next;
++    if (before->next != 0) before->next->prev = node;
++    before->next = node;
++    *(long*) &node->cost = *(long*) &cost;
++    node->tot_cost = tot_cost;
++    if (!ix->first[b] || ix->first[b] == at) { ix->first[b] = node; ix->bits[b >> 5] |= 1u << (b & 31); }
++    if (!at) ix->tail = node;
++    land_owner[node->y * land_w + node->x] = (unsigned char) (k + 1);
++}
++static Map_Stack* land_pop(Map_Stack* heads, int k, long& x, long& y, float& cost) {
++    Map_Stack* node = heads[k].next;
++    if (node == 0) return 0;
++    x = node->x;
++    y = node->y;
++    cost = node->cost;
++    land_remove(heads, node);
++    return node;
++}
++
+ uchar RGE_RMM_Land_Generator::base_land_generate() {
+     long land_size[99];
+     Map_Stack stack[99];
+@@ -150,6 +212,9 @@ uchar RGE_RMM_Land_Generator::base_land_generate() {
+     float stack_cost;
+     uchar done;
+ 
++    land_ix = (LandIndex*) calloc(this->info.land_num > 0 ? this->info.land_num : 1, sizeof(LandIndex));
++    land_owner = (unsigned char*) calloc(this->map_width * this->map_height, 1);
++    land_w = this->map_width;
+     index3 = 0;
+     if (this->info.land_num > 0) {
+         RGE_Land_Info_Line* line = this->info.land;
+@@ -193,22 +258,22 @@ uchar RGE_RMM_Land_Generator::base_land_generate() {
+ 
+             if (x0 > 0 && y0 <= y1) {
+                 for (long row = y0; row <= y1; ++row) {
+-                    this->push_stack(*stack_ptr, x0 - 1, row, (float) index3, 0.0f);
++                    land_push(stack, (int) (stack_ptr - stack), &this->stack_offsets[row][x0 - 1], (float) index3, 0.0f);
+                 }
+             }
+             if (y0 > 0 && x0 <= x1) {
+                 for (long column = x0; column <= x1; ++column) {
+-                    this->push_stack(*stack_ptr, column, y0 - 1, (float) index3, 0.0f);
++                    land_push(stack, (int) (stack_ptr - stack), &this->stack_offsets[y0 - 1][column], (float) index3, 0.0f);
+                 }
+             }
+             if (x1 < max_x && y0 <= y1) {
+                 for (long row = y0; row <= y1; ++row) {
+-                    this->push_stack(*stack_ptr, x1 + 1, row, (float) index3, 0.0f);
++                    land_push(stack, (int) (stack_ptr - stack), &this->stack_offsets[row][x1 + 1], (float) index3, 0.0f);
+                 }
+             }
+             if (y1 < max_y && x0 <= x1) {
+                 for (long column = x0; column <= x1; ++column) {
+-                    this->push_stack(*stack_ptr, column, y1 + 1, (float) index3, 0.0f);
++                    land_push(stack, (int) (stack_ptr - stack), &this->stack_offsets[y1 + 1][column], (float) index3, 0.0f);
+                 }
+             }
+ 
+@@ -228,7 +293,7 @@ uchar RGE_RMM_Land_Generator::base_land_generate() {
+             do {
+                 long index2 = *size_ptr;
+                 if (index2 < line->land_size) {
+-                    if (this->pop_stack(*stack_ptr, x, y, stack_cost) != 0) {
++                    if (land_pop(stack, (int) (stack_ptr - stack), x, y, stack_cost) != 0) {
+                         done = 0;
+ 
+                         uchar placement_chance = this->chance(x, y, index3);
+@@ -247,22 +312,22 @@ uchar RGE_RMM_Land_Generator::base_land_generate() {
+                                 if (x > 0 && this->search_map_rows[y][x - 1] == this->info.land_num) {
+                                     long random_value = debug_rand((char*) "C:\\msdev\\work\\age1_x1\\rmm_land.cpp", 312);
+                                     long cost = (random_value * 100) / 0x7FFF - (long) count * line->clumpiness_factor + 0xFA;
+-                                    this->push_stack(*stack_ptr, x - 1, y, 0.0f, (float) cost);
++                                    land_push(stack, (int) (stack_ptr - stack), &this->stack_offsets[y][x - 1], 0.0f, (float) cost);
+                                 }
+                                 if (x < max_x && this->search_map_rows[y][x + 1] == this->info.land_num) {
+                                     long random_value = debug_rand((char*) "C:\\msdev\\work\\age1_x1\\rmm_land.cpp", 315);
+                                     long cost = (random_value * 100) / 0x7FFF - (long) count * line->clumpiness_factor + 0xFA;
+-                                    this->push_stack(*stack_ptr, x + 1, y, 0.0f, (float) cost);
++                                    land_push(stack, (int) (stack_ptr - stack), &this->stack_offsets[y][x + 1], 0.0f, (float) cost);
+                                 }
+                                 if (y > 0 && this->search_map_rows[y - 1][x] == this->info.land_num) {
+                                     long random_value = debug_rand((char*) "C:\\msdev\\work\\age1_x1\\rmm_land.cpp", 318);
+                                     long cost = (random_value * 100) / 0x7FFF - (long) count * line->clumpiness_factor + 0xFA;
+-                                    this->push_stack(*stack_ptr, x, y - 1, 0.0f, (float) cost);
++                                    land_push(stack, (int) (stack_ptr - stack), &this->stack_offsets[y - 1][x], 0.0f, (float) cost);
+                                 }
+                                 if (y < max_y && this->search_map_rows[y + 1][x] == this->info.land_num) {
+                                     long random_value = debug_rand((char*) "C:\\msdev\\work\\age1_x1\\rmm_land.cpp", 321);
+                                     long cost = (random_value * 100) / 0x7FFF - (long) count * line->clumpiness_factor + 0xFA;
+-                                    this->push_stack(*stack_ptr, x, y + 1, 0.0f, (float) cost);
++                                    land_push(stack, (int) (stack_ptr - stack), &this->stack_offsets[y + 1][x], 0.0f, (float) cost);
+                                 }
+                                 *size_ptr = index2 + 1;
+                             }
+@@ -284,7 +349,7 @@ uchar RGE_RMM_Land_Generator::base_land_generate() {
+         do {
+             uchar terrain = (uchar) this->info.land[index3].terrain_type;
+             uchar zone = this->info.land[index3].zone;
+-            while (this->pop_stack(*stack_ptr, x, y, stack_cost) != 0) {
++            while (land_pop(stack, (int) (stack_ptr - stack), x, y, stack_cost) != 0) {
+                 RGE_Tile* tile = &this->map_row_offset[y][x];
+                 if ((x > 0 && this->search_map_rows[y][x - 1] == zone && x < max_x && this->search_map_rows[y][x + 1] == zone)
+                     || (y > 0 && this->search_map_rows[y - 1][x] == zone && y < max_y
+@@ -307,5 +372,9 @@ uchar RGE_RMM_Land_Generator::base_land_generate() {
+         } while (index3 < this->info.land_num);
+     }
+ 
++    free(land_ix);
++    free(land_owner);
++    land_ix = 0;
++    land_owner = 0;
+     return 1;
+ }
+diff --git a/src/rmm_obj.cpp b/src/rmm_obj.cpp
+index c45373ca..6b475bc4 100644
+--- a/src/rmm_obj.cpp
++++ b/src/rmm_obj.cpp
+@@ -133,9 +133,11 @@ void RGE_RMM_Object_Generator::make_placement_stack(Map_Stack& stack, long x, lo
+         do {
+             long xcur = x0;
+             if (x0 <= x1) {
++                const uchar* search_row = this->search_map_rows[row];   // (the port: the rows' pointers once a row)
++                Map_Stack* stack_row = this->stack_offsets[row];
+                 do {
+-                    if (this->search_map_rows[row][xcur] != 0) {
+-                        Map_Stack* node = &this->stack_offsets[row][xcur];
++                    if (search_row[xcur] != 0) {
++                        Map_Stack* node = &stack_row[xcur];
+                         this->add_stack_node(last, node);
+                         last = node;
+                     }
+diff --git a/src/rmm_terr.cpp b/src/rmm_terr.cpp
+index aa10a000..bd513d01 100644
+--- a/src/rmm_terr.cpp
++++ b/src/rmm_terr.cpp
+@@ -219,7 +219,7 @@ void RGE_RMM_Terrain_Generator::generate_modifiers() {
+                             if (dy < 0)
+                                 dy = -dy;
+ 
+-                            long distance = (long) sqrt((double) (dx * dx + dy * dy));
++                            long distance = aoe_isqrt(dx * dx + dy * dy);
+                             long contribution = hot_spot[1] - distance;
+                             if (contribution > 0)
+                                 modifier += hot_spot[2] * contribution;
 diff --git a/src/scr_game.cpp b/src/scr_game.cpp
-index 92412fb6..13b8da63 100644
+index 92412fb6..638ce564 100644
 --- a/src/scr_game.cpp
 +++ b/src/scr_game.cpp
 @@ -1,3 +1,4 @@
@@ -886,7 +1963,15 @@ index 92412fb6..13b8da63 100644
              this->button_panel[16]->tribe_button_type = 3;
  
              this->more_cancel_pic = this->button_cmd_pic;
-@@ -1083,6 +1107,66 @@ long TRIBE_Screen_Game::handle_idle() {
+@@ -1035,6 +1059,7 @@ long TRIBE_Screen_Game::handle_paint() {
+         TPanel* panel = node->panel;
+ 
+         if (draw_all_children || panel == this->curr_child) {
++            aoe_view_copy_serve();   // (the port: as TPanel::handle_paint)
+             panel->handle_paint();
+         }
+ 
+@@ -1083,6 +1108,69 @@ long TRIBE_Screen_Game::handle_idle() {
      return result;
  }
  
@@ -912,10 +1997,13 @@ index 92412fb6..13b8da63 100644
 +    static void* aoe_zones_of;
 +    if (w->map && w->map->map_zones != aoe_zones_of) {
 +        aoe_zones_of = w->map->map_zones;
-+        for (int i = 0; i < w->terrain_num; i++) {
-+            int index;
-+            if (w->terrains[i]) w->map->map_zones->get_zone_map(w->terrains[i], w->terrain_size, index);
-+        }
++        if (getenv("AOE_ZONES") && !strcmp(getenv("AOE_ZONES"), "old")) {   // (the way before: one by one)
++            for (int i = 0; i < w->terrain_num; i++) {
++                int index;
++                if (w->terrains[i]) w->map->map_zones->get_zone_map(w->terrains[i], w->terrain_size, index);
++            }
++        } else
++            aoe_zone_maps_all(w->map->map_zones, w->terrains, w->terrain_num, w->terrain_size);
 +    }
 +    aoe_updates++;
 +    { extern void aoe_lat(int, int, int); aoe_lat('U', 0, 0); }
@@ -953,7 +2041,7 @@ index 92412fb6..13b8da63 100644
  void TRIBE_Screen_Game::handle_game_update() {
      int update_counter = 0;
  
-@@ -1142,7 +1226,20 @@ void TRIBE_Screen_Game::handle_game_update() {
+@@ -1142,7 +1230,20 @@ void TRIBE_Screen_Game::handle_game_update() {
              } else if (this->game_ended != 0) {
                  game_state = 1;
              } else {
@@ -975,7 +2063,7 @@ index 92412fb6..13b8da63 100644
                  if (out_of_sync2 != 0) {
                      return;
                  }
-@@ -2262,7 +2359,7 @@ void TRIBE_Screen_Game::player_changed(int old_player_id, int new_player_id) {
+@@ -2262,7 +2363,7 @@ void TRIBE_Screen_Game::player_changed(int old_player_id, int new_player_id) {
                  } else {
                      game_pic_id = culture + 0xC635;
                  }
@@ -984,7 +2072,7 @@ index 92412fb6..13b8da63 100644
                  sprintf(str, s_game_b_format, culture);
                  if (culture == RGE_CULTURE_ROMAN) {
                      game_pic_id = 0xCF13;
-@@ -2270,11 +2367,12 @@ void TRIBE_Screen_Game::player_changed(int old_player_id, int new_player_id) {
+@@ -2270,11 +2371,12 @@ void TRIBE_Screen_Game::player_changed(int old_player_id, int new_player_id) {
                      game_pic_id = culture + 0xC631;
                  }
              } else {
@@ -1000,7 +2088,7 @@ index 92412fb6..13b8da63 100644
                  }
              }
              this->game_screen_pic = new TShape(str, game_pic_id);
-@@ -2283,7 +2381,7 @@ void TRIBE_Screen_Game::player_changed(int old_player_id, int new_player_id) {
+@@ -2283,7 +2385,7 @@ void TRIBE_Screen_Game::player_changed(int old_player_id, int new_player_id) {
                  this->button_panel[i]->border_pic = (i < 0x0C) ? this->button_border1_pic : this->button_border2_pic;
              }
  
@@ -1009,7 +2097,7 @@ index 92412fb6..13b8da63 100644
                  this->more_cancel_pic = this->button_cmd_pic;
              } else {
                  this->more_cancel_pic = this->button_other_pic;
-@@ -3498,12 +3596,11 @@ void TRIBE_Screen_Game::draw() {
+@@ -3498,12 +3600,11 @@ void TRIBE_Screen_Game::draw() {
                  if (this->pnl_wid >= 1024 && this->pnl_hgt >= 768) {
                      this->game_screen_pic->shape_draw(this->render_area, 0, 0, 0, 0, 0);
                      this->game_screen_pic->shape_draw(this->render_area, 0, 642, 1, 0, 0);
@@ -1025,7 +2113,7 @@ index 92412fb6..13b8da63 100644
                  }
                  this->render_area->Unlock(s_scr_game_draw2);
              }
-@@ -3520,15 +3617,45 @@ void TRIBE_Screen_Game::draw() {
+@@ -3520,15 +3621,45 @@ void TRIBE_Screen_Game::draw() {
          this->draw_setup(flag);
          if (this->game_screen_pic) {
              if (this->render_area->Lock(s_scr_game_draw3, 1)) {
@@ -1268,7 +2356,7 @@ index d0ddcafa..0967f4d2 100644
  #include "../include/program_mode.h"
  #include "../include/asp_list.h"
 diff --git a/src/taiinfmd.cpp b/src/taiinfmd.cpp
-index 0d961d41..87c34289 100644
+index 0d961d41..3428a614 100644
 --- a/src/taiinfmd.cpp
 +++ b/src/taiinfmd.cpp
 @@ -155,7 +155,7 @@ TribeInformationAIModule::TribeInformationAIModule(void* pW, int pID) :
@@ -1307,7 +2395,152 @@ index 0d961d41..87c34289 100644
      }
  
      return 1;
-@@ -2164,14 +2161,8 @@ ConstructionItem* TribeInformationAIModule::influencePlaceStructure(
+@@ -1877,6 +1874,92 @@ int TribeInformationAIModule::influenceCanPlaceStructure(BuildItem* bi) {
+ 
+ #pragma intrinsic(sqrt)
+ 
++// The port: a column of influencePlaceStructure's scan made by the job workers (port/aoe_view.cpp's aoe_view_jobs), each cell's value
++// into an array, then the best taken from it on this core in the scan's order as before (the choice halves randSelect as it goes, so
++// it stays in order). A cell's value reads the map, the objects and the influence map and changes nothing: the same places come out
++// (docs/games/aoe.md, "The computer players' places"). Walls and connected types (4 and 6) are made here one by one as before.
++enum { AOE_NO_PLACE = -0x7fffffff - 1 };
++struct AoePlaceColumn {
++    TribeInformationAIModule* self;
++    RGE_Master_Static_Object* masterObj;
++    int x, ymin, placementType, minimum_placement_value, building_size_int, buildingType, useExcludeRegion;
++    float buildingSize;
++    XYPoint minExclude, maxExclude, centerPoint;
++    int* values;
++};
++static AoePlaceColumn aoe_place_column;
++static void aoe_place_job(unsigned from, unsigned to) {
++    for (unsigned i = from; i < to; i++) aoe_place_column.values[i] = aoe_place_column.self->aoePlaceValue(&aoe_place_column, aoe_place_column.ymin + (int) i);
++}
++int TribeInformationAIModule::aoePlaceValue(AoePlaceColumn* c, int y) {
++    int x = c->x;
++    float buildingSize = c->buildingSize;
++    int placementType = c->placementType;
++    if (c->useExcludeRegion == 1 && x >= c->minExclude.x && x <= c->maxExclude.x && y >= c->minExclude.y && y <= c->maxExclude.y) {
++        return AOE_NO_PLACE;
++    }
++    XYPoint minClear;
++    XYPoint maxClear;
++    if (buildingSize == 5.0f) {
++        minClear.x = x - 2; minClear.y = y - 2; maxClear.x = x + 2; maxClear.y = y + 2;
++    } else if (buildingSize == 3.0f) {
++        if (placementType == 6 || placementType == 3 || placementType == 4 || placementType == 1 || placementType == 2 || placementType == 8) {
++            minClear.x = x - 1; minClear.y = y - 1; maxClear.x = x + 1; maxClear.y = y + 1;
++        } else {
++            minClear.x = x - 2; minClear.y = y - 2; maxClear.x = x + 2; maxClear.y = y + 2;
++        }
++    } else if (buildingSize == 2.0f) {
++        if (placementType == 6 || placementType == 3 || placementType == 4) {
++            minClear.x = x - 1; minClear.y = y - 1; maxClear.x = x; maxClear.y = y;
++        } else {
++            minClear.x = x - 2; minClear.y = y - 2; maxClear.x = x + 1; maxClear.y = y + 1;
++        }
++    } else {   // buildingSize == 1.0f (others never come here)
++        if (placementType == 6 || placementType == 3 || placementType == 4) {
++            minClear.x = x; minClear.y = y; maxClear.x = x; maxClear.y = y;
++        } else {
++            minClear.x = x - 1; minClear.y = y - 1; maxClear.x = x + 1; maxClear.y = y + 1;
++        }
++    }
++    if (this->mapBound(minClear) == 1 || this->mapBound(maxClear) == 1) {
++        return AOE_NO_PLACE;
++    }
++    int basePlacementTotal = 0;
++    for (int clearX = minClear.x; clearX <= maxClear.x; ++clearX) {
++        for (int clearY = minClear.y; clearY <= maxClear.y; ++clearY) {
++            int value = iMap.lookupValue(clearX, clearY);
++            if (value == 0xff) return AOE_NO_PLACE;
++            basePlacementTotal += value;
++        }
++    }
++    int blockingObject = -1;
++    if (c->masterObj->check_placement(this->md->player, (float) x - (-0.5f), (float) y - (-0.5f), &blockingObject, 1, 1, 1, 1, 1, 1) != 0) {
++        return AOE_NO_PLACE;
++    }
++    if (placementType == 1 || placementType == 2) {
++        if (this->undesirableLot(c->buildingType, (unsigned char) x, (unsigned char) y, 10) == 1) {
++            basePlacementTotal /= 10;
++        }
++    } else if (placementType != 6) {
++        if (this->undesirableLot(c->buildingType, (unsigned char) x, (unsigned char) y, c->building_size_int) == 1) {
++            basePlacementTotal /= 10;
++        }
++    }
++    if (placementType == 1 || placementType == 2) {
++        int delta_x = x - c->centerPoint.x;
++        int delta_y = y - c->centerPoint.y;
++        int distance = (int) aoe_isqrt(delta_x * delta_x + delta_y * delta_y);   // ((int) sqrt((double) ...) of a whole number)
++        distance -= 10;
++        if (distance > 0) {
++            int adjusted_total = basePlacementTotal - distance / 5;
++            if (adjusted_total > c->minimum_placement_value) {
++                basePlacementTotal = adjusted_total;
++            }
++        }
++    }
++    return basePlacementTotal;
++}
++
+ ConstructionItem* TribeInformationAIModule::influencePlaceStructure(
+     BuildItem* bi, int builderID, int alternateType, float alternateSize, char* alternateName, int alternateMinD,
+     int alternateMaxD, int alternateX, int alternateY, PlacementState& placementState, unsigned long startTime
+@@ -2105,6 +2188,51 @@ ConstructionItem* TribeInformationAIModule::influencePlaceStructure(
+             }
+         }
+ 
++        // (the port: the column's cells by the job workers, above)
++        if (placementType != 4 && placementType != 6 && max.y >= min.y
++            && (buildingSize == 5.0f || buildingSize == 3.0f || buildingSize == 2.0f || buildingSize == 1.0f)) {
++            extern void aoe_view_jobs(void (*fn)(unsigned, unsigned), const unsigned* a0, const unsigned* a1, int n);
++            int cells = max.y - min.y + 1;
++            static int* values;
++            static int values_room;
++            if (cells > values_room) { free(values); values_room = cells + 64; values = (int*) malloc(values_room * sizeof(int)); }
++            memset(values, 0, cells * sizeof(int));   // (stored to here first: no worker waits for a page)
++            aoe_place_column.self = this;
++            aoe_place_column.masterObj = masterObj;
++            aoe_place_column.x = x;
++            aoe_place_column.ymin = min.y;
++            aoe_place_column.placementType = placementType;
++            aoe_place_column.minimum_placement_value = minimum_placement_value;
++            aoe_place_column.building_size_int = building_size_int;
++            aoe_place_column.buildingType = buildingType;
++            aoe_place_column.useExcludeRegion = useExcludeRegion;
++            aoe_place_column.buildingSize = buildingSize;
++            aoe_place_column.minExclude = minExclude;
++            aoe_place_column.maxExclude = maxExclude;
++            aoe_place_column.centerPoint = centerPoint;
++            aoe_place_column.values = values;
++            unsigned from[8], to[8];
++            int chunks = 0;
++            for (int k = 0; k < 8; k++) {   // (on 4 cells, a texel: no texel has two writers)
++                unsigned a = ((unsigned) cells * k / 8) & ~3u, b = k == 7 ? (unsigned) cells : ((unsigned) cells * (k + 1) / 8) & ~3u;
++                if (a < b) { from[chunks] = a; to[chunks] = b; chunks++; }
++            }
++            aoe_view_jobs(aoe_place_job, from, to, chunks);
++            for (int y = min.y; y <= max.y; ++y) {
++                int basePlacementTotal = values[y - min.y];
++                if (basePlacementTotal == AOE_NO_PLACE) continue;
++                if (bestPointValue == -1 || bestPointValue < basePlacementTotal + randSelect) {
++                    if (basePlacementTotal <= bestPointValue) {
++                        randSelect /= 2;
++                    }
++                    bestPoint.x = x;
++                    bestPoint.y = y;
++                    bestPointValue = basePlacementTotal;
++                }
++            }
++            continue;
++        }
++
+         for (int y = min.y; y <= max.y; ++y) {
+             if (useExcludeRegion == 1 && x >= minExclude.x && x <= maxExclude.x && y >= minExclude.y && y <= maxExclude.y) {
+                 continue;
+@@ -2164,14 +2292,8 @@ ConstructionItem* TribeInformationAIModule::influencePlaceStructure(
                  continue;
              }
  
@@ -1324,7 +2557,7 @@ index 0d961d41..87c34289 100644
              int basePlacementTotal = 0;
              int blocked = 0;
              for (int clearX = minClear.x; clearX <= maxClear.x && blocked == 0; ++clearX) {
-@@ -2188,6 +2179,14 @@ ConstructionItem* TribeInformationAIModule::influencePlaceStructure(
+@@ -2188,6 +2310,14 @@ ConstructionItem* TribeInformationAIModule::influencePlaceStructure(
                  continue;
              }
  
@@ -1339,7 +2572,7 @@ index 0d961d41..87c34289 100644
              if (placementType == 4 || placementType == 6) {
                  int old_connection_count = iMap.connectionCountValue;
                  int connection_count = iMap.connectionsIncluding(minClear, maxClear, 0xff, 0xff, 1, 0, 1);
-@@ -2418,7 +2417,7 @@ void TribeInformationAIModule::removeObject(int objID) {
+@@ -2418,7 +2548,7 @@ void TribeInformationAIModule::removeObject(int objID) {
          ObjectMemory* mem = objectMemory(objID);
          if (mem != 0) {
              // obj->owner->id, kept raw for the same reason as in initialize.
@@ -1536,16 +2769,79 @@ index a3c3afc3..6be4416f 100644
                  case 0:
                      player = new TRIBE_Player(
 diff --git a/src/view.cpp b/src/view.cpp
-index 6439e31f..f77a024a 100644
+index 6439e31f..3dd9819b 100644
 --- a/src/view.cpp
 +++ b/src/view.cpp
-@@ -1,3 +1,4 @@
+@@ -1,3 +1,5 @@
++#include <stddef.h>
 +#include "aoe_cores.h"
  #include <windows.h>
  #include "../include/program_mode.h"
  #include <ddraw.h>
-@@ -856,12 +857,15 @@ void RGE_View::draw() {
+@@ -755,6 +757,38 @@ void RGE_View::CreateBlitQueue(tagRECT& src_rect, tagRECT& dest_rect, int xDelta
+     this->Blit_Offset_Y = this->render_rect.top;
+ }
+ 
++// The port: the strips a scroll uncovers are cleared in the save area (PtrClear) by the raster's bands, each its rows, before its terrain
++// (RGE_View::aoe_terrain_band) when the walk is split: nothing reads those pixels before. Otherwise at once, as before.
++extern int aoe_view_record_terrain(void);
++extern int aoe_view_split_walk(void);
++static struct { int n; tagRECT r[2]; } aoe_clears __attribute__((aligned(16)));
++extern int aoe_walk_split_now(void);
++extern int aoe_terrain_reset_owed;
++static void aoe_strip_clear(TDrawArea* area, tagRECT* r) {
++    // (kept always: draw clears them after the save area's offsets are set, as before, or the bands do; draw makes the rectangles
++    // before those offsets now, for the walk's tiles)
++    if (aoe_clears.n < 2) { aoe_clears.r[aoe_clears.n++] = *r; return; }
++    area->PtrClear(r, 0);
++}
++static void aoe_strip_clears_now(TDrawArea* area) {   // (the walk not split after all)
++    for (int i = 0; i < aoe_clears.n; i++) area->PtrClear(&aoe_clears.r[i], 0);
++    aoe_clears.n = 0;
++}
++static void aoe_strip_clears_rows(TDrawArea* area, long lo, long hi) {   // (PtrClear's, of lines lo to hi)
++    for (int i = 0; i < aoe_clears.n; i++) {
++        long x0 = aoe_clears.r[i].left, y0 = aoe_clears.r[i].top, x1 = aoe_clears.r[i].right, y1 = aoe_clears.r[i].bottom;
++        if (x1 < 0 || x0 > x1 || x0 >= area->Width || y1 < 0 || y0 > y1 || y0 >= area->Height) continue;
++        if (x0 < 0) x0 = 0;
++        if (x1 >= area->Width) x1 = area->Width - 1;
++        if (y0 < 0) y0 = 0;
++        if (y1 >= area->Height) y1 = area->Height - 1;
++        if (y0 < lo) y0 = lo;
++        if (y1 > hi) y1 = hi;
++        unsigned char** rows = (unsigned char**) area->CurDisplayOffsets;
++        for (long y = y0; y <= y1; y++) memset(rows[y] + x0, 0, x1 - x0 + 1);
++    }
++}
++
+ void RGE_View::ProcessQueuedBlit(int WaitIfBusy) {
+     tagRECT src;
+ 
+@@ -817,13 +851,17 @@ void RGE_View::draw() {
+         return;
+     }
+ 
++    aoe_clears.n = 0;
+     old_start_scr_row = this->start_scr_row;
+     old_start_map_row = this->start_map_row;
+     old_start_scr_col = this->start_scr_col;
+     old_start_map_col = this->start_map_col;
+ 
+-    this->Terrain_Clip_Mask->ResetAll();
+-    this->Terrain_Fog_Clip_Mask->ResetAll();
++    if (aoe_view_record_terrain() && aoe_view_split_walk()) aoe_terrain_reset_owed = 1;   // (the port: made with the walk's copies)
++    else {
++        this->Terrain_Clip_Mask->ResetAll();
++        this->Terrain_Fog_Clip_Mask->ResetAll();
++    }
+     this->Master_Clip_Mask->ResetAll();
+ 
+     old_map_scr_y_offset = this->map_scr_y_offset;
+@@ -854,14 +892,18 @@ void RGE_View::draw() {
+             new_rect.bottom = old_rect.bottom + y_diff;
+ 
              if (new_rect.bottom < 0 || new_rect.right < 0 || old_rect.bottom < new_rect.top || old_rect.right < new_rect.left) {
++                { extern unsigned aoe_mode0_far; aoe_mode0_far++; }
                  this->render_terrain_mode = 0;
              } else {
 -                if ((x_diff & 7) != 0) {
@@ -1563,10 +2859,180 @@ index 6439e31f..f77a024a 100644
                      x_diff = (short) (x_diff + adjust);
                      this->map_scr_x_offset += adjust;
                  }
-@@ -1863,7 +1867,84 @@ long RGE_View::view_function(
-     return result;
- }
+@@ -900,64 +942,7 @@ void RGE_View::draw() {
+                     new_rect.bottom = this->pnl_hgt - y_diff - 1;
+                 }
  
+-                if (this->render_area->DrawSystem->DrawType == 1 || this->render_area->UsingVidMem == 0) {
+-                    this->render_area->OverlayMemCopy(
+-                        old_rect, new_rect, x_diff, y_diff, this->render_rect.left, this->render_rect.top
+-                    );
+-                    this->Queued_Blits = 0;
+-                } else {
+-                    this->CreateBlitQueue(old_rect, new_rect, x_diff, y_diff);
+-                    if (MouseSystem != 0) {
+-                        MouseSystem->Poll();
+-                    }
+-                    if (this->Queued_Blits != 0) {
+-                        this->ProcessQueuedBlit(0);
+-                    }
+-                }
+-
+-                this->prior_objs->Scroll(x_diff, y_diff);
+-
+-                this->Float_X_Delta += x_diff;
+-                if (this->Float_X_Delta >= this->save_area1->Width) {
+-                    if (this->save_area1->Lock("view::draw", 1) != 0) {
+-                        memcpy(
+-                            this->save_area1->DisplayOffsets[0],
+-                            (unsigned char*) this->save_area1->DisplayOffsets[this->save_area1->Height - 1]
+-                                + this->save_area1->Width,
+-                            this->Float_X_Delta - x_diff
+-                        );
+-                        this->Float_X_Delta -= this->save_area1->Width;
+-                        this->Float_Y_Delta++;
+-                        if (this->Float_Y_Delta >= this->save_area1->Height) {
+-                            this->Float_Y_Delta = 0;
+-                        }
+-                        this->save_area1->Unlock("view::draw");
+-                    }
+-                } else if (this->Float_X_Delta < 0) {
+-                    if (this->save_area1->Lock("view::draw2", 1) != 0) {
+-                        this->Float_X_Delta += this->save_area1->Width;
+-                        this->Float_Y_Delta--;
+-                        if (this->Float_Y_Delta < 0) {
+-                            this->Float_Y_Delta = this->save_area1->Height - 1;
+-                        }
+-                        memcpy(
+-                            (unsigned char*) this->save_area1->DisplayOffsets[this->save_area1->Height - 1]
+-                                + this->save_area1->Width,
+-                            this->save_area1->DisplayOffsets[0], this->Float_X_Delta
+-                        );
+-                        this->save_area1->Unlock("view::draw3");
+-                    }
+-                }
+-
+-                this->Float_Y_Delta += y_diff;
+-                if (this->Float_Y_Delta < 0) {
+-                    this->Float_Y_Delta += this->save_area1->Height;
+-                }
+-                if (this->Float_Y_Delta >= this->save_area1->Height) {
+-                    this->Float_Y_Delta -= this->save_area1->Height;
+-                }
+-                this->save_area1->SetFloatOffsets(this->Float_X_Delta, this->Float_Y_Delta);
+-
++                // (the port: the strips' rectangles first, and the walk's tiles begun before the copy: view.cpp, aoe_sp)
+                 if (new_rect.left == 0 && new_rect.right == this->pnl_wid - 1) {
+                     clip_rect1.left = -1;
+                     if (new_rect.top == 0 && new_rect.bottom == this->pnl_hgt - 1) {
+@@ -1014,12 +999,12 @@ void RGE_View::draw() {
+                 }
+ 
+                 if (clip_rect1.left != -1) {
+-                    this->save_area1->PtrClear(&clip_rect1, 0);
++                    aoe_strip_clear(this->save_area1, &clip_rect1);   // (the port: by the bands when the walk is split, view.cpp)
+                     this->Limited_Render_Rect = 1;
+                     this->Render_Rect1 = clip_rect1;
+                 }
+                 if (clip_rect2.left != -1) {
+-                    this->save_area1->PtrClear(&clip_rect2, 0);
++                    aoe_strip_clear(this->save_area1, &clip_rect2);
+                     if (clip_rect1.left == -1) {
+                         this->Limited_Render_Rect = 1;
+                         this->Render_Rect1 = clip_rect2;
+@@ -1028,6 +1013,66 @@ void RGE_View::draw() {
+                         this->Render_Rect2 = clip_rect2;
+                     }
+                 }
++                this->aoe_walk_split_begin();
++                if (this->render_area->DrawSystem->DrawType == 1 || this->render_area->UsingVidMem == 0) {
++                    this->render_area->OverlayMemCopy(
++                        old_rect, new_rect, x_diff, y_diff, this->render_rect.left, this->render_rect.top
++                    );
++                    this->Queued_Blits = 0;
++                } else {
++                    this->CreateBlitQueue(old_rect, new_rect, x_diff, y_diff);
++                    if (MouseSystem != 0) {
++                        MouseSystem->Poll();
++                    }
++                    if (this->Queued_Blits != 0) {
++                        this->ProcessQueuedBlit(0);
++                    }
++                }
++
++                this->prior_objs->Scroll(x_diff, y_diff);
++
++                this->Float_X_Delta += x_diff;
++                if (this->Float_X_Delta >= this->save_area1->Width) {
++                    if (this->save_area1->Lock("view::draw", 1) != 0) {
++                        memcpy(
++                            this->save_area1->DisplayOffsets[0],
++                            (unsigned char*) this->save_area1->DisplayOffsets[this->save_area1->Height - 1]
++                                + this->save_area1->Width,
++                            this->Float_X_Delta - x_diff
++                        );
++                        this->Float_X_Delta -= this->save_area1->Width;
++                        this->Float_Y_Delta++;
++                        if (this->Float_Y_Delta >= this->save_area1->Height) {
++                            this->Float_Y_Delta = 0;
++                        }
++                        this->save_area1->Unlock("view::draw");
++                    }
++                } else if (this->Float_X_Delta < 0) {
++                    if (this->save_area1->Lock("view::draw2", 1) != 0) {
++                        this->Float_X_Delta += this->save_area1->Width;
++                        this->Float_Y_Delta--;
++                        if (this->Float_Y_Delta < 0) {
++                            this->Float_Y_Delta = this->save_area1->Height - 1;
++                        }
++                        memcpy(
++                            (unsigned char*) this->save_area1->DisplayOffsets[this->save_area1->Height - 1]
++                                + this->save_area1->Width,
++                            this->save_area1->DisplayOffsets[0], this->Float_X_Delta
++                        );
++                        this->save_area1->Unlock("view::draw3");
++                    }
++                }
++
++                this->Float_Y_Delta += y_diff;
++                if (this->Float_Y_Delta < 0) {
++                    this->Float_Y_Delta += this->save_area1->Height;
++                }
++                if (this->Float_Y_Delta >= this->save_area1->Height) {
++                    this->Float_Y_Delta -= this->save_area1->Height;
++                }
++                this->save_area1->SetFloatOffsets(this->Float_X_Delta, this->Float_Y_Delta);
++
++                if (!aoe_walk_split_now()) aoe_strip_clears_now(this->save_area1);   // (the port: the strips, kept above, cleared here when not split)
+             }
+         }
+     }
+@@ -1046,12 +1091,15 @@ void RGE_View::draw() {
+     }
+ 
+     if (this->render_terrain_mode == 0) {
++        { extern unsigned aoe_mode0_all; aoe_mode0_all++; }
+         this->Float_X_Delta = 0;
+         this->Float_Y_Delta = 0;
+         this->save_area1->SetFloatOffsets(0, 0);
+         this->save_area1->PtrClear(&this->save_area1->ClipRect, 0);
+     }
+ 
++    { extern void aoe_view_copy_passed(void); aoe_view_copy_passed(); }   // (the port: the scroll's copy asked, if any: the first core goes on)
++    this->aoe_walk_split_begin();   // (the port: the walk's copies and its tiles begun on their worker)
+     this->draw_view(10, this->save_area1);
+     this->render_terrain_mode = 1;
+     this->draw_finish();
+@@ -1859,11 +1907,676 @@ long RGE_View::view_function(
+     if ((this->function_mode == 0x29 || this->function_mode == 0x2a || this->function_mode == 0x2b) && result == 0x34) {
+         *picked_item = last_picked_obj;
+     }
+-
+-    return result;
++
++    return result;
++}
++
 +// The port: which children want drawing is asked before the view's job starts: the first core goes on and draws them.
 +static struct { tagRECT rect; int count; } aoe_kids[32];
 +static int aoe_kids_taken;
@@ -1643,12 +3109,715 @@ index 6439e31f..f77a024a 100644
 +#pragma push_macro("SDI_Capture_Info")
 +#undef SDI_Capture_Info
 +#define SDI_Capture_Info (aoe_my_words->capture)
++// The port: both of a tile's edge numbers at once, the visible one in the low byte and the explored one above it, from one look at
++// its eight neighbours: get_tile_mask_num's two calls a tile in the walk, each the same eight words (docs/games/aoe.md, "Speed in play")
++static inline int aoe_tile_masks(const unsigned char* edge, int map_col, int map_row, int map_width, int map_height, unsigned long visible,
++                                 unsigned long explored, unsigned long* const* unified_map_offsets) {
++    unsigned v = 0, e = 0;
++    if (0 < map_col && 0 < map_row && map_col < map_width - 1 && map_row < map_height - 1) {
++        const unsigned long* up = unified_map_offsets[map_row - 1] + map_col;
++        const unsigned long* mid = unified_map_offsets[map_row] + map_col;
++        const unsigned long* down = unified_map_offsets[map_row + 1] + map_col;
++        unsigned long n = up[0], ne = up[1], nw = up[-1], ea = mid[1], we = mid[-1], s = down[0], se = down[1], sw = down[-1];
++#define AOE_EDGE(word, bit) do { if (!((word) & visible)) v |= (bit); if (!((word) & explored)) e |= (bit); } while (0)
++        AOE_EDGE(n, 0x80); AOE_EDGE(ea, 0x40); AOE_EDGE(s, 0x20); AOE_EDGE(we, 0x10);
++        AOE_EDGE(ne, 0x08); AOE_EDGE(se, 0x04); AOE_EDGE(sw, 0x02); AOE_EDGE(nw, 0x01);
++#undef AOE_EDGE
++        return edge[v] | edge[e] << 8;
++    }
++    int max_col = map_width - 1, max_row = map_height - 1;
++#define AOE_EDGE_AT(ok, r, c, bit) do { if (ok) { unsigned long w = unified_map_offsets[r][c]; if (!(w & visible)) v |= (bit); if (!(w & explored)) e |= (bit); } } while (0)
++    AOE_EDGE_AT(0 < map_col, map_row, map_col - 1, 0x10);
++    AOE_EDGE_AT(map_col < max_col, map_row, map_col + 1, 0x40);
++    AOE_EDGE_AT(0 < map_row, map_row - 1, map_col, 0x80);
++    AOE_EDGE_AT(map_row < max_row, map_row + 1, map_col, 0x20);
++    AOE_EDGE_AT(0 < map_col && 0 < map_row, map_row - 1, map_col - 1, 0x01);
++    AOE_EDGE_AT(0 < map_col && map_row < max_row, map_row + 1, map_col - 1, 0x02);
++    AOE_EDGE_AT(map_col < max_col && 0 < map_row, map_row - 1, map_col + 1, 0x08);
++    AOE_EDGE_AT(map_col < max_col && map_row < max_row, map_row + 1, map_col + 1, 0x04);
++#undef AOE_EDGE_AT
++    return edge[v] | edge[e] << 8;
++}
++
++// The port: what the clip mask takes this frame (RGE_View::draw_view), for the bands (aoe_band_frame)
++static struct {
++    int mode0, merge, copy, adds;
++    long dx, dy;
++    DClipInfo_Node* add[16384];
++} aoe_bf __attribute__((aligned(16)));
++static void aoe_mask_add(DClipInfo_Node* node) {
++    if (aoe_bf.adds == (int) (sizeof aoe_bf.add / sizeof aoe_bf.add[0])) { fprintf(stderr, "aoe: the clip mask's list is full\n"); _Exit(9); }
++    if (node->Node_Type == 0) Clip_draw++;
++    aoe_bf.add[aoe_bf.adds++] = node;
++}
++
++// The port: the walk's terrain work (the terrain masks' regions and mini lists, the tiles' shapes into the save area, the levels up to
++// 5) recorded in its order and done after the walk by the raster's bands, each the whole record on its own lines (aoe_terrain_band): every
++// one of those works line by line, so each line has the same work in the same order (docs/games/aoe.md, "Speed in play"). The walk keeps
++// what the game reads and the tiles' own words; the view's worker hands the world back to the first core that much sooner.
++enum { AOE_TR_REGION, AOE_TR_ADD, AOE_TR_SUB, AOE_TR_SHAPE };
++struct AoeTrCmd {
++    int kind, mask, a, b, c, d, fog, maxs;
++    void* p;
++    void* q;
++    TSpan_List_Manager* cur;
++    TDrawArea* area;
++    unsigned sh[4];
++};
++static struct {
++    int on, n, bad;
++    int start[2][4];   // (each terrain mask's Min_Span_Px, Min_Line, Max_Span_Px, Max_Line when the walk began)
++    AoeTrCmd cmd[16384];
++} aoe_tr __attribute__((aligned(16)));
++extern int aoe_view_record_terrain(void);
++extern int aoe_view_split_walk(void);
++extern int aoe_view_tiles_start(RGE_View* view);
++extern void aoe_view_tiles_wait(RGE_View* view);
++extern int aoe_tiles_owed;
++// (what of the record the bands may replay: its first n commands, published every 16 and whole at the tiles' end, `done`; the bands follow
++// it while the tiles' worker still writes the rest: aoe_terrain_band. A pass's stores are seen together, so a count seen has its commands)
++static struct { volatile int n, done; char pad[8]; } aoe_tr_pub __attribute__((aligned(16)));
++static void aoe_tr_publish(int done) {
++    __asm__ volatile("" ::: "memory");
++    aoe_tr_pub.n = aoe_tr.n;
++    if (done) { __asm__ volatile("" ::: "memory"); aoe_tr_pub.done = 1; }
++}
++static AoeTrCmd* aoe_tr_new(int kind) {
++    if (aoe_tr.n == (int) (sizeof aoe_tr.cmd / sizeof aoe_tr.cmd[0])) { fprintf(stderr, "aoe: the terrain's record is full\n"); _Exit(9); }
++    if (!(aoe_tr.n & 15)) aoe_tr_publish(0);   // (the commands before this one)
++    AoeTrCmd* c = &aoe_tr.cmd[aoe_tr.n++];
++    c->kind = kind;
++    return c;
++}
++static void aoe_tr_region(TSpan_List_Manager* real, int mask, int MinS, int MinL, int MaxS, int MaxL) {
++    real->SetSpanRegions(MinS, MinL, MaxS, MaxL);   // (its limits now: what the walk and the next reset go by)
++    if (!aoe_tr.on) return;
++    AoeTrCmd* c = aoe_tr_new(AOE_TR_REGION);
++    c->mask = mask; c->a = MinS; c->b = MinL; c->c = MaxS; c->d = MaxL;
++}
++static void aoe_tr_mini(TSpan_List_Manager* real, int mask, int add, VSpanMiniList* list, int x, int y) {
++    if (!aoe_tr.on) {
++        if (add) real->AddMiniList(list, x, y);
++        else real->SubtractMiniList(list, x, y);
++        return;
++    }
++    if (list == 0) return;
++    AoeTrCmd* c = aoe_tr_new(add ? AOE_TR_ADD : AOE_TR_SUB);
++    c->mask = mask; c->p = list; c->a = x; c->b = y;
++}
++// what shape_draw would draw of a tile's shape: kept with its shadowing, its clip list and its fog
++static void aoe_tr_shape(TShape* shape, TDrawArea* area, long x, long y, long shape_num, int fog, const unsigned* sh) {
++    if (shape_num < 0 || shape->Check_shape(shape_num, (char*) "RGL_shape_draw") != 0) return;
++    if (shape->FShape == 0) { aoe_tr.bad++; return; }
++    Shape_Info* info = (Shape_Info*) (shape->FShape + shape_num + 1);
++    TSpan_List_Manager* span_list = area->SpanList;
++    TSpan_List_Manager* current = area->CurSpanList;
++    AoeTrCmd* c = aoe_tr_new(AOE_TR_SHAPE);
++    c->p = shape->FShape; c->q = info; c->area = area; c->cur = current;
++    c->a = x - info->Hotspot_X; c->b = y - info->Hotspot_Y;
++    c->c = (span_list->Num_Lines < current->Num_Lines ? span_list->Num_Lines : current->Num_Lines) - 1;
++    c->maxs = current->Max_Span_Px; c->fog = fog;
++    for (int i = 0; i < 4; i++) c->sh[i] = sh[i];
++}
++
++// The port: the walk split in two (aoe_view.cpp's bands, docs/games/aoe.md "Speed in play"). Before the walk gives the world back, the view's
++// worker captures the objects on the tiles and copies what the tiles' drawing reads of the world: the visibility words under the view and
++// each tile's view bytes (last_drawn_as to last_drawn_shape2). The tiles' work (aoe_terrain_loop: which to draw again, their masks, their
++// record) is made from those copies after it, while the first core updates the world, and its view bytes are written back by the first
++// core at the join (aoe_view_tiles_settle): a world's update writes a tile's other bytes (its objects, draw_as) in the same texels. What
++// the world asks of the view bytes meanwhile (RGE_Map::request_redraw, clear_map_view_info) is done again after that, in its order, as it
++// came after the walk.
++static struct { int on; char pad[12]; } aoe_sp_on __attribute__((aligned(16)));
++static struct { volatile int v; char pad[12]; } aoe_sp_copied __attribute__((aligned(16)));   // (the tiles' worker's: its copies made)
++int aoe_terrain_reset_owed;   // (draw's: the terrain masks' reset left to the walk's copies, view.cpp)
++static struct { int v; char pad[12]; } aoe_swap_owed_w __attribute__((aligned(16)));
++#define aoe_swap_owed (aoe_swap_owed_w.v)   // (the view's worker's: the lists to swap at the join)
++static void aoe_sp_copy(RGE_View* v);
++void aoe_view_tiles_copied_wait(void);   // (the view's worker's, while the tiles' work runs)
++static struct {
++    int pending, applying;
++    int r0, c0, w, h;            // the view bytes' window
++    RGE_Map* map;
++    int start_map_x, start_row, cols_2_scan, rows_2_scan, Map_Width, Map_Height, Full_Visibility;
++    unsigned long TileFoggedMask, TileVisibleMask;
++    tagRECT render_rect;
++    int map_scr_x_offset, map_scr_y_offset;   // (as draw_view sets them for the save area)
++    int begun, split;
++    int vr0, vr1, vc0, vc1, reset_owed;
++    int tiles;   // (tiles_drawn's count of the tiles' work: tiles_drawn lies in a texel with the view's worker's words)
++    int events_n, events_lost;
++    struct { int kind, x1, y1, x2, y2, attr; } events[64];
++} aoe_sp __attribute__((aligned(16)));
++enum { AOE_SP_MAX = 128, AOE_LDA = 3, AOE_LDS = 4, AOE_DAS = 5, AOE_DAT = 6, AOE_LDS2 = 7 };
++static unsigned char aoe_sp_cache[AOE_SP_MAX * AOE_SP_MAX][8] __attribute__((aligned(16)));   // (bytes 4 to 11 of each tile)
++static unsigned char aoe_sp_touched[AOE_SP_MAX * AOE_SP_MAX] __attribute__((aligned(16)));
++static unsigned long aoe_sp_vis[(AOE_SP_MAX + 2) * (AOE_SP_MAX + 2)] __attribute__((aligned(16)));
++static unsigned long* aoe_sp_rows[1024];
++typedef char aoe_tile_bytes_check[(offsetof(RGE_Tile, last_drawn_as) == 7 && offsetof(RGE_Tile, last_drawn_shape2) == 11 && sizeof(RGE_Tile) == 24) ? 1 : -1];
++static unsigned char (*aoe_sp_rowc[1024])[8];   // (each row's copies, by column: aoe_sp_cache's rows less c0)
++static unsigned char* aoe_sp_rowt[1024];
++static struct { int n; unsigned short at[AOE_SP_MAX * AOE_SP_MAX]; } aoe_sp_list __attribute__((aligned(16)));   // (the copies touched, for the write back)
++static inline unsigned char* aoe_sc(int row, int col) { return aoe_sp_rowc[row][col]; }
++static inline unsigned char aoe_tget(RGE_Tile* t, int row, int col, int f) {
++    return aoe_sp_on.on ? aoe_sc(row, col)[f] : ((unsigned char*) t)[4 + f];
++}
++static inline void aoe_tset(RGE_Tile* t, int row, int col, int f, unsigned char v) {
++    if (aoe_sp_on.on) {
++        if (aoe_sc(row, col)[f] == v) return;   // (as it was: nothing to write back)
++        aoe_sc(row, col)[f] = v;
++        if (!aoe_sp_rowt[row][col]) { aoe_sp_rowt[row][col] = 1; aoe_sp_list.at[aoe_sp_list.n++] = (unsigned short) ((row - aoe_sp.r0) * aoe_sp.w + col - aoe_sp.c0); }
++    }
++    else ((unsigned char*) t)[4 + f] = v;
++}
++int aoe_walk_split_now(void) { return aoe_sp.begun && aoe_sp.split; }
++// The first core, at the join: the view bytes the tiles' work wrote, then what the world asked of them meanwhile
++void aoe_view_tiles_settle(void) {
++    if (!aoe_sp.pending) return;
++    aoe_sp.pending = 0;
++    int cleared = 0;
++    for (int i = 0; i < aoe_sp.events_n; i++) cleared |= aoe_sp.events[i].kind == 1;
++    if (!cleared && !aoe_sp.events_lost) {
++        for (int k = 0; k < aoe_sp_list.n; k++) {
++            int i = aoe_sp_list.at[k], r = i / aoe_sp.w, c = i - r * aoe_sp.w;
++            aoe_sp_touched[i] = 0;
++            unsigned char* t = (unsigned char*) (aoe_sp.map->map_row_offset[aoe_sp.r0 + r] + aoe_sp.c0 + c);
++            unsigned char* d = aoe_sp_cache[i] + 3;
++            t[7] = d[0]; t[8] = d[1]; t[9] = d[2]; t[10] = d[3]; t[11] = d[4];
++        }
++        aoe_sp_list.n = 0;
++    } else {
++        for (int k = 0; k < aoe_sp_list.n; k++) aoe_sp_touched[aoe_sp_list.at[k]] = 0;
++        aoe_sp_list.n = 0;
++        if (aoe_sp.events_lost) aoe_sp.map->clear_map_view_info();   // (too many asked: every tile drawn again)
++    }
++    aoe_sp.applying = 1;
++    for (int i = 0; i < aoe_sp.events_n; i++) {
++        if (aoe_sp.events[i].kind == 1) aoe_sp.map->clear_map_view_info();
++        else aoe_sp.map->request_redraw(aoe_sp.events[i].x1, aoe_sp.events[i].y1, aoe_sp.events[i].x2, aoe_sp.events[i].y2, (unsigned char) aoe_sp.events[i].attr);
++    }
++    aoe_sp.applying = 0;
++    aoe_sp.events_n = 0; aoe_sp.events_lost = 0;
++}
++// RGE_Map::request_redraw (kind 0) and clear_map_view_info (1), from the first core while copies wait to be written back
++extern "C" int mcw_on_worker(void);
++void aoe_view_tiles_event(int kind, int x1, int y1, int x2, int y2, int attr) {
++    if (!aoe_sp.pending || aoe_sp.applying || mcw_on_worker()) return;
++    if (aoe_sp.events_n == 64) { aoe_sp.events_lost = 1; return; }
++    aoe_sp.events[aoe_sp.events_n].kind = kind;
++    aoe_sp.events[aoe_sp.events_n].x1 = x1; aoe_sp.events[aoe_sp.events_n].y1 = y1;
++    aoe_sp.events[aoe_sp.events_n].x2 = x2; aoe_sp.events[aoe_sp.events_n].y2 = y2;
++    aoe_sp.events[aoe_sp.events_n].attr = attr;
++    aoe_sp.events_n++;
++}
++
++// The port: the tiles' part of the walk (view_function_terrain's loop but for the objects), from the walk's copies (aoe_sp), on the view's
++// worker after the walk: the same record, the same terrain masks, the same view bytes as the loop whole made them
++void RGE_View::aoe_terrain_loop() {
++    if (!aoe_sp_copied.v) aoe_sp_copy(this);
++    int start_map_x = aoe_sp.start_map_x, start_row = aoe_sp.start_row, cols_2_scan = aoe_sp.cols_2_scan, rows_2_scan = aoe_sp.rows_2_scan;
++    int Map_Width = aoe_sp.Map_Width, Map_Height = aoe_sp.Map_Height, Full_Visibility = aoe_sp.Full_Visibility;
++    unsigned long TileFoggedMask = aoe_sp.TileFoggedMask, TileVisibleMask = aoe_sp.TileVisibleMask;
++    unsigned long* const* aoe_vis_now = aoe_sp_rows;
++    int current_region = -1;
++    int row_num;
++    aoe_sp_on.on = 1;
++    row_num = 0;
++    if (rows_2_scan > 0) {
++        do {
++            int map_col = start_map_x;
++            int map_row = start_row;
++            int col_num = 0;
++            int odd_row;
++
++
++            odd_row = row_num & 1;
++
++            if (cols_2_scan > 0) {
++                do {
++                    if (map_row >= 0 && map_col >= 0) {
++                        if (map_row >= Map_Height || map_col >= Map_Width) {
++                            col_num = cols_2_scan;
++                        } else {
++                            RGE_Map* current_map = this->map;
++                            RGE_Tile* tile = current_map->map_row_offset[map_row] + map_col;
++                            int tile_x = tile->screen_xpos - aoe_sp.map_scr_x_offset;
++                            int tile_y = tile->screen_ypos - aoe_sp.map_scr_y_offset;
++                            int tile_right = tile_x + this->tile_wid;
++                            int tile_bottom = tile_y + current_map->tilesizes[tile->tile_type].height;
++                            short draw_x = (short) tile_x;
++                            short draw_y = (short) tile_y;
++                            unsigned char MapVis;
++
++                            if ((aoe_vis_now[map_row][map_col] & TileVisibleMask) != 0) {
++                                MapVis = RGE_TILE_VISIBLE;
++                            } else if ((aoe_vis_now[map_row][map_col] & TileFoggedMask) != 0 || Full_Visibility != 0) {
++                                MapVis = this->map->fog_flag != 0 ? RGE_TILE_FOGGED : RGE_TILE_VISIBLE;
++                            } else {
++                                MapVis = 0;
++                                aoe_tset(tile, map_row, map_col, AOE_LDA, 0);
++                            }
++
++                            if (MapVis != 0 && tile_x <= aoe_sp.render_rect.right && tile_y <= aoe_sp.render_rect.bottom
++                                && tile_right > aoe_sp.render_rect.left && tile_bottom > aoe_sp.render_rect.top) {
++                                unsigned char terrain_num = tile->terrain_type;
++                                int black_tile_mask_num = -1;
++                                int tile_mask_num = -1;
++                                int region = 0;
++                                int clip_to = 0;
++                                int aoe_masks = -1;   // (both edge numbers, made at the first that is wanted: aoe_tile_masks)
++#define AOE_MASKS() (aoe_masks < 0 ? (aoe_masks = aoe_tile_masks(this->EdgeNumber, map_col, map_row, Map_Width, Map_Height, TileVisibleMask, TileFoggedMask, aoe_vis_now)) : aoe_masks)
++
++                                if (this->calc_draw_count != 0 && (short) terrain_num < this->map->num_terrain) {
++                                    this->map->terrain_types[terrain_num].drawn++;
++                                }
++
++                                if (this->render_terrain_mode != 0 && aoe_tget(tile, map_row, map_col, AOE_LDA) == MapVis) {
++                                    if (MapVis == RGE_TILE_VISIBLE) {
++                                        if (this->map->fog_flag == 0) {
++                                            black_tile_mask_num = 0;
++                                        } else {
++                                            black_tile_mask_num =
++                                                (AOE_MASKS() & 0xff);
++                                        }
++                                        if ((int) aoe_tget(tile, map_row, map_col, AOE_LDS) != black_tile_mask_num) {
++                                            goto draw_this_tile;
++                                        }
++                                    }
++
++                                    if (MapVis == RGE_TILE_VISIBLE || MapVis == RGE_TILE_FOGGED) {
++                                        if (Full_Visibility == 0) {
++                                            tile_mask_num =
++                                                (AOE_MASKS() >> 8);
++                                        } else {
++                                            tile_mask_num = 0;
++                                        }
++                                        if ((int) aoe_tget(tile, map_row, map_col, AOE_LDS2) != tile_mask_num) {
++                                            goto draw_this_tile;
++                                        }
++                                    }
++
++                                    if (this->Limited_Render_Rect == 0) {
++                                        goto tile_off_screen;
++                                    }
++
++                                    if (this->Use_Rect2 != 0 && this->Render_Rect2.right >= tile_x
++                                        && tile_right >= this->Render_Rect2.left && this->Render_Rect2.bottom >= tile_y
++                                        && tile_bottom >= this->Render_Rect2.top) {
++                                        clip_to = 1;
++                                    }
++
++                                    if (this->Render_Rect1.right >= tile_x && tile_right >= this->Render_Rect1.left
++                                        && this->Render_Rect1.bottom >= tile_y && tile_bottom >= this->Render_Rect1.top) {
++                                        region = 1;
++                                    } else {
++                                        if (clip_to == 0) {
++                                            goto tile_off_screen;
++                                        }
++                                        clip_to = 0;
++                                        region = 2;
++                                    }
++                                }
++
++                            draw_this_tile: {
++                                Tile_FogEdge_Table* edge_table = this->Tile_Edge_Tables[tile->tile_type];
++                                Tile_BlackEdge_Table* black_table = this->Black_Edge_Tables ? this->Black_Edge_Tables[tile->tile_type] : 0;
++                                VSpanMiniList* normal_draw_data;
++                                VSpanMiniList* fog_draw_data;
++                                VSpanMiniList* black_draw_data;
++                                int draw_normal;
++                                int fog_draw;
++                                int draw_black;
++
++                                if (this->map->fog_flag == 0) {
++                                    black_tile_mask_num = 0;
++                                }
++                                if (Full_Visibility != 0) {
++                                    tile_mask_num = 0;
++                                }
++                                if (black_tile_mask_num == -1) {
++                                    if (MapVis == RGE_TILE_VISIBLE) {
++                                        black_tile_mask_num =
++                                            (AOE_MASKS() & 0xff);
++                                    } else {
++                                        black_tile_mask_num = 0;
++                                    }
++                                }
++                                if (tile_mask_num == -1) {
++                                    if (MapVis != 0) {
++                                        tile_mask_num =
++                                            (AOE_MASKS() >> 8);
++                                    } else {
++                                        tile_mask_num = 0;
++                                    }
++                                }
++
++                                normal_draw_data = edge_table[black_tile_mask_num].normal_draw;
++                                fog_draw_data = edge_table[black_tile_mask_num].fog_draw;
++                                black_draw_data = black_table ? black_table[tile_mask_num].black_UNdraw : 0;
++
++                                if (MapVis == RGE_TILE_FOGGED) {
++                                    fog_draw_data = edge_table[0].normal_draw;
++                                    fog_draw = 1;
++                                    draw_normal = 0;
++                                } else {
++                                    draw_normal = normal_draw_data != 0;
++                                    fog_draw = fog_draw_data != 0;
++                                }
++
++                                draw_black = tile_mask_num > 0 && black_draw_data != 0;
++
++                                if (region != current_region) {
++                                    if (region == 0) {
++                                        aoe_tr_region(this->Terrain_Clip_Mask, 0, 
++                                            aoe_sp.render_rect.left, aoe_sp.render_rect.top, aoe_sp.render_rect.right,
++                                            aoe_sp.render_rect.bottom
++                                        );
++                                        aoe_tr_region(this->Terrain_Fog_Clip_Mask, 1, 
++                                            aoe_sp.render_rect.left, aoe_sp.render_rect.top, aoe_sp.render_rect.right,
++                                            aoe_sp.render_rect.bottom
++                                        );
++                                    }
++                                    if (region == 1) {
++                                        aoe_tr_region(this->Terrain_Clip_Mask, 0, 
++                                            this->Render_Rect1.left, this->Render_Rect1.top, this->Render_Rect1.right,
++                                            this->Render_Rect1.bottom
++                                        );
++                                        aoe_tr_region(this->Terrain_Fog_Clip_Mask, 1, 
++                                            this->Render_Rect1.left, this->Render_Rect1.top, this->Render_Rect1.right,
++                                            this->Render_Rect1.bottom
++                                        );
++                                    }
++                                    current_region = region;
++                                    if (region == 2) {
++                                        aoe_tr_region(this->Terrain_Clip_Mask, 0, 
++                                            this->Render_Rect2.left, this->Render_Rect2.top, this->Render_Rect2.right,
++                                            this->Render_Rect2.bottom
++                                        );
++                                        aoe_tr_region(this->Terrain_Fog_Clip_Mask, 1, 
++                                            this->Render_Rect2.left, this->Render_Rect2.top, this->Render_Rect2.right,
++                                            this->Render_Rect2.bottom
++                                        );
++                                        current_region = region;
++                                    }
++                                }
++
++                                if (draw_normal != 0) {
++                                    aoe_tr_mini(this->Terrain_Clip_Mask, 0, 1, normal_draw_data, tile_x, tile_y);
++                                }
++                                if (fog_draw != 0) {
++                                    aoe_tr_mini(this->Terrain_Fog_Clip_Mask, 1, 1, fog_draw_data, tile_x, tile_y);
++                                }
++                                if (draw_black != 0) {
++                                    if (draw_normal != 0) {
++                                        aoe_tr_mini(this->Terrain_Clip_Mask, 0, 0, black_draw_data, tile_x, tile_y);
++                                    }
++                                    if (fog_draw != 0) {
++                                        aoe_tr_mini(this->Terrain_Fog_Clip_Mask, 1, 0, black_draw_data, tile_x, tile_y);
++                                    }
++                                }
++
++                                if (clip_to != 0) {
++                                    aoe_tr_region(this->Terrain_Clip_Mask, 0, 
++                                        this->Render_Rect2.left, this->Render_Rect2.top, this->Render_Rect2.right,
++                                        this->Render_Rect2.bottom
++                                    );
++                                    aoe_tr_region(this->Terrain_Fog_Clip_Mask, 1, 
++                                        this->Render_Rect2.left, this->Render_Rect2.top, this->Render_Rect2.right,
++                                        this->Render_Rect2.bottom
++                                    );
++                                    current_region = 2;
++
++                                    if (draw_normal != 0) {
++                                        aoe_tr_mini(this->Terrain_Clip_Mask, 0, 1, normal_draw_data, tile_x, tile_y);
++                                    }
++                                    if (fog_draw != 0) {
++                                        aoe_tr_mini(this->Terrain_Fog_Clip_Mask, 1, 1, fog_draw_data, tile_x, tile_y);
++                                    }
++                                    if (draw_black != 0) {
++                                        if (draw_normal != 0) {
++                                            aoe_tr_mini(this->Terrain_Clip_Mask, 0, 0, black_draw_data, tile_x, tile_y);
++                                        }
++                                        if (fog_draw != 0) {
++                                            aoe_tr_mini(this->Terrain_Fog_Clip_Mask, 1, 0, black_draw_data, tile_x, tile_y);
++                                        }
++                                    }
++                                }
++
++                                terrain_num = tile->terrain_type;
++                                {
++                                    short terrain_to_draw = this->map->terrain_types[terrain_num].terrain_to_draw;
++                                    if (terrain_to_draw != -1) {
++                                        terrain_num = (unsigned char) terrain_to_draw;
++                                    }
++                                }
++
++                                aoe_tset(tile, map_row, map_col, AOE_LDS2, (unsigned char) tile_mask_num);
++                                aoe_tset(tile, map_row, map_col, AOE_LDS, (unsigned char) black_tile_mask_num);
++                                aoe_tset(tile, map_row, map_col, AOE_LDA, MapVis);
++                                aoe_tset(tile, map_row, map_col, AOE_DAS, MapVis);
++                                aoe_tset(tile, map_row, map_col, AOE_DAT, aoe_tget(tile, map_row, map_col, AOE_DAT) & 0xbf);
++                                this->draw_tile(
++                                    tile, terrain_num, draw_x, draw_y, (short) map_col, (short) map_row, MapVis, draw_normal,
++                                    fog_draw
++                                );
++                                aoe_sp.tiles++;
++                            }
++                            }
++
++                        tile_off_screen:
++                            if (tile != 0 && (aoe_tget(tile, map_row, map_col, AOE_DAT) & 0x40) == 0x40) {
++                                unsigned char terrain_num = tile->terrain_type;
++                                short terrain_to_draw = this->map->terrain_types[terrain_num].terrain_to_draw;
++                                if (terrain_to_draw != -1) {
++                                    terrain_num = (unsigned char) terrain_to_draw;
++                                }
++                                this->draw_tile(
++                                    tile, terrain_num, draw_x, draw_y, (short) map_col, (short) map_row, MapVis, 1, 1
++                                );
++                                aoe_tset(tile, map_row, map_col, AOE_DAT, aoe_tget(tile, map_row, map_col, AOE_DAT) & 0xbf);
++                            }
++
++                        }
++                    }
++
++                    map_col++;
++                    map_row++;
++                    col_num++;
++                } while (col_num < cols_2_scan);
++            }
++
++            if (odd_row == 1) {
++                start_row++;
++            } else {
++                start_map_x--;
++            }
++            row_num++;
++        } while (row_num < rows_2_scan);
++    }
++    aoe_sp_on.on = 0;
++    if (current_region != 0) {
++        aoe_tr_region(this->Terrain_Clip_Mask, 0, aoe_sp.render_rect.left, aoe_sp.render_rect.top, aoe_sp.render_rect.right, aoe_sp.render_rect.bottom);
++        aoe_tr_region(this->Terrain_Fog_Clip_Mask, 1, aoe_sp.render_rect.left, aoe_sp.render_rect.top, aoe_sp.render_rect.right, aoe_sp.render_rect.bottom);
++    }
++    aoe_tr_publish(1);
++}
++
++// The port: whether this picture's walk is split (aoe_sp), and if so its copies made and its tiles begun on their worker, from draw once
++// the scroll is made, before draw_view: the loop's locals as view_function_terrain makes them, and the view's offsets and rectangle as
++// draw_view sets them for the save area (save_area1, the area the tiles draw into)
++// The port: the walk's copies of the tiles' view bytes and of the visibility under the view (aoe_sp), made by the tiles' worker as it
++// begins (the walk waits for them before it gives the world back: aoe_view_tiles_copied_wait), or by the walk where there is none;
++// with the terrain masks' reset draw owed them
++static void aoe_sp_copy(RGE_View* v) {
++    if (aoe_sp.reset_owed) { v->Terrain_Clip_Mask->ResetAll(); v->Terrain_Fog_Clip_Mask->ResetAll(); aoe_sp.reset_owed = 0; }
++    int r0 = aoe_sp.r0, r1 = aoe_sp.r0 + aoe_sp.h - 1, c0 = aoe_sp.c0;
++    int vr0 = aoe_sp.vr0, vr1 = aoe_sp.vr1, vc0 = aoe_sp.vc0, vc1 = aoe_sp.vc1;
++    RGE_Map* map = aoe_sp.map;
++            for (int r = r0; r <= r1; r++) {
++                aoe_sp_rowc[r] = &aoe_sp_cache[(r - r0) * aoe_sp.w] - c0;
++                aoe_sp_rowt[r] = &aoe_sp_touched[(r - r0) * aoe_sp.w] - c0;
++                const unsigned* t = (const unsigned*) (map->map_row_offset[r] + c0) + 1;   // (bytes 4 to 11: two words a tile)
++                unsigned* d = (unsigned*) aoe_sp_cache[(r - r0) * aoe_sp.w];
++                for (int c = 0; c < aoe_sp.w; c++, t += 6, d += 2) { d[0] = t[0]; d[1] = t[1]; }
++            }
++            int vw = vc1 - vc0 + 1;
++            for (int r = vr0; r <= vr1; r++) {
++                unsigned long* d = aoe_sp_vis + (r - vr0) * vw;
++                memcpy(d, unified_map_offsets[r] + vc0, vw * sizeof(unsigned long));
++                aoe_sp_rows[r] = d - vc0;
++            }
++    __asm__ volatile("" ::: "memory");
++    aoe_sp_copied.v = 1;
++}
++void aoe_view_tiles_copied_wait(void) { while (!aoe_sp_copied.v) __asm__ volatile(".word 0x0000100f" ::: "memory"); }   // (mc_end_pass)
++
++void RGE_View::aoe_walk_split_begin() {
++    if (aoe_sp.begun) return;   // (begun already by the scroll)
++    aoe_sp.begun = 1;
++    aoe_sp.split = 0;
++    struct ResetOwed {   // (the terrain masks' reset draw left: made here unless the tiles' worker makes it with its copies)
++        RGE_View* v;
++        ~ResetOwed() { if (aoe_terrain_reset_owed) { v->Terrain_Clip_Mask->ResetAll(); v->Terrain_Fog_Clip_Mask->ResetAll(); aoe_terrain_reset_owed = 0; } }
++    } reset_owed = {this};
++    aoe_tr.on = aoe_view_record_terrain();
++    aoe_tr.n = 0;
++    aoe_tr_pub.n = 0; aoe_tr_pub.done = 0;
++    if (aoe_tr.on) {
++        TSpan_List_Manager* masks[2] = {this->Terrain_Clip_Mask, this->Terrain_Fog_Clip_Mask};
++        for (int i = 0; i < 2; i++) {
++            aoe_tr.start[i][0] = masks[i]->Min_Span_Px; aoe_tr.start[i][1] = masks[i]->Min_Line;
++            aoe_tr.start[i][2] = masks[i]->Max_Span_Px; aoe_tr.start[i][3] = masks[i]->Max_Line;
++        }
++    }
++    if (!aoe_tr.on || !aoe_view_split_walk() || this->map == 0 || this->player == 0 || this->save_area1 == 0) return;
++    this->cur_render_area = this->save_area1;   // (draw_view's, for the record's shapes)
++    tagRECT rr;
++    rr.left = 0; rr.top = 0;
++    rr.right = this->render_rect.right - this->render_rect.left; rr.bottom = this->render_rect.bottom - this->render_rect.top;
++    int start_map_x = this->start_map_col;
++    int start_row = this->start_map_row;
++    int cols_2_scan = this->max_col_num + 5;
++    int rows_2_scan = this->max_row_num * 2 + 12;
++    int Map_Width = this->map->map_width;
++    int Map_Height = this->map->map_height;
++    unsigned long TileFoggedMask = this->player->mutualExploredMask;
++    unsigned long TileVisibleMask = this->player->mutualVisibleMask;
++    int Full_Visibility = this->player->visible == 0 || this->map->map_visible_flag != 0;
++    {   // (the window of tiles the walk visits and the tiles' work writes, and the copies of it)
++        int rows_half = rows_2_scan / 2, rows_up = (rows_2_scan + 1) / 2;
++        int r0 = start_row, r1 = start_row + rows_half + cols_2_scan;              // (and a row below: a neighbour's mark)
++        int c0 = start_map_x - rows_up - 1, c1 = start_map_x + cols_2_scan;        // (and a column left)
++        if (r0 < 0) r0 = 0;
++        if (c0 < 0) c0 = 0;
++        if (r1 > Map_Height - 1) r1 = Map_Height - 1;
++        if (c1 > Map_Width - 1) c1 = Map_Width - 1;
++        if (r1 < r0 || c1 < c0 || r1 - r0 + 1 > AOE_SP_MAX || c1 - c0 + 1 > AOE_SP_MAX) return;
++        else {
++            aoe_sp.r0 = r0; aoe_sp.c0 = c0; aoe_sp.w = c1 - c0 + 1; aoe_sp.h = r1 - r0 + 1; aoe_sp.map = this->map;
++            for (int k = 0; k < aoe_sp_list.n; k++) aoe_sp_touched[aoe_sp_list.at[k]] = 0;
++            aoe_sp_list.n = 0;
++            aoe_sp.vr0 = r0 > 0 ? r0 - 1 : 0; aoe_sp.vr1 = r1 < Map_Height - 1 ? r1 + 1 : r1;   // (the masks look at the neighbours)
++            aoe_sp.vc0 = c0 > 0 ? c0 - 1 : 0; aoe_sp.vc1 = c1 < Map_Width - 1 ? c1 + 1 : c1;
++            aoe_sp.start_map_x = start_map_x; aoe_sp.start_row = start_row; aoe_sp.cols_2_scan = cols_2_scan; aoe_sp.rows_2_scan = rows_2_scan;
++            aoe_sp.Map_Width = Map_Width; aoe_sp.Map_Height = Map_Height; aoe_sp.Full_Visibility = Full_Visibility;
++            aoe_sp.TileFoggedMask = TileFoggedMask; aoe_sp.TileVisibleMask = TileVisibleMask;
++            aoe_sp.events_n = 0; aoe_sp.events_lost = 0;
++            aoe_sp.render_rect = rr;
++            aoe_sp.map_scr_x_offset = this->map_scr_x_offset + this->render_rect.left;
++            aoe_sp.map_scr_y_offset = this->map_scr_y_offset + this->render_rect.top;
++            aoe_sp.split = 1;
++            aoe_sp.pending = 1;
++            aoe_sp.tiles = 0;
++            for (int t = 0; t < this->map->num_terrain; t++) this->map->terrain_types[t].drawn = 0;   // (view_function_terrain's)
++            aoe_sp_copied.v = 0;
++            aoe_sp.reset_owed = aoe_terrain_reset_owed;
++            aoe_terrain_reset_owed = 0;
++            if (!aoe_view_tiles_start(this)) aoe_sp_copy(this);   // (no tiles' worker: the copies now, the world not yet given back)
++        }
++    }
+ }
+ 
  long RGE_View::view_function_terrain(unsigned char function_mode_in, tagRECT save_render_rect) {
 +    AoeCoreWords* const aoe_my_words = &aoe_core_words[mcw_on_worker() ? 1 : 0];
      int start_map_x;
      int start_row;
      int cols_2_scan;
-@@ -2011,7 +2092,7 @@ long RGE_View::view_function_terrain(unsigned char function_mode_in, tagRECT sav
+@@ -1888,7 +2601,7 @@ long RGE_View::view_function_terrain(unsigned char function_mode_in, tagRECT sav
+     Map_Height = this->map->map_height;
+     this->function_mode = function_mode_in;
+ 
+-    if (this->map->num_terrain > 0) {
++    if (this->map->num_terrain > 0 && !(aoe_sp.begun && aoe_sp.split)) {   // (the port: when split, reset before the tiles' worker began)
+         int terrain_num = 0;
+         do {
+             this->map->terrain_types[terrain_num].drawn = 0;
+@@ -1896,6 +2609,20 @@ long RGE_View::view_function_terrain(unsigned char function_mode_in, tagRECT sav
+         } while (terrain_num < this->map->num_terrain);
+     }
+ 
++    unsigned long* const* aoe_vis_now = unified_map_offsets;
++    int aoe_split = 0;
++    if (aoe_sp.begun) { aoe_sp.begun = 0; aoe_split = aoe_sp.split; }   // (the port: made in draw, aoe_walk_split_begin)
++    else {
++        aoe_tr.on = aoe_view_record_terrain();
++        aoe_tr.n = 0;
++        if (aoe_tr.on) {
++            TSpan_List_Manager* masks[2] = {this->Terrain_Clip_Mask, this->Terrain_Fog_Clip_Mask};
++            for (int i = 0; i < 2; i++) {
++                aoe_tr.start[i][0] = masks[i]->Min_Span_Px; aoe_tr.start[i][1] = masks[i]->Min_Line;
++                aoe_tr.start[i][2] = masks[i]->Max_Span_Px; aoe_tr.start[i][3] = masks[i]->Max_Line;
++            }
++        }
++    }
+     TileFoggedMask = this->player->mutualExploredMask;
+     TileVisibleMask = this->player->mutualVisibleMask;
+     SDI_List = this->futur_objs;
+@@ -1908,6 +2635,57 @@ long RGE_View::view_function_terrain(unsigned char function_mode_in, tagRECT sav
+         Full_Visibility = 0;
+     }
+ 
++    if (aoe_split) {   // (the port: the objects only; the tiles after the walk, aoe_terrain_loop)
++        row_num = 0;
++        while (row_num < rows_2_scan) {
++            int map_col = start_map_x;
++            int map_row = start_row;
++            int col_num = 0;
++            if ((row_num & 3) == 3 && MouseSystem != 0) MouseSystem->Poll();
++            int odd_row = row_num & 1;
++            if (odd_row == 1 && this->Queued_Blits != 0) this->ProcessQueuedBlit(0);
++            while (col_num < cols_2_scan) {
++                if (map_row >= 0 && map_col >= 0) {
++                    if (map_row >= Map_Height || map_col >= Map_Width) {
++                        col_num = cols_2_scan;
++                    } else {
++                        RGE_Tile* tile = this->map->map_row_offset[map_row] + map_col;
++                        if (tile->objects.list != 0) {   // (a tile with no objects: nothing of this loop's)
++                        short draw_x = (short) (tile->screen_xpos - this->map_scr_x_offset);
++                        short draw_y = (short) (tile->screen_ypos - this->map_scr_y_offset);
++                        unsigned char MapVis;
++                        if ((unified_map_offsets[map_row][map_col] & TileVisibleMask) != 0) MapVis = RGE_TILE_VISIBLE;
++                        else if ((unified_map_offsets[map_row][map_col] & TileFoggedMask) != 0 || Full_Visibility != 0)
++                            MapVis = this->map->fog_flag != 0 ? RGE_TILE_FOGGED : RGE_TILE_VISIBLE;
++                        else MapVis = 0;
++                            if (view_debug_Objects == 0 && tile != 0 && tile->objects.list != 0) {
++                            SDI_Capture_Info = 1;
++                            if (MapVis == 0) {
++                                this->futur_objs->SetCaptureLevel(0, 5);
++                            }
++                            if (MapVis != RGE_TILE_VISIBLE) {
++                                fog_next_shape = 1;
++                            }
++                            tile->objects.draw(
++                                this->save_area1, draw_x, (short) (draw_y + tile->height * this->tile_half_hgt),
++                                MapVis == RGE_TILE_FOGGED
++                            );
++                            this->futur_objs->SetCaptureLevel(0, 0x28);
++                            fog_next_shape = 0;
++                            SDI_Capture_Info = 0;
++                        }
++                        }
++                    }
++                }
++                map_col++;
++                map_row++;
++                col_num++;
++            }
++            if (odd_row == 1) start_row++;
++            else start_map_x--;
++            row_num++;
++        }
++    } else {
+     row_num = 0;
+     if (rows_2_scan > 0) {
+         do {
+@@ -1957,6 +2735,8 @@ long RGE_View::view_function_terrain(unsigned char function_mode_in, tagRECT sav
+                                 int tile_mask_num = -1;
+                                 int region = 0;
+                                 int clip_to = 0;
++                                int aoe_masks = -1;   // (both edge numbers, made at the first that is wanted: aoe_tile_masks)
++#define AOE_MASKS() (aoe_masks < 0 ? (aoe_masks = aoe_tile_masks(this->EdgeNumber, map_col, map_row, Map_Width, Map_Height, TileVisibleMask, TileFoggedMask, aoe_vis_now)) : aoe_masks)
+ 
+                                 if (this->calc_draw_count != 0 && (short) terrain_num < this->map->num_terrain) {
+                                     this->map->terrain_types[terrain_num].drawn++;
+@@ -1968,7 +2748,7 @@ long RGE_View::view_function_terrain(unsigned char function_mode_in, tagRECT sav
+                                             black_tile_mask_num = 0;
+                                         } else {
+                                             black_tile_mask_num =
+-                                                this->get_tile_mask_num(map_col, map_row, Map_Width, Map_Height, TileVisibleMask);
++                                                (AOE_MASKS() & 0xff);
+                                         }
+                                         if ((int) tile->last_drawn_shape != black_tile_mask_num) {
+                                             goto draw_this_tile;
+@@ -1978,7 +2758,7 @@ long RGE_View::view_function_terrain(unsigned char function_mode_in, tagRECT sav
+                                     if (MapVis == RGE_TILE_VISIBLE || MapVis == RGE_TILE_FOGGED) {
+                                         if (Full_Visibility == 0) {
+                                             tile_mask_num =
+-                                                this->get_tile_mask_num(map_col, map_row, Map_Width, Map_Height, TileFoggedMask);
++                                                (AOE_MASKS() >> 8);
+                                         } else {
+                                             tile_mask_num = 0;
+                                         }
+@@ -2011,7 +2791,7 @@ long RGE_View::view_function_terrain(unsigned char function_mode_in, tagRECT sav
  
                              draw_this_tile: {
                                  Tile_FogEdge_Table* edge_table = this->Tile_Edge_Tables[tile->tile_type];
@@ -1657,7 +3826,25 @@ index 6439e31f..f77a024a 100644
                                  VSpanMiniList* normal_draw_data;
                                  VSpanMiniList* fog_draw_data;
                                  VSpanMiniList* black_draw_data;
-@@ -2044,7 +2125,7 @@ long RGE_View::view_function_terrain(unsigned char function_mode_in, tagRECT sav
+@@ -2028,7 +2808,7 @@ long RGE_View::view_function_terrain(unsigned char function_mode_in, tagRECT sav
+                                 if (black_tile_mask_num == -1) {
+                                     if (MapVis == RGE_TILE_VISIBLE) {
+                                         black_tile_mask_num =
+-                                            this->get_tile_mask_num(map_col, map_row, Map_Width, Map_Height, TileVisibleMask);
++                                            (AOE_MASKS() & 0xff);
+                                     } else {
+                                         black_tile_mask_num = 0;
+                                     }
+@@ -2036,7 +2816,7 @@ long RGE_View::view_function_terrain(unsigned char function_mode_in, tagRECT sav
+                                 if (tile_mask_num == -1) {
+                                     if (MapVis != 0) {
+                                         tile_mask_num =
+-                                            this->get_tile_mask_num(map_col, map_row, Map_Width, Map_Height, TileFoggedMask);
++                                            (AOE_MASKS() >> 8);
+                                     } else {
+                                         tile_mask_num = 0;
+                                     }
+@@ -2044,7 +2824,7 @@ long RGE_View::view_function_terrain(unsigned char function_mode_in, tagRECT sav
  
                                  normal_draw_data = edge_table[black_tile_mask_num].normal_draw;
                                  fog_draw_data = edge_table[black_tile_mask_num].fog_draw;
@@ -1666,7 +3853,100 @@ index 6439e31f..f77a024a 100644
  
                                  if (MapVis == RGE_TILE_FOGGED) {
                                      fog_draw_data = edge_table[0].normal_draw;
-@@ -2168,7 +2249,7 @@ long RGE_View::view_function_terrain(unsigned char function_mode_in, tagRECT sav
+@@ -2059,32 +2839,32 @@ long RGE_View::view_function_terrain(unsigned char function_mode_in, tagRECT sav
+ 
+                                 if (region != current_region) {
+                                     if (region == 0) {
+-                                        this->Terrain_Clip_Mask->SetSpanRegions(
++                                        aoe_tr_region(this->Terrain_Clip_Mask, 0, 
+                                             this->render_rect.left, this->render_rect.top, this->render_rect.right,
+                                             this->render_rect.bottom
+                                         );
+-                                        this->Terrain_Fog_Clip_Mask->SetSpanRegions(
++                                        aoe_tr_region(this->Terrain_Fog_Clip_Mask, 1, 
+                                             this->render_rect.left, this->render_rect.top, this->render_rect.right,
+                                             this->render_rect.bottom
+                                         );
+                                     }
+                                     if (region == 1) {
+-                                        this->Terrain_Clip_Mask->SetSpanRegions(
++                                        aoe_tr_region(this->Terrain_Clip_Mask, 0, 
+                                             this->Render_Rect1.left, this->Render_Rect1.top, this->Render_Rect1.right,
+                                             this->Render_Rect1.bottom
+                                         );
+-                                        this->Terrain_Fog_Clip_Mask->SetSpanRegions(
++                                        aoe_tr_region(this->Terrain_Fog_Clip_Mask, 1, 
+                                             this->Render_Rect1.left, this->Render_Rect1.top, this->Render_Rect1.right,
+                                             this->Render_Rect1.bottom
+                                         );
+                                     }
+                                     current_region = region;
+                                     if (region == 2) {
+-                                        this->Terrain_Clip_Mask->SetSpanRegions(
++                                        aoe_tr_region(this->Terrain_Clip_Mask, 0, 
+                                             this->Render_Rect2.left, this->Render_Rect2.top, this->Render_Rect2.right,
+                                             this->Render_Rect2.bottom
+                                         );
+-                                        this->Terrain_Fog_Clip_Mask->SetSpanRegions(
++                                        aoe_tr_region(this->Terrain_Fog_Clip_Mask, 1, 
+                                             this->Render_Rect2.left, this->Render_Rect2.top, this->Render_Rect2.right,
+                                             this->Render_Rect2.bottom
+                                         );
+@@ -2093,43 +2873,43 @@ long RGE_View::view_function_terrain(unsigned char function_mode_in, tagRECT sav
+                                 }
+ 
+                                 if (draw_normal != 0) {
+-                                    this->Terrain_Clip_Mask->AddMiniList(normal_draw_data, tile_x, tile_y);
++                                    aoe_tr_mini(this->Terrain_Clip_Mask, 0, 1, normal_draw_data, tile_x, tile_y);
+                                 }
+                                 if (fog_draw != 0) {
+-                                    this->Terrain_Fog_Clip_Mask->AddMiniList(fog_draw_data, tile_x, tile_y);
++                                    aoe_tr_mini(this->Terrain_Fog_Clip_Mask, 1, 1, fog_draw_data, tile_x, tile_y);
+                                 }
+                                 if (draw_black != 0) {
+                                     if (draw_normal != 0) {
+-                                        this->Terrain_Clip_Mask->SubtractMiniList(black_draw_data, tile_x, tile_y);
++                                        aoe_tr_mini(this->Terrain_Clip_Mask, 0, 0, black_draw_data, tile_x, tile_y);
+                                     }
+                                     if (fog_draw != 0) {
+-                                        this->Terrain_Fog_Clip_Mask->SubtractMiniList(black_draw_data, tile_x, tile_y);
++                                        aoe_tr_mini(this->Terrain_Fog_Clip_Mask, 1, 0, black_draw_data, tile_x, tile_y);
+                                     }
+                                 }
+ 
+                                 if (clip_to != 0) {
+-                                    this->Terrain_Clip_Mask->SetSpanRegions(
++                                    aoe_tr_region(this->Terrain_Clip_Mask, 0, 
+                                         this->Render_Rect2.left, this->Render_Rect2.top, this->Render_Rect2.right,
+                                         this->Render_Rect2.bottom
+                                     );
+-                                    this->Terrain_Fog_Clip_Mask->SetSpanRegions(
++                                    aoe_tr_region(this->Terrain_Fog_Clip_Mask, 1, 
+                                         this->Render_Rect2.left, this->Render_Rect2.top, this->Render_Rect2.right,
+                                         this->Render_Rect2.bottom
+                                     );
+                                     current_region = 2;
+ 
+                                     if (draw_normal != 0) {
+-                                        this->Terrain_Clip_Mask->AddMiniList(normal_draw_data, tile_x, tile_y);
++                                        aoe_tr_mini(this->Terrain_Clip_Mask, 0, 1, normal_draw_data, tile_x, tile_y);
+                                     }
+                                     if (fog_draw != 0) {
+-                                        this->Terrain_Fog_Clip_Mask->AddMiniList(fog_draw_data, tile_x, tile_y);
++                                        aoe_tr_mini(this->Terrain_Fog_Clip_Mask, 1, 1, fog_draw_data, tile_x, tile_y);
+                                     }
+                                     if (draw_black != 0) {
+                                         if (draw_normal != 0) {
+-                                            this->Terrain_Clip_Mask->SubtractMiniList(black_draw_data, tile_x, tile_y);
++                                            aoe_tr_mini(this->Terrain_Clip_Mask, 0, 0, black_draw_data, tile_x, tile_y);
+                                         }
+                                         if (fog_draw != 0) {
+-                                            this->Terrain_Fog_Clip_Mask->SubtractMiniList(black_draw_data, tile_x, tile_y);
++                                            aoe_tr_mini(this->Terrain_Fog_Clip_Mask, 1, 0, black_draw_data, tile_x, tile_y);
+                                         }
+                                     }
+                                 }
+@@ -2168,7 +2948,7 @@ long RGE_View::view_function_terrain(unsigned char function_mode_in, tagRECT sav
                                  tile->draw_attribute &= 0xbf;
                              }
  
@@ -1675,7 +3955,40 @@ index 6439e31f..f77a024a 100644
                                  SDI_Capture_Info = 1;
                                  if (MapVis == 0) {
                                      this->futur_objs->SetCaptureLevel(0, 5);
-@@ -2374,81 +2455,26 @@ long RGE_View::view_function_terrain(unsigned char function_mode_in, tagRECT sav
+@@ -2201,6 +2981,7 @@ long RGE_View::view_function_terrain(unsigned char function_mode_in, tagRECT sav
+             row_num++;
+         } while (row_num < rows_2_scan);
+     }
++    }
+ 
+     while (this->Queued_Blits != 0) {
+         this->ProcessQueuedBlit(1);
+@@ -2322,18 +3103,20 @@ long RGE_View::view_function_terrain(unsigned char function_mode_in, tagRECT sav
+         }
+     }
+ 
++    if (aoe_tr.on && !aoe_split) aoe_tr_publish(1);   // (the port: the walk's record whole, its regions' end below added to it)
+     Clip_draw = 0;
+     Clip_remove = 0;
+-    if (current_region != 0) {
+-        this->Terrain_Clip_Mask->SetSpanRegions(
++    if (!aoe_split && current_region != 0) {
++        aoe_tr_region(this->Terrain_Clip_Mask, 0, 
+             this->render_rect.left, this->render_rect.top, this->render_rect.right, this->render_rect.bottom
+         );
+-        this->Terrain_Fog_Clip_Mask->SetSpanRegions(
++        aoe_tr_region(this->Terrain_Fog_Clip_Mask, 1, 
+             this->render_rect.left, this->render_rect.top, this->render_rect.right, this->render_rect.bottom
+         );
+     }
++    if (aoe_tr.on && !aoe_split) aoe_tr_publish(1);
+ 
+-    {
++    if (!aoe_tr.on) {
+         int level = 0;
+         do {
+             DClipInfo_Node* node = this->futur_objs->Draw_Level_Head[level];
+@@ -2374,81 +3157,28 @@ long RGE_View::view_function_terrain(unsigned char function_mode_in, tagRECT sav
          MouseSystem->Poll();
      }
  
@@ -1696,12 +4009,7 @@ index 6439e31f..f77a024a 100644
 -                if (old_object_id == object_id) {
 -                    goto no_mouse_process;
 -                }
-+    // The port: the job needs no more of the game than this
-+    aoe_walked_list = this->futur_objs;
-+    aoe_walked_rect = save_render_rect;
-+    if (aoe_view_wanted()) aoe_view_walked();
-+    else this->aoe_pick_touched(this->futur_objs, save_render_rect);
- 
+-
 -                this->UC_StartTime = current_time;
 -                this->UC_TouchedObj = object_id;
 -                {
@@ -1734,7 +4042,14 @@ index 6439e31f..f77a024a 100644
 -            }
 -        }
 -    }
--
++    // The port: the job needs no more of the game than this
++    aoe_walked_list = this->futur_objs;
++    aoe_walked_rect = save_render_rect;
++    if (aoe_split) aoe_view_tiles_copied_wait();   // (the port: the tiles' worker's copies of the world made first)
++    if (aoe_view_wanted()) aoe_view_walked();
++    else this->aoe_pick_touched(this->futur_objs, save_render_rect);
++    aoe_tiles_owed = aoe_split;   // (the port: the tiles from the walk's copies, made beside it: waited for at the bands' go, aoe_view.cpp)
+ 
 -no_mouse_process: {
 -    PanelNode* child_node = this->first_child_node;
 -    while (child_node != 0) {
@@ -1769,7 +4084,7 @@ index 6439e31f..f77a024a 100644
              );
              if (new_node != 0) {
                  DClipInfo_Node* tail = this->futur_objs->Draw_Level_Tail[0x1e];
-@@ -2459,8 +2485,6 @@ no_mouse_process: {
+@@ -2459,112 +3189,77 @@ no_mouse_process: {
                  }
                  this->futur_objs->Draw_Level_Tail[0x1e] = new_node;
              }
@@ -1778,7 +4093,518 @@ index 6439e31f..f77a024a 100644
      }
  }
  
-@@ -2759,6 +2783,8 @@ void RGE_View::Add_GDI_Clip_Mask(DClipInfo_Node* SDI, TSpan_List_Manager* Clip_M
+-    if (this->render_terrain_mode == 0) {
+-        int line = 0;
+-        if (this->save_area1->Height > 0) {
+-            do {
+-                this->Master_Clip_Mask->AddSpan(0, this->save_area1->Width - 1, line);
+-                line++;
+-            } while (line < this->save_area1->Height);
+-        }
++    // The port: the clip mask (the lines of what changed), its copy of the terrain and the last draws by bands of lines on the view's
++    // worker and the raster's band workers (port/aoe_view.cpp, aoe_raster_levels): each band adds to its own lines, from span nodes of
++    // its own, the same spans in the same order as the whole mask had them line by line. What it takes is matched here first, as before
++    // (docs/games/aoe.md, "Speed in play").
++    aoe_bf.mode0 = this->render_terrain_mode == 0;
++    aoe_bf.adds = 0;
++    aoe_bf.merge = 0;
++    if (aoe_bf.mode0) {
+         this->prior_objs->ReclaimAllNodes();
+     } else {
+-        this->Master_Clip_Mask->Merge_n_Align(this->Terrain_Clip_Mask, this->Terrain_Fog_Clip_Mask);
+-
+-        if (this->Limited_Render_Rect != 0) {
+-            if (this->Render_Rect1.left >= 0) {
+-                int line = this->Render_Rect1.top;
+-                if (line <= this->Render_Rect1.bottom) {
+-                    do {
+-                        this->Master_Clip_Mask->AddSpan(this->Render_Rect1.left, this->Render_Rect1.right, line);
+-                        line++;
+-                    } while (line <= this->Render_Rect1.bottom);
+-                }
+-            }
+-            if (this->Use_Rect2 != 0 && this->Render_Rect2.left >= 0) {
+-                int line = this->Render_Rect2.top;
+-                if (line <= this->Render_Rect2.bottom) {
+-                    do {
+-                        this->Master_Clip_Mask->AddSpan(this->Render_Rect2.left, this->Render_Rect2.right, line);
+-                        line++;
+-                    } while (line <= this->Render_Rect2.bottom);
++        TSpan_List_Manager* m = this->Master_Clip_Mask;
++        m->ResetAll();   // (what Merge_n_Align began with)
++        m->aoe_dirty_lo = 0;
++        m->aoe_dirty_hi = m->Num_Lines - 1;
++        aoe_bf.merge = m->Num_Lines == this->Terrain_Clip_Mask->Num_Lines && m->Num_Lines == this->Terrain_Fog_Clip_Mask->Num_Lines
++                       && m->Num_Pixels == this->Terrain_Clip_Mask->Num_Pixels && m->Num_Pixels == this->Terrain_Fog_Clip_Mask->Num_Pixels;
++        int line = 0;
++        if (this->futur_objs->YLine_Size > 0) {
++            do {
++                // (an old node matched is kept in this list, not marked in its Node_Type as before: the box's pick reads the old list on the
++                // first core meanwhile (pick_multi_objects), and a node marked was not picked; each matched once, as the mark made it)
++                DClipInfo_Node* matched[256];
++                int matched_n = 0;
++                DClipInfo_Node* new_node = this->futur_objs->Draw_Clip_Nodes[line];
++                while (new_node != 0) {
++                    if (new_node->Draw_Level > 5) {
++                        DClipInfo_Node* old_node = this->prior_objs->Draw_Clip_Nodes[line];
++                        int add_node = 1;
++                        while (old_node != 0) {
++                            int taken = 0;
++                            for (int k = 0; k < matched_n; k++) if (matched[k] == old_node) { taken = 1; break; }
++                            int compare_size = new_node->Node_Type != 0 ? 0x34 : 0x24;
++                            if (!taken && memcmp(&new_node->Shape, &old_node->Shape, compare_size) == 0) {
++                                add_node = 0;
++                                Clip_remove++;
++                                if (matched_n == 256) { fprintf(stderr, "aoe: a line's matched nodes are too many\n"); _Exit(9); }
++                                matched[matched_n++] = old_node;
++                                break;
++                            }
++                            old_node = old_node->Next;
++                        }
++                        if (add_node != 0) aoe_mask_add(new_node);
++                    }
++                    new_node = new_node->Next;
+                 }
+-            }
+-        }
+-
+-        {
+-            int line = 0;
+-            if (this->futur_objs->YLine_Size > 0) {
+-                do {
+-                    DClipInfo_Node* new_node = this->futur_objs->Draw_Clip_Nodes[line];
+-                    while (new_node != 0) {
+-                        if (new_node->Draw_Level > 5) {
+-                            DClipInfo_Node* old_node = this->prior_objs->Draw_Clip_Nodes[line];
++                {
++                    DClipInfo_Node* old_node = this->prior_objs->Draw_Clip_Nodes[line];
++                    while (old_node != 0) {
++                        int taken = 0;
++                        for (int k = 0; k < matched_n; k++) if (matched[k] == old_node) { taken = 1; break; }
++                        if (old_node->Draw_Level > 5 && !taken) {
++                            DClipInfo_Node* new_node2 = this->futur_objs->Draw_Clip_Nodes[line];
+                             int add_node = 1;
+-                            while (old_node != 0) {
+-                                int compare_size = new_node->Node_Type != 0 ? 0x34 : 0x24;
+-                                if (memcmp(&new_node->Shape, &old_node->Shape, compare_size) == 0) {
++                            while (new_node2 != 0) {
++                                int compare_size = old_node->Node_Type != 0 ? 0x34 : 0x24;
++                                if (memcmp(&new_node2->Shape, &old_node->Shape, compare_size) == 0) {
+                                     add_node = 0;
+-                                    Clip_remove++;
+-                                    old_node->Node_Type = -1;
+                                     break;
+                                 }
+-                                old_node = old_node->Next;
+-                            }
+-
+-                            if (add_node != 0) {
+-                                if (new_node->Node_Type == 0) {
+-                                    this->Master_Clip_Mask->AddShape_Align(
+-                                        new_node->Shape_Base, new_node->Shape, new_node->Draw_X, new_node->Draw_Y,
+-                                        (new_node->Draw_Flag & 2) == 2
+-                                    );
+-                                    Clip_draw++;
+-                                } else {
+-                                    this->Add_GDI_Clip_Mask(new_node, this->Master_Clip_Mask);
+-                                }
+-                            }
+-                        }
+-                        new_node = new_node->Next;
+-                    }
+-
+-                    {
+-                        DClipInfo_Node* old_node = this->prior_objs->Draw_Clip_Nodes[line];
+-                        while (old_node != 0) {
+-                            if (old_node->Draw_Level > 5 && old_node->Node_Type != -1) {
+-                                DClipInfo_Node* new_node2 = this->futur_objs->Draw_Clip_Nodes[line];
+-                                int add_node = 1;
+-                                while (new_node2 != 0) {
+-                                    int compare_size = old_node->Node_Type != 0 ? 0x34 : 0x24;
+-                                    if (memcmp(&new_node2->Shape, &old_node->Shape, compare_size) == 0) {
+-                                        add_node = 0;
+-                                        break;
+-                                    }
+-                                    new_node2 = new_node2->Next;
+-                                }
+-
+-                                if (add_node != 0) {
+-                                    if (old_node->Node_Type == 0) {
+-                                        this->Master_Clip_Mask->AddShape_Align(
+-                                            old_node->Shape_Base, old_node->Shape, old_node->Draw_X, old_node->Draw_Y,
+-                                            (old_node->Draw_Flag & 2) == 2
+-                                        );
+-                                        Clip_draw++;
+-                                    } else {
+-                                        this->Add_GDI_Clip_Mask(old_node, this->Master_Clip_Mask);
+-                                    }
+-                                }
++                                new_node2 = new_node2->Next;
+                             }
+-                            old_node = old_node->Next;
++                            if (add_node != 0) aoe_mask_add(old_node);
+                         }
++                        old_node = old_node->Next;
+                     }
+-                    line++;
+-                } while (line < this->futur_objs->YLine_Size);
+-            }
++                }
++                line++;
++            } while (line < this->futur_objs->YLine_Size);
+         }
+     }
+ 
+@@ -2572,23 +3267,286 @@ no_mouse_process: {
+     this->render_rect.top += save_render_rect.top;
+     this->render_rect.right += save_render_rect.left;
+     this->render_rect.bottom += save_render_rect.top;
+-    this->save_area1->PtrSpanCopy(
+-        this->render_area, this->render_rect.left, this->render_rect.top, &this->save_area1->ClipRect,
+-        (unsigned char**) this->Master_Clip_Mask->Line_Head_Ptrs
+-    );
++    aoe_bf.dx = this->render_rect.left;
++    aoe_bf.dy = this->render_rect.top;
++    {
++        TDrawArea* from = this->save_area1;
++        aoe_bf.copy = !(from->DrawSystem && from->DrawSystem->DrawType == 2 && !this->render_area->Lock((char*) "PtrSpanCopy", 1));
++    }
+     this->Update_Render_Pointers();
+     this->render_rect.left -= save_render_rect.left;
+     this->render_rect.top -= save_render_rect.top;
+     this->render_rect.right -= save_render_rect.left;
+     this->render_rect.bottom -= save_render_rect.top;
+ 
++    this->render_area->CurSpanList = this->Master_Clip_Mask;
++    extern void aoe_raster_levels(RGE_View* view);
++    aoe_raster_levels(this);
++
++    if (view_debug_spans != 0 && this->render_terrain_mode != 0) {
++        int color = frame_count % 0xdc + 0x10;
++        int line = 0;
++        if (this->render_area->Height > 0) {
++            do {
++                this->render_area->DrawLine(0, line, this->render_area->Width - 1, line, (unsigned char) color);
++                line++;
++            } while (line < this->render_area->Height);
++        }
++    }
++
++    if (view_debug_palette != 0) {
++        int row = 0;
++        int y = 0x20;
++        do {
++            unsigned char col = 0;
++            int x = 0;
++            do {
++                this->render_area->FillRect(x, y, x + 0x1f, y + 0x0f, (unsigned char) (col + (unsigned char) row * 0x10));
++                x += 0x20;
++                col++;
++            } while (x < 0x200);
++            y += 0x10;
++            row++;
++        } while (y < 0x120);
++    }
++
++    this->render_area->Unlock("view::view_function_terrain");
++    this->render_area->CurSpanList = this->render_area->SpanList;
++
++    // (the port: on the view's worker the lists are swapped by the first core at the join, aoe_view_swap_lists: the first core's pick
++    // writes the view's UC_ words, which lie in a texel with these, beside the job; RVC_RACES found the two stores in one pass)
++    if (aoe_view_in_job() && mcw_on_worker()) aoe_swap_owed = 1;
++    else {
++        DClipInfo_List* temp = this->futur_objs;
++        this->futur_objs = this->prior_objs;
++        this->prior_objs = temp;
++    }
++    return 0;
++}
++void aoe_view_swap_lists(RGE_View* v) {
++    if (!aoe_swap_owed) return;
++    aoe_swap_owed = 0;
++    DClipInfo_List* temp = v->futur_objs;
++    v->futur_objs = v->prior_objs;
++    v->prior_objs = temp;
++}
++
++// The port: the draws of levels 6 to 0x28 into the page, through the master clip, of the rows line_lo to line_hi alone (a band of
++// aoe_raster_levels'; the whole view with the widest bounds)
++// The port: lines line_lo to line_hi of the clip mask (m: its lines' arrays the master's, its span nodes its own, its Min_Line and Max_Line
++// the band's), then the terrain's copy along them and the last draws of those rows: what draw_view did for every line, in the order it did
++// it for each line
++// The port: the lines a GDI node's outline or bar touches (Add_GDI_Clip_Mask, Draw_GDI_Object): 0 for a kind that draws nothing
++static int aoe_gdi_rows(const DClipInfo_Node* n, long* lo, long* hi) {
++    long a, b;
++    if (n->Node_Type == 1) {
++        a = b = n->y1;
++        if (n->y2 < a) a = n->y2; if (n->y2 > b) b = n->y2;
++        if (n->y3 < a) a = n->y3; if (n->y3 > b) b = n->y3;
++        if (n->y4 < a) a = n->y4; if (n->y4 > b) b = n->y4;
++    } else if (n->Node_Type >= 2 && n->Node_Type <= 4) {
++        a = n->y1 < n->y2 ? n->y1 : n->y2;
++        b = n->y1 < n->y2 ? n->y2 : n->y1;
++    } else return 0;
++    *lo = a; *hi = b;
++    return 1;
++}
++
++// The port: where the bands of lines lo to hi divide (aoe_raster_levels): each with about as many pixels to draw, the shapes over its lines
++// (the walk's terrain record and every level's) and a little for each line, on 4 lines; bound[b] is band b's first line, b from 1
++int aoe_tiles_owed;   // (the walk's tiles still being made: aoe_raster_levels waits for them before the bands)
++void aoe_view_tiles_counted(void) { tiles_drawn += aoe_sp.tiles; aoe_sp.tiles = 0; }   // (the view's worker, the tiles made)
++void aoe_band_split(RGE_View* v, long lo, long hi, int parts, long* bound) {
++    // (by groups of 4 lines, as the bands begin on 4: a group's weight the pixels of the shapes over its lines, and a little for each)
++    static int diff[1100];
++    long g0 = lo >> 2, groups = (hi >> 2) - g0 + 1;
++    if (hi < lo || groups > 1024) { for (int b = 1; b < parts; b++) bound[b] = (lo + (hi - lo + 1) * b / parts) & ~3L; return; }
++    memset(diff, 0, (groups + 1) * sizeof(int));
++    #define AOE_SPLIT_ADD(y0, h, w) do { long a_ = ((y0) >> 2) - g0, b_ = (((y0) + (h) - 1) >> 2) - g0 + 1; if (a_ < 0) a_ = 0; if (b_ > groups) b_ = groups; \
++        if (a_ < b_) { diff[a_] += ((w) + 16) * 4; diff[b_] -= ((w) + 16) * 4; } } while (0)
++    for (int i = 0; !aoe_tiles_owed && i < aoe_tr.n; i++) {   // (not while the tiles' worker writes the record)
++        AoeTrCmd* c = &aoe_tr.cmd[i];
++        if (c->kind == AOE_TR_SHAPE) { Shape_Info* info = (Shape_Info*) c->q; AOE_SPLIT_ADD(c->b, info->Height, info->Width); }
++    }
++    for (int level = 0; level <= 0x28; level++)
++        for (DClipInfo_Node* node = v->futur_objs->Draw_Level_Head[level]; node; node = node->NextOnLevel)
++            if (node->Node_Type == 0 && node->Shape) AOE_SPLIT_ADD(node->Draw_Y, node->Shape->Height, node->Shape->Width * (level <= 5 ? 2 : 1));
++    for (int i = 0; i < aoe_bf.adds; i++) {
++        DClipInfo_Node* node = aoe_bf.add[i];
++        if (node->Node_Type == 0 && node->Shape) AOE_SPLIT_ADD(node->Draw_Y, node->Shape->Height, 8);
++    }
++    #undef AOE_SPLIT_ADD
++    long long total = 0;
++    for (long i = 0, w = 0; i < groups; i++) { w += diff[i]; diff[i] = w + 192; total += diff[i]; }
++    long long run = 0;
++    int b = 1;
++    for (long i = 0; i < groups && b < parts; i++) {
++        run += diff[i];
++        while (b < parts && run * parts >= total * b) { bound[b] = (g0 + i + 1) * 4; b++; }
++    }
++    for (; b < parts; b++) bound[b] = (hi + 1) & ~3L;
++    for (b = 1; b < parts; b++) {   // (in order, each band at least empty)
++        if (bound[b] < (lo & ~3L)) bound[b] = lo & ~3L;
++        if (b > 1 && bound[b] < bound[b - 1]) bound[b] = bound[b - 1];
++    }
++}
++
++void RGE_View::aoe_terrain_band(long line_lo, long line_hi, TSpan_List_Manager* tm, TSpan_List_Manager* fm) {
++    aoe_strip_clears_rows(this->save_area1, line_lo, line_hi);   // (the strips a scroll uncovered: kept by draw for the bands)
++    TSpan_List_Manager* real[2] = {this->Terrain_Clip_Mask, this->Terrain_Fog_Clip_Mask};
++    TSpan_List_Manager* mine[2] = {tm, fm};
++    for (int i = 0; i < 2; i++) {   // (each as it stood when the walk began, on the band's lines)
++        TSpan_List_Manager* x = mine[i];
++        if (x != real[i]) x->VSList.ReclaimAllNodes();
++        x->Min_Span_Px = aoe_tr.start[i][0]; x->Min_Line = aoe_tr.start[i][1];
++        x->Max_Span_Px = aoe_tr.start[i][2]; x->Max_Line = aoe_tr.start[i][3];
++        if (x->Min_Line < line_lo) x->Min_Line = line_lo;
++        if (x->Max_Line > line_hi) x->Max_Line = line_hi;
++    }
++    long first = line_lo < 0 ? 0 : line_lo;
++    static const unsigned plain[4] = {0x00ff00ff, 0, 0xff00ff00, 0};
++    int shapes = 0;
++    for (int i = 0;; i++) {
++        while (i >= aoe_tr_pub.n) {   // (the tiles' worker still writing: wait for more, or the end)
++            if (aoe_tr_pub.done && i >= aoe_tr_pub.n) goto replayed;
++            __asm__ volatile(".word 0x0000100f" ::: "memory");   // (mc_end_pass)
++        }
++        AoeTrCmd* c = &aoe_tr.cmd[i];
++        switch (c->kind) {
++            case AOE_TR_REGION: {
++                TSpan_List_Manager* x = mine[c->mask];
++                x->SetSpanRegions(c->a, c->b, c->c, c->d);
++                if (x->Min_Line < line_lo) x->Min_Line = line_lo;
++                if (x->Max_Line > line_hi) x->Max_Line = line_hi;
++                break;
++            }
++            case AOE_TR_ADD: mine[c->mask]->AddMiniList((VSpanMiniList*) c->p, c->a, c->b); break;
++            case AOE_TR_SUB: mine[c->mask]->SubtractMiniList((VSpanMiniList*) c->p, c->a, c->b); break;
++            case AOE_TR_SHAPE: {
++                Shape_Info* info = (Shape_Info*) c->q;
++                long last = c->c < line_hi ? c->c : line_hi;
++                shapes = 1;
++                if (c->b > last || c->b + info->Height - 1 < first) break;   // (none of its rows here: what it sets, the next sets again)
++                TSpan_List_Manager* cur = c->cur == real[0] ? mine[0] : c->cur == real[1] ? mine[1] : c->cur;
++                ASMSet_Shadowing(c->sh[0], c->sh[1], c->sh[2], c->sh[3]);
++                ASMSet_Surface_Info(c->area->CurDisplayOffsets, cur->Line_Head_Ptrs, cur->Line_Tail_Ptrs, 0, first, c->maxs, last);
++                if (first <= last)
++                    ASMDraw_Sprite((unsigned char*) c->p, c->a, c->b, info->Width, info->Height, info->Shape_Data_Offsets,
++                                   info->Shape_Outline_Offset, c->fog);
++                ASMSet_Shadowing(plain[0], plain[1], plain[2], plain[3]);
++                break;
++            }
++        }
++    }
++replayed:
++    if (shapes) ASMSet_Shadowing(plain[0], plain[1], plain[2], plain[3]);   // (as the last shape left it)
++    // the levels up to 5, as the walk drew them
++    int level = 0;
++    do {
++        DClipInfo_Node* node = this->futur_objs->Draw_Level_Head[level];
++        while (node != 0) {
++            if (node->Node_Type == 0) {
++                Shape_Info* shape = node->Shape;
++                ASMSet_Surface_Info(this->save_area1->CurDisplayOffsets, tm->Line_Head_Ptrs, tm->Line_Tail_Ptrs, tm->Min_Span_Px, tm->Min_Line,
++                                    tm->Max_Span_Px, tm->Max_Line);
++                ASMSet_Color_Xform(node->Xform_Mask);
++                ASMSet_Xlate_Table(node->Color_Table);
++                ASMDraw_Sprite(node->Shape_Base, node->Draw_X, node->Draw_Y, shape->Width, shape->Height, shape->Shape_Data_Offsets,
++                               shape->Shape_Outline_Offset, node->Draw_Flag & 0xfe);
++                ASMSet_Surface_Info(this->save_area1->CurDisplayOffsets, fm->Line_Head_Ptrs, fm->Line_Tail_Ptrs, fm->Min_Span_Px, fm->Min_Line,
++                                    fm->Max_Span_Px, fm->Max_Line);
++                ASMDraw_Sprite(node->Shape_Base, node->Draw_X, node->Draw_Y, shape->Width, shape->Height, shape->Shape_Data_Offsets,
++                               shape->Shape_Outline_Offset, node->Draw_Flag | 1);
++            }
++            node = node->NextOnLevel;
++        }
++        level++;
++    } while (level <= 5);
++    for (int i = 0; i < 2; i++)   // (the real masks' limits, as the walk left them)
++        if (mine[i] == real[i]) { (void) 0; }
++}
++
++void RGE_View::aoe_band_frame(long line_lo, long line_hi, TSpan_List_Manager* m, TSpan_List_Manager* tm, TSpan_List_Manager* fm) {
++    if (aoe_tr.on) this->aoe_terrain_band(line_lo, line_hi, tm, fm);
++    TSpan_List_Manager* master = this->Master_Clip_Mask;
++    if (m != master) m->VSList.ReclaimAllNodes();
++    long lo = m->Min_Line, hi = m->Max_Line;
++    if (lo < line_lo) lo = line_lo;
++    if (hi > line_hi) hi = line_hi;
++    if (aoe_bf.mode0) {
++        for (long line = lo < 0 ? 0 : lo; line <= hi && line < this->save_area1->Height; line++) m->AddSpan(0, this->save_area1->Width - 1, line);
++    } else {
++        if (aoe_bf.merge) {
++            TSpan_List_Manager* l1 = this->Terrain_Clip_Mask;
++            TSpan_List_Manager* l2 = this->Terrain_Fog_Clip_Mask;
++            for (long i = lo < 0 ? 0 : lo; i <= hi && i < m->Num_Lines; i++) {
++                VSpan_Node* node1 = l1->Line_Head_Ptrs[i];
++                VSpan_Node* node2 = l2->Line_Head_Ptrs[i];
++                while (node1 || node2) {
++                    if (node1) {
++                        m->AddSpan(node1->StartPx & 0xFFFFFFFC, node1->EndPx | 3, i);
++                        node1 = node1->Next;
++                    }
++                    if (node2) {
++                        m->AddSpan(node2->StartPx & 0xFFFFFFFC, node2->EndPx | 3, i);
++                        node2 = node2->Next;
++                    }
++                }
++            }
++        }
++        if (this->Limited_Render_Rect != 0) {
++            if (this->Render_Rect1.left >= 0)
++                for (long line = this->Render_Rect1.top; line <= this->Render_Rect1.bottom; line++)
++                    if (line >= lo && line <= hi) m->AddSpan(this->Render_Rect1.left, this->Render_Rect1.right, line);
++            if (this->Use_Rect2 != 0 && this->Render_Rect2.left >= 0)
++                for (long line = this->Render_Rect2.top; line <= this->Render_Rect2.bottom; line++)
++                    if (line >= lo && line <= hi) m->AddSpan(this->Render_Rect2.left, this->Render_Rect2.right, line);
++        }
++        for (int i = 0; i < aoe_bf.adds; i++) {
++            DClipInfo_Node* node = aoe_bf.add[i];
++            if (node->Node_Type == 0) {
++                Shape_Info* si = node->Shape;
++                if (si == 0 || node->Draw_Y > hi || node->Draw_Y + si->Height <= lo) continue;   // (no line of the band)
++                m->AddShape_Align(node->Shape_Base, si, node->Draw_X, node->Draw_Y, (node->Draw_Flag & 2) == 2);
++            } else {
++                long a, b;
++                if (aoe_gdi_rows(node, &a, &b) && (b < m->Min_Line || a > m->Max_Line)) continue;   // (none of its lines in the band)
++                this->Add_GDI_Clip_Mask(node, m);
++            }
++        }
++    }
++    if (aoe_bf.copy) {   // (PtrSpanCopy, of the band's lines)
++        TDrawArea* from_area = this->save_area1;
++        tagRECT* r = &from_area->ClipRect;
++        TDrawArea* dest = this->render_area;
++        long dx = aoe_bf.dx, dy = aoe_bf.dy;
++        if (!(r->left < 0 || r->left > r->right || r->right >= from_area->Width || r->top < 0 || r->top > r->bottom || r->bottom >= from_area->Height
++              || dx < 0 || dx >= dest->Width || dy < 0 || dy >= dest->Height)) {
++            long h = r->bottom - r->top + 1;
++            if (dy + h > dest->Height) h = dest->Height - dy;
++            unsigned char** from = (unsigned char**) from_area->CurDisplayOffsets;
++            unsigned char** to = (unsigned char**) dest->CurDisplayOffsets;
++            for (long i = 0; i < h; i++) {
++                long sy = r->top + i;
++                if (sy < lo || sy > hi) continue;
++                unsigned char* sp = from[sy] + r->left;
++                unsigned char* dp = to[dy + i] + dx;
++                for (VSpan_Node* n = master->Line_Head_Ptrs[sy]; n; n = n->Next) memcpy(dp + n->StartPx, sp + n->StartPx, n->EndPx - n->StartPx + 1);
++            }
++        }
++    }
++    this->aoe_draw_levels(line_lo, line_hi);
++}
++
++void RGE_View::aoe_draw_levels(long line_lo, long line_hi) {
++    long lo = this->Master_Clip_Mask->Min_Line, hi = this->Master_Clip_Mask->Max_Line;
++    if (lo < line_lo) lo = line_lo;
++    if (hi > line_hi) hi = line_hi;
+     ASMSet_Surface_Info(
+         this->RenderOffsets, this->Master_Clip_Mask->Line_Head_Ptrs, this->Master_Clip_Mask->Line_Tail_Ptrs,
+-        this->Master_Clip_Mask->Min_Span_Px, this->Master_Clip_Mask->Min_Line, this->Master_Clip_Mask->Max_Span_Px,
+-        this->Master_Clip_Mask->Max_Line
++        this->Master_Clip_Mask->Min_Span_Px, lo, this->Master_Clip_Mask->Max_Span_Px, hi
+     );
+-    this->render_area->CurSpanList = this->Master_Clip_Mask;
+-
++    if (lo > hi) return;
+     {
+         int level = 6;
+         do {
+@@ -2620,50 +3578,15 @@ no_mouse_process: {
+                         ASMSet_Shadowing(0x00ff00ff, 0, 0xff00ff00, 0);
+                     }
+                 } else {
+-                    this->Draw_GDI_Object(node, this->render_area);
++                    long a, b;
++                    if (!aoe_gdi_rows(node, &a, &b) || (b >= lo && a <= hi))   // (a node of no line of the band draws nothing in it)
++                        this->Draw_GDI_Object(node, this->render_area);
+                 }
+                 node = node->NextOnLevel;
+             }
+             level++;
+         } while (level <= 0x28);
+     }
+-
+-    if (view_debug_spans != 0 && this->render_terrain_mode != 0) {
+-        int color = frame_count % 0xdc + 0x10;
+-        int line = 0;
+-        if (this->render_area->Height > 0) {
+-            do {
+-                this->render_area->DrawLine(0, line, this->render_area->Width - 1, line, (unsigned char) color);
+-                line++;
+-            } while (line < this->render_area->Height);
+-        }
+-    }
+-
+-    if (view_debug_palette != 0) {
+-        int row = 0;
+-        int y = 0x20;
+-        do {
+-            unsigned char col = 0;
+-            int x = 0;
+-            do {
+-                this->render_area->FillRect(x, y, x + 0x1f, y + 0x0f, (unsigned char) (col + (unsigned char) row * 0x10));
+-                x += 0x20;
+-                col++;
+-            } while (x < 0x200);
+-            y += 0x10;
+-            row++;
+-        } while (y < 0x120);
+-    }
+-
+-    this->render_area->Unlock("view::view_function_terrain");
+-    this->render_area->CurSpanList = this->render_area->SpanList;
+-
+-    {
+-        DClipInfo_List* temp = this->futur_objs;
+-        this->futur_objs = this->prior_objs;
+-        this->prior_objs = temp;
+-    }
+-    return 0;
+ }
+ 
+ void RGE_View::Update_Render_Pointers() {
+@@ -2759,6 +3682,8 @@ void RGE_View::Add_GDI_Clip_Mask(DClipInfo_Node* SDI, TSpan_List_Manager* Clip_M
      }
  }
  
@@ -1787,7 +4613,79 @@ index 6439e31f..f77a024a 100644
  void RGE_View::draw_multi_object_outline() {
  }
  
-@@ -3731,6 +3757,11 @@ RGE_Static_Object* RGE_View::hit_object(
+@@ -2844,7 +3769,7 @@ int RGE_View::draw_tile(
+     RGE_Tile* tile, unsigned char terrain_type, short x, short y, short map_col, short map_row, unsigned char visible,
+     int norm_draw, int fog_draw
+ ) {
+-    unsigned char draw_attribute = tile->draw_attribute;
++    unsigned char draw_attribute = aoe_tget(tile, map_row, map_col, AOE_DAT);
+ 
+     if ((short) terrain_type >= this->map->num_terrain || this->map->terrain_types[terrain_type].loaded == 0) {
+         return 0;
+@@ -2902,11 +3827,11 @@ int RGE_View::draw_tile(
+         if (draw_border == 0) {
+             if (map_col > 0) {
+                 RGE_Tile* neighbor = this->map->map_row_offset[map_row] + map_col - 1;
+-                neighbor->draw_attribute |= 0x40;
++                aoe_tset(neighbor, map_row, map_col - 1, AOE_DAT, aoe_tget(neighbor, map_row, map_col - 1, AOE_DAT) | 0x40);
+             }
+             if (map_row < this->map->map_height - 1) {
+                 RGE_Tile* neighbor = this->map->map_row_offset[map_row + 1] + map_col;
+-                neighbor->draw_attribute |= 0x40;
++                aoe_tset(neighbor, map_row + 1, map_col, AOE_DAT, aoe_tget(neighbor, map_row + 1, map_col, AOE_DAT) | 0x40);
+             }
+         }
+     }
+@@ -2941,11 +3866,11 @@ int RGE_View::draw_tile(
+ 
+         if (map_col > 0) {
+             RGE_Tile* neighbor = this->map->map_row_offset[map_row] + map_col - 1;
+-            neighbor->draw_attribute |= 0x40;
++            aoe_tset(neighbor, map_row, map_col - 1, AOE_DAT, aoe_tget(neighbor, map_row, map_col - 1, AOE_DAT) | 0x40);
+         }
+         if (map_row < this->map->map_height - 1) {
+             RGE_Tile* neighbor = this->map->map_row_offset[map_row + 1] + map_col;
+-            neighbor->draw_attribute |= 0x40;
++            aoe_tset(neighbor, map_row + 1, map_col, AOE_DAT, aoe_tget(neighbor, map_row + 1, map_col, AOE_DAT) | 0x40);
+         }
+     }
+ 
+@@ -2958,6 +3883,34 @@ void RGE_View::draw_terrain_shape(
+     int draw_x = x - shape->shape_info[index].Hotspot_X;
+     int draw_y = y - shape->shape_info[index].Hotspot_Y;
+ 
++    if (aoe_tr.on) {   // (the port: kept for the bands, each draw as below would make it)
++        if ((draw_attribute & 0x10) == 0x10) {
++            static const unsigned sh10[4] = {0x00ff00ff, 0x28002800, 0xff00ff00, 0x00280028};
++            aoe_tr_shape(shape, this->cur_render_area, draw_x, draw_y, index, 1, sh10);
++            return;
++        }
++        unsigned sh[4] = {0x00ff00ff, 0, 0xff00ff00, 0};
++        if ((draw_attribute & 0x20) == 0x20) { sh[1] = 0x56005600; sh[3] = 0x00560056; }
++        if ((draw_attribute & 0x80) == 0x80) {
++            int c = draw_attribute & 0x0f;
++            unsigned value = (((c << 16) + c) << 12) + 0x04000400;
++            sh[1] = value; sh[3] = value;
++        }
++        int fog = this->map->fog_flag != 0 && visible == RGE_TILE_FOGGED;
++        if (draw_fog != 0) {
++            this->cur_render_area->CurSpanList = this->Terrain_Fog_Clip_Mask;
++            aoe_tr_shape(shape, this->cur_render_area, x, y, index, 1, sh);
++            fog = 0;
++        }
++        if ((draw_attribute & 0xa0) != 0) fog = 1;
++        if (draw_normal != 0) {
++            this->cur_render_area->CurSpanList = this->Terrain_Clip_Mask;
++            aoe_tr_shape(shape, this->cur_render_area, x, y, index, fog, sh);
++        }
++        this->cur_render_area->CurSpanList = this->cur_render_area->SpanList;
++        return;
++    }
++
+     if ((draw_attribute & 0x10) == 0x10) {
+         fog_next_shape = 1;
+         ASMSet_Shadowing(0x00ff00ff, 0x28002800, 0xff00ff00, 0x00280028);
+@@ -3731,6 +4684,11 @@ RGE_Static_Object* RGE_View::hit_object(
      return picked;
  }
  
@@ -1799,7 +4697,7 @@ index 6439e31f..f77a024a 100644
  int RGE_View::start_scroll_view(unsigned char scroll_action_in, long x, long y, int ctrl_key, int shift_key) {
      RGE_Pick_Info pick_info;
      int result;
-@@ -3752,6 +3783,10 @@ int RGE_View::start_scroll_view(unsigned char scroll_action_in, long x, long y,
+@@ -3752,6 +4710,10 @@ int RGE_View::start_scroll_view(unsigned char scroll_action_in, long x, long y,
          this->set_redraw((TPanel::RedrawMode) 1);
      }
  
@@ -1810,7 +4708,7 @@ index 6439e31f..f77a024a 100644
      result = 0;
      this->scroll_action = scroll_action_in;
      this->mouse_last_x = x;
-@@ -3801,6 +3836,17 @@ int RGE_View::handle_scroll_view(long x, long y) {
+@@ -3801,6 +4763,17 @@ int RGE_View::handle_scroll_view(long x, long y) {
      save_view_y = this->player->view_y;
  
      switch (this->scroll_action) {
@@ -1828,7 +4726,7 @@ index 6439e31f..f77a024a 100644
          case 2:
              this->mouse_last_x = x;
              this->mouse_last_y = y;
-@@ -3964,7 +4010,12 @@ void RGE_View::end_scroll_view() {
+@@ -3964,7 +4937,12 @@ void RGE_View::end_scroll_view() {
      long min_x, max_x, min_y, max_y;
  
      switch (this->scroll_action) {
@@ -1841,7 +4739,7 @@ index 6439e31f..f77a024a 100644
              if (this->mouse_down_x > this->mouse_last_x) {
                  min_x = this->mouse_last_x;
                  max_x = this->mouse_down_x;
-@@ -4232,8 +4283,8 @@ void DClipInfo_List::SetNumZones(int New_Size) {
+@@ -4232,8 +5210,8 @@ void DClipInfo_List::SetNumZones(int New_Size) {
      int i;
  
      if (New_Size >= Max_Zones) {
@@ -1852,7 +4750,7 @@ index 6439e31f..f77a024a 100644
          if (Zone_Ptrs != 0) {
              i = 0;
              if (Used_Zones > 0) {
-@@ -4243,8 +4294,8 @@ void DClipInfo_List::SetNumZones(int New_Size) {
+@@ -4243,8 +5221,8 @@ void DClipInfo_List::SetNumZones(int New_Size) {
                      i = i + 1;
                  } while (i < Used_Zones);
              }
@@ -1863,7 +4761,7 @@ index 6439e31f..f77a024a 100644
          }
          Zone_Ptrs = Ptrs;
          Zone_Size_Ptrs = new_zone_sizes;
-@@ -4262,7 +4313,7 @@ void DClipInfo_List::InitNewZone(int Zone_Size) {
+@@ -4262,7 +5240,7 @@ void DClipInfo_List::InitNewZone(int Zone_Size) {
      Used_Zones = zone_index + 1;
      alloc_size = Element_Size * Zone_Size;
      Zone_Size_Ptrs[zone_index] = Zone_Size;
@@ -2057,10 +4955,101 @@ index 0b7cd1ad..725cb81c 100644
      if ((panel = rge_base_game->get_view_panel()) != 0)
          panel->set_redraw(TPanel::RedrawImmediate);
 diff --git a/src/zone_map.cpp b/src/zone_map.cpp
-index b57eb84f..3db09910 100644
+index b57eb84f..d86ed0bf 100644
 --- a/src/zone_map.cpp
 +++ b/src/zone_map.cpp
-@@ -160,55 +160,43 @@ uchar RGE_Zone_Map::do_zone_map() {
+@@ -7,6 +7,7 @@ void rge_write(int file, void* data, int size);
+ #include <math.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include <stdio.h>
+ 
+ extern "C" void __cdecl free(void* block);
+ extern "C" void* __cdecl calloc(unsigned int num, unsigned int size);
+@@ -90,6 +91,26 @@ RGE_Zone_Map::RGE_Zone_Map(RGE_Map* new_map, float* new_terrain_rules, long new_
+     this->do_zone_map();
+ }
+ 
++// The port: the same, the flood left to aoe_flood (aoe_zone_maps_all floods several at once, docs/games/aoe.md "The load")
++RGE_Zone_Map::RGE_Zone_Map(RGE_Map* new_map, float* new_terrain_rules, long new_terrain_rules_num, int flood) {
++    int i;
++    this->map = new_map;
++    this->zone_map = (uchar*) calloc(this->map->map_width * this->map->map_height, 1);
++    memset(this->zone_map, 0xFF, this->map->map_width * this->map->map_height);
++    this->zone_map_rows = (uchar**) calloc(this->map->map_height, 4);
++    for (i = 0; i < this->map->map_height; i++) {
++        this->zone_map_rows[i] = this->zone_map + this->map->map_width * i;
++    }
++    for (i = 0; i < 0xFF; i++) {
++        this->zone_info[i] = 0xFF;
++        this->numberTilesInZoneValue[i] = 0;
++    }
++    this->terrain_passability_rules_num = new_terrain_rules_num;
++    this->terrain_passability_rules = (float*) calloc(this->terrain_passability_rules_num, 4);
++    memcpy(this->terrain_passability_rules, new_terrain_rules, this->terrain_passability_rules_num * 4);
++    if (flood) this->do_zone_map();
++}
++
+ RGE_Zone_Map::~RGE_Zone_Map() {
+     free(this->zone_map);
+     free(this->zone_map_rows);
+@@ -106,20 +127,33 @@ void RGE_Zone_Map::save(int outfile) {
+     }
+ }
+ 
+-uchar RGE_Zone_Map::do_zone_map() {
+-    long map_width;
+-    long map_height;
++uchar RGE_Zone_Map::do_zone_map() { return this->aoe_flood(0); }
++
++// do_zone_map's work with a list of tiles of its own (0: the first core's), which a worker's flood is given, and the terrains that
++// are of each group found once, not at each zone (256 rules a zone)
++uchar RGE_Zone_Map::aoe_flood(int* list) {
++    static int* own;
++    static long own_tiles;
++    long map_width = this->map->map_width;
++    long map_height = this->map->map_height;
++    if (!list) {
++        long tiles = map_width * map_height;
++        if (tiles > own_tiles) { free(own); own = (int*) malloc(tiles * sizeof(int)); own_tiles = tiles; }
++        list = own;
++    }
++    uchar same[2][256];
++    for (int i = 0; i < 256; i++) {
++        int pass = i < this->terrain_passability_rules_num && this->terrain_passability_rules[i] > g_zone_passability_zero_threshold;
++        same[1][i] = i < this->terrain_passability_rules_num && pass;
++        same[0][i] = i < this->terrain_passability_rules_num && !pass;
++    }
+     long y;
+     uchar group;
+     long row_offset;
+-    int group_counter;
++    int group_counter = 0;
+     int row;
+     int col;
+ 
+-    map_width = this->map->map_width;
+-    map_height = this->map->map_height;
+-    group_counter = 0;
+-
+     memset(this->zone_info, 0xFF, 255);
+ 
+     for (row = 0; row < map_width; row++) {
+@@ -142,11 +176,11 @@ uchar RGE_Zone_Map::do_zone_map() {
+                         int terrainByte = ((unsigned char*) this->map->map_row_offset[y])[row_offset + 5] & 0x1F;
+                         float passability = this->terrain_passability_rules[terrainByte];
+                         group = 1;
+-                        if (!(passability > 0.0))
++                        if (!(passability > 0.0f))
+                             group = 0;
+ 
+                         this->zone_map_rows[y][x] = (uchar) group_counter;
+-                        do_zone_map_area(x, y, group, (uchar) group_counter);
++                        this->aoe_area(x, y, (uchar) group_counter, same[group], list);
+                         group_counter++;
+                     }
+                     x++;
+@@ -160,55 +194,168 @@ uchar RGE_Zone_Map::do_zone_map() {
      return 1;
  }
  
@@ -2132,17 +5121,141 @@ index b57eb84f..3db09910 100644
 -                    this->zone_map_rows[y + 1][x] = zone;
 -                    zone_push(&zone_end, &zone_queue, x, y + 1);
 -                }
--            }
 +        if (y < max_y && this->zone_map_rows[y + 1][x] == 0xff && same[this->map->map_row_offset[y + 1][x].terrain_type]) {
 +            this->zone_map_rows[y + 1][x] = zone;
 +            list[used++] = (int) ((y + 1) << 16 | x);
-         }
--    } while (zone_pop(&zone_end, &zone_queue, x, y));
++        }
 +        if (!used) break;
 +        used--;
 +        x = list[used] & 0xffff;
 +        y = (unsigned) list[used] >> 16;
 +    }
++}
++
++// (the flood before, a neighbour at a time: AOE_ZONE_CHECK's second flood, to which the zones are compared)
++int aoe_zone_old;
++static void aoe_area_neighbours(RGE_Zone_Map* z, long x, long y, uchar zone, const uchar* same, int* list) {
++    long max_x = z->map->map_width - 1;
++    long max_y = z->map->map_height - 1;
++    long used = 0;
++    uchar** zones = z->zone_map_rows;
++    RGE_Tile** tiles = z->map->map_row_offset;
++    for (;;) {
++        uchar* zr = zones[y];
++        RGE_Tile* tr = tiles[y];
++        if (x > 0 && zr[x - 1] == 0xff && same[tr[x - 1].terrain_type]) {
++            zr[x - 1] = zone;
++            list[used++] = (int) (y << 16 | (x - 1));
++        }
++        if (y > 0 && zones[y - 1][x] == 0xff && same[tiles[y - 1][x].terrain_type]) {
++            zones[y - 1][x] = zone;
++            list[used++] = (int) ((y - 1) << 16 | x);
++        }
++        if (x < max_x && zr[x + 1] == 0xff && same[tr[x + 1].terrain_type]) {
++            zr[x + 1] = zone;
++            list[used++] = (int) (y << 16 | (x + 1));
++        }
++        if (y < max_y && zones[y + 1][x] == 0xff && same[tiles[y + 1][x].terrain_type]) {
++            zones[y + 1][x] = zone;
++            list[used++] = (int) ((y + 1) << 16 | x);
++        }
++        if (!used) break;
++        used--;
++        x = list[used] & 0xffff;
++        y = (unsigned) list[used] >> 16;
++    }
++}
++
++void RGE_Zone_Map::aoe_area(long x, long y, uchar zone, const uchar* same, int* list) {
++    if (aoe_zone_old) { aoe_area_neighbours(this, x, y, zone, same, list); return; }
++    // A scanline fill: a row's whole run of tiles of the group not yet in a zone is put in the zone and listed as one (its row and
++    // ends), and a run taken from the list has the rows above and below it searched over its length for runs of their own. The
++    // tiles a zone gets are those reachable from the first through tiles of its group not yet in a zone, whatever the order (the
++    // threshold is 0.0: a tile's own terrain is of its group), so the zones are those of the flood a neighbour at a time it
++    // replaces; a run is listed once, so the list holds fewer than the map's tiles (docs/games/aoe.md, "The load").
++    long max_x = this->map->map_width - 1;
++    long max_y = this->map->map_height - 1;
++    long used = 0;
++    uchar** zones = this->zone_map_rows;
++    RGE_Tile** tiles = this->map->map_row_offset;
++    if (max_x > 255 || max_y > 255) { aoe_area_neighbours(this, x, y, zone, same, list); return; }   // (rows and ends in a word)
++    {
++        uchar* zr = zones[y];
++        RGE_Tile* tr = tiles[y];
++        long l = x, r = x;
++        while (l > 0 && zr[l - 1] == 0xff && same[tr[l - 1].terrain_type]) zr[--l] = zone;
++        while (r < max_x && zr[r + 1] == 0xff && same[tr[r + 1].terrain_type]) zr[++r] = zone;
++        list[used++] = (int) (y << 16 | l << 8 | r);
++    }
++    while (used) {
++        used--;
++        long ry = (unsigned) list[used] >> 16, l = (list[used] >> 8) & 0xff, r = list[used] & 0xff;
++        for (int side = 0; side < 2; side++) {
++            long ny = side ? ry + 1 : ry - 1;
++            if (ny < 0 || ny > max_y) continue;
++            uchar* nz = zones[ny];
++            RGE_Tile* nt = tiles[ny];
++            for (long c = l; c <= r; c++) {
++                if (nz[c] != 0xff || !same[nt[c].terrain_type]) continue;
++                long a = c, b = c;
++                nz[c] = zone;
++                while (a > 0 && nz[a - 1] == 0xff && same[nt[a - 1].terrain_type]) nz[--a] = zone;
++                while (b < max_x && nz[b + 1] == 0xff && same[nt[b + 1].terrain_type]) nz[++b] = zone;
++                list[used++] = (int) (ny << 16 | a << 8 | b);
++                c = b;
+             }
+         }
+-    } while (zone_pop(&zone_end, &zone_queue, x, y));
++    }
++}
++
++// The port: the zone maps a world's terrains want, made at its first update (scr_game.cpp; docs/games/aoe.md, "The load"). Each new
++// one goes on the list where get_zone_map would put it, made but not flooded, and then all are flooded at once, each on a worker of
++// its own where there are workers (port/aoe_view.cpp): a flood writes only its own map. AOE_ZONE_CHECK=1 floods each again here.
++extern void aoe_view_jobs(void (*fn)(unsigned, unsigned), const unsigned* a0, const unsigned* a1, int n);
++static void aoe_zone_job(unsigned zone_map, unsigned list) { ((RGE_Zone_Map*) zone_map)->aoe_flood((int*) list); }
++void aoe_zone_maps_all(RGE_Zone_Map_List* zl, float** terrains, int terrain_num, long terrain_size) {
++    enum { MOST = 64 };
++    unsigned maps[MOST], lists[MOST];
++    int n = 0;
++    long tiles = zl->map->map_width * zl->map->map_height;
++    for (int i = 0; i < terrain_num; i++) {
++        float* rules = terrains[i];
++        if (!rules) continue;
++        int j;
++        for (j = 0; j < zl->zone_map_num; j++)
++            if (zl->zone_maps[j]->check_info(rules, terrain_size)) break;
++        if (j < zl->zone_map_num) continue;
++        int* list = n < MOST ? (int*) malloc(tiles * sizeof(int)) : 0;
++        RGE_Zone_Map** grown = (RGE_Zone_Map**) calloc(zl->zone_map_num + 1, 4);
++        if (zl->zone_maps != 0) {
++            memcpy(grown, zl->zone_maps, zl->zone_map_num * 4);
++            free(zl->zone_maps);
++        }
++        RGE_Zone_Map* made = new RGE_Zone_Map(zl->map, rules, terrain_size, list == 0);
++        grown[zl->zone_map_num] = made;
++        zl->zone_maps = grown;
++        zl->zone_map_num++;
++        if (list) { memset(list, 0, tiles * sizeof(int)); maps[n] = (unsigned) made; lists[n] = (unsigned) list; n++; }
++    }
++    aoe_view_jobs(aoe_zone_job, maps, lists, n);
++    if (getenv("AOE_ZONE_CHECK")) {
++        int wrong = 0;
++        for (int i = 0; i < n; i++) {
++            RGE_Zone_Map* z = (RGE_Zone_Map*) maps[i];
++            uchar* copy = (uchar*) malloc(tiles);
++            uchar info[255];
++            memcpy(copy, z->zone_map, tiles);
++            memcpy(info, z->zone_info, 255);
++            aoe_zone_old = 1;
++            z->aoe_flood(0);
++            aoe_zone_old = 0;
++            wrong += memcmp(copy, z->zone_map, tiles) != 0 || memcmp(info, z->zone_info, 255) != 0;
++            free(copy);
++        }
++        fprintf(stderr, "aoe: %d zone maps made at once, %d not as made one by one\n", n, wrong);
++    }
++    for (int i = 0; i < n; i++) free((void*) lists[i]);
  }
  
  RGE_Zone_Map* RGE_Zone_Map::check_info(float* new_terrain_rules, long new_terrain_rules_num) {
