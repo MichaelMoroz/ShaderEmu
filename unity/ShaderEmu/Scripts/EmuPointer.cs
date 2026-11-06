@@ -758,9 +758,11 @@ public class EmuPointer : UdonSharpBehaviour
             bool right = target[1] == Display, left = target[0] == Display;
             turnedOf[0] = right ? turnedOf[0] + stick * rate : 0f;
             turnedOf[1] = right ? turnedOf[1] + stickX * rate : 0f;
-            turnedOf[2] = left ? turnedOf[2] + moveY * rate : 0f;
-            turnedOf[3] = left ? turnedOf[3] + moveX * rate : 0f;
-            Still(player, (right && (stick != 0f || stickX != 0f)) || (left && (moveX != 0f || moveY != 0f)));
+            // (the left stick always walks: both beams are on the display wherever the player stands before it, and a
+            // left stick that scrolled there held them in place; its wheel, REL_DIAL and REL_MISC, is never turned)
+            turnedOf[2] = 0f;
+            turnedOf[3] = 0f;
+            Still(player, right && (stick != 0f || stickX != 0f));
         }
         for (int w = 0; w < 4; w++)
         {
