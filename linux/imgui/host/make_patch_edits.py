@@ -306,6 +306,33 @@ edit('imgui_draw.cpp', '''    const bool word_wrap_enabled = (wrap_width > 0.0f)
             if (!word_wrap_eol)
                 word_wrap_eol = CalcWordWrapPositionA(scale, s, text_end, wrap_width - line_width);''')
 
+# ---- imgui.cpp: a style colour's last words kept with what they were made of, bit for bit (some 35 a frame with the
+# demo window, four floats' conversion each) ----
+edit('imgui.cpp', '''ImU32 ImGui::GetColorU32(ImGuiCol idx, float alpha_mul)
+{
+    ImGuiStyle& style = GImGui->Style;
+    ImVec4 c = style.Colors[idx];
+    c.w *= style.Alpha * alpha_mul;
+    return ColorConvertFloat4ToU32(c);
+}''', '''ImU32 ImGui::GetColorU32(ImGuiCol idx, float alpha_mul)
+{
+    ImGuiStyle& style = GImGui->Style;
+    ImVec4 c = style.Colors[idx];
+    c.w *= style.Alpha * alpha_mul;
+    // ShaderEmu: the colour as it was made last, when its four floats are the same bits
+    static struct { ImU32 bits[4], out; } made[ImGuiCol_COUNT];
+    ImU32 bits[4];
+    memcpy(bits, &c, sizeof bits);
+    if ((unsigned)idx < ImGuiCol_COUNT)
+    {
+        if (made[idx].bits[0] == bits[0] && made[idx].bits[1] == bits[1] && made[idx].bits[2] == bits[2] && made[idx].bits[3] == bits[3] && made[idx].out)
+            return made[idx].out;
+        memcpy(made[idx].bits, bits, sizeof bits);
+        return made[idx].out = ColorConvertFloat4ToU32(c);
+    }
+    return ColorConvertFloat4ToU32(c);
+}''')
+
 # ---- imgui.cpp: every list of a frame draws through the hooks when a backend set them ----
 edit('imgui.cpp', '''    if (g.IO.BackendFlags & ImGuiBackendFlags_RendererHasVtxOffset)
         g.DrawListSharedData.InitialFlags |= ImDrawListFlags_AllowVtxOffset;

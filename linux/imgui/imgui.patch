@@ -1,8 +1,26 @@
 diff --git a/imgui.cpp b/imgui.cpp
-index 4624c45..b6ee69a 100644
+index 4624c45..ad07a24 100644
 --- a/imgui.cpp
 +++ b/imgui.cpp
-@@ -3845,6 +3845,8 @@ ImGuiContext::ImGuiContext(ImFontAtlas* shared_font_atlas)
+@@ -3237,6 +3237,17 @@ ImU32 ImGui::GetColorU32(ImGuiCol idx, float alpha_mul)
+     ImGuiStyle& style = GImGui->Style;
+     ImVec4 c = style.Colors[idx];
+     c.w *= style.Alpha * alpha_mul;
++    // ShaderEmu: the colour as it was made last, when its four floats are the same bits
++    static struct { ImU32 bits[4], out; } made[ImGuiCol_COUNT];
++    ImU32 bits[4];
++    memcpy(bits, &c, sizeof bits);
++    if ((unsigned)idx < ImGuiCol_COUNT)
++    {
++        if (made[idx].bits[0] == bits[0] && made[idx].bits[1] == bits[1] && made[idx].bits[2] == bits[2] && made[idx].bits[3] == bits[3] && made[idx].out)
++            return made[idx].out;
++        memcpy(made[idx].bits, bits, sizeof bits);
++        return made[idx].out = ColorConvertFloat4ToU32(c);
++    }
+     return ColorConvertFloat4ToU32(c);
+ }
+ 
+@@ -3845,6 +3856,8 @@ ImGuiContext::ImGuiContext(ImFontAtlas* shared_font_atlas)
  
      WindowsActiveCount = 0;
      CurrentWindow = NULL;
@@ -11,7 +29,7 @@ index 4624c45..b6ee69a 100644
      HoveredWindow = NULL;
      HoveredWindowUnderMovingWindow = NULL;
      HoveredWindowBeforeClear = NULL;
-@@ -5044,6 +5046,8 @@ static void SetupDrawListSharedData()
+@@ -5044,6 +5057,8 @@ static void SetupDrawListSharedData()
          g.DrawListSharedData.InitialFlags |= ImDrawListFlags_AntiAliasedFill;
      if (g.IO.BackendFlags & ImGuiBackendFlags_RendererHasVtxOffset)
          g.DrawListSharedData.InitialFlags |= ImDrawListFlags_AllowVtxOffset;
@@ -20,7 +38,7 @@ index 4624c45..b6ee69a 100644
  }
  
  void ImGui::NewFrame()
-@@ -5292,7 +5296,10 @@ void ImGui::NewFrame()
+@@ -5292,7 +5307,10 @@ void ImGui::NewFrame()
      // This fallback is particularly important as it prevents ImGui:: calls from crashing.
      g.WithinFrameScopeWithImplicitWindow = true;
      SetNextWindowSize(ImVec2(400, 400), ImGuiCond_FirstUseEver);
@@ -32,7 +50,7 @@ index 4624c45..b6ee69a 100644
      IM_ASSERT(g.CurrentWindow->IsFallbackWindow == true);
  
      // Store stack sizes
-@@ -6410,6 +6417,25 @@ ImGuiID ImGui::GetWindowResizeBorderID(ImGuiWindow* window, ImGuiDir dir)
+@@ -6410,6 +6428,25 @@ ImGuiID ImGui::GetWindowResizeBorderID(ImGuiWindow* window, ImGuiDir dir)
      return id;
  }
  
@@ -58,7 +76,7 @@ index 4624c45..b6ee69a 100644
  // Handle resize for: Resize Grips, Borders, Gamepad
  // Return true when using auto-fit (double-click on resize grip)
  static int ImGui::UpdateWindowManualResize(ImGuiWindow* window, const ImVec2& size_auto_fit, int* border_hovered, int* border_held, int resize_grip_count, ImU32 resize_grip_col[4], const ImRect& visibility_rect)
-@@ -6446,13 +6472,16 @@ static int ImGui::UpdateWindowManualResize(ImGuiWindow* window, const ImVec2& si
+@@ -6446,13 +6483,16 @@ static int ImGui::UpdateWindowManualResize(ImGuiWindow* window, const ImVec2& si
          const ImVec2 corner = ImLerp(window->Pos, window->Pos + window->Size, def.CornerPosN);
  
          // Using the FlattenChilds button flag we make the resize button accessible even if we are hovering over a child window
@@ -76,7 +94,7 @@ index 4624c45..b6ee69a 100644
          //GetForegroundDrawList(window)->AddRect(resize_rect.Min, resize_rect.Max, IM_COL32(255, 255, 0, 255));
          if (hovered || held)
              SetMouseCursor((resize_grip_n & 1) ? ImGuiMouseCursor_ResizeNESW : ImGuiMouseCursor_ResizeNWSE);
-@@ -6492,11 +6521,14 @@ static int ImGui::UpdateWindowManualResize(ImGuiWindow* window, const ImVec2& si
+@@ -6492,11 +6532,14 @@ static int ImGui::UpdateWindowManualResize(ImGuiWindow* window, const ImVec2& si
          const ImGuiResizeBorderDef& def = resize_border_def[border_n];
          const ImGuiAxis axis = (border_n == ImGuiDir_Left || border_n == ImGuiDir_Right) ? ImGuiAxis_X : ImGuiAxis_Y;
  
@@ -92,7 +110,7 @@ index 4624c45..b6ee69a 100644
          //GetForegroundDrawList(window)->AddRect(border_rect.Min, border_rect.Max, IM_COL32(255, 255, 0, 255));
          if (hovered && g.HoveredIdTimer <= WINDOWS_RESIZE_FROM_EDGES_FEEDBACK_TIMER)
              hovered = false;
-@@ -7524,8 +7556,8 @@ bool ImGui::Begin(const char* name, bool* p_open, ImGuiWindowFlags flags)
+@@ -7524,8 +7567,8 @@ bool ImGui::Begin(const char* name, bool* p_open, ImGuiWindowFlags flags)
  
          // Record the loss of precision of CursorStartPos which can happen due to really large scrolling amount.
          // This is used by clipper to compensate and fix the most common use case of large scroll area. Easy and cheap, next best thing compared to switching everything to double or ImU64.
@@ -103,7 +121,7 @@ index 4624c45..b6ee69a 100644
          window->DC.CursorStartPos  = ImVec2((float)start_pos_highp_x, (float)start_pos_highp_y);
          window->DC.CursorStartPosLossyness = ImVec2((float)(start_pos_highp_x - window->DC.CursorStartPos.x), (float)(start_pos_highp_y - window->DC.CursorStartPos.y));
          window->DC.CursorPos = window->DC.CursorStartPos;
-@@ -9035,6 +9067,8 @@ static void ImGui::UpdateKeyRoutingTable(ImGuiKeyRoutingTable* rt)
+@@ -9035,6 +9078,8 @@ static void ImGui::UpdateKeyRoutingTable(ImGuiKeyRoutingTable* rt)
  {
      ImGuiContext& g = *GImGui;
      rt->EntriesNext.resize(0);
@@ -112,7 +130,7 @@ index 4624c45..b6ee69a 100644
      for (ImGuiKey key = ImGuiKey_NamedKey_BEGIN; key < ImGuiKey_NamedKey_END; key = (ImGuiKey)(key + 1))
      {
          const int new_routing_start_idx = rt->EntriesNext.Size;
-@@ -9058,6 +9092,7 @@ static void ImGui::UpdateKeyRoutingTable(ImGuiKeyRoutingTable* rt)
+@@ -9058,6 +9103,7 @@ static void ImGui::UpdateKeyRoutingTable(ImGuiKeyRoutingTable* rt)
                  if (owner_data->OwnerCurr == ImGuiKeyOwner_NoOwner)
                  {
                      owner_data->OwnerCurr = routing_entry->RoutingCurr;
@@ -120,7 +138,7 @@ index 4624c45..b6ee69a 100644
                      //IMGUI_DEBUG_LOG("SetKeyOwner(%s, owner_id=0x%08X) via Routing\n", GetKeyName(key), routing_entry->RoutingCurr);
                  }
              }
-@@ -9568,6 +9603,8 @@ static void UpdateAliasKey(ImGuiKey key, bool v, float analog_value)
+@@ -9568,6 +9614,8 @@ static void UpdateAliasKey(ImGuiKey key, bool v, float analog_value)
  {
      IM_ASSERT(ImGui::IsAliasKey(key));
      ImGuiKeyData* key_data = ImGui::GetKeyData(key);
@@ -129,7 +147,7 @@ index 4624c45..b6ee69a 100644
      key_data->Down = v;
      key_data->AnalogValue = analog_value;
  }
-@@ -9613,7 +9650,9 @@ static void ImGui::UpdateKeyboardInputs()
+@@ -9613,7 +9661,9 @@ static void ImGui::UpdateKeyboardInputs()
          g.LastKeyModsChangeFromNoneTime = g.Time;
  
      // Clear gamepad data if disabled
@@ -140,7 +158,7 @@ index 4624c45..b6ee69a 100644
          for (int key = ImGuiKey_Gamepad_BEGIN; key < ImGuiKey_Gamepad_END; key++)
          {
              io.KeysData[key - ImGuiKey_NamedKey_BEGIN].Down = false;
-@@ -9621,9 +9660,12 @@ static void ImGui::UpdateKeyboardInputs()
+@@ -9621,9 +9671,12 @@ static void ImGui::UpdateKeyboardInputs()
          }
  
      // Update keys
@@ -154,7 +172,7 @@ index 4624c45..b6ee69a 100644
          key_data->DownDurationPrev = key_data->DownDuration;
          key_data->DownDuration = key_data->Down ? (key_data->DownDuration < 0.0f ? 0.0f : key_data->DownDuration + io.DeltaTime) : -1.0f;
          if (key_data->DownDuration == 0.0f)
-@@ -9636,16 +9678,21 @@ static void ImGui::UpdateKeyboardInputs()
+@@ -9636,16 +9689,21 @@ static void ImGui::UpdateKeyboardInputs()
      }
  
      // Update keys/input owner (named keys only): one entry per key
@@ -177,7 +195,7 @@ index 4624c45..b6ee69a 100644
      // Update key routing (for e.g. shortcuts)
      UpdateKeyRoutingTable(&g.KeysRoutingTable);
  }
-@@ -9984,6 +10031,7 @@ void ImGui::UpdateInputEvents(bool trickle_fast_inputs)
+@@ -9984,6 +10042,7 @@ void ImGui::UpdateInputEvents(bool trickle_fast_inputs)
              key_data->Down = e->Key.Down;
              key_data->AnalogValue = e->Key.AnalogValue;
              key_changed = true;
@@ -185,7 +203,7 @@ index 4624c45..b6ee69a 100644
              key_changed_mask.SetBit(key_data_index);
              if (trickle_interleaved_nonchar_keys_and_text && !key_is_potentially_for_char_input)
                  key_changed_nonchar = true;
-@@ -10106,6 +10154,7 @@ void ImGui::SetKeyOwner(ImGuiKey key, ImGuiID owner_id, ImGuiInputFlags flags)
+@@ -10106,6 +10165,7 @@ void ImGui::SetKeyOwner(ImGuiKey key, ImGuiID owner_id, ImGuiInputFlags flags)
  
      ImGuiKeyOwnerData* owner_data = GetKeyOwnerData(&g, key);
      owner_data->OwnerCurr = owner_data->OwnerNext = owner_id;

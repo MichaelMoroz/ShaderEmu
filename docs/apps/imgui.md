@@ -54,14 +54,14 @@ committed code of the day before built with the held picture's count of vertices
 
 | | before | now | |
 |---|---|---|---|
-| the program's own window | 155,172 | 57,539 | 2.70 times fewer |
-| with ImGui's demo window | 218,521 | 88,164 | 2.48 times fewer |
+| the program's own window | 155,172 | 56,718 | 2.74 times fewer |
+| with ImGui's demo window | 218,521 | 87,260 | 2.50 times fewer |
 
 The busiest of the six copying workers: 41,600 and 52,800 a frame. What gave it, each measured on the demo window:
 drawn later (218,500 to 151,000), the plot's segments as one record and the plot on the workers (135,700 to
 114,000), the counts (to 101,000), the shares cut by work (the busiest worker 103,000 to 53,000), the fallback
 window bare, the keys' walks skipped, the resize grips quiet, a text's width in a tight loop, a run a texture,
-more inlining and the counts made again (to 88,200).
+more inlining and the counts made again (to 88,200), a style colour's last words kept (to 87,260).
 
 The table of 31 October 2026, before all that (`rvc_cpu`, from the frame after `imstat: frame 30` to the end of
 300 frames; the frames a second calibrated, so programs' clocks saw the card's pace):
@@ -173,7 +173,8 @@ window); the fallback window (`Debug##Default`) begun with no title bar, backgro
 frame with nothing in it (it is not drawn then); the 154 named keys' two walks skipped while no key is down, owned
 or locked and none was touched (`KeysIdle`, cleared wherever a key's state or owner is written); a window's resize
 grip or border that the pointer is not over and that is not held left out of `ItemAdd()` and `ButtonBehavior()`
-(`ResizeHandleQuiet`); a text's width a run of plain characters at a time at the font's own size.
+(`ResizeHandleQuiet`); a text's width a run of plain characters at a time at the font's own size; a style colour's words kept with the four floats
+they were made of, bit for bit (`GetColorU32`).
 
 ## Played counts
 
