@@ -798,6 +798,7 @@ public static partial class ShaderEmuBuilder
         ShaderEmuBuilder.GpuHoloInputs(hudMat);
         GiveRom(hudMat);
         hudMat.SetFloat("_HudFlip", 1f);
+        hudMat.renderQueue = -1;   // the shader's: after the world, before the room's transparent things (it was 3010, over them)
         hudMat.renderQueue = 3010;   // after the world (2503), the beams and the seal (2505), and the room's transparent things
         EditorUtility.SetDirty(hudMat);
         GameObject layer = new GameObject("Holodeck HUD", typeof(MeshFilter), typeof(MeshRenderer));

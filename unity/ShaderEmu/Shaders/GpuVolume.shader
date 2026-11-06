@@ -28,7 +28,7 @@ Shader "ShaderEmu/GpuVolume"
         Tags { "Queue"="Transparent-498" "RenderType"="Opaque" }   // after the mask, and after the sky
         Cull Off      // the guest's own culling is not known
         ZTest LEqual
-        Stencil { Ref 87 Comp Equal }
+        Stencil { Ref 87 ReadMask 223 Comp Equal }
 
         Pass
         {

@@ -777,6 +777,9 @@ public class EmuPointer : UdonSharpBehaviour
 
     private void Still(VRCPlayerApi player, bool on)
     {
+        // (a sitter's seat holds them, a station of Immobilize: an Immobilize(false) of ours there let the left stick move
+        // the avatar as well as the game; standing up, the keyboard's SetCapture(false) frees them)
+        if (away) { stilled = false; return; }
         if (on == stilled) return;
         stilled = on;
         player.Immobilize(on);

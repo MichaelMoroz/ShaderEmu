@@ -36,7 +36,7 @@ Shader "ShaderEmu/GpuHolodeck"
             Name "VOLUME0"
             Blend One Zero
             ZWrite On
-            Stencil { Ref 87 Comp Equal }      // through the room's own faces: as far as it goes
+            Stencil { Ref 119 ReadMask 223 WriteMask 32 Comp Equal Pass Replace }      // through the room's own faces: as far as it goes; bit 32: the world is in front here (the HUD)
             CGPROGRAM
             #pragma target 5.0
             #pragma vertex vert
@@ -53,7 +53,7 @@ Shader "ShaderEmu/GpuHolodeck"
             Name "VOLUME1"
             Blend SrcAlpha OneMinusSrcAlpha, Zero One
             ZWrite Off
-            Stencil { Ref 87 Comp Equal }      // through the room's own faces: as far as it goes
+            Stencil { Ref 87 ReadMask 223 Comp Equal }      // through the room's own faces: as far as it goes
             CGPROGRAM
             #pragma target 5.0
             #pragma vertex vert
@@ -70,7 +70,7 @@ Shader "ShaderEmu/GpuHolodeck"
             Name "VOLUME2"
             Blend SrcAlpha One, Zero One
             ZWrite Off
-            Stencil { Ref 87 Comp Equal }      // through the room's own faces: as far as it goes
+            Stencil { Ref 87 ReadMask 223 Comp Equal }      // through the room's own faces: as far as it goes
             CGPROGRAM
             #pragma target 5.0
             #pragma vertex vert
@@ -87,7 +87,7 @@ Shader "ShaderEmu/GpuHolodeck"
             Name "VOLUME3"
             Blend DstColor Zero, Zero One
             ZWrite Off
-            Stencil { Ref 87 Comp Equal }      // through the room's own faces: as far as it goes
+            Stencil { Ref 87 ReadMask 223 Comp Equal }      // through the room's own faces: as far as it goes
             CGPROGRAM
             #pragma target 5.0
             #pragma vertex vert
@@ -104,7 +104,7 @@ Shader "ShaderEmu/GpuHolodeck"
             Name "INSIDE0"
             Blend One Zero
             ZWrite On
-            Stencil { Ref 87 ReadMask 127 Comp NotEqual }   // not on the room's faces (87), nor on the room's own things (HoloGuard.shader: 87 + 128)
+            Stencil { Ref 119 ReadMask 95 WriteMask 32 Comp NotEqual Pass Replace }   // not on the room's faces (87), nor on the room's own things (HoloGuard.shader: 87 + 128); bit 32: the world in front (the HUD)
             CGPROGRAM
             #pragma target 5.0
             #pragma vertex vert
@@ -122,7 +122,7 @@ Shader "ShaderEmu/GpuHolodeck"
             Name "INSIDE1"
             Blend SrcAlpha OneMinusSrcAlpha, Zero One
             ZWrite Off
-            Stencil { Ref 87 ReadMask 127 Comp NotEqual }   // not on the room's faces (87), nor on the room's own things (HoloGuard.shader: 87 + 128)
+            Stencil { Ref 87 ReadMask 95 Comp NotEqual }   // not on the room's faces (87), nor on the room's own things (HoloGuard.shader: 87 + 128)
             CGPROGRAM
             #pragma target 5.0
             #pragma vertex vert
@@ -140,7 +140,7 @@ Shader "ShaderEmu/GpuHolodeck"
             Name "INSIDE2"
             Blend SrcAlpha One, Zero One
             ZWrite Off
-            Stencil { Ref 87 ReadMask 127 Comp NotEqual }   // not on the room's faces (87), nor on the room's own things (HoloGuard.shader: 87 + 128)
+            Stencil { Ref 87 ReadMask 95 Comp NotEqual }   // not on the room's faces (87), nor on the room's own things (HoloGuard.shader: 87 + 128)
             CGPROGRAM
             #pragma target 5.0
             #pragma vertex vert
@@ -158,7 +158,7 @@ Shader "ShaderEmu/GpuHolodeck"
             Name "INSIDE3"
             Blend DstColor Zero, Zero One
             ZWrite Off
-            Stencil { Ref 87 ReadMask 127 Comp NotEqual }   // not on the room's faces (87), nor on the room's own things (HoloGuard.shader: 87 + 128)
+            Stencil { Ref 87 ReadMask 95 Comp NotEqual }   // not on the room's faces (87), nor on the room's own things (HoloGuard.shader: 87 + 128)
             CGPROGRAM
             #pragma target 5.0
             #pragma vertex vert

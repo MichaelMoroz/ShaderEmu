@@ -382,8 +382,14 @@ A program's frame has draws with a place in space (the world) and draws flat ove
 messages, the console, a weapon drawn flat. The world round the seat can only place the first; until 3 November 2026 the
 rest was left out, so a seated game had no HUD at all. `GpuHolodeckHud.shader` (`GpuHolodeckHudPass.cginc`, and
 `volume_flat_command` and `volume_picture` in `src/gpu.h`) draws them on a quad of their own, "Holodeck HUD", in the GPU's
-pass order and blending, over everything of the room (no depth), each vertex at its place in the picture as a share of
-the quad. `EmuHolodeck.PlaceHud` keeps the quad before the sitter's eyes while a world is shown: 1.1 m ahead and 0.12 m
+pass order and blending, each vertex at its place in the picture as a share of the quad. It floats over the program's
+world but not over what is nearer of the room (6 November 2026; before, it had no depth and was drawn over everything, an
+avatar, a hand, the seat's panels, in a headset plainly wrong): `GpuHolodeck.shader`'s two solid passes set stencil bit 32
+where the world is in front (the other stencil tests leave it out, `ReadMask` 223 and 95), and each of the HUD's four
+blendings is a pair of passes, with no depth test on that bit, so the world's own near faces (a weapon at the eye) stay
+under it, and at its own distance off it, where an avatar, a hand or the room's things before it hide it. Its queue is
+after the world's material (2503) and the hands' aims (2504): Transparent-495, the material's own queue -1 (it was 3010), so the room's transparent things, its panels
+and labels, are drawn after it and over it where they are nearer. `EmuHolodeck.PlaceHud` keeps the quad before the sitter's eyes while a world is shown: 1.1 m ahead and 0.12 m
 below them (`hudDistance`, `hudDrop`), 1.0 m wide at the picture's shape (`hudWidth`); on a desktop it turns and tilts with
 the view, in a headset it follows the head's turn about the upright and its tilt up and down at `hudFollow` (2.5 a second), never
 its roll (5 November 2026: before, it kept level, so a sitter who looked down had the HUD above the view). A menu
