@@ -108,7 +108,18 @@ def put(profile, build):
         path = os.path.join(build, name)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         open(path, 'wb').write(b''.join(out))
-    print('%d .gcda files in %s' % (len(files), build))
+    # A .gcda the profile does not hold is an older count of a source changed since: GCC, told to use
+    # mismatched counts, met Red Alert's tab.cpp.gcda of a counting run before the window's-size layout
+    # and died (an internal compiler error) in every build from 3 November 2026 on. Only the profile's own.
+    kept = {os.path.normpath(os.path.join(build, n)) for n in files}
+    stale = 0
+    for folder, _, names in os.walk(build):
+        for n in names:
+            p = os.path.normpath(os.path.join(folder, n))
+            if n.endswith('.gcda') and p not in kept:
+                os.remove(p)
+                stale += 1
+    print('%d .gcda files in %s%s' % (len(files), build, ', %d stale removed' % stale if stale else ''))
 
 
 if __name__ == '__main__':
