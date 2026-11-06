@@ -421,6 +421,41 @@ public static partial class ShaderEmuBuilder
     // A plate drawn again onto the one it has, which keeps its place in the lightmap (no bake)
     static bool PlateInPlace;
 
+    // A panel a behaviour moves while the world runs: its plate is never static. A static plate is batched into the
+    // room where it was built and stays there: the links panel (EmuMachine.PlaceLinks, before a classroom tube) went
+    // to the tube with its fields and colliders while its picture stayed before the wall's display.
+    static bool Moves(Canvas canvas)
+    {
+        return canvas.name == "Links panel";
+    }
+
+    // A plate made static before: lit by the probes, as a panel that opens later is.
+    public static void Unstatic(MeshRenderer renderer)
+    {
+        if (renderer == null) return;
+        GameObjectUtility.SetStaticEditorFlags(renderer.gameObject, 0);
+        renderer.receiveGI = ReceiveGI.LightProbes;
+        renderer.lightmapIndex = -1;
+        EditorUtility.SetDirty(renderer);
+        EditorUtility.SetDirty(renderer.gameObject);
+    }
+
+    [MenuItem("ShaderEmu/Unbatch the plates of moving panels")]
+    static void UnstaticMoving()
+    {
+        int n = 0;
+        foreach (Canvas canvas in Object.FindObjectsOfType<Canvas>(true))
+        {
+            if (!Moves(canvas)) continue;
+            Transform plate = canvas.transform.Find(canvas.name + " plate");
+            if (plate == null || GameObjectUtility.GetStaticEditorFlags(plate.gameObject) == 0) continue;
+            Unstatic(plate.GetComponent<MeshRenderer>());
+            n++;
+        }
+        if (n > 0) UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(UnityEngine.SceneManagement.SceneManager.GetActiveScene());
+        Debug.Log("[Retro] plates no longer static: " + n);
+    }
+
     static void Plate(Canvas canvas, string name, bool shown = true, List<Graphic> print = null)
     {
         RectTransform rect = (RectTransform)canvas.transform;
@@ -458,6 +493,7 @@ public static partial class ShaderEmuBuilder
         if (print != null) foreach (Graphic graphic in print) graphic.enabled = false;
         if (inPlace)
         {
+            if (Moves(canvas)) Unstatic(old.GetComponent<MeshRenderer>());
             old.gameObject.SetActive(true);
             old.GetComponent<MeshRenderer>().sharedMaterial = material;
             return;
@@ -472,7 +508,7 @@ public static partial class ShaderEmuBuilder
         MeshRenderer renderer = plate.GetComponent<MeshRenderer>();
         renderer.sharedMaterial = material;
         renderer.shadowCastingMode = ShadowCastingMode.Off;
-        if (!shown) return;   // a panel that opens later has no part in the bake: the probes light its plate
+        if (!shown || Moves(canvas)) return;   // a panel that opens later has no part in the bake: the probes light its plate
         GameObjectUtility.SetStaticEditorFlags(plate, StaticEditorFlags.ContributeGI | StaticEditorFlags.BatchingStatic | StaticEditorFlags.ReflectionProbeStatic);
         renderer.receiveGI = ReceiveGI.Lightmaps;
         renderer.scaleInLightmap = 3f;

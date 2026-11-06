@@ -79,6 +79,11 @@ sends the press to `EmuStations.Act` with the place's number):
 
 A lamp over LINKS ON is lit while the owner's browser wants addresses pasted.
 
+The links panel moves (`EmuMachine.PlaceLinks`), so its restyled plate is never static (`Moves` in
+`ShaderEmuRetro.cs`): a static plate is batched where the world was built, and from the restyle until 6 November
+2026 the panel's picture stayed before the wall's display while its fields and colliders went to the tube, an
+invisible panel there. "ShaderEmu/Unbatch the plates of moving panels" clears a scene made before.
+
 POWER has its name over it in lit letters, and a bar under it that beckons while the place is
 free (`beacons`). The capture key is the keyboard's.
 

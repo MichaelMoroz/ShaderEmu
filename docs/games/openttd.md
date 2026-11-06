@@ -287,6 +287,23 @@ parts, and zoomed out the first core 601k to 694k a picture: not kept. `OPENTTD_
 `tools/test_all.py openttd-windows` (`OPENTTD_PLAY_MOVE=1`: moved at picture 20 of the part, closed at 40) checks every picture against
 one drawn whole. Paused captures against the tree on the software device are the same to the pixel with four windows.
 
+## The small map on the workers
+
+The small map (the minimap) froze the game in the world (6 November 2026): upstream draws its tiles' colours on the first core, a
+column of pixels at a time (`DrawSmallMapColumn`), and draws the whole map again every 930 ms (`refresh_interval`, and the
+industries' blink while one is picked); the tick waits while the first core paints ("Windows"), and a paint of the map was longer
+than the 930 ms, so the tick hardly ran. Now `SmallMapWindow::DrawSmallMapOnWorkers` (`smallmap_gui.cpp`) draws the rows in bands of 8,
+a band a piece of the workers' loop (`mcw_for_opt`), each band upstream's loop of columns with every column drawn only where its
+rows lie in the band (`DrawSmallMapRows`); the first core draws the first band before the workers start (so that a worker runs
+no code no core has run), and the vehicles, the links and the towns' names after them, as before. A core stores to its band's rows
+alone, and two rows of the map never share 16 bytes while the map is at least 15 pixels narrower than the screen: otherwise, on
+a screen deeper than 8 bits, or on a worker, the first core draws it alone, as `OPENTTD_SMALLMAP=core` does always.
+
+`OPENTTD_SMALLMAP=check` draws every picture of the map again on the first core and counts the pixels that differ:
+`test_all.py openttd-map` must say 0 (10 checks of a 478 x 234 map in its run, 0 undone under `--races`). The busy game with the map
+open (`OPENTTD_PLAY_PART=window OPENTTD_PLAY_SCENE=map`, `rvc_cpu`'s plain clock, `test_all.py --long openttd-map-time` and
+`openttd-map-time-core`): 61 pictures in 4.26 s against 21.74 (14.3 a second against 2.8).
+
 ## The tick in slices
 
 `OPENTTD_TICK=slices` runs the tick on the first core, on a stack of its own (`ottd_tick_swap`,

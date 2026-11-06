@@ -305,6 +305,10 @@
   use of a hand's stick, or a new `Immobilize`, takes nothing from walking but while the player asks for it (a button
   held, a key captured), and is tried in a headset before it is called done. Seated, the station holds the player: the
   pointer's `Still` never calls `Immobilize` while `away`, as an `Immobilize(false)` there let the left stick move the avatar.
+- What is meant to be seen from a seat is seen whole (6 November 2026, the developer's rule; `docs/world/holodeck.md`, "What the
+  sitter must see"): from the eye point every panel, key, screen and keyboard meant for the sitter has a free line of sight, no
+  other panel or thing over it. "ShaderEmu/Check lines of sight in the open scene" (`ShaderEmuSight.Check`) must say 0 covered
+  after a change that places any of them, and a new one is a target of it (it found the holodeck keyboard over the console's keys).
 - The world's camera (the scene descriptor's reference camera, `ShaderEmuModels.cs`) has a near clip of 0.01 m, always
   (6 November 2026, the developer's rule): the least VRChat takes, so a hand, a keyboard or a HUD near the eye is never cut.
   A builder or a change that makes or touches that camera keeps it.

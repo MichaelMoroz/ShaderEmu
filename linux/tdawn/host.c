@@ -509,7 +509,7 @@ hw_picture(void)
 	hw_used_count = 0;
 	for (r = 0; r < HW_SIDE; r++)
 		for (c = 0; c < HW_SIDE; c++) {
-			unsigned char index = r < cursor_h && c < cursor_w ? cursor[r * cursor_w + c] : 0;
+			unsigned char index = r < cursor_h && c < cursor_w ? cursor[r * CURSOR_MAX + c] : 0;
 
 			hw_image[r * HW_SIDE + c] = index ? 0xff000000u | (palette[index] & 0xffffff) : 0;
 			if (!index || hw_used_count == (int)(sizeof hw_used / sizeof hw_used[0]))
@@ -592,28 +592,41 @@ host_cursor(const unsigned char *pixels, int width, int height, int hot_x, int h
 		return;
 	scene_finish();
 	host_settle();
-	memcpy(cursor, pixels, width * height);
+	/*
+	 * The texture is always CURSOR_MAX a side, the picture in its corner: a list shown again
+	 * copies it into the VRAM's block made for that size (gpu_uploads.h), which a larger
+	 * picture would overrun, and draws its part by the vertices' texels (cursor_corners).
+	 */
+	memset(cursor, 0, CURSOR_MAX * CURSOR_MAX);
+	for (int r = 0; r < height; r++)
+		memcpy(cursor + r * CURSOR_MAX, pixels + r * width, width);
 	cursor_w = width;
 	cursor_h = height;
 	cursor_hot_x = hot_x;
 	cursor_hot_y = hot_y;
 	glBindTexture(GL_TEXTURE_2D, cursor_texture);
-	seglTexturePointer(cursor, width, height, GL_COLOR_INDEX8_EXT);
+	seglTexturePointer(cursor, CURSOR_MAX, CURSOR_MAX, GL_COLOR_INDEX8_EXT);
 	hw_stale = 1;
 	pointer_publish();
 }
 
-/* A rectangle of the screen's pixels showing the whole of a texture. */
+/* A rectangle of the screen's pixels showing the whole of a texture, or its corner of u x v (16.16). */
 static void
-quad(GLuint texture, int x, int y, int width, int height, int keyed)
+quad_part(GLuint texture, int x, int y, int width, int height, int keyed, GLfixed u, GLfixed v)
 {
-	static const GLfixed uv[8] = {0, 0, ONE, 0, ONE, ONE, 0, ONE};
+	const GLfixed uv[8] = {0, 0, u, 0, u, v, 0, v};
 	/* in units of the whole window: a matrix of 16.16 numbers cannot hold 2/640 exactly */
 	GLfixed x0 = (GLfixed)(((long long)x << 16) / unit_w), x1 = (GLfixed)(((long long)(x + width) << 16) / unit_w);
 	GLfixed y0 = (GLfixed)(((long long)y << 16) / unit_h), y1 = (GLfixed)(((long long)(y + height) << 16) / unit_h);
 	GLfixed xyz[12] = {x0, y0, 0, x1, y0, 0, x1, y1, 0, x0, y1, 0};
 
 	seglQuad(xyz, uv, texture, 255, 255, keyed);
+}
+
+static void
+quad(GLuint texture, int x, int y, int width, int height, int keyed)
+{
+	quad_part(texture, x, y, width, height, keyed, ONE, ONE);
 }
 
 /* TDAWN_RESIZE=WIDTHxHEIGHT gives the window that size after its 60th frame, as a drag would. */
@@ -672,6 +685,7 @@ static int scene_built, scene_shown;	/* a scene waits for its swap; the list sho
 static int scenes_shown;
 static int scene_rect[4], scene_key;	/* where the page lets the scene through, and by which index */
 static unsigned int *page_commands[2], *cursor_command, *cursor_vertices;
+static unsigned int *page_uploads[4], page_upload_count, page_shown;	/* the shown list's copies of its page */
 
 int
 host_scene_open(int cells)
@@ -1392,8 +1406,11 @@ sprite_now(int kind, int x, int y, int width, int height, int atlas_x, int atlas
 		texels[2] = (atlas_x + width) * (1024 / SHADE_W), texels[3] = (atlas_y + height) * (1024 / SHADE_H);
 		name = shade_texture;
 	} else {
-		/* the texture that shows these rows: the first for the icons' rows, then two a half apart */
-		int view = atlas_y + height <= VIEW_ROWS && kind != HOST_MASK ? 0 : atlas_y + height <= VIEW_ROWS + 512 ? 1 : 2;
+		/* the texture that shows these rows: the first for the icons' rows, then two a half apart; a shape (from
+		 * SHAPE_ROWS, gl.cpp) always the last, so that a frame draws from three of them, not five: a list copies every
+		 * texture it draws into the VRAM's band (programs/common/gpu_uploads.h), which holds three of 1,024 rows, and
+		 * what found no room there was drawn magenta (docs/games/tdawn.md, "The map on the GPU") */
+		int view = atlas_y >= 2 * 512 ? 2 : atlas_y + height <= VIEW_ROWS && kind != HOST_MASK ? 0 : atlas_y + height <= VIEW_ROWS + 512 ? 1 : 2;
 
 		atlas_y -= view * 512;
 		texels[0] = atlas_x, texels[1] = atlas_y, texels[2] = atlas_x + width, texels[3] = atlas_y + height;
@@ -1406,7 +1423,7 @@ sprite_now(int kind, int x, int y, int width, int height, int atlas_x, int atlas
 static inline __attribute__((always_inline)) void
 block_now(int x, int y, int width, int height, int atlas_x, int atlas_y, unsigned int colour)
 {
-	int view = atlas_y + 24 <= VIEW_ROWS + 512 ? 1 : 2;
+	int view = atlas_y >= 2 * 512 || atlas_y + 24 > VIEW_ROWS + 512 ? 2 : 1;	/* (the last, as sprite_now's shapes) */
 	int texels[4] = {atlas_x + 8, atlas_y - view * 512 + 8, atlas_x + 16, atlas_y - view * 512 + 16};
 
 	put_sprite(mask_texture[view - 1], colour, 0, x, y, width, height, texels);
@@ -1839,9 +1856,12 @@ cursor_corners(unsigned int *to, int shown)
 	unsigned int x0 = x * ONE / unit_w, y0 = y * ONE / unit_h;
 	unsigned int x1 = (x + cursor_w) * ONE / unit_w, y1 = (y + cursor_h) * ONE / unit_h;
 
+	unsigned int u1 = cursor_w * 1024 / CURSOR_MAX, v1 = (cursor_h * 1024 / CURSOR_MAX) << 16;
+
 	if (!shown || !cursor_w || hw_on)
 		x0 = x1 = y0 = y1 = 0;
 	to[0] = x0, to[1] = y0, to[4] = x1, to[5] = y0, to[8] = x1, to[9] = y1, to[12] = x0, to[13] = y1;
+	to[3] = 0, to[7] = u1, to[11] = u1 | v1, to[15] = v1;	/* (the picture's corner of the texture) */
 }
 
 /*
@@ -1870,6 +1890,16 @@ present_scene(int page, int with_cursor)
 	cursor_vertices = seglLastVertices();
 	cursor_corners(cursor_vertices, with_cursor);
 	show(0);
+	/*
+	 * The draws name the page's copy in the VRAM, made by an upload at the list's end
+	 * (gpu_uploads.h): a list shown again with the other page has those uploads read it. A
+	 * draw given a page's address instead is magenta, the whole window every other frame.
+	 */
+	page_shown = seglAddress(screen + (page & 1) * screen_w * screen_h);
+	page_upload_count = 0;
+	for (unsigned int *c = cursor_command + 16, k = 0; k < 256 && c[0] == 6; c += 16, k++)
+		if (c[1] == page_shown && page_upload_count < 4)
+			page_uploads[page_upload_count++] = c;
 	scene_built = 0;
 	scene_shown = 1;
 	scenes_shown++;
@@ -1932,12 +1962,11 @@ host_present(int page, int with_cursor)
 		present_scene(page, with_cursor);
 	} else if (scene_shown) {
 		/* the same scene: the page it shows may be the other one now, the pointer elsewhere */
+		unsigned int now = seglAddress(screen + (page & 1) * screen_w * screen_h);
+
 		host_settle();
-		page_commands[1][7] = seglAddress(screen + (page & 1) * screen_w * screen_h);
-		if (page_commands[0])
-			page_commands[0][7] = page_commands[1][7];
-		cursor_command[8] = cursor_w;
-		cursor_command[9] = cursor_h;
+		for (unsigned int k = 0; k < page_upload_count; k++)
+			page_uploads[k][1] = now;
 		cursor_corners(cursor_vertices, with_cursor);
 		show(1);
 	} else {
@@ -1945,7 +1974,8 @@ host_present(int page, int with_cursor)
 		glColorKeySE(0);
 		page_part(page, 0, 0, screen_w, screen_h, 0);
 		if (with_cursor && cursor_w && !hw_on)
-			quad(cursor_texture, pointer_x - cursor_hot_x, pointer_y - cursor_hot_y, cursor_w, cursor_h, 1);
+			quad_part(cursor_texture, pointer_x - cursor_hot_x, pointer_y - cursor_hot_y, cursor_w, cursor_h, 1,
+				  cursor_w * ONE / CURSOR_MAX, cursor_h * ONE / CURSOR_MAX);
 		show(0);
 	}
 	resize_for_test();

@@ -435,6 +435,15 @@ CASES = [
     case('openttd-windows', 'games openttd', X + 'OPENTTD_DRAW=cpu OPENTTD_PLAY=1 OPENTTD_PLAY_PART=window OPENTTD_PLAY_SCENE=many OPENTTD_PLAY_MOVE=1 OPENTTD_PAUSE=1 OPENTTD_CHECK=1 openttd -g /usr/share/openttd/busy.sav; '
          'OPENTTD_DRAW=cpu OPENTTD_PLAY=1 OPENTTD_PLAY_PART=window OPENTTD_PLAY_SCENE=vehicle OPENTTD_PLAY_MOVE=1 OPENTTD_PAUSE=1 OPENTTD_CHECK=1 openttd -g /usr/share/openttd/busy.sav',
          True, wall=400, has=[r'openttd: play round 1: .*checked \d+, 0 differ \(0 pixels']),
+    # docs/games/openttd.md, "The small map on the workers": the small map open while the game runs, its tiles' colours drawn in bands by every
+    # core, and each picture of it drawn again by the first core alone: not a pixel differs
+    case('openttd-map', 'games openttd', X + 'OPENTTD_DRAW=cpu OPENTTD_PLAY=1 OPENTTD_PLAY_PART=window OPENTTD_PLAY_SCENE=map OPENTTD_SMALLMAP=check '
+         'openttd -g /usr/share/openttd/busy.sav', True, wall=400,
+         has=[r'openttd: small map \d+x\d+ checked [1-9]\d* times', r'openttd: play round 1: '], never=[r'[1-9]\d* pixels differ', r' [1-9]\d* in all']),
+    # and timed: the small map open, its tiles' colours by every core and by the first core alone (OPENTTD_SMALLMAP=core, upstream's way)
+    *[case(f'openttd-map-time{tag}', 'games openttd long', X + f'OPENTTD_DRAW=cpu OPENTTD_PLAY=1 OPENTTD_PLAY_PART=window OPENTTD_PLAY_SCENE=map {pre}'
+           'openttd -g /usr/share/openttd/busy.sav', True, wall=600, has=[r'openttd: play round 1: '])
+      for tag, pre in (('', ''), ('-core', 'OPENTTD_SMALLMAP=core '))],
     # a window of a new vehicle hidden in a depot and the other small views, with light pictures, which OPENTTD_CHECK turns off (docs/games/openttd.md,
     # "Pictures the tick does not wait for"): its view followed a copy no sync had made, the map's north corner
     # a game saved uncompressed, as named LZMA, and with an encoder that cannot start, and each loaded: its state as it was saved

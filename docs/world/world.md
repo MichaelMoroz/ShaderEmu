@@ -405,11 +405,15 @@ build, no bake.
 
 The world's entry at VRChat is `unity/listing`: `description.txt`, and `WorldIcon.png`, which
 `python tools\make_world_icon.py CAPTURE.png unity\listing\WorldIcon.png` letters onto a
-capture (`WorldIconCapture.jpg` is the one it was made from). The capture is a camera made in
-editor code in play mode with the machine on, rendered 2400 x 1800 with 8 samples: low at the
-left of the front row's first computer, `(-2.30, 0.78, 0.55)` looking at `(-1.40, 1.19,
-1.36)`, 54 degrees, after `Take0` on "Stations" twice (the second makes its tube show the
-display) and `doom &` typed at the console keyboard's `queue`. "ShaderEmu/Show the world's
+capture (`WorldIconCapture.jpg` is the one it was made from), in a column right of the capture's
+screen and at least 170 pixels inside the picture's right edge: VRChat crops the picture to 16:9
+and to a square, and lettering over the screen hid it. The capture is a camera made in editor
+code in play mode with the machine on, rendered 2400 x 1800 with 8 samples: low at the left of
+the front row's first computer, at `(-2.36, 0.78, 1.60)` looking at `(-1.46, 1.19, 2.41)`,
+moved 0.15 m back along its view and turned 15 degrees right about the vertical (6 November
+2026), 54 degrees, after `Take0` on "Stations" twice (the second makes its tube show the
+display), `quake3 &` typed into the machine (`RemoteChar`) and, at its skill menu, Enter (`RemoteKey` 28
+with 65536, then 28): The Longest Yard in play, its window on the desktop. "ShaderEmu/Show the world's
 listing at VRChat" reads the entry, and "Update the world's picture and description at
 VRChat" sends those two and nothing else (`ShaderEmuListing.cs`: the SDK's
 `UpdateWorldInfo` and `UpdateWorldImage`, which need its panel logged in and no build).
