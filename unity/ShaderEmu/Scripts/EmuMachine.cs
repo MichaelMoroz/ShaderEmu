@@ -68,9 +68,12 @@ public class EmuMachine : UdonSharpBehaviour
     public EmuKeyboard consoleKeyboard;
     public EmuKeyboard gpuKeyboard;
 
-    // The boot image, twelve textures: RAM r, g, b, a, then ROM, then device tree.
-    // A missing texture is left black.
+    // The boot image: the ROM alone (index 1; 0 is left empty). The world keeps no image of RAM
+    // (AGENTS.md, 5 November 2026): the reset copies the kernel and its device tree out of the ROM's
+    // texture, where ShaderEmuImages put them past the root file system. Each piece is (its first texel
+    // of RAM from 0x80000000, its texels, its first texel of the ROM's texture).
     public Texture2D[] imageTextures;
+    public Vector4 bootKernel, bootTree;
     public Texture2D blackTexture;
 
     // Pages for the guest's browser (docs/system/fetch.md). A world can only load the addresses it
@@ -453,19 +456,22 @@ public class EmuMachine : UdonSharpBehaviour
 
     private void ApplyImage()
     {
-        machineMaterial.SetTexture("_Data_RAM", Pick(0));
+        machineMaterial.SetVector("_BootKernel", bootKernel);
+        machineMaterial.SetVector("_BootTree", bootTree);
         machineMaterial.SetTexture("_Data_ROM", Pick(1));
         tickMaterial.SetTexture("_Data_ROM", Pick(1));
         // (a copy out of the ROM is committed as points, and its edges gathered; RAM starts as points)
         pointsMaterial.SetTexture("_Data_ROM", Pick(1));
         gatherMaterial.SetTexture("_Data_ROM", Pick(1));
-        pointsMaterial.SetTexture("_Data_RAM", Pick(0));
+        pointsMaterial.SetVector("_BootKernel", bootKernel);
+        pointsMaterial.SetVector("_BootTree", bootTree);
         if (frontMaterial != null) frontMaterial.SetTexture("_Data_ROM", Pick(1));
         if (pointsBlitMaterial != null)
         {
             pointsBlitMaterial.SetTexture("_Data_ROM", Pick(1));
             gatherBlitMaterial.SetTexture("_Data_ROM", Pick(1));
-            pointsBlitMaterial.SetTexture("_Data_RAM", Pick(0));
+            pointsBlitMaterial.SetVector("_BootKernel", bootKernel);
+            pointsBlitMaterial.SetVector("_BootTree", bootTree);
         }
         if (gpuBlitMaterial != null) gpuBlitMaterial.SetTexture("_Data_ROM", Pick(1));
         if (volumeMaterial != null) volumeMaterial.SetTexture("_Data_ROM", Pick(1));   // the holodeck's light maps

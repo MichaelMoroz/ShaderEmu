@@ -21,6 +21,7 @@ import furniture    # noqa: E402
 import annex        # noqa: E402
 import shell        # noqa: E402
 import city         # noqa: E402
+import unwrap       # noqa: E402
 
 PARTS = {"Room": room, "Shell": shell, "Computer": computer, "Furniture": furniture, "Annex": annex, "City": city}
 OUT = os.path.join(HERE, "..", "unity", "ShaderEmu", "Models")
@@ -30,7 +31,13 @@ def main():
     args = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     wanted = args or list(PARTS)
     if bpy.app.background:
-        bpy.ops.wm.read_factory_settings(use_empty=True)
+        blend = os.path.abspath(os.path.join(HERE, "..", "build", "world.blend"))
+        if os.environ.get("WORLD_ADD") == "1" and os.path.exists(blend):
+            # the parts asked for built anew into the world.blend of before, the others kept: the five parts in two
+            # runs, each under a minute (the checks want them all in one file)
+            bpy.ops.wm.open_mainfile(filepath=blend)
+        else:
+            bpy.ops.wm.read_factory_settings(use_empty=True)
     os.makedirs(OUT, exist_ok=True)
     report = {}
     for name in wanted:
@@ -43,6 +50,8 @@ def main():
         builder = lib.Builder(seed=7)
         PARTS[name].build(builder)
         objects = builder.finish(name)
+        if name not in ("Shell", "City"):   # (the shell brings its own, one chart a surface; the city is unlit)
+            unwrap.unwrap(objects)
         # what brings its own place in the lightmap is a file of its own: Unity lays out a whole file's, or none of it
         own = [ob for ob in objects if ob.name in builder.was_charted]
         if own:

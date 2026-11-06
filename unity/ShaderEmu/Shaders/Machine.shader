@@ -25,7 +25,6 @@ Shader "ShaderEmu/Machine"
         _Rtc1Lo ("RTC1 low half", Int) = 0
         _Rtc1Hi ("RTC1 high half", Int) = 0
 
-        _Data_RAM ("The start image, a 16-byte texel a pixel (RGBAFloat, read by its bits)", 2D) = "black" {}
 
 
         _Data_ROM ("ROM, a 16-byte texel a pixel (RGBAFloat, read by its bits)", 2D) = "black" {}

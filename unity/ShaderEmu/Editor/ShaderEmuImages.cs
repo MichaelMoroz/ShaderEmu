@@ -13,14 +13,15 @@ public static class ShaderEmuImages
 
     public class BootImage
     {
-        public string name, title, ram, rom;
+        public string name, title, ram, rom, kernel, tree;
     }
 
     public static readonly BootImage[] Images =
     {
         // Linux without an MMU (docs/system/nommu.md), for MachineTickLean.shader's machine.
         new BootImage { name = "linux", title = "Linux: shell, Nano-X desktop (nx), Doom, glxgears",
-                        ram = "build/images/nommu/linux_payload.bin", rom = "build/images/nommu/rootfs.bin" },
+                        ram = "build/images/nommu/linux_payload.bin", rom = "build/images/nommu/rootfs.bin",
+                        kernel = "build/images/nommu/Image", tree = "build/images/nommu/dts.bin" },
         // The bare-metal programs (programs/bin: gears, raycast, raytrace, blend, rects) start in
         // machine mode at 0x80000000, which the SBI_HLE build of the shader does not do.
     };
@@ -41,10 +42,25 @@ public static class ShaderEmuImages
         return ImageFolder + "/" + name + "_rom.texels";
     }
 
-    // RAM's start image as well.
-    public static string RamPath(string name)
+    // The world keeps no image of RAM (AGENTS.md, 5 November 2026). The ROM's texture holds, past the root file
+    // system, what a boot loader puts in RAM: the kernel, then its device tree, each from a row of its own. The
+    // reset copies them (src/ram.cginc, RAM_BOOT_FROM_ROM). Where each goes in RAM: tools/make_linux_image.py and
+    // linux/nommu/image.py (the kernel at 0x82000000, its tree at 0x83e00000; texels from 0x80000000).
+    public const int KernelAt = 0x2000000 / 16, TreeAt = 0x3e00000 / 16, Row = 2048;
+
+    static int Rows(long bytes) { return (int)((bytes + Row * 16 - 1) / (Row * 16)); }
+
+    // (first texel of RAM, texels, first texel of the ROM's texture) for the kernel and the tree; false without the files
+    public static bool BootPieces(BootImage image, out Vector4 kernel, out Vector4 tree)
     {
-        return ImageFolder + "/" + name + "_ram.texels";
+        kernel = tree = Vector4.zero;
+        string rom = Repo + "/" + image.rom, k = Repo + "/" + image.kernel, t = Repo + "/" + image.tree;
+        if (!File.Exists(rom) || !File.Exists(k) || !File.Exists(t)) return false;
+        long kb = new FileInfo(k).Length, tb = new FileInfo(t).Length;
+        int kAt = Rows(new FileInfo(rom).Length) * Row, tAt = kAt + Rows(kb) * Row;
+        kernel = new Vector4(KernelAt, (kb + 15) / 16, kAt, 0);
+        tree = new Vector4(TreeAt, (tb + 15) / 16, tAt, 0);
+        return true;
     }
 
     [MenuItem("ShaderEmu/Sync shader sources from the repository")]
@@ -76,22 +92,36 @@ public static class ShaderEmuImages
         Directory.CreateDirectory(ImageFolder);
         foreach (BootImage image in Images)
         {
-            CopyTexels(image.name, "ram", image.ram);
-            CopyTexels(image.name, "rom", image.rom);
+            WriteRom(image);
+            // (an image of RAM from before the rule goes)
+            string old = ImageFolder + "/" + image.name + "_ram.texels";
+            if (File.Exists(old)) AssetDatabase.DeleteAsset(old);
         }
         AssetDatabase.Refresh();
         Debug.Log("[ShaderEmu] boot images imported from " + Repo);
     }
 
-    static void CopyTexels(string name, string part, string file)
+    // The ROM's texels: the root file system, then the kernel and its tree, each padded to whole rows
+    static void WriteRom(BootImage image)
     {
-        string path = Repo + "/" + file;
-        if (!File.Exists(path))
+        Vector4 kernel, tree;
+        if (!BootPieces(image, out kernel, out tree))
         {
-            Debug.LogWarning("[ShaderEmu] " + path + " is missing; image '" + name + "' will lack its " + part);
+            Debug.LogError("[ShaderEmu] " + Repo + "/" + image.rom + ", " + image.kernel + " or " + image.tree + " is missing: no ROM for '" + image.name + "'");
             return;
         }
-        File.Copy(path, part == "ram" ? RamPath(name) : RomPath(name), true);
+        byte[] k = File.ReadAllBytes(Repo + "/" + image.kernel), t = File.ReadAllBytes(Repo + "/" + image.tree);
+        using (FileStream rom = File.OpenRead(Repo + "/" + image.rom))
+        using (FileStream to = File.Create(RomPath(image.name)))
+        {
+            rom.CopyTo(to);
+            to.SetLength((long)kernel.z * 16);
+            to.Position = (long)kernel.z * 16;
+            to.Write(k, 0, k.Length);
+            to.SetLength((long)tree.z * 16);
+            to.Position = (long)tree.z * 16;
+            to.Write(t, 0, t.Length);
+        }
     }
 
     // RAM's image and the ROM in four lanes as before, for the Udon model only (EmuUdonCpu reads them on the processor).

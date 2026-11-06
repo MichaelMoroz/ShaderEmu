@@ -42,6 +42,23 @@ in Blender by scripts in `world/`; furniture, plants and the main surfaces come 
 - `sounds.py` computes the rain's loop, and cuts thunder and the computer's own sounds from
   recordings (`SOURCES`: Freesound, CC0; fetched once into `build/sounds`, which needs ffmpeg)
   (`Sounds/*.wav`).
+- **Every model's lightmap layout is Blender's** (5 November 2026, `world/unwrap.py`, called by `build.py`
+  for every part but the shell and the city; Unity's importer unwraps nothing, `ImportModel(..., false)`):
+  cut at edges sharper than 50 degrees and wherever the picture's coordinates are cut (a lathe's bands
+  and meridian, a tube's line, a downloaded model's islands), unwrapped by angle, a piece that comes out
+  folded or stretched (`FOLD`) laid again by Smart UV Project, one density, packed with a margin of 2.5
+  texels at the mesh's least lightmap scale (`lightmap_scale`, as `ShaderEmuModels.cs`'s; halved until
+  it fits, the build names those under it), cached by the mesh's shape in `build/unwrap`. Unity's
+  charts of a mug were slivers. What follows (`b.chart`, `charted=True`) is written first and laid
+  over by it; the files keep their names.
+- **A model made many times is one mesh** (6 November 2026, `b.instance(model, make)` in `world/lib.py`): made
+  once at the origin and linked into each copy, as Poly Haven's models are, so a part's FBX has it once and
+  Unity one mesh with a renderer for each copy, each its own place in the lightmap (`lightmapScaleOffset`).
+  The office chairs are: 12 in the classroom and 3 in the side rooms were 15 x 14,916 triangles, now one mesh a
+  part. Its weighted normals are put in the mesh (a modifier on each copy would make the copies apart in the
+  FBX); `make` draws no chances. The five parts no longer build in one run under a minute (the unwrap's
+  cache misses a dozen meshes at random, the tree before this too): `-- Room Computer Shell Furniture`, then
+  `WORLD_ADD=1 ... -- Annex`, which builds into the `world.blend` of before.
 - **A lightmap layout of its own.** Unity (and Bakery after it) lays out a model's place in the
   lightmap by cutting it wherever it bends, a chart a piece: a keyboard is a chart a key
   and more, each lit by its own few texels, and it shows as blotches and lines. An object made
@@ -187,7 +204,7 @@ after a build of all five parts (one build call: each starts empty), each well u
 
 A thing's material is its kind's (`Plastic`, `Metal`, the scans), and what use has left on it
 is laid over that in Unity: `world/wear.py` makes layers (a grain of a VDI 3400 grade or a rolled
-finish, scratches, fingerprints, dust, mugs' rings), each in metres of the surface with its source
+finish, scratches, fingerprints, dust), each in metres of the surface with its source
 or "a guess" beside it, and mixes them by a recipe a material (`RECIPES`) into a detail set,
 `Wear<NAME>.png` (colour), `_r` (roughness), `_n` (normal), listed in `Wear.txt`. Unity
 (`ShaderEmuModels.cs`, `Detail`) puts a material's set in Mochie's detail slot, laid by where a
@@ -196,7 +213,8 @@ no coordinates of the model's. A thing that wants its own use has a material of 
 its recipe (the floppies' `FloppyShell` and `FloppyShutter`, the side rooms' desks' `DeskWalnut`),
 the same base as before. `python world/wear.py` (and `textures.py`, which calls it) writes them.
 What lies on a thing by its shape (worn edges, dust in corners) is not yet in it: that needs a
-mask a thing, baked from its shape.
+mask a thing, baked from its shape; so are mugs' rings, which a triplanar set put on a desk's
+edges and sides too (tried and given up, 5 November 2026).
 
 ## The shell
 
@@ -358,6 +376,11 @@ lightmap, which shows a line wherever two pieces of a wall meet and at every cor
 - Rain is sheets of scrolling streaks at four distances (`Rain` in `world/city.py`,
   `Rain.shader`), and haze that hides the far towers (a vertex's alpha, 480 m).
 - The sky is `Sky.shader`: the panorama under a layer of cloud that drifts.
+- Fog lies over the streets and thins with height (`HeightFog.cginc`, in `City.shader` and
+  `Sky.shader`; `HeightFog` in `ShaderEmuWeather.cs` sets both alike, 5 November 2026): a density
+  of 0.125 a metre at the street that falls by e every 20 m up, summed along the eye's ray in
+  closed form in each fragment, no depth texture; the sky is the ray's end at infinity, so the
+  horizon is all fog and the towers stand into it.
 - `EmuWeather` strikes lightning every 30 to 80 s: the global `_UdonWeatherFlash` lights the
   sky, the city and the rain, and thunder follows after the time its distance takes.
 - Sound is two sources by the window: the rain's loop, and thunder. Check them by

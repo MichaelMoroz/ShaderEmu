@@ -7,7 +7,8 @@ float _Init;
 #define SBI_HLE
 #define NO_PAGING
 
-Texture2D<float4> _Data_RAM;   // the start image: as the ROM
+// No start image of RAM: the reset copies the kernel and its tree out of the ROM (src/ram.cginc)
+#define RAM_BOOT_FROM_ROM
 
 Texture2D<float4> _Data_ROM;   // the ROM: a 16-byte texel a pixel, read by its bits (asuint)
 

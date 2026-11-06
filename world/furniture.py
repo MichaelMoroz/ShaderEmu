@@ -16,9 +16,10 @@ from pc import office_chair
 
 
 def mug(b, at, mat="Ceramic", turn=0):
-    with b.at(at, (0, turn, 0)):
-        b.lathe((0, 0, 0), [(0, 0.004), (0.036, 0.004), (0.04, 0), (0.041, 0.095), (0.037, 0.095), (0.036, 0.008), (0, 0.008)], mat, segs=24)
-        b.tube([(0.04, 0.075, 0), (0.062, 0.07, 0), (0.066, 0.045, 0), (0.058, 0.022, 0), (0.04, 0.02, 0)], 0.006, mat, segs=8, smooth=4)
+    """The mug of world/toys.py (this was a copy of it, its handle left at 8 sides), where it is put, not let fall:
+    the den's holds pens made round it (let fall, it went 64 mm from them)."""
+    import toys
+    toys.mug.__wrapped__(b, at, mat, turn)
 
 
 def cushion(b, at, side, thick, rot):
@@ -483,14 +484,14 @@ def classroom(b):
     for z in ROWS_Z:
         for x in TABLES_X:
             table(b, x, z)
-    b.obj("Chairs")
+    # the chairs: one mesh made once and its copies (lib.Builder.instance), each its own renderer
     import random
     third = random.Random(12)   # (the last row's chances are its own: the room's other chances stay what they were)
     for row, (z, behind) in enumerate(zip(ROWS_Z, CHAIRS_BACK)):
         rand = b.rand if row < 2 else third.uniform
         for x in PLACES_X:
             with b.at((x + rand(-0.05, 0.05), 0, z - behind + rand(-0.05, 0.05)), (0, rand(-25, 25), 0)):
-                office_chair(b)
+                b.instance("Office chair", office_chair)
     # The computers: world/bake_pc.py's shells (monitor and tower, their detail baked into their
     # pictures), and at each place its own glass, keyboard, mouse, leads and stickers. No two lie
     # alike: the set a little off and turned, the keyboard and the mouse as a hand left them.

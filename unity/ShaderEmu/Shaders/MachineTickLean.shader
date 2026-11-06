@@ -23,7 +23,6 @@ Shader "ShaderEmu/MachineTickLean"
         _MtimeLoHi ("The timer, high half", Int) = 0
         _LaneField ("The lanes' field drawn (docs/machine/lanes.md)", Int) = 1
 
-        _Data_RAM ("The start image, a 16-byte texel a pixel (RGBAFloat, read by its bits)", 2D) = "black" {}
 
 
         _Data_ROM ("ROM, a 16-byte texel a pixel (RGBAFloat, read by its bits)", 2D) = "black" {}

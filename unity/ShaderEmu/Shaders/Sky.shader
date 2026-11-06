@@ -1,7 +1,8 @@
 Shader "ShaderEmu/Sky"
 {
     // The night sky as a skybox: a panorama (world/textures.py: u = 0.5 looks along +x, v = 1
-    // straight up) under a layer of cloud that drifts and that lightning lights (EmuWeather).
+    // straight up) under a layer of cloud that drifts and that lightning lights (EmuWeather), and the
+    // city's fog over its horizon (HeightFog.cginc).
     Properties
     {
         _MainTex ("Panorama", 2D) = "black" {}
@@ -10,6 +11,11 @@ Shader "ShaderEmu/Sky"
         _Cover ("Cloud cover", Range(0, 1)) = 0.8
         _CityGlow ("The clouds' light from the city (lightning's apart)", Float) = 1
         _Wind ("Drift (uv a second)", Vector) = (0.004, 0.0015, 0, 0)
+        _FogColour ("Height fog: its colour", Color) = (0.167, 0.167, 0.177, 1)
+        _FogFlash ("Height fog: lit by lightning (at a flash of 1, ten times this)", Color) = (0.05, 0.05, 0.06, 1)
+        _FogDensity ("Height fog: a metre's at its base", Float) = 0.125
+        _FogBase ("Height fog: its base (world y, the street)", Float) = -40
+        _FogFalloff ("Height fog: metres up for a fall by e", Float) = 20
     }
     SubShader
     {
@@ -22,6 +28,7 @@ Shader "ShaderEmu/Sky"
             #pragma vertex vert
             #pragma fragment frag
             #include "UnityCG.cginc"
+            #include "HeightFog.cginc"
 
             sampler2D _MainTex, _Clouds;
             float _Exposure, _Cover, _CityGlow;
@@ -56,7 +63,8 @@ Shader "ShaderEmu/Sky"
                     cloud += _UdonWeatherFlash * float3(1.6, 1.75, 2.2) * (0.25 + n) * saturate(0.55 + 0.45 * dot(normalize(d.xz), float2(0.96, 0.28)));
                     c = lerp(c, cloud, cover);
                 }
-                return float4(c, 1);
+                // the city's fog (HeightFog.cginc): all of it at the horizon and below, where the towers stand in it
+                return float4(HeightFogged(c, HeightFogSkyDepth(d), _UdonWeatherFlash), 1);
             }
             ENDCG
         }

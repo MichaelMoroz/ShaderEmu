@@ -11,7 +11,6 @@ Shader "ShaderEmu/MachineCommitPoints"
         _TickState ("The state rows after the tick", 2D) = "black" {}
         _Stage ("The commit's stage (MachineGather.shader)", 2D) = "black" {}
         _GpuTarget ("The GPU's colour target", 2D) = "black" {}
-        _Data_RAM ("The start image, a 16-byte texel a pixel (RGBAFloat, read by its bits)", 2D) = "black" {}
         _Data_ROM ("ROM, a 16-byte texel a pixel (RGBAFloat, read by its bits)", 2D) = "black" {}
         _CommitPoints ("Points the mesh has", Int) = 41346
         _FieldPoints ("Of them the lanes' field's buckets, before the picture's", Int) = 7936

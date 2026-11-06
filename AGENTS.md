@@ -6,7 +6,7 @@
 - Tick simplification (2 November 2026, `docs/plans/tick-simplification-plan.md` has the numbers and what was not done). The tick needs fxc2 67 or later, the submodule
   `tools/fxc2` (`git submodule update --init`; a new compiler is a commit moving it), and Unity's editor needs its `bin/unity` too: `c` and `ot` are statics under `#pragma static_noinit`,
   which an older DLL ignores (448 zeroing instructions a pass); `xr` stays zeroed (without it 0.6 to 0.8% slower). The geometry is one row of cores
-  (`docs/machine/multicore.md`, "The geometry"): no division by a variable in it, a worker has 2^5 at most and its texels are in tiles (rows: 50% slower), and one triangle draws the tick, `frag` discarding what no core runs: a warp is then 4 x 8 pixels of one core. The timer comes from the host: no doubles in the tick. The ROM and RAM's start image are one RGBAFloat texture each, from their first row.
+  (`docs/machine/multicore.md`, "The geometry"): no division by a variable in it, a worker has 2^5 at most and its texels are in tiles (rows: 50% slower), and one triangle draws the tick, `frag` discarding what no core runs: a warp is then 4 x 8 pixels of one core. The timer comes from the host: no doubles in the tick. The ROM is one RGBAFloat texture, from its first row (the world has no RAM image: see the rule of 5 November 2026 on RAM made beforehand).
 - The rules of the work (23 October 2026). We own the whole stack, from the games' and programs' sources down to the
   tick's DXBC instructions: the games and userland, the toolchain, the tick and the other shaders, and
   fxc2 (the submodule `tools/fxc2`), so a cost is fixed at whichever layer it is cheapest.
@@ -36,6 +36,11 @@
   scribed or a millimetre short, `--why` says which faces) and `check_uv.py` (0: the picture's scale even over every continuous chunk
   of a surface, within 1.5 times along a side and one way against the other, no smear; chunks apart may differ) must pass. A new `KNOWN` pair, a
   `BUILDING` word or a pose's distance changed to make a test pass says why beside it.
+- The world keeps no RAM state made beforehand (5 November 2026, the developer's rule): no start image of RAM, no snapshot,
+  nothing of a booted machine among Unity's assets. At reset RAM is zeros but for what a boot loader puts there, the kernel
+  and its device tree, which lie in the ROM's texture past the root file system (`ShaderEmuImages.cs`, `EmuMachine.bootKernel`
+  and `bootTree`) and are copied by the reset's commit (`RAM_BOOT_FROM_ROM`, `ram_init_texel` in `shader_vm/src/ram.h`):
+  the machine boots fully from there, every time.
 - Every object the world's scripts model or texture follows a specification found online (5 November 2026, the developer's
   rule): its dimensions from a maker's sheet, a standard or a measured photo (a can's 211 x 413 body and 202 lid, a socket's
   CEE 7/3 plate and well, a chair's spec sheet), and its picture from the real thing of the decade (its print, its colours, its

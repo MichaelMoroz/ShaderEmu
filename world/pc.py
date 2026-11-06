@@ -1121,10 +1121,23 @@ SET_X, TOWER_X, TOWER_Z = -0.11, 0.38, 0.05   # the monitor and keyboard a littl
 
 
 STRIP_AT = [None]   # where the last station() laid its strip of sockets
+MAINS_AT = [None]   # where the last station() given `mains` wants its wall socket: (middle, turn)
+SCHUKO_LONG = 0.058  # a Schuko plug from its face in the socket's well to its sleeve's end
+
+
+def schuko_plug(b):
+    """A Schuko plug (CEE 7/4) in a wall socket (world/room.py: wall_socket) whose frame this is, the
+    room towards -z: its face in the socket's well a hair off the well's floor, round and 32 mm across
+    (CEE 7/4's body is 37 mm with the earth's notches cut in it: here a plain round clear of the
+    socket's springs, which stand 16.6 mm off the middle), a grip that widens to 38 mm a little
+    out of the well, and a sleeve where the lead leaves. The pins are in the socket and not seen.
+    (The grip's length and its sleeve's are a guess from photographs of moulded plugs.)"""
+    b.lathe((0, 0, 0), [(0.016, 0.0022), (0.016, 0.0118), (0.0185, 0.0124), (0.019, 0.016), (0.0178, 0.036), (0.0125, 0.040),
+                        (0.0075, 0.042), (0.0055, SCHUKO_LONG)], "Rubber", segs=20, rot=(-90, 0, 0))
 HUB_SOCKET = 4      # the strip's socket a hub's supply is plugged into, at a place that has one
 
 
-def station(b, which="all", lie=None, desk=None, seed=0, stuck=0, bare=(), supply=False, lan=None):
+def station(b, which="all", lie=None, desk=None, seed=0, stuck=0, bare=(), supply=False, lan=None, mains=None):
     """A whole place on the table at the frame's origin: the monitor and keyboard, the tower
     beside them, the mouse before the tower, and their leads. which: "shell" is the monitor and
     the tower alone, "rest" all but them (with the tube's glass, which no mode but "full" gives).
@@ -1134,7 +1147,10 @@ def station(b, which="all", lie=None, desk=None, seed=0, stuck=0, bare=(), suppl
     stuck: how many stickers it has, on any face but those of `bare` (stickers()).
     supply: a hub's supply stands on its strip's socket HUB_SOCKET (its lead is the network's).
     lan: the network's socket in a wall behind the table (x, y, z of its face, which looks towards
-    -z): a lead from the card falls into it with the others, and the wall is what they fall on too."""
+    -z): a lead from the card falls into it with the others, and the wall is what they fall on too.
+    mains: where a wall socket would be for a place x in this frame, mains(x) giving its middle and
+    turn (its room towards its -z): the strip's own lead goes into a plug in it, MAINS_AT[0] says
+    where (the caller puts the socket there); without it the lead goes into a socket in the floor."""
     lie = lie or {"keyboard": (0, 0, 0), "mouse": (0, 0, 0), "mat": (0, 0, 0)}
     kx, kz, kturn = lie["keyboard"]
     mx, mz, mturn = lie["mouse"]
@@ -1201,17 +1217,30 @@ def station(b, which="all", lie=None, desk=None, seed=0, stuck=0, bare=(), suppl
     out, end = lies[2], lies[0] - STRIP[0] / 2 - 0.012
     strip(b, lies, plugs=(1, 3), adapters=(HUB_SOCKET,) if supply else ())   # (the others are empty)
     STRIP_AT[0] = lies
-    lead(b, "strip", [(end, floor + 0.02, out), (end - 0.05, floor + 0.005, out), (end - 0.10, floor + 0.005, out),
-                      (end - 0.10, floor + 0.005, near - 0.3 + 0.03), (end - 0.10, floor + 0.03, near - 0.3)], 0.004, "Rubber", bend=0.02, rng=rng, up=0.02)
-    # and ends in a socket let into the floor under the table: a steel plate, the plug in it
-    b.box((end - 0.10, floor + 0.002, near - 0.3), (0.12, 0.004, 0.12), "MetalSteel", bevel=0.001, segs=1)
-    b.box((end - 0.10, floor + 0.017, near - 0.3), (0.036, 0.026, 0.036), "Rubber", bevel=0.006, segs=2)
+    if mains is not None:
+        # into the wall's socket left of the strip's end, a Schuko plug in it: along the floor to the wall, up it and out to the plug
+        socket_at, socket_turn = mains(end - 0.10)
+        MAINS_AT[0] = (socket_at, socket_turn)
+        with b.at(socket_at, socket_turn):
+            schuko_plug(b)
+        face = lib.place(socket_at, socket_turn)
+        tail, out_of, below = (tuple(face @ Vector(p)) for p in ((0, 0, -SCHUKO_LONG + 0.002), (0, -0.004, -SCHUKO_LONG - 0.025), (0, -0.07, -0.05)))
+        lead(b, "strip", [(end, floor + 0.02, out), (end - 0.05, floor + 0.005, out), (below[0], floor + 0.005, below[2]),
+                          (below[0], below[1], below[2]), out_of, tail][::-1], 0.004, "Rubber", bend=0.02, rng=random.Random(5000 + seed), up=0.02)   # (its own chance: the other leads keep theirs)
+    else:
+        lead(b, "strip", [(end, floor + 0.02, out), (end - 0.05, floor + 0.005, out), (end - 0.10, floor + 0.005, out),
+                          (end - 0.10, floor + 0.005, near - 0.3 + 0.03), (end - 0.10, floor + 0.03, near - 0.3)], 0.004, "Rubber", bend=0.02, rng=rng, up=0.02)
+        # and ends in a socket let into the floor under the table: a steel plate, the plug in it
+        b.box((end - 0.10, floor + 0.002, near - 0.3), (0.12, 0.004, 0.12), "MetalSteel", bevel=0.001, segs=1)
+        b.box((end - 0.10, floor + 0.017, near - 0.3), (0.036, 0.026, 0.036), "Rubber", bevel=0.006, segs=2)
     # each unit's mains lead: out of its inlet, in an arc over the table's edge, down behind it and along to the strip
     for name, x, y, z, k in (("monitor mains", SET_X - 0.14, plug_y - BOARD_DOWN, back, 1),
                              ("tower mains", TOWER_X + at["inlet"][0], at["inlet"][1], behind, 3)):
         # (with length to spare: it comes down to the floor, lies there, and rises into its plug)
         socket = strip_socket(k, lies)[0]
         over, lying = max(edge + 0.035, z + 0.07) + rng.uniform(0, 0.03), out + rng.uniform(0.05, 0.12)   # (no further: the next row's chairs stand there)
+        if mains is not None and k == 1:
+            lying = out - 0.05   # before the strip: behind it the strip's own lead goes to the wall, and the two would cross
         lead(b, name, [(x, y, z + 0.02), (x, y, z + 0.05), (x, y - 0.05, over), (x, -0.12, over + 0.01), (x, floor + 0.05, over + 0.02),
                        ((x + socket) / 2 + rng.uniform(-0.08, 0.08), floor + 0.012, lying), (socket + rng.uniform(-0.03, 0.03), floor + 0.03, lying - 0.04),
                        (socket, floor + 0.14, out + 0.02), strip_socket(k, lies, up=PLUG_HIGH - 0.004)], 0.0035, "Rubber", bend=0.05, rng=rng, up=0.02)

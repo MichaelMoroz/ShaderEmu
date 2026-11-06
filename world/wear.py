@@ -1,5 +1,5 @@
 # What use leaves on a surface, laid over its material in Unity (ShaderEmuModels.cs: Wear): a set
-# of layers made once here (a moulded or rolled grain, scratches, fingerprints, dust, rings), mixed
+# of layers made once here (a moulded or rolled grain, scratches, fingerprints, dust), mixed
 # by a recipe for each kind of thing, and written as one detail set a recipe:
 #   Wear<NAME>.png     colour overlay: 0.5 changes nothing (Mochie's overlay blend)
 #   Wear<NAME>_r.png   roughness overlay: 0.5 changes nothing
@@ -150,27 +150,6 @@ def dust(w, n, tile, amount, seed, colour=0.25, rough=0.15):
     w.rough += total * rough
 
 
-# ---- rings
-
-def rings(w, n, tile, per_m2, seed, diameter=0.08, edge=0.0015, colour=0.05, rough=0.08):
-    """Where a wet mug stood: a ring of its foot's diameter (a mug's foot is about 80 mm across: a
-    guess from common mugs), its edge a line 1.5 mm wide, faint, a water mark in the finish."""
-    rng = np.random.default_rng(seed)
-    texel = tile / n
-    count = int(round(per_m2 * tile * tile))
-    yy, xx = np.mgrid[0:n, 0:n].astype(float)
-    total = np.zeros((n, n))
-    for _ in range(count):
-        cx, cy = rng.random(2) * n
-        r = diameter * rng.uniform(0.9, 1.1) / 2 / texel
-        d = np.hypot((xx - cx + n / 2) % n - n / 2, (yy - cy + n / 2) % n - n / 2)
-        ring = np.exp(-0.5 * ((d - r) / (edge / texel / 2)) ** 2)
-        broken = np.clip(0.4 + noise(n, r / 2, int(rng.integers(1 << 30))), 0, 1)
-        total = np.maximum(total, ring * broken * rng.uniform(0.4, 1.0))
-    w.colour += total * colour
-    w.rough += total * rough
-
-
 # ---- recipes: a thing's material and its use
 
 RECIPES = {
@@ -195,16 +174,16 @@ RECIPES = {
     ]),
     # The side rooms' desks (world/rooms.py: desk): walnut veneer under a satin lacquer (a guess:
     # an office desk of the 1990s). Years of use: hairlines in the lacquer every way, arcs from
-    # wiping, rings where mugs stood, prints and a little dust.
+    # wiping, prints and a little dust (rings where mugs stood were tried and given up: a
+    # triplanar set put them on edges and sides where no mug stands).
     "DeskWalnut": dict(tile=0.5, n=2048, layers=[
         ("scratches", dict(per_m2=2500, length=0.03, width=40e-6, depth=3e-6, seed=21, rough=0.3, colour=0.04)),
         ("scratches", dict(per_m2=150, length=0.12, width=30e-6, depth=1e-6, seed=22, rough=0.2, colour=0.02, bend=1.5)),
-        ("rings", dict(per_m2=6, seed=23)),
         ("fingerprints", dict(per_m2=12, seed=24, rough=0.15, colour=0.02)),
         ("dust", dict(amount=0.04, seed=25, colour=0.12)),
     ]),
     # The same desk's upright faces (its pedestal, panel end, drawers' fronts, modesty board): no
-    # mug stood on them and no dust lies on them (Unity lays a set from all three axes, so what only
+    # dust lies on them (Unity lays a set from all three axes, so what only
     # an upward face gets is a recipe of its own); knocks and hands' prints on the fronts.
     "DeskWalnutSides": dict(tile=0.5, n=2048, layers=[
         ("scratches", dict(per_m2=1200, length=0.02, width=40e-6, depth=3e-6, seed=26, rough=0.3, colour=0.04)),
@@ -212,7 +191,7 @@ RECIPES = {
     ]),
 }
 
-MAKERS = {"grain": grain, "scratches": scratches, "fingerprints": fingerprints, "dust": dust, "rings": rings}
+MAKERS = {"grain": grain, "scratches": scratches, "fingerprints": fingerprints, "dust": dust}
 SLOPE = 0.35   # the normal map's slope a texel for a height step of a texel's width: the bumps' strength (a guess, by eye against the scan)
 
 
