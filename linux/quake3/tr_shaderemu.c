@@ -163,6 +163,10 @@ static int		dragging;	/* the left button is held on the game: the pointer's trav
 /* A sitter in a holodeck's seat (docs/world/holodeck.md, "Played from the seat"): 1 with tracked
    hands, 2 with a mouse. The room is turned by `body`; the aim is the hand's from there. */
 static int		seated;
+/* (asked by the game's and the client's game: cg_draw.c draws no cross-hair before a sitter in a headset, who aims
+   with the hand; bg_pmove.c stops the seated player where the stick lets go, the client's prediction and the server alike) */
+int SE_Seated (void) { return seated; }
+int SE_SeatStop (int client) { return seated && cl.snap.valid && client == cl.snap.ps.clientNum; }
 static float		body, aimed, seat_fov_x = 90, seat_fov_y = 73.74f;
 static unsigned		mouse_count;
 static int		window_w, window_h;	/* its size now: the game's picture is config's, stretched to it */

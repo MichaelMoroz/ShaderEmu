@@ -628,7 +628,7 @@ index 3ff1a15f..9270535f 100644
  	if( g_pGameRules->IsDeathmatch() )
  	{
 diff --git a/pm_shared/pm_shared.c b/pm_shared/pm_shared.c
-index 925d040c..3ca500cd 100644
+index 925d040c..a9829b20 100644
 --- a/pm_shared/pm_shared.c
 +++ b/pm_shared/pm_shared.c
 @@ -147,8 +147,30 @@ void PM_SwapTextures( int i, int j )
@@ -662,3 +662,23 @@ index 925d040c..3ca500cd 100644
  	// Bubble sort, yuck, but this only occurs at startup and it's only 512 elements...
  	//
  	int i, j;
+@@ -1130,6 +1152,8 @@ PM_WalkMove
+ Only used by players.  Moves along the ground when player is a MOVETYPE_WALK.
+ ======================
+ */
++int SE_SeatStop( int player_index );	// the engine's vid_shaderemu.c: this player is the one seated in a holodeck
++
+ void PM_WalkMove( void )
+ {
+ 	//int clip;
+@@ -3209,6 +3233,10 @@ void PM_PlayerMove( qboolean server )
+ 			{
+ 				pmove->velocity[2] = 0.0f;
+ 				PM_Friction();
++				// a sitter in a holodeck stops where the stick lets go (the engine's vid_shaderemu.c, SE_SeatStop): the
++				// friction's half second from a run is a slide in a headset; the client's prediction and the server alike
++				if( !pmove->cmd.forwardmove && !pmove->cmd.sidemove && SE_SeatStop( pmove->player_index ))
++					pmove->velocity[0] = pmove->velocity[1] = 0.0f;
+ 			}
+ 
+ 			// Make sure velocity is valid.

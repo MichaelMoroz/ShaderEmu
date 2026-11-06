@@ -300,6 +300,16 @@ Doom, Quake, Quake III, ClassiCube and Half-Life read those words, each in its o
   key and the seal's queue into a scene, without a bake; it also gives that key and Hide
   the caps of the room's panels, which Hide had not. In play mode on a desktop `debugBeam`, which nothing but a test
   sets, invents hands before the head.
+- **Stopped at once, no cross-hair** (6 November 2026): in the four shooters a seated player on the ground with no move
+  asked stops where the stick lets go, not after the friction's half second from a run (a slide in a headset), and a sitter
+  in a headset, who aims with the hand, has no cross-hair in the middle of the HUD; a desktop's sitter keeps it. Each game's
+  own movement and cross-hair, asked of its engine: Quake `SE_Seated` (`sv_user.c`, `gl_screen.c`; `docs/games/quake.md`,
+  "Seated in a holodeck"), Quake III `SE_SeatStop`/`SE_Seated` in `tr_shaderemu.c` (`bg_pmove.c`'s `PM_WalkMove`, the
+  server and the client's prediction alike, the bots not; `cg_draw.c`'s cross-hair and its 3D one), Half-Life in
+  `vid_shaderemu.c` (`hlsdk.patch`'s `pm_shared.c` after `PM_Friction`, the local `player_index` only; `xash3d.patch`'s
+  `CL_DrawCrosshair`), Jedi Outcast in `sys_shaderemu.cpp` (`jk2.patch`'s `bg_pmove.cpp`, client 0, not the NPCs;
+  `cg_draw.cpp`). Unseated, every game and its sums are as they were. Quake's stop was seen in play mode; the others are
+  built, their test cases pass, and wait for a headset.
 
 ## Boxes in the hands
 

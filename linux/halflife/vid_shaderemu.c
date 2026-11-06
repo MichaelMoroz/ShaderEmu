@@ -37,6 +37,10 @@ static int dragging;	// the left button is held on the game: the pointer's trave
 /* A sitter in a holodeck's seat: 1 with tracked hands, 2 with a mouse. The room is turned by
    `body`; the aim is the hand's from there. */
 static int seated;
+// (asked by the engine's cross-hair, none before a sitter in a headset, who aims with the hand: xash3d.patch's
+// CL_DrawCrosshair; and by pm_shared.c, which stops the seated player where the stick lets go, server and prediction alike)
+int SE_Seated( void ) { return seated; }
+int SE_SeatStop( int player_index ) { return seated && player_index == cl.playernum; }
 static float body, aimed;
 static float seat_unit;	// the game's units in 4 mm of the room (SE_SeatView)
 int se_seat_aiming;	// the right hand aims: the gun is se_seat_gun from the eye (hlsdk.patch's EV_GetGunPosition)
