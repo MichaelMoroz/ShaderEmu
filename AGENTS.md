@@ -485,5 +485,8 @@
   gles.c, Nano-X's driver, nxweb's strips, ClassiCube, `programs/common/gpu.h`; a new one does too, and a new command or
   kind of texture is a case there and an upload kind of `gpu_upload_fragment`. The harness says `GPUDraw reads RAM` if a
   draw pass binds the state texture. The holodeck draws the device's last list from the front end's targets, and reads no
-  RAM. A copy (command 7, `glCopyTexSubImage2D`, framebuffer objects; "Copies") is made after the whole list: a draw after it
+  RAM: from copies of them kept only in a frame whose list the volume words name, and the VRAM's scratch band kept with
+  them (`GpuKeep.shader`, `EmuMachine.GpuDraw`; `GPU_KEPT_SCRATCH` in `gpu_draw.h`), since every list of any program, the
+  desktop's too, writes over the shared targets and copies its own textures into that band. A new thing the holodeck reads
+  of the GPU is kept with them, or it flickers whenever another program draws. A copy (command 7, `glCopyTexSubImage2D`, framebuffer objects; "Copies") is made after the whole list: a draw after it
   in its list is a mistake `SEGL_DEBUG=1` reports.

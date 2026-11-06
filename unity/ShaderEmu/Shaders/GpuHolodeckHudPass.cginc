@@ -10,6 +10,7 @@ float _HudFlip;                // 1: the picture's top is the quad's top (-1 tur
 #define GPU_STATE _State
 #define GPU_TARGET_W 1280.0
 #define GPU_TARGET_H 720.0
+#define GPU_KEPT_SCRATCH   // (a kept frame: the scratch band as its list left it, EmuMachine.holoScratch)
 #include "src/gpu_draw.cginc"
 
 struct mesh_point {

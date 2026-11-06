@@ -383,6 +383,19 @@ summed by `tools/volume_frames.py`:
 | Jedi Outcast (since 3 November 2026) | not in play: a menu, the console, a load (`SE_InPlay`, `se_world_tell` in `sys_shaderemu.cpp`); up is z, the eye 48 units | not a holodeck game: the large screen | on the HUD layer: up to 50 flat draws; its opening scene draws none | `+map demo`'s load flat (the large screen) for 39 minutes of the guest's at `rvc_cpu`'s speed, then 1,070 frames of the world, 2 single frames of an empty world |
 | the 2D games | not registered: always on the large screen, menus and all | | | |
 
+## Kept apart from the other programs' lists
+
+The device draws every program's lists, the desktop's too, through the same front end targets and draw IDs, and each list
+copies the textures it names into the VRAM's scratch band (rows 2048 to 4095, `programs/common/gpu_uploads.h`) before its
+passes. The holodeck draws one program's frame for many of the card's frames, so it reads copies (6 November 2026;
+`GpuKeep.shader`, at the end of `EmuMachine.GpuDraw`): the eight targets and the draw IDs (`HoloGpuMade*`,
+`HoloGpuDrawIds`) and the scratch band (`HoloGpuScratch`, 4096 x 2048, read for the band's addresses where
+`GPU_KEPT_SCRATCH` is defined: the holodeck's, its HUD's and the volume's passes), each taken only in a frame whose list is
+the one the volume words name. Before, Quake lost triangles whenever the desktop drew, and the physics demo's boxes, whose
+colours are a texture of the band, were white for one frame in about forty (a frame of the desktop's); with the band kept,
+600 frames of it seated showed none. The display reads a copy too (`GpuShown`), of the target, from lists not drawn
+`SUBMIT_SIZED`.
+
 ## The HUD layer
 
 A program's frame has draws with a place in space (the world) and draws flat over its picture: a status bar, a cross-hair,

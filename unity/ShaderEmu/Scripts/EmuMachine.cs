@@ -57,6 +57,7 @@ public class EmuMachine : UdonSharpBehaviour
     public Material keepMaterial;
     public RenderTexture[] holoMade;
     public RenderTexture holoDrawIds;
+    public RenderTexture holoScratch;       // 4096 x 2048: the VRAM's scratch band as the holodeck's frame left it (GpuKeep's pass 3)
     public RenderTexture gpuShown;
     public Material orderMaterial;          // BlitOrder.shader
     public RenderTexture orderTexture;      // 81 x 81: its pass 0's
@@ -1432,6 +1433,7 @@ public class EmuMachine : UdonSharpBehaviour
                 keepMaterial.SetTexture("_State", state);
                 for (int i = 0; i < holoMade.Length; i++) VRCGraphics.Blit(made[i], holoMade[i], keepMaterial, i == 4 || i == 5 ? 1 : 0);
                 VRCGraphics.Blit(drawIds, holoDrawIds, keepMaterial, 1);
+            if (holoScratch != null) VRCGraphics.Blit(vram, holoScratch, keepMaterial, 3);
                 VRCGraphics.Blit(target, gpuShown, keepMaterial, 2);
             }
         }

@@ -894,12 +894,15 @@ public static partial class ShaderEmuBuilder
     {
         m.SetTexture("_GpuVram", Vram());
         m.SetTexture("_GpuDrawIds", DrawIds("Holo"));
+        m.SetTexture("_GpuScratchKept", HoloScratch());
         RenderTexture[] made = Made("Holo");
         for (int i = 0; i < made.Length; i++) m.SetTexture(MadeNames[i], made[i]);
     }
     // The picture the display shows: the GPU's target as the last list drawn to be seen left it (a list drawn SUBMIT_SIZED,
     // a picture only for its copies into the VRAM, was a frame of something else on the screen)
     static RenderTexture GpuShown() { return Target("GpuShown", 1280, 720, 0); }
+    // The VRAM's scratch band (rows 2048 to 4095, level 0: programs/common/gpu_uploads.h) as the holodeck's frame left it
+    static RenderTexture HoloScratch() { return Target("HoloGpuScratch", 4096, 2048, 0); }
     // What EmuMachine.GpuDraw keeps apart, and the material that keeps it
     public static void GpuKeep(EmuMachine machine)
     {
@@ -909,6 +912,7 @@ public static partial class ShaderEmuBuilder
         machine.holoMade = Made("Holo");
         machine.holoDrawIds = DrawIds("Holo");
         machine.gpuShown = GpuShown();
+        machine.holoScratch = HoloScratch();
     }
 
     // The front end's targets (shader_vm/src/gpu_draw.h, gpu_made): a texel a mesh vertex and a row past them for the frame,

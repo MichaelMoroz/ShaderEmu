@@ -10,6 +10,7 @@ Shader "ShaderEmu/GpuHolodeck"
         _State ("Machine state texture", 2D) = "black" {}
         _Data_ROM ("ROM, a 16-byte texel a pixel (RGBAFloat, read by its bits)", 2D) = "black" {}
         _GpuVram ("The GPU's VRAM: textures the guest uploaded, with mip levels", 2D) = "black" {}
+        _GpuScratchKept ("The VRAM's scratch band as the kept frame's list left it (4096 x 2048: GpuKeep's pass 3)", 2D) = "black" {}
         _GpuDrawIds ("Each mesh vertex's command and passes (512 x 384 RGInt)", 2D) = "black" {}
         // the vertex front end's eight (GpuFront.shader; ShaderEmuBuilder.GpuInputs): declared, or what the builder sets is not kept
         _GpuMadePos ("The vertex front end's pos (512 x 385)", 2D) = "black" {}

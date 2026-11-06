@@ -5,7 +5,8 @@ Shader "ShaderEmu/GpuKeep"
     // system's too: the holodeck draws a 3D program's whole frame, so its copies (passes 0 and 1) are taken only in a frame
     // whose list is the one the volume words name (0x81000300), and kept otherwise. A list drawn SUBMIT_SIZED is a picture
     // only for its copies into the VRAM: the display's copy of the target (pass 2) is taken only from a list drawn to be seen.
-    // Each is a blit of the source (_MainTex) that discards where it keeps the old.
+    // The VRAM's scratch band is kept with the holodeck's copies (pass 3): every list's textures are copied there before its
+    // passes, the desktop's over the 3D program's. Each is a blit of the source (_MainTex) that discards where it keeps the old.
     Properties
     {
         _MainTex ("The source (the blit's)", 2D) = "black" {}
@@ -83,6 +84,21 @@ Shader "ShaderEmu/GpuKeep"
             float4 frag(float4 p : SV_Position) : SV_Target {
                 if (!keep_shown()) discard;
                 return _MainTex.Load(int3(p.xy, 0));
+            }
+            ENDCG
+        }
+        Pass
+        {
+            // 3: the VRAM's scratch band (its rows 2048 to 4095, level 0), for the holodeck: the next list of any program
+            // copies its textures over the kept frame's (src/gpu_draw.h, GPU_KEPT_SCRATCH)
+            CGPROGRAM
+            #pragma target 5.0
+            #pragma vertex vert
+            #pragma fragment frag
+            Texture2D<float4> _MainTex;
+            float4 frag(float4 p : SV_Position) : SV_Target {
+                if (!keep_volume()) discard;
+                return _MainTex.Load(int3(p.x, p.y + 2048.0, 0));
             }
             ENDCG
         }
