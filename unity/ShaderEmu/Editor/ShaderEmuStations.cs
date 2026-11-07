@@ -238,7 +238,8 @@ public static partial class ShaderEmuBuilder
         hit.center = new Vector3(0, 0, -40f);
         Font font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
         TextMeshProUGUI unused;
-        float fieldWidth = wide - 20 - 3 * (key + 10);
+        const float clipWide = 150;   // (the Clipboard key: docs/system/clipboard.md)
+        float fieldWidth = wide - 20 - 3 * (key + 10) - (clipWide + 10);
         RectTransform box = Child(panel, "Field", 10, gap, fieldWidth, row);
         Plate(box, new Color(0.14f, 0.16f, 0.22f));
         Text text = Child(box, "Text", 10, 2, fieldWidth - 20, row - 26).gameObject.AddComponent<Text>();
@@ -260,6 +261,14 @@ public static partial class ShaderEmuBuilder
         OnClick(MakeButton(panel, "Open", "Open Link", x, gap, key, row, 26, out unused), machine, "OpenPlaceLink");
         OnClick(MakeButton(panel, "Type", "Type as Text", x + key + 10, gap, key, row, 26, out unused), paste, "Send");
         OnClick(MakeButton(panel, "Type line", "+Enter", x + 2 * (key + 10), gap, key, row, 26, out unused), paste, "SendLine");
+        // the machine's clipboard in the field before this place's tube (EmuClip.Place goes by the visitor's own place)
+        Button clipKey = MakeButton(panel, "Clipboard", "Clipboard", x + 3 * (key + 10), gap, clipWide, row, 24, out unused);
+        OnClick(clipKey, stations, "Clipboard");
+        if (machine.clip != null)
+        {
+            machine.clip.stations = stations;
+            Apply(machine.clip);
+        }
         // (the link's news in the field's lowest line: the strip has no row to spare)
         machine.placeLabel = Label(panel, "Link says", "", 20, gap + row - 24, fieldWidth - 20, 22, 16, TextAnchor.MiddleLeft,
                                    new Color(1f, 0.8f, 0.3f));

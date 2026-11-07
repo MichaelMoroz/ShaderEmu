@@ -508,7 +508,7 @@ public static partial class ShaderEmuBuilder
     // to the tube with its fields and colliders while its picture stayed before the wall's display.
     static bool Moves(Canvas canvas)
     {
-        return canvas.name == "Links panel";
+        return canvas.name == "Links panel" || canvas.name == "Clip panel";   // (and the clipboard's field: EmuClip.Place)
     }
 
     // The canvas as it stands, without its print, drawn into a picture and hung on a plate with a

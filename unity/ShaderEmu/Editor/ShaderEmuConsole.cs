@@ -56,7 +56,7 @@ public static partial class ShaderEmuBuilder
         RectTransform panel = Panel(computer, "Console paste", at, board.localEulerAngles, width, height, back);
         Label(panel, "Title", "Text for the console, or a link to open: click the field, type or paste (Ctrl+V), then:", 12, 4, width - 300, 30, 20,
               TextAnchor.MiddleLeft, dim);
-        float fieldWidth = width - 3 * (key + 10) - 20;
+        float fieldWidth = width - 4 * (key + 10) - 20;
         RectTransform box = Child(panel, "Field", 10, 40, fieldWidth, height - 50);
         Plate(box, new Color(0.14f, 0.16f, 0.22f));
         Text text = Child(box, "Text", 10, 6, fieldWidth - 20, height - 62).gameObject.AddComponent<Text>();
@@ -85,6 +85,7 @@ public static partial class ShaderEmuBuilder
         }
         OnClick(MakeButton(panel, "Type", "Type as Text", x + key + 10, 40, key, height - 50, 22, out unused), paste, "Send");
         OnClick(MakeButton(panel, "Type line", "+Enter", x + 2 * (key + 10), 40, key, height - 50, 24, out unused), paste, "SendLine");
+        ClipKey(panel, x + 3 * (key + 10), 40, key, height - 50, 24);   // (wired when the field is made: ShaderEmuClip.cs)
         Text status = Child(panel, "Status", width - 140, 6, 130, 28).gameObject.AddComponent<Text>();
         status.font = text.font;
         status.material = UiMaterial();
@@ -111,7 +112,7 @@ public static partial class ShaderEmuBuilder
         Vector3 at = board.localPosition + board.localRotation * new Vector3(0, (board.sizeDelta.y / 2 + height / 2 + 14f) * 0.001f, 0);
         RectTransform panel = Panel(computer, "Display paste", at, board.localEulerAngles, width, height, back);
         Font font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
-        float fieldX = 10, fieldWidth = width - fieldX - 3 * (key + 10) - 10;
+        float fieldX = 10, fieldWidth = width - fieldX - 4 * (key + 10) - 10;
 
         // (the title's row also has the link's news and what is left to type, at its right)
         Label(panel, "Title", "A link to open, or text to type: click the field, type or paste (Ctrl+V)", 12, 8, width - 460, 30, 20,
@@ -138,6 +139,12 @@ public static partial class ShaderEmuBuilder
         OnClick(MakeButton(panel, "Open", "Open Link", x, top, key, row, 24, out unused), machine, "OpenLink");
         OnClick(MakeButton(panel, "Type", "Type as Text", x + key + 10, top, key, row, 22, out unused), paste, "Send");
         OnClick(MakeButton(panel, "Type line", "+Enter", x + 2 * (key + 10), top, key, row, 22, out unused), paste, "SendLine");
+        Button clipKey = ClipKey(panel, x + 3 * (key + 10), top, key, row, 22);   // the machine's clipboard in front of the screen
+        if (machine.clip != null)
+        {
+            OnClick(clipKey, machine.clip, "ShowBoard");
+            ClipKeys.Remove(clipKey);
+        }
         Text status = Child(panel, "Status", width - 210, 8, 200, 30).gameObject.AddComponent<Text>();
         status.font = font;
         status.material = UiMaterial();

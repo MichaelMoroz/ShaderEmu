@@ -1469,11 +1469,14 @@ int main(int argc, char** argv) {
                     // the guest's kept folder (docs/system/persist.md): answered here, from the file; what
                     // it hands over lies in the fetch's own 256 KB (four rows are the 100,000 bytes)
                     PersistHost keeper;
-                    std::vector<uint8_t> data(PersistHost::kLimit + 32768, 0), rows, reply;
+                    // (the clipboard's text may be the fetch's whole 256 KB: eight rows; docs/system/clipboard.md)
+                    bool handed = url == "persist:save" || url == "clip:show" || url == "clip:set";
+                    unsigned most = PersistHost::clip(url) ? PersistHost::kClipMost : PersistHost::kLimit;
+                    std::vector<uint8_t> data(PersistHost::kClipMost + 32768, 0), rows, reply;
                     keeper.file = opt.persist;
                     bool read = true;
-                    if (opt.cpu) memcpy(data.data(), &cpuemu::ram[rvlayout::kFetchData - cpuemu::RAM_BASE], PersistHost::kLimit);
-                    else if (url == "persist:save" && (read = backend.readRows(64 + rvlayout::devT(0x16c000) / 2048, 4, rows)))
+                    if (opt.cpu) memcpy(data.data(), &cpuemu::ram[rvlayout::kFetchData - cpuemu::RAM_BASE], most);
+                    else if (handed && (read = backend.readRows(64 + rvlayout::devT(0x16c000) / 2048, PersistHost::clip(url) ? 8 : 4, rows)))
                         memcpy(data.data(), rows.data(), (std::min)(rows.size(), data.size()));
                     fetch.status = read ? keeper.answer(url, offset, data.data(), reply) : 500;
                     fetch.offset = 0;

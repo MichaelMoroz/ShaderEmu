@@ -786,6 +786,21 @@ CASES = [
     # version 3's blocks on the worker cores, each primed with the block before: packed and unpacked to the same bytes, and one stream's (version 2) too
     case('apps-persist-blocks', 'desktop apps', 'cat /usr/share/openttd/busy.sav /usr/share/doom1.wad | head -c 700000 > /tmp/t; nxpersist test /tmp/t; NXPERSIST_FORMAT=2 nxpersist test /tmp/t',
          True, wall=300, has=[r'test /tmp/t: 700000 bytes packed to \d+ in [\d.]+ s, unpacked in [\d.]+ s: the same'], never=[r'WRONG']),
+    # Export (docs/apps/export.md): a folder as each packing's text (a data: address) and back, the same files; QR codes of a file of the
+    # image (their count and every module's sum); the field in front of the screen as the harness's files (RVC_CLIP: shown, kept), and a
+    # paste of a zip (RVC_CLIP_IN, tools/clip/paste-zip.txt) imported and unpacked (docs/system/clipboard.md)
+    case('export-text', 'desktop apps', 'mkdir -p /tmp/e/d/sub; cp /etc/passwd /etc/group /tmp/e/d/; cp /usr/share/openttd/test.cfg /tmp/e/d/sub/; '
+         'head -c 50000 /usr/share/doom1.wad > /tmp/e/d/sub/w.bin; for k in zip tgz txz; do NXEXPORT_PACK=$k NXEXPORT_LEVEL=6 nxexport --text /tmp/t.$k /tmp/e/d; '
+         'rm -rf /tmp/b; nxexport --decode /tmp/t.$k /tmp/b > /dev/null; diff -r /tmp/e/d /tmp/b/d && echo SAME-$k; done; '
+         'nxexport --text /tmp/t.as /etc/passwd; nxexport --decode /tmp/t.as /tmp/c > /dev/null; cmp /etc/passwd /tmp/c/passwd && echo SAME-as',
+         wall=200, has=[r'^SAME-zip', r'^SAME-tgz', r'^SAME-txz', r'^SAME-as', r'text of d\.zip: \d+ characters']),
+    case('export-qr', 'desktop apps', 'nxexport --text /tmp/t.txt /usr/share/openttd/test.cfg; nxexport --qr medium /tmp/t.txt; nxexport --qr big /tmp/t.txt',
+         wall=120, sums=[(r'nxexport: \d+ characters in \d+ codes of at most \d+, sum ([0-9a-f]+)', ['b361f51b', 'eaa13062'])]),
+    case('export-clip', 'desktop apps', 'echo clip-words > /tmp/clipboard; nxexport --clipboard; NXEXPORT_PRINT=1 nxexport --push; nxexport --import /tmp/imp; '
+         'cat "/tmp/imp/from host/hello.txt"', wall=120,
+         env={'RVC_CLIP': os.path.join(ROOT, 'build', 'test_clip'), 'RVC_CLIP_IN': os.path.join(ROOT, 'tools', 'clip', 'paste-zip.txt')},
+         has=[r'clipboard \(11 bytes\) to the host: 200', r'kept by the host: 200', r'imported /tmp/imp/from host\.zip: 248 bytes, sum [0-9a-f]+, unpacked into',
+              r'^hello from the host']),
     # the whole way: a folder saved to the host (rvc_cpu --persist), taken away, loaded again: the same files
     case('apps-persist-host', 'desktop apps', 'mkdir -p /persistence/a; cp /etc/passwd /persistence/a/p.txt; head -c 300000 /usr/share/doom1.wad > /persistence/a/w; '
          'S1=$(find /persistence -type f | sort | xargs md5sum | md5sum); nxpersist save; rm -rf /persistence/*; nxpersist load!; '

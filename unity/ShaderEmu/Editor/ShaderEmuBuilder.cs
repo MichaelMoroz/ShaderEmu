@@ -1322,6 +1322,7 @@ public static partial class ShaderEmuBuilder
         // an address of the visitor's own for the guest's browser: VRChat only loads what is
         // typed into a field of this kind
         WebLinks(computer, machine, dispAt, dispW, dispH);
+        Clip(computer, machine, dispAt);   // the text field in front of the screen (ShaderEmuClip.cs, docs/system/clipboard.md)
         machine.fetchLabel = Label(panel, "Web status", "", 30, 520, 1000, 50, 24, TextAnchor.MiddleLeft, new Color(0.75f, 0.85f, 1f));
         FetchLinePlace(machine.fetchLabel);
         Apply(machine);

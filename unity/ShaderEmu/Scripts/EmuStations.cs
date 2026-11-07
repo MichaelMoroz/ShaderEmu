@@ -175,6 +175,12 @@ public class EmuStations : UdonSharpBehaviour
         nextAt = 0;
     }
 
+    // The strip's Clipboard key: the machine's clipboard in the field before this visitor's tube (EmuClip, docs/system/clipboard.md).
+    public void Clipboard()
+    {
+        if (machine != null && machine.clip != null) machine.clip.ShowBoard();
+    }
+
     // A key of a place's monitor or tower (EmuPlace): its owner's machine's, and nobody else's.
     // The power key of a free place is anybody's: it starts their machine there. CONSOLE and
     // DISPLAY on another's turn this visitor's view; the pointer's switches are anybody's.

@@ -109,6 +109,7 @@ public class EmuMachine : UdonSharpBehaviour
     public Texture2D netData;          // 160 x 4: the network's packets for the guest, a row each (docs/system/lan.md)
     public TextMeshProUGUI fetchLabel;
     public EmuPersist persist;         // the guest's kept folder, as this player's PlayerData (docs/system/persist.md)
+    public EmuClip clip;               // the text field in front of the screen (docs/system/clipboard.md)
 
     public TextMeshProUGUI statsText;
     public TextMeshProUGUI speedLabel;
@@ -252,6 +253,8 @@ public class EmuMachine : UdonSharpBehaviour
     private string persistWhat = "";   // what the guest asks of its kept folder ("persist:" and this)
     private bool persistReading;
     private byte[] persistPart = new byte[FetchMost];
+    private string clipWhat = "";      // what the guest asks of the field in front of the screen ("clip:" and this)
+    private bool clipReading;
     private Color32[] fetchPixels = new Color32[65536];
 
     private bool soundEnabled;         // the guest has the sound card on, and where its clock is
@@ -888,6 +891,23 @@ public class EmuMachine : UdonSharpBehaviour
             PowerOff();
             return;
         }
+        if (address.StartsWith("clip:"))
+        {
+            // the text field in front of the screen (docs/system/clipboard.md): answered from EmuClip
+            heldImage = false;
+            clipWhat = address.Substring(5);
+            clipReading = false;
+            fetchState = FetchLoading;
+            fetchStarted = Time.time;
+            if (clip == null)
+            {
+                // (a world without the field: said at once)
+                clipWhat = "";
+                fetchStatus = 404;
+                fetchState = FetchReady;
+            }
+            return;
+        }
         if (address.StartsWith("persist:"))
         {
             // the guest's kept folder: answered from PlayerData, once VRChat has brought it
@@ -1267,6 +1287,10 @@ public class EmuMachine : UdonSharpBehaviour
         {
             PersistStep();
         }
+        else if (fetchState == FetchLoading && clipWhat.Length > 0 && clip != null)
+        {
+            ClipStep();
+        }
         else if (fetchState == FetchLoading && Time.time - fetchStarted > 20f)
         {
             persistWhat = "";
@@ -1357,6 +1381,55 @@ public class EmuMachine : UdonSharpBehaviour
         fetchOffset = 0;
         persistWhat = "";
         fetchState = FetchReady;
+    }
+
+    // The field in front of the screen (docs/system/clipboard.md): as PersistStep, a show or set waits for the
+    // readback of what the guest left in the fetch's memory (the request's offset word long).
+    private void ClipStep()
+    {
+        int length = 0;
+        fetchStatus = 200;
+        if (clipWhat == "show" || clipWhat == "set")
+        {
+            if (!clipReading)
+            {
+                clipReading = true;
+                clip.Read(state, fetchOffset, clipWhat == "show");
+            }
+            if (clip.reading) return;
+            fetchStatus = clip.readStatus;
+        }
+        else if (clipWhat == "ask") clip.Ask();
+        else if (clipWhat == "hide") clip.Hide();
+        else if (clipWhat == "take")
+        {
+            byte[] got = clip.Take();
+            if (got == null) fetchStatus = 404;
+            else
+            {
+                length = Mathf.Min(got.Length, FetchMost);
+                System.Buffer.BlockCopy(got, 0, persistPart, 0, length);
+            }
+        }
+        else fetchStatus = 400;
+        if (length > 0)
+        {
+            hostData.LoadRawTextureData(persistPart);
+            hostData.Apply(false);
+        }
+        fetchLength = length;
+        fetchOffset = 0;
+        clipWhat = "";
+        fetchState = FetchReady;
+    }
+
+    // The guest is told to open an address (the desktop's bar takes it): "clip:paste" for the field's To the machine.
+    public bool AskOpenFor(string address)
+    {
+        if (!powered || displayWidth == 0) return false;
+        openSays = null;
+        openDue = address;
+        return true;
     }
 
     // The storage sign's Save: the guest is told to pack its folder, as it is told to open an address.

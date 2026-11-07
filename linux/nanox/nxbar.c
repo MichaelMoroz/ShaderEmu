@@ -29,6 +29,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 #define MWINCLUDECOLORS
@@ -1992,10 +1994,35 @@ watch_open(void)
 	}
 	if ((opened = real_vfork()) == 0) {
 		signal(SIGCHLD, SIG_DFL);
-		execlp("open", "open", address, (char *)NULL);
+		/* (the host's "To the machine" of the clipboard's field: its text onto the clipboard, docs/system/clipboard.md) */
+		if (!strncmp(address, "clip:", 5))
+			execlp("nxexport", "nxexport", "--paste", (char *)NULL);
+		else
+			execlp("open", "open", address, (char *)NULL);
 		_exit(127);
 	}
 	strcpy(opened_address, address);
+}
+
+/* The desktop's clipboard handed to the host when it has changed (docs/system/clipboard.md): the field a visitor
+ * opens with the console's Clipboard key shows it. By a program of its own, which waits for the host, not the bar. */
+static void
+watch_clip(void)
+{
+	static struct stat was;
+	static pid_t pushing;
+	struct stat now;
+
+	if (stat("/tmp/clipboard", &now) || (now.st_mtime == was.st_mtime && now.st_size == was.st_size && now.st_ino == was.st_ino))
+		return;
+	if (pushing > 0 && waitpid(pushing, NULL, WNOHANG) == 0)
+		return;	/* (the last one still at it: the next second) */
+	was = now;
+	if ((pushing = real_vfork()) == 0) {
+		signal(SIGCHLD, SIG_DFL);
+		execlp("nxexport", "nxexport", "--push", (char *)NULL);
+		_exit(127);
+	}
 }
 
 /* Tells the host which program's window has the keyboard (../apps/gameid.h). */
@@ -2680,6 +2707,7 @@ main(int argc, char **argv)
 			continue;
 		looked = now;
 		watch_open();
+		watch_clip();
 		if (closing_count)
 			closing_tick();
 		if (starting_count) {

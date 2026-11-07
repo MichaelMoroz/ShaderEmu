@@ -31,11 +31,21 @@ if [ ! -f "$LZ/lib/liblzma.a" ]; then
         --disable-xz --disable-xzdec --disable-lzmadec --disable-lzmainfo --disable-lzma-links --disable-scripts --disable-doc \
         --disable-microlzma --disable-lzip-decoder > /dev/null && make -s -j"$(nproc)" > /dev/null && make -s install > /dev/null)
 fi
+# nxexport's QR codes: Project Nayuki's generator (MIT), fetched once at its release tag
+QR=$WORK/src/qrcodegen-1.8.0
+if [ ! -f "$QR/qrcodegen.c" ]; then
+    mkdir -p "$QR"
+    for f in qrcodegen.c qrcodegen.h; do
+        curl -fsSL -o "$QR/$f" "https://raw.githubusercontent.com/nayuki/QR-Code-generator/v1.8.0/c/$f"
+    done
+fi
 # the programs compile at once, a process each; the build fails if any of them does
 build_one() {
     local p=$1 more=""
     # (its blocks are packed on the worker cores: docs/system/persist.md, "The bytes")
     [ $p = nxpersist ] && more="$ZLIB -I$LZ/include -I$REPO/programs/mc $LZ/lib/liblzma.a $WORK/src/libmedia/mcw.o $WORK/src/libmedia/mcwx.o"
+    # (a file or folder out as text or QR codes, and back: docs/apps/export.md)
+    [ $p = nxexport ] && more="$ZLIB -I$LZ/include -I$QR $QR/qrcodegen.c $LZ/lib/liblzma.a"
     [ $p = nxcalc ] || [ $p = nxsolitaire ] && more="-lm"
     # the monitor and Paint move pictures with the worker cores (ui_bulk.h) and the browser
     # makes its strips there: the library every program has for them
@@ -51,7 +61,7 @@ build_one() {
     riscv32-linux-strip -o "$OUT/bin/$p" "$WORK/src/apps/$p"
 }
 pids=()
-for p in nxedit nxfiles nxpaint nxview nxsettings nxmon nxweb nxkey nxinput nxfuzz nxicon nxask nxnet open nxpersist nxreg nxtetris nxmine nxpinball nxsolitaire nx2048 nxlife nxeyes nxclock nxterm nxcalc cabinst; do
+for p in nxedit nxfiles nxpaint nxview nxsettings nxmon nxweb nxkey nxinput nxfuzz nxicon nxask nxnet open nxpersist nxexport nxreg nxtetris nxmine nxpinball nxsolitaire nx2048 nxlife nxeyes nxclock nxterm nxcalc cabinst; do
     build_one $p & pids+=($!)
 done
 # archives unpacked on the worker cores (unarc.c: open --unpack runs it first, docs/system/open.md)
@@ -62,7 +72,8 @@ failed=0
 for pid in "${pids[@]}"; do wait $pid || failed=1; done
 [ $failed = 0 ] || { echo "a program did not build"; exit 1; }
 # the Start menu lists what the nxapps.* files name (linux/nanox/nxbar.c)
-printf '%s\n' "Utilities/Editor=nxedit" "Utilities/Files=nxfiles" "Utilities/Paint=nxpaint" "Other/Web=nxweb" "Settings=nxsettings" "Monitor=nxmon" "Network=nxnet" > "$OUT/share/nxapps.20-apps"
+printf '%s\n' "Utilities/Editor=nxedit" "Utilities/Files=nxfiles" "Utilities/Paint=nxpaint" "Other/Web=nxweb" "Settings=nxsettings" "Monitor=nxmon" "Network=nxnet" \
+    "Utilities/Import pasted text=nxexport --import" "Utilities/Clipboard in front of the screen=nxexport --clipboard" > "$OUT/share/nxapps.20-apps"
 # the card game among the games of linux/nanox/build.sh's list (after Pinball)
 echo "Games/Solitaire=nxsolitaire" > "$OUT/share/nxapps.11-solitaire"
 printf '%s\n' "Games/2048=nx2048" "Games/Life=nxlife" > "$OUT/share/nxapps.12-tiles"

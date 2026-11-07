@@ -106,7 +106,8 @@ static char ahead[24];		/* letters typed one after another: the entry that start
 static unsigned ahead_time;
 
 enum { M_OPEN = 1, M_EDIT, M_CUT, M_COPY, M_PASTE, M_PASTE_IN, M_RENAME, M_DELETE, M_SHORTCUT, M_PROPERTIES,
-	M_TILES, M_DETAILS, M_REFRESH, M_FOLDER, M_FILE, M_ARRANGE, M_SETTINGS, M_FILES, M_ALL, M_TERMINAL, M_TERMINAL_IN, M_PERSIST };
+	M_TILES, M_DETAILS, M_REFRESH, M_FOLDER, M_FILE, M_ARRANGE, M_SETTINGS, M_FILES, M_ALL, M_TERMINAL, M_TERMINAL_IN, M_PERSIST,
+	M_EXPORT, M_IMPORT };
 
 static unsigned
 milliseconds(void)
@@ -1897,6 +1898,49 @@ kilobytes(long bytes, char *text, int size)
 	return text;
 }
 
+/* Export: the selected entries to nxexport, one by its path, more by a list of them (docs/apps/export.md). */
+static void
+export_chosen(void)
+{
+	static char list[700];
+	char path[600];
+	FILE *f;
+	int i, n = 0, one = -1;
+
+	for (i = 0; i < count; i++)
+		if (entries[i].chosen)
+			n++, one = one < 0 ? i : one;
+	if (!n) {
+		strcpy(notice, "nothing is selected");
+		return;
+	}
+	if (n == 1) {
+		entry_path(one, path, sizeof path);
+		snprintf(list, sizeof list, "%s", path);
+		ui_run("nxexport", list);
+		return;
+	}
+	if (!(f = fopen("/tmp/nxexport.list", "w")))
+		return;
+	for (i = 0; i < count; i++)
+		if (entries[i].chosen) {
+			entry_path(i, path, sizeof path);
+			fprintf(f, "%s\n", path);
+		}
+	fclose(f);
+	ui_run("nxexport", "@/tmp/nxexport.list");
+}
+
+/* nxexport's one argument for an import into a folder */
+static const char *
+import_into(const char *folder)
+{
+	static char argument[620];
+
+	snprintf(argument, sizeof argument, "--import=%s", folder);
+	return argument;
+}
+
 /* Whether the folder shown is /persistence or in it. */
 static int
 in_persistence(void)
@@ -2062,6 +2106,8 @@ act(int what)
 	case M_TERMINAL: terminal_in(NULL); return;
 	case M_TERMINAL_IN: if (cursor >= 0) terminal_in(entries[cursor].name); return;
 	case M_PERSIST: persist_chosen(); break;
+	case M_EXPORT: export_chosen(); return;
+	case M_IMPORT: ui_run("nxexport", import_into(where)); return;
 	}
 	draw_all();
 }
@@ -2071,7 +2117,7 @@ act(int what)
 static void
 context_menu(int on, int x, int y, int keyboard)
 {
-	static struct ui_menu_item menu[12], made[2], view[2];
+	static struct ui_menu_item menu[16], made[2], view[2];
 	int n = 0, carried = access(CARRIED, F_OK) == 0;
 #define ROW(text, what, mark) (menu[n].label = (text), menu[n].id = (what), menu[n].icon = -1, menu[n].sub = NULL, menu[n].flags = (mark), n++)
 
@@ -2097,6 +2143,7 @@ context_menu(int on, int x, int y, int keyboard)
 		ROW("Delete", M_DELETE, 0);
 		if (!in_persistence())
 			ROW("Save to persistence", M_PERSIST, 0), menu[n - 1].icon = ui_icon_of("persistence");
+		ROW("Export...", M_EXPORT, 0);	/* (as text or QR codes: docs/apps/export.md) */
 		if (!desktop)
 			ROW("Shortcut on the desktop", M_SHORTCUT, UI_MENU_LINE);
 		ROW("Properties", M_PROPERTIES, UI_MENU_LINE);
@@ -2113,6 +2160,7 @@ context_menu(int on, int x, int y, int keyboard)
 		menu[n - 1].sub = made, menu[n - 1].sub_count = 2;
 		ROW("Terminal here", M_TERMINAL, 0);
 		menu[n - 1].icon = ui_icon_of("nxterm");
+		ROW("Import...", M_IMPORT, 0);	/* (text pasted in front of the screen: docs/apps/export.md) */
 		if (desktop) {
 			ROW("Open in Files", M_FILES, UI_MENU_LINE);
 			ROW("Settings", M_SETTINGS, 0);
