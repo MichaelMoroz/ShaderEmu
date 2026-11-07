@@ -46,6 +46,7 @@ public class EmuHolodeck : UdonSharpBehaviour
     public Slider[] volumeSliders, voiceSliders;
     public TextMeshProUGUI[] volumeLabels, voiceLabels;
     public EmuSound sound;
+    public EmuVoices voiceRange;          // its gain is the Voices slider's 100%
     public TextMeshProUGUI[] screenLabels;
     public TextMeshProUGUI[] worldLabels;   // each console's 3D key: games only, or every program
     public Collider[] plateColliders;      // a console's own, which VRChat's laser presses: off for a sitter in a headset
@@ -380,7 +381,7 @@ public class EmuHolodeck : UdonSharpBehaviour
         Hear(voices);
     }
 
-    // VRChat's defaults are 15 dB a voice and 10 an avatar's sounds; a seat's slider scales both
+    // A voice's gain is the world's (EmuVoices.gain, 18 dB) and an avatar's sounds VRChat's 10 dB; a seat's slider scales both
     private void Hear(float level)
     {
         VRCPlayerApi[] players = new VRCPlayerApi[VRCPlayerApi.GetPlayerCount()];
@@ -388,7 +389,7 @@ public class EmuHolodeck : UdonSharpBehaviour
         for (int i = 0; i < players.Length; i++)
         {
             if (!Utilities.IsValid(players[i]) || players[i].isLocal) continue;
-            players[i].SetVoiceGain(15f * level);
+            players[i].SetVoiceGain(VoiceGain() * level);
             players[i].SetAvatarAudioGain(10f * level);
         }
     }
@@ -396,9 +397,11 @@ public class EmuHolodeck : UdonSharpBehaviour
     public override void OnPlayerJoined(VRCPlayerApi player)
     {
         if (own < 0 || !Utilities.IsValid(player) || player.isLocal) return;
-        player.SetVoiceGain(15f * voices);
+        player.SetVoiceGain(VoiceGain() * voices);
         player.SetAvatarAudioGain(10f * voices);
     }
+
+    private float VoiceGain() { return voiceRange != null ? voiceRange.gain : 15f; }
 
     private bool Has(Slider[] sliders) { return sliders != null && own < sliders.Length && sliders[own] != null; }
 

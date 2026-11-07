@@ -112,9 +112,11 @@ picks start from the lifted eye too.
 
 Whoever is inside any holodeck's box, seated or standing, hears everybody who is inside one, the
 same or another, at full strength whatever the distance. Between inside and outside (the
-corridor is outside) a voice travels as VRChat's does. `EmuVoices` decides it on each client
-twice a second from where the players are and sets `SetVoiceDistanceNear` and `Far` on its own
-side (400 m both, or 0 and 25 m); nothing is synced.
+corridor is outside), and everywhere else in the world, a voice is 18 dB and carries 50 m, louder
+and further than VRChat's own 15 dB and 25 m: visitors found voices in the room too quiet and lost
+within a few metres (7 November 2026). `EmuVoices` decides it on each client twice a second from
+where the players are and sets `SetVoiceDistanceNear` and `Far` on its own side (400 m both, or 0
+and 50 m) and, while this visitor is outside, `SetVoiceGain` (`gain`); nothing is synced.
 
 ## How it is drawn
 
@@ -509,7 +511,7 @@ console.
 
 Under the World and Screen size sliders are Volume, the machine's sound (the sound panel's own
 slider, `EmuSound`, which the console's follows), and Voices, how loud the other players are to
-a sitter: their voices and their avatars' sounds, scaled from VRChat's own gains (15 and 10 dB),
+a sitter: their voices and their avatars' sounds, scaled from the world's voice gain (`EmuVoices.gain`, 18 dB) and VRChat's 10 dB,
 for this visitor alone, while seated and set back when they stand up (`Hear`). The console
 is laid out again where it stands and drawn again onto the plate it has
 (`ConsolesInPlace`, `RetroInPlace`, `PlateInPlace` in `ShaderEmuRetro.cs`): a plate made anew

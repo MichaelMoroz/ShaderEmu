@@ -750,6 +750,7 @@ public static partial class ShaderEmuBuilder
         voices.high = new Vector3[rooms];
         deck.machine = machine;
         deck.gamepad = gamepad;
+        deck.voiceRange = voices;
         deck.content = content;
         deck.scene = scene.transform;
         // off until somebody sits down (EmuHolodeck.Entered): left on, the mask stood in the den as a black box

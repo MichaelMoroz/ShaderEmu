@@ -4,14 +4,16 @@ using VRC.SDKBase;
 
 // Voices between the holodecks (docs/world/holodeck.md): whoever is in a holodeck hears everybody who
 // is in one, the same or another, at full strength whatever the distance. Between inside and
-// outside a voice travels as VRChat's does. Each client decides for itself, from where the
-// players are; nothing is synced.
+// outside, and everywhere else, a voice is louder and carries further than VRChat's own (15 dB, gone
+// at 25 m): visitors found voices in the room too quiet and lost within a few metres (7 November 2026).
+// Each client decides for itself, from where the players are; nothing is synced.
 [UdonBehaviourSyncMode(BehaviourSyncMode.None)]
 public class EmuVoices : UdonSharpBehaviour
 {
     public Vector3[] low, high;        // each room's box, in the world
     public float far = 400f;           // how far a voice carries between the rooms
-    public float nearUsual = 0f, farUsual = 25f;   // VRChat's own
+    public float nearUsual = 0f, farUsual = 50f;   // outside them (VRChat's own: 0 and 25 m)
+    public float gain = 18f;           // a voice's gain in dB outside them, and a sitter's 100% (VRChat's own: 15; at most 24)
     public bool log;                   // a line in the output log whenever the number so heard changes
 
     private VRCPlayerApi[] players = new VRCPlayerApi[100];
@@ -42,6 +44,7 @@ public class EmuVoices : UdonSharpBehaviour
             // near as far as far: no falling off with distance
             player.SetVoiceDistanceNear(both ? far : nearUsual);
             player.SetVoiceDistanceFar(both ? far : farUsual);
+            if (!here) player.SetVoiceGain(gain);   // (in a holodeck the console's Voices slider has it: EmuHolodeck.Hear)
             if (both) now++;
         }
         if (now != linked)
