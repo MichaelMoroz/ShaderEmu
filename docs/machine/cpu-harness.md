@@ -218,7 +218,8 @@ to a folder of its own.
   `tools\game_par.py` sets it, with `RVC_WCACHE`, `RVC_ADFAULT` and `RVC_RACES`
   (`docs/machine/multicore.md`, "A game's speed"; `--plain` drops all four, `RVC_ADFAULT=0` that one).
 - No keys from the host (`nxkey` in the guest makes them). The pointer goes round (`--pointer-sweep N`, from pass N; `--pointer-circle
-  X,Y,R` for a circle of its own on the display) and its buttons word is set for a while
+  X,Y,R` for a circle of its own on the display, `--pointer-at S,X,Y` still at X,Y from second S of the guest's, given
+  again a path of stops) and its buttons word is set for a while
   (`--pointer-button B,S,T`: B from second S to T of the guest's). No pages from the host
   (`docs/system/fetch.md`) but the kept folder's (`--persist FILE`, `docs/system/persist.md`).
 - As it stands, not a model of the shader machine's limits: no write cache that fills, no one-writer-per-16

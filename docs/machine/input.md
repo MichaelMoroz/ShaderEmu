@@ -16,7 +16,12 @@ is separate.
 
 - The pointer is where the host's pointer is over the picture, in the display's own pixels
   (0..width-1, 0..height-1, clamped), whatever size the picture is shown at. It needs a display
-  mode to be set.
+  mode to be set. The host gives it as a place over a panel (`_InputPointer`: x, y and the panel's size), and
+  `gpu.h` scales the picture into the panel with no margin: the world gives the display's own pixels over a panel
+  of the display's size, the place its `Display.shader` draws the cursor at (`_HostPointer`). Until 7 November 2026
+  the world still added the margin `gpu.h` lost on 17 October (x + 8 over a panel 16 larger): the guest's pointer
+  was up to 8 px toward the picture's middle from the drawn cursor, and a still pointer on a caption's close box lit
+  and pressed the box beside it. `rvc_cpu --pointer-at S,X,Y` holds the pointer still (`test_all.py wm-caption-still`).
 - A key event is a Linux key code (`KEY_A` = 30; the numbers of `linux/input-event-codes.h`)
   with bit 31 set for a press and clear for a release. The host does not repeat keys.
 - Event number n is at ring position n mod 32. A reader keeps its own count: while it differs

@@ -1623,8 +1623,10 @@ public class EmuMachine : UdonSharpBehaviour
         machineMaterial.SetInt("_InputKeyCount", keys);
         keySeq += (uint)keys;
         bool theirs = UseRemote();
-        machineMaterial.SetVector("_InputPointer", new Vector4((theirs ? remoteX : pointerX) + 8, (theirs ? remoteY : pointerY) + 8,
-                                                               displayWidth + 16, displayHeight + 16));
+        // the pointer in display pixels over a panel of the display's own size: gpu.h's mapping has had no 16-pixel margin since
+        // f6fa7ab4 (17 October 2026), and the margin kept here (+8, +16) put the guest's pointer up to 8 px toward the middle of
+        // the cursor Display.shader draws at _HostPointer: on a caption's close box the box beside it was lit and pressed
+        machineMaterial.SetVector("_InputPointer", new Vector4(theirs ? remoteX : pointerX, theirs ? remoteY : pointerY, displayWidth, displayHeight));
         machineMaterial.SetInt("_InputButtons", theirs ? remoteButtons : inputAway && !pointerOwn ? 0 : pointerButtons | moreButtons);
 
         frameMs = Time.timeSinceLevelLoad * 1000f;

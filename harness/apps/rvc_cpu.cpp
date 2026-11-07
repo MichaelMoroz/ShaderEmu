@@ -95,6 +95,8 @@ struct Options {
     int cores = 256;         // core 0 and 255 workers, as the shader machine
     long long sweep = -1;
     int circleX = -1, circleY = 0, circleR = 0;    // --pointer-circle: the sweep's own circle
+    struct PointerAt { double from; int x, y; };
+    std::vector<PointerAt> pointerAt;              // --pointer-at S,X,Y: the pointer still at X,Y from guest second S on
     std::vector<ButtonSpan> buttons;               // --pointer-button: the buttons word, between seconds of the guest's
     unsigned host[8] = {};                         // --host: the host's eight words, hex (docs/world/holodeck.md)
     unsigned hostLater[4][8] = {};                 // --host-from S W0,...: the words from guest second S on
@@ -2481,6 +2483,12 @@ static void control_pass() {
             word(CTRL + 0x24) = (u32)(opt.circleY + opt.circleR * sin(turn));
         }
     }
+    {
+        const Options::PointerAt* now = nullptr;
+        for (const auto& at : opt.pointerAt)   // (in the order given: the last whose second has come)
+            if (guest_seconds >= at.from) now = &at;
+        if (now) word(CTRL + 0x20) = (u32)now->x, word(CTRL + 0x24) = (u32)now->y;
+    }
     if (opt.host[0]) {
         // (docs/world/holodeck.md, "What the machine is told": as the world's control pass writes them)
         const unsigned* now = opt.host;
@@ -3068,6 +3076,11 @@ int main(int argc, char** argv) {
         }
         else if (a == "--pointer-sweep") opt.sweep = atoll(next("--pointer-sweep").c_str());
         else if (a == "--pointer-circle") sscanf(next("--pointer-circle").c_str(), "%d,%d,%d", &opt.circleX, &opt.circleY, &opt.circleR);
+        else if (a == "--pointer-at") {
+            Options::PointerAt at = {};
+            if (sscanf(next("--pointer-at").c_str(), "%lf,%d,%d", &at.from, &at.x, &at.y) != 3) { fprintf(stderr, "rvc_cpu: --pointer-at S,X,Y\n"); return 2; }
+            opt.pointerAt.push_back(at);
+        }
         else if (a == "--host") {
             std::string v = next("--host");
             sscanf(v.c_str(), "%x,%x,%x,%x,%x,%x,%x,%x", &opt.host[0], &opt.host[1], &opt.host[2], &opt.host[3], &opt.host[4], &opt.host[5], &opt.host[6], &opt.host[7]);
@@ -3124,6 +3137,7 @@ int main(int argc, char** argv) {
                    "                         (3700000 and 0.25: the harness; the world is about 3100000 and 0.2)\n"
                    "  --pointer-sweep N      the pointer goes round from pass N on\n"
                    "  --pointer-circle X,Y,R round that place of the display, so far from it\n"
+                   "  --pointer-at S,X,Y     the pointer still at X,Y from second S of the guest's (given again: a path of stops)\n"
                    "  --host W0,...,W7        the host's eight words in hex (docs/world/holodeck.md)\n"
                    "  --host-mouse N          and a sitter's mouse going right N counts a second\n"
                    "  --host-wheel N          and their wheel turning up N notches a second\n"

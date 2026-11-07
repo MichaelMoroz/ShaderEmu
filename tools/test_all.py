@@ -882,6 +882,14 @@ CASES = [
     case('wm-caption-hover', 'desktop wm', 'export NXWM_HOT_PRINT=1; ' + WM + "nxwintest plain a & sleep 2; nxwintest list; sleep 20", wall=120,
          more=['--pointer-sweep', '0', '--pointer-circle', '250,12,22'],
          has=[r'^win 0 a 40,20 246x', r'^nanowm: hot 1$', r'^nanowm: hot 2$', r'^nanowm: hot 3$', r'^nanowm: hot 0$']),
+    # and a pointer that jumps and then stands still (rvc_cpu --pointer-at), over a program drawing in its window (glxgears at
+    # 40,20, 306 wide, as a game): from the caption's title onto the minimise box, 50 ms later onto the close box and held there
+    # 7 s. The close box stays lit: the last move is heard, the quiet rectangle never swallows it (7 November 2026, a report from
+    # the world of the minimise box lit under a still pointer on the close box; the world's own pointer mapping was the cause)
+    case('wm-caption-still', 'desktop wm', 'export NXWM_HOT_PRINT=1; ' + WM + "glxgears >/dev/null & sleep 4; nxwintest list; sleep 10", wall=120,
+         more=['--pointer-at', '0,100,300', '--pointer-at', '14,200,30', '--pointer-at', '15,293,30', '--pointer-at', '15.05,335,30'],
+         has=[r'^win 0 glxgears 40,20 306x'], count=[(r'^nanowm: hot 3$', 1), (r'^nanowm: hot 1$', 1)],
+         never=[r'^nanowm: hot [02]$']),
     # the editors' text larger and smaller: Ctrl +, Ctrl and the wheel up, Ctrl 0; kept in the registry
     case('edit-zoom', 'desktop', WM + "echo hello > /tmp/z.c; nxedit /tmp/z.c & sleep 5; nxkey ctrl+= ctrl+= 800; echo Z1 $(nxreg get nxedit.zoom); "
          "nxkey down:ctrl wheel:300,200:1 up:ctrl 800; echo Z2 $(nxreg get nxedit.zoom); nxkey ctrl+- 800; echo Z3 $(nxreg get nxedit.zoom); "
