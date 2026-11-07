@@ -43,14 +43,15 @@ build_one() {
     # (cabinst: a game's installer unpacked on them, docs/system/install.md)
     # (Life makes its generations on the worker cores: mcwx.h's loop)
     [ $p = nxlife ] && more="-I$REPO/programs/mc $WORK/src/libmedia/mcw.o $WORK/src/libmedia/mcwx.o"
-    case $p in nxview|nxpaint|nxfiles|nxsettings|nxicon|nxweb|cabinst)
+    # (nxconvert: pictures, sound and films made into other kinds, docs/apps/convert.md)
+    case $p in nxview|nxpaint|nxfiles|nxsettings|nxicon|nxweb|cabinst|nxconvert)
         more="-I$REPO/linux/libmedia -I$REPO/programs/mc $MEDIA $WORK/src/libmedia/mcw.o $WORK/src/libmedia/mcwx.o -lm -Wl,--gc-sections" ;;
     esac
     rv32-cc -O2 -Wall -Wno-unused-function -I"$MW/src/include" -I"$HERE/../userland" "$HERE/$p.c" $more "$MW/src/lib/libnano-X.a" -o "$WORK/src/apps/$p"
     riscv32-linux-strip -o "$OUT/bin/$p" "$WORK/src/apps/$p"
 }
 pids=()
-for p in nxedit nxfiles nxpaint nxview nxsettings nxmon nxweb nxkey nxinput nxfuzz nxicon nxask nxnet open nxpersist nxreg nxtetris nxmine nxpinball nxsolitaire nx2048 nxlife nxeyes nxclock nxterm nxcalc cabinst; do
+for p in nxedit nxfiles nxpaint nxview nxsettings nxmon nxweb nxkey nxinput nxfuzz nxicon nxask nxnet open nxpersist nxreg nxtetris nxmine nxpinball nxsolitaire nx2048 nxlife nxeyes nxclock nxterm nxcalc cabinst nxconvert; do
     build_one $p & pids+=($!)
 done
 # archives unpacked on the worker cores (unarc.c: open --unpack runs it first, docs/system/open.md)
@@ -61,7 +62,7 @@ failed=0
 for pid in "${pids[@]}"; do wait $pid || failed=1; done
 [ $failed = 0 ] || { echo "a program did not build"; exit 1; }
 # the Start menu lists what the nxapps.* files name (linux/nanox/nxbar.c)
-printf '%s\n' "Utilities/Editor=nxedit" "Utilities/Files=nxfiles" "Utilities/Paint=nxpaint" "Other/Web=nxweb" "Settings=nxsettings" "Monitor=nxmon" "Network=nxnet" > "$OUT/share/nxapps.20-apps"
+printf '%s\n' "Utilities/Editor=nxedit" "Utilities/Files=nxfiles" "Utilities/Paint=nxpaint" "Utilities/Converter=nxconvert" "Other/Web=nxweb" "Settings=nxsettings" "Monitor=nxmon" "Network=nxnet" > "$OUT/share/nxapps.20-apps"
 # the card game among the games of linux/nanox/build.sh's list (after Pinball)
 echo "Games/Solitaire=nxsolitaire" > "$OUT/share/nxapps.11-solitaire"
 printf '%s\n' "Games/2048=nx2048" "Games/Life=nxlife" > "$OUT/share/nxapps.12-tiles"

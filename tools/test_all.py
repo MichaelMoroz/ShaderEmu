@@ -531,6 +531,32 @@ CASES = [
          has=[r"pictures' sum 3129e37f", r"sound's sum 6dd01fde"]),
     case('media-avi-none', 'media long', 'media_test video "/root/Videos/Big Buck Bunny.avi" 0', wall=600,
          has=[r"pictures' sum 3129e37f", r"sound's sum 6dd01fde"]),
+    # the converter (docs/apps/convert.md): the fox into every picture format and at half its size, the files' sums
+    # (a picture's are media_test-host encode's on the build computer); FLAC and WAV, the FLAC decoded again to the MP3's
+    # samples, the same file with no workers; the films into MJPEG AVI and read back (the MPEG's AVI the host's filmenc),
+    # an animated GIF and every 48th picture
+    case('convert-pictures', 'media desktop apps', 'cd /tmp; for f in png jpg gif bmp ppm tga; do nxconvert --to $f /usr/share/picture-fox.jpg /tmp/fox.$f; done; '
+         'nxconvert --to jpg --scale 50 /usr/share/picture-fox.png /tmp/half.jpg; nxconvert --to png /usr/share/picture-fox.jpg /tmp/fox.png', True,
+         sums=[(r'^nxconvert: made .* sum ([0-9a-f]+),', ['5b38ecc9', 'bd0b8027', '3cae98ae', '0a40b790', '57d14865', '397b512a', '5d2ed007'])],
+         has=[r'^nxconvert: not made: a file of that name is there already']),
+    case('convert-sound', 'media apps', 'cd /tmp; nxconvert --to flac /usr/share/play-test.mp3 /tmp/t.flac; nxconvert --to wav /usr/share/play-test.flac /tmp/t.wav; '
+         'media_test audio /tmp/t.flac /tmp/a.raw 8; NXCONVERT_WORKERS=0 nxconvert --to flac /usr/share/play-test.mp3 /tmp/t0.flac; '
+         'nxconvert --to flac "/root/Videos/Big Buck Bunny.avi" /tmp/b.flac; media_test audio /tmp/b.flac /tmp/b.raw 4', True, wall=400,
+         sums=[(r'^nxconvert: made .* sum ([0-9a-f]+),', ['8ca12520', '6bcc8ea3', '8ca12520', '33990159']),
+               (r'^audio /tmp/\w\.flac: .* sum ([0-9a-f]+)', ['aa07a2e5', 'caab0fc3'])]),
+    case('convert-film', 'media apps', 'cd /tmp; nxconvert --to avi "/root/Videos/Big Buck Bunny.avi" /tmp/b.avi; MEDIA_TEST_QUIET=1 media_test video /tmp/b.avi 8; '
+         'NXCONVERT_TIMES=1 nxconvert --to avi --quality 75 "/root/Videos/Big Buck Bunny.mpg" /tmp/m.avi; MEDIA_TEST_QUIET=1 media_test video /tmp/m.avi 8; '
+         'nxconvert --to gif --scale 50 --every 4 "/root/Videos/Big Buck Bunny.mpg" /tmp/m.gif; '
+         'nxconvert --to jpg --every 48 --quality 80 "/root/Videos/Big Buck Bunny.avi" /tmp/p.jpg; test -f /tmp/p-0002.jpg && echo P2-THERE', True, wall=600,
+         sums=[(r'^nxconvert: made .* sum ([0-9a-f]+),', ['4e0789ff', '2c5a85f1', 'b10560b8', '13f75eba']),
+               (r"pictures' sum ([0-9a-f]+)", ['26ebe6f9', '396b3d97']), (r"sound's sum ([0-9a-f]+)", ['6dd01fde', '96a296a2'])],
+         has=[r'^nxconvert: made 2 JPEG pictures /tmp/p-0001\.jpg to p-0002\.jpg', r'^P2-THERE',
+              r'^nxconvert: the sound \d+ ms, the pictures in 5 batches of 96']),
+    # its window: the fox opened, PNG chosen and Convert pressed (the window's inside at 43,46), the file beside it
+    case('convert-window', 'media desktop apps', 'cp /usr/share/picture-fox.jpg /tmp/f.jpg; ' + X + 'NXCONVERT_PRINT=1 nxconvert /tmp/f.jpg & sleep 8; '
+         'nxkey 215,133; sleep 2; nxkey 390,341; sleep 25; ls -l /tmp/f.png; nxkey escape; sleep 2; pidof nxconvert; echo PIDOF=$?', True, wall=400,
+         has=[r'^nxconvert: button PNG at 172,87', r'^nxconvert: button Convert at 347,295', r'^nxconvert: made /tmp/f\.png: PNG picture, 640 x 480, 227682 bytes, sum 5b38ecc9',
+              r'^PIDOF=1']),
     case('nxplay', 'media', '; '.join(f'NXPLAY_SUM=1 nxplay /usr/share/play-test.{e}' for e in ('wav', 'flac', 'mod', 'mp3')) +
          '; NXPLAY_WORKERS=0 NXPLAY_HALF=0 NXPLAY_SUM=1 nxplay /usr/share/play-test.mp3', True, wall=600,
          sums=[(r'nxplay: sum ([0-9a-f]+ of \d+) samples', ['e5fd8f8c of 141120', '1a14a562 of 176400', '98e66905 of 1354752',

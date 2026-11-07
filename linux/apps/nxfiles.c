@@ -106,7 +106,8 @@ static char ahead[24];		/* letters typed one after another: the entry that start
 static unsigned ahead_time;
 
 enum { M_OPEN = 1, M_EDIT, M_CUT, M_COPY, M_PASTE, M_PASTE_IN, M_RENAME, M_DELETE, M_SHORTCUT, M_PROPERTIES,
-	M_TILES, M_DETAILS, M_REFRESH, M_FOLDER, M_FILE, M_ARRANGE, M_SETTINGS, M_FILES, M_ALL, M_TERMINAL, M_TERMINAL_IN, M_PERSIST };
+	M_TILES, M_DETAILS, M_REFRESH, M_FOLDER, M_FILE, M_ARRANGE, M_SETTINGS, M_FILES, M_ALL, M_TERMINAL, M_TERMINAL_IN, M_PERSIST,
+	M_CONVERT };
 
 static unsigned
 milliseconds(void)
@@ -1212,6 +1213,16 @@ open_entry(int i, int edit)
 	ui_launch_started(child);
 }
 
+/* The menu's "Convert...": the converter, with the entry (docs/apps/convert.md). */
+static void
+convert_entry(int i)
+{
+	char path[600];
+
+	entry_path(i, path, sizeof path);
+	ui_run("nxconvert", path);
+}
+
 /* Makes entry i the one the keys work on, in view; `extend` selects from the anchor to it. */
 static void
 move_to(int i, int extend)
@@ -2062,6 +2073,7 @@ act(int what)
 	case M_TERMINAL: terminal_in(NULL); return;
 	case M_TERMINAL_IN: if (cursor >= 0) terminal_in(entries[cursor].name); return;
 	case M_PERSIST: persist_chosen(); break;
+	case M_CONVERT: if (cursor >= 0) convert_entry(cursor); return;
 	}
 	draw_all();
 }
@@ -2087,6 +2099,9 @@ context_menu(int on, int x, int y, int keyboard)
 		ROW("Open", M_OPEN, 0);
 		if (kind_of(on) != K_FOLDER && entries[on].kind != K_SHORTCUT)
 			ROW("Edit", M_EDIT, 0);
+		/* a picture, a sound or a film made into another kind (nxconvert, docs/apps/convert.md) */
+		if (entries[on].kind == K_PICTURE || entries[on].kind == K_SOUND || entries[on].kind == K_VIDEO)
+			ROW("Convert...", M_CONVERT, 0), menu[n - 1].icon = ui_icon_of("nxconvert");
 		ROW("Cut", M_CUT, UI_MENU_LINE);
 		ROW("Copy", M_COPY, 0);
 		if (entries[on].kind == K_FOLDER)

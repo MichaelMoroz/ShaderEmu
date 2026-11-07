@@ -566,11 +566,11 @@ m_for_grain(uint32_t n, mcw_body fn, void *ctx, uint32_t grain, int workers)
 		told_for.on = 0;
 }
 
-void
-media_image_fit(const struct media_image *in, struct media_image *out, int cover, int workers)
+static void
+fit_setup(struct fit *f_, const struct media_image *in, struct media_image *out, int cover)
 {
 	struct fit f;
-	int w = in->width, h = in->height, got;
+	int w = in->width, h = in->height;
 
 	memset(&f, 0, sizeof f);
 	f.in = in, f.out = out;
@@ -591,9 +591,28 @@ media_image_fit(const struct media_image *in, struct media_image *out, int cover
 		if (f.dh < 1) f.dh = 1;
 		f.dx0 = (out->width - f.dw) / 2, f.dy0 = (out->height - f.dh) / 2;
 	}
+	*f_ = f;
+}
+
+void
+media_image_fit(const struct media_image *in, struct media_image *out, int cover, int workers)
+{
+	struct fit f;
+	int got;
+
+	fit_setup(&f, in, out, cover);
 	got = m_workers_begin(workers);
 	m_for((uint32_t)out->height, fit_rows, &f, (uint32_t)out->stride, got);
 	m_workers_end();
+}
+
+void
+m_fit_alone(const struct media_image *in, struct media_image *out, int cover)
+{
+	struct fit f;
+
+	fit_setup(&f, in, out, cover);
+	fit_rows(&f, 0, (uint32_t)out->height);
 }
 
 /* How much smaller a picture of w x h may be decoded and still be at least the size it is shown at. */
@@ -734,6 +753,38 @@ media_bmp_encode(const struct media_image *image, uint32_t *size)
 	return f;
 }
 
+/* A TGA: uncompressed, 24 bits (32 with an alpha of 4 channels not laid over the background), its rows from the top. */
+uint8_t *
+media_tga_encode(const struct media_image *image, uint32_t *size)
+{
+	int alpha = image->channels == 4 && !image->opaque, out = alpha ? 4 : 3, y, x;
+	uint8_t *f, *o;
+
+	*size = 18 + (uint32_t)image->width * (uint32_t)image->height * (uint32_t)out;
+	if (image->width > 65535 || image->height > 65535 || !(f = m_map(*size)))
+		return NULL;
+	memset(f, 0, 18);
+	f[2] = 2;	/* true colour, not packed */
+	f[12] = (uint8_t)image->width, f[13] = (uint8_t)(image->width >> 8);
+	f[14] = (uint8_t)image->height, f[15] = (uint8_t)(image->height >> 8);
+	f[16] = (uint8_t)(out * 8);
+	f[17] = (uint8_t)(0x20 | (alpha ? 8 : 0));	/* from the top; 8 bits of alpha */
+	o = f + 18;
+	for (y = 0; y < image->height; y++) {
+		const uint8_t *p = image->pixels + (uint32_t)y * (uint32_t)image->stride;
+
+		for (x = 0; x < image->width; x++, p += image->channels, o += out) {
+			if (image->bgr)
+				o[0] = p[0], o[1] = p[1], o[2] = p[2];
+			else
+				o[0] = p[2], o[1] = p[1], o[2] = p[0];
+			if (alpha)
+				o[3] = p[3];
+		}
+	}
+	return f;
+}
+
 const char *
 media_image_save(const char *path, const struct media_image *image, int quality, int workers)
 {
@@ -746,6 +797,7 @@ media_image_save(const char *path, const struct media_image *image, int quality,
 	case MEDIA_JPEG: f = media_jpeg_encode(image, quality > 0 ? quality : 90, &size, workers); break;
 	case MEDIA_BMP: f = media_bmp_encode(image, &size); break;
 	case MEDIA_GIF: f = media_gif_encode(image, &size, workers); break;
+	case MEDIA_TGA: f = media_tga_encode(image, &size); break;
 	default: f = media_ppm_encode(image, &size); break;
 	}
 	if (!f)

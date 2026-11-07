@@ -25,6 +25,7 @@ nxweb                   apps/internet-web-browser
 nxmon                   apps/utilities-system-monitor
 nxsettings              apps/preferences-desktop
 nxview                  nxview
+nxconvert               apps/handbrake
 nxgame                  nxgame
 nxnet                   places/network-workgroup places/network apps/preferences-system-network
 nxplay                  nxplay

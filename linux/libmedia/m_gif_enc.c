@@ -26,7 +26,7 @@ struct genc {
 	uint32_t *piece_bytes;		/* 16 bytes a piece */
 	uint32_t *piece_at;		/* where each piece's bytes begin in the codes put together */
 	uint8_t *file;
-	uint32_t head, total;		/* the file's bytes before the codes; the codes' */
+	uint32_t head, total, bytes;	/* the file's bytes before the codes; the codes'; the file's */
 };
 
 static const uint8_t bayer[16] = { 0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5 };
@@ -261,6 +261,9 @@ blocks_pages(void *ctx, uint32_t from, uint32_t to)
 		memcpy(e->file + o, e->codes + k * e->room + (d - e->piece_at[k]), n);
 		o += n;
 	}
+	/* the end and the trailer by the core of the last page (the first core storing to it after would share its texel) */
+	if (to * PAGE >= e->bytes)
+		e->file[e->bytes - 2] = 0, e->file[e->bytes - 1] = 0x3b;
 }
 
 uint8_t *
@@ -385,8 +388,8 @@ media_gif_encode(const struct media_image *image, uint32_t *size, int workers)
 	*p++ = (uint8_t)e->w, *p++ = (uint8_t)(e->w >> 8), *p++ = (uint8_t)e->h, *p++ = (uint8_t)(e->h >> 8), *p++ = 0;
 	*p++ = (uint8_t)e->min_code;
 	e->file = f;
-	m_for((*size - 2 + PAGE - 1) / PAGE, blocks_pages, e, 0, got);
-	f[*size - 2] = 0, f[*size - 1] = 0x3b;
+	e->bytes = *size;
+	m_for((*size + PAGE - 1) / PAGE, blocks_pages, e, 0, got);
 done:
 	m_workers_end();
 	m_unmap(e->sets, cores * SET * 4);

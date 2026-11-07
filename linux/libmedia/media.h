@@ -70,13 +70,14 @@ uint8_t *media_png_encode(const struct media_image *image, int level, uint32_t *
 uint8_t *media_jpeg_encode(const struct media_image *image, int quality, uint32_t *size, int workers);
 uint8_t *media_bmp_encode(const struct media_image *image, uint32_t *size);
 uint8_t *media_ppm_encode(const struct media_image *image, uint32_t *size);
+uint8_t *media_tga_encode(const struct media_image *image, uint32_t *size);
 /* A GIF: the picture's own colours when it has 256 or fewer, else 252 fixed ones, dithered. */
 uint8_t *media_gif_encode(const struct media_image *image, uint32_t *size, int workers);
 /* An animated GIF: count frames of one size, each with its own colours, shown delays_ms[n] each
  * (NULL: 100), the whole played loops times (0: for ever). */
 uint8_t *media_gif_anim_encode(const struct media_image *frames, int count, const int *delays_ms, int loops, uint32_t *size,
 			       int workers);
-/* Writes a picture as its name's ending asks (.png .jpg .jpeg .gif .bmp .ppm; another: PPM). */
+/* Writes a picture as its name's ending asks (.png .jpg .jpeg .gif .bmp .tga .ppm; another: PPM). */
 const char *media_image_save(const char *path, const struct media_image *image, int quality, int workers);
 void media_free(void *memory, uint32_t size);
 /* Called on the first core while a picture is decoded, when not NULL: `done` of `total`, or a
@@ -173,6 +174,13 @@ int media_audio_mix_rate(struct media_audio *audio, int rate);
 uint32_t media_audio_decode_all(struct media_audio *audio, int16_t *to, uint32_t most_frames, int workers);
 void media_audio_close(struct media_audio *audio);
 
+/* Sound encoded (docs/system/media.md, "Sound encoded"): `count` frames of 16-bit samples, `channels` (1 or 2) a frame.
+ * A file the library maps (free with media_free), its length in *size; NULL when there is no memory. A WAV is the
+ * samples after a header; a FLAC is blocks of 4,096 frames (fixed predictors, Rice codes, the cheaper of left/right,
+ * left/side, side/right and mid/side), each encoded by a core, so that this library decodes it in pieces. */
+uint8_t *media_wav_encode(const int16_t *frames, uint32_t count, int rate, int channels, uint32_t *size);
+uint8_t *media_flac_encode(const int16_t *frames, uint32_t count, int rate, int channels, uint32_t *size, int workers);
+
 /* ---------------------------------------------------------------- films */
 
 /*
@@ -225,6 +233,27 @@ uint32_t media_video_sound(struct media_video *video, uint32_t first, int16_t *t
 /* Lets the workers go on with the decoding (the first core calls it between frames). */
 void media_video_pump(struct media_video *video);
 void media_video_close(struct media_video *video);
+/* A film's picture (as media_video_frame gave it, of the film's format) as pixels of `out` (its size, 3 or 4 channels,
+ * pixels given), rows on every core. NULL, or why not. */
+const char *media_video_picture(const struct media_video_info *info, const uint8_t *frame, const uint32_t *palette,
+				struct media_image *out, int workers);
+
+/*
+ * Motion JPEG in AVI written (docs/system/media.md, "Films written"): pictures of width x height, fps_milli a thousand
+ * seconds, and 16-bit PCM sound of `rate` and `channels` (rate 0: none), in the order given (a picture's sound after it,
+ * say). Each picture is this library's JPEG at `quality` (restart intervals, encoded over every core). End makes the
+ * file (mapped: media_free) and lets the writer go, NULL when there is no memory or no picture.
+ */
+struct media_avi_out;
+struct media_avi_out *media_avi_begin(int width, int height, int fps_milli, int rate, int channels);
+const char *media_avi_picture(struct media_avi_out *avi, const struct media_image *picture, int quality, int workers);
+const char *media_avi_sound(struct media_avi_out *avi, const int16_t *frames, uint32_t count);
+uint8_t *media_avi_end(struct media_avi_out *avi, uint32_t *size);
+/* `count` pictures of a film (as media_video_frame gave them, `stride` bytes apart; a PAL8 one's palette 256 words each),
+ * each made the AVI's size and encoded on a core of its own, side by side; their chunks in order, after picture k
+ * sound_counts[k] frames of `sound` (one after another; sound_counts NULL: none). NULL, or what is wrong. */
+const char *media_avi_film(struct media_avi_out *avi, const struct media_video_info *info, const uint8_t *frames, uint32_t stride,
+			   const uint32_t *palettes, int count, int quality, const int16_t *sound, const uint32_t *sound_counts, int workers);
 
 /* ---------------------------------------------------------------- pieces for a game's own players */
 
