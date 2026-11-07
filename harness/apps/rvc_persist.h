@@ -13,7 +13,51 @@ struct PersistHost {
     std::string file;                        // --persist FILE; FILE.auto says "0" when loading at start is off
 
     static bool is(const std::string& address) {
-        return address.rfind("persist:", 0) == 0 || address == "host:name" || address.rfind("clip:", 0) == 0;
+        return address.rfind("persist:", 0) == 0 || address == "host:name" || address.rfind("clip:", 0) == 0 ||
+               address.rfind("photo:", 0) == 0;
+    }
+
+    // "photo:show=TEXEL,ENTRIES,TAIL,NAME" (docs/apps/export.md, "A photo"): the world draws a zip into VRChat's camera's
+    // pictures (Photo.shader). Here RVC_PHOTO=FILE gets the 24-bit bitmap such a picture saved from Paint is, at
+    // RVC_PHOTO_SIZE=WxH (1920x1080), by the shader's own sums; `ram` is the machine's RAM from 0x80000000, `ramSize` long.
+    // Without RVC_PHOTO a photo is shown (200) and nothing is written, as a world with no camera in the cube.
+    static inline const uint8_t* ram = nullptr;
+    static inline size_t ramSize = 0;
+
+    // The byte of the bitmap file at `f` (f >= 54): the entries after the header, the directory at the end, its start's word made here.
+    static uint8_t photoByte(uint64_t f, uint64_t fileSize, const uint8_t* at, uint32_t entries, uint32_t tail) {
+        uint64_t tailAt = fileSize - tail;
+        if (f - 54 < entries) return at[f - 54];
+        if (f < tailAt) return 0;
+        uint64_t t = f - tailAt;
+        if (t >= tail - 6 && t < tail - 2) return (uint8_t)(tailAt >> (8 * (t - (tail - 6))));   // (the end's word 16: where the directory begins)
+        return at[entries + t];
+    }
+
+    static unsigned photoAnswer(const std::string& what) {
+        if (what == "hide") return 200;
+        if (what.rfind("show=", 0) != 0) return 400;
+        unsigned texel = 0, entries = 0, tail = 0, w = 1920, h = 1080;
+        if (sscanf(what.c_str() + 5, "%u,%u,%u", &texel, &entries, &tail) != 3 || tail < 22) return 400;
+        const char* file = getenv("RVC_PHOTO");
+        if (!file || !*file) return 200;
+        const char* size = getenv("RVC_PHOTO_SIZE");
+        if (size && *size) sscanf(size, "%ux%u", &w, &h);
+        uint64_t row = (uint64_t)w * 3, fileSize = 54 + row * h;
+        if (row % 4 || 54 + (uint64_t)entries + tail > fileSize || !ram || (uint64_t)texel * 16 + entries + tail > ramSize) return 413;
+        const uint8_t* at = ram + (size_t)texel * 16;
+        std::vector<uint8_t> bmp((size_t)fileSize);
+        uint8_t* b = bmp.data();
+        auto le = [&](size_t o, uint32_t v, int n) { for (int i = 0; i < n; i++) b[o + i] = (uint8_t)(v >> (8 * i)); };
+        b[0] = 'B', b[1] = 'M', le(2, (uint32_t)fileSize, 4), le(10, 54, 4), le(14, 40, 4), le(18, w, 4), le(22, h, 4);
+        le(26, 1, 2), le(28, 24, 2), le(34, (uint32_t)(row * h), 4), le(38, 3780, 4), le(42, 3780, 4);   // (Paint's: 96 dots an inch)
+        // the picture's pixels, as the shader draws them: (x, row from the bottom) holds the file's bytes from
+        // 54 + row * w * 3 + x * 3, blue, green, red; written here by their place in the file, which is the same
+        for (uint64_t f = 54; f < fileSize; f++) b[f] = photoByte(f, fileSize, at, entries, tail);
+        FILE* out = fopen(file, "wb");
+        if (!out) return 500;
+        bool fine = fwrite(b, 1, bmp.size(), out) == bmp.size();
+        return fclose(out) == 0 && fine ? 200 : 500;
     }
     static bool clip(const std::string& address) { return address.rfind("clip:", 0) == 0; }
     static const unsigned kClipMost = 0x40000;   // what the guest hands over for "clip:show" and "clip:set": the fetch's 256 KB
@@ -90,6 +134,7 @@ struct PersistHost {
     unsigned answer(const std::string& address, unsigned offset, const uint8_t* data, std::vector<uint8_t>& reply) const {
         reply.clear();
         if (clip(address)) return clipAnswer(address.substr(5), offset, data, reply);
+        if (address.rfind("photo:", 0) == 0) return photoAnswer(address.substr(6));
         std::string what = address.substr(8);
         if (address == "host:name") {
             std::string name = player();

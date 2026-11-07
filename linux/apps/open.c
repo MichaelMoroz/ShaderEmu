@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -288,6 +289,94 @@ name_from(const char *address, char *name, size_t room)
 		snprintf(name, room, "download");
 }
 
+/*
+ * A photo of a file (nxexport's, docs/apps/export.md, "A photo"): a picture whose pixels are the bytes of a 24-bit
+ * bitmap (54 bytes of header, then rows from the bottom, blue, green, red) that is a zip: its entries from byte 54,
+ * its directory at the file's end. The bitmap's byte at `f` of a picture w pixels wide, from its pixels as the host
+ * gives them (a word each, rows from the top, red in the low byte).
+ */
+static uint8_t
+photo_byte(const uint32_t *pixels, uint32_t w, uint32_t h, uint64_t f)
+{
+	uint64_t i = f - 54, p = i / 3;
+	uint32_t row = (uint32_t)(p / w), x = (uint32_t)(p % w), c = pixels[(uint64_t)(h - 1 - row) * w + x];
+
+	return (uint8_t)(i % 3 == 0 ? c >> 16 : i % 3 == 1 ? c >> 8 : c);
+}
+
+static uint32_t
+le32(const uint8_t *p)
+{
+	return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24;
+}
+
+/* The picture's top row (the file's last bytes) ends with a zip's end whose directory lies in a file of this size. */
+static int
+photo_like(const uint32_t *top, uint32_t w, uint32_t h)
+{
+	uint64_t size = 54 + 3ull * w * h, i;
+	uint8_t end[22];
+	uint32_t cd_size, cd_at;
+
+	if (w < 8 || (w * 3) % 4)
+		return 0;
+	for (i = 0; i < 22; i++)	/* (the file's last w * 3 bytes are the top row: counted from the bottom, row h - 1) */
+		end[i] = photo_byte(top, w, h, size - 22 + i);	/* (only row h - 1 is read: the top row, index x) */
+	cd_size = le32(end + 12), cd_at = le32(end + 16);
+	return le32(end) == 0x06054b50 && end[20] == 0 && end[21] == 0 && cd_at >= 54 && (uint64_t)cd_at + cd_size + 22 == size;
+}
+
+/* The zip a photo's pixels hold, made whole again without the bitmap's header and the gap before its directory:
+ * at `zip`, its length; 0 if it is none. */
+static uint32_t
+photo_zip(const uint32_t *pixels, uint32_t w, uint32_t h, uint8_t **zip)
+{
+	uint64_t size = 54 + 3ull * w * h, f;
+	uint8_t *file = malloc((size_t)size), *out, *e;
+	uint32_t cd_size, cd_at, entries_end = 54, n, k, at;
+
+	*zip = NULL;
+	if (!file)
+		return 0;
+	for (f = 54; f < size; f++)
+		file[f] = photo_byte(pixels, w, h, f);
+	e = file + size - 22;
+	cd_size = le32(e + 12), cd_at = le32(e + 16), n = e[10] | e[11] << 8;
+	/* where the last entry ends: each local header's own name and extra lengths, and its packed size */
+	for (k = 0, at = cd_at; k < n; k++) {
+		uint32_t local, end;
+
+		if (at + 46 > cd_at + cd_size || le32(file + at) != 0x02014b50)
+			return free(file), 0;
+		local = le32(file + at + 42);
+		if (local < 54 || local + 30 > cd_at || le32(file + local) != 0x04034b50)
+			return free(file), 0;
+		end = local + 30 + (file[local + 26] | file[local + 27] << 8) + (file[local + 28] | file[local + 29] << 8) + le32(file + at + 20);
+		if (end > cd_at)
+			return free(file), 0;
+		if (end > entries_end)
+			entries_end = end;
+		at += 46 + (file[at + 28] | file[at + 29] << 8) + (file[at + 30] | file[at + 31] << 8) + (file[at + 32] | file[at + 33] << 8);
+	}
+	if (!(out = malloc(entries_end - 54 + cd_size + 22)))
+		return free(file), 0;
+	memcpy(out, file + 54, entries_end - 54);
+	memcpy(out + entries_end - 54, file + cd_at, cd_size + 22);
+	/* the offsets from the zip's own start: every entry's in the directory, and the directory's in its end */
+	for (k = 0, at = entries_end - 54; k < n; k++) {
+		uint32_t v = le32(out + at + 42) - 54;
+
+		out[at + 42] = (uint8_t)v, out[at + 43] = (uint8_t)(v >> 8), out[at + 44] = (uint8_t)(v >> 16), out[at + 45] = (uint8_t)(v >> 24);
+		at += 46 + (out[at + 28] | out[at + 29] << 8) + (out[at + 30] | out[at + 31] << 8) + (out[at + 32] | out[at + 33] << 8);
+	}
+	e = out + entries_end - 54 + cd_size;
+	e[16] = (uint8_t)(entries_end - 54), e[17] = (uint8_t)((entries_end - 54) >> 8), e[18] = (uint8_t)((entries_end - 54) >> 16);
+	e[19] = (uint8_t)((entries_end - 54) >> 24);
+	free(file);
+	*zip = out;
+	return entries_end - 54 + cd_size + 22;
+}
+
 /* What an address holds, into a file under FOLDER whose path is returned in `path`; 0, with a
  * line said, if it did not come. */
 static int
@@ -340,8 +429,52 @@ fetch(const char *address, char *path, size_t room)
 		static uint8_t rgb[FETCH_MOST];
 		uint32_t size = regs[REG_REPLY + 3], w = size & 0x7fff, h = size >> 16, i, done = 0;
 		int rgba = (size & FETCH_RGBA) != 0;
+		uint32_t *photo = NULL;	/* a photo of a file: every pixel kept, the zip made of them at the end */
 
 		name_from(address, name, sizeof name - 4);
+		if (rgba && w && h && photo_like((const uint32_t *)fetched, w, h) && (photo = malloc((size_t)w * h * 4)) != NULL) {
+			/* (its name without the picture's ending: a zip) */
+			char *dot = strrchr(name, '.');
+
+			if (dot && (!strcasecmp(dot, ".png") || !strcasecmp(dot, ".bmp")))
+				*dot = 0;
+			for (;;) {
+				uint32_t here = w * h - done < FETCH_MOST / 4 ? w * h - done : FETCH_MOST / 4;
+
+				memcpy(photo + done, fetched, here * 4);
+				done += here;
+				progress_show(done, (unsigned long long)w * h, progress_megabytes(done * 3ull, w * h * 3ull));
+				if (done >= w * h)
+					break;
+				status = ask(address, done * 4, 40);
+				if (status != 200 || regs[REG_REPLY + 3] != size) {
+					why_of(status);
+					printf("open: the host stopped at %u of %u pixels (%d)\n", (unsigned)done, (unsigned)(w * h), status);
+					free(photo);
+					return 0;
+				}
+			}
+			{
+				uint8_t *zip;
+				uint32_t n = photo_zip(photo, w, h, &zip);
+
+				free(photo);
+				snprintf(path, room, FOLDER "/%s.zip", name);
+				if (!n || (file = fopen(path, "wb")) == NULL || fwrite(zip, 1, n, file) != n) {
+					if (file)
+						fclose(file);
+					free(zip);
+					snprintf(why, sizeof why, "the picture looked like a photo of a zip, but its directory is damaged");
+					printf("open: %s\n", why);
+					return 0;
+				}
+				fclose(file);
+				printf("open: %s, %u bytes from a photo of %u x %u, sum %08x\n", path, (unsigned)n, (unsigned)w, (unsigned)h,
+				       (unsigned)crc32(zip, n, 0));
+				free(zip);
+				return 1;
+			}
+		}
 		snprintf(path, room, FOLDER "/%s.%s", name, rgba ? "tga" : "ppm");
 		if (w == 0 || h == 0 || (file = fopen(path, "wb")) == NULL) {
 			snprintf(why, sizeof why, "the picture cannot be kept in " FOLDER);

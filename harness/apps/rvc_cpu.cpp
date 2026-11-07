@@ -2316,6 +2316,7 @@ static void persist_pass() {
     if (!PersistHost::is(address)) return;
     PersistHost host;
     host.file = opt.persist;
+    PersistHost::ram = ram.data(), PersistHost::ramSize = ram.size();   // (a photo is drawn from RAM: docs/apps/export.md, "A photo")
     std::vector<uint8_t> reply;
     u32 status = host.answer(address, word(CTRL + 0x10c), &ram[DATA - RAM_BASE], reply);
     if (!reply.empty()) {

@@ -31,21 +31,13 @@ if [ ! -f "$LZ/lib/liblzma.a" ]; then
         --disable-xz --disable-xzdec --disable-lzmadec --disable-lzmainfo --disable-lzma-links --disable-scripts --disable-doc \
         --disable-microlzma --disable-lzip-decoder > /dev/null && make -s -j"$(nproc)" > /dev/null && make -s install > /dev/null)
 fi
-# nxexport's QR codes: Project Nayuki's generator (MIT), fetched once at its release tag
-QR=$WORK/src/qrcodegen-1.8.0
-if [ ! -f "$QR/qrcodegen.c" ]; then
-    mkdir -p "$QR"
-    for f in qrcodegen.c qrcodegen.h; do
-        curl -fsSL -o "$QR/$f" "https://raw.githubusercontent.com/nayuki/QR-Code-generator/v1.8.0/c/$f"
-    done
-fi
 # the programs compile at once, a process each; the build fails if any of them does
 build_one() {
     local p=$1 more=""
     # (its blocks are packed on the worker cores: docs/system/persist.md, "The bytes")
     [ $p = nxpersist ] && more="$ZLIB -I$LZ/include -I$REPO/programs/mc $LZ/lib/liblzma.a $WORK/src/libmedia/mcw.o $WORK/src/libmedia/mcwx.o"
-    # (a file or folder out as text or QR codes, and back: docs/apps/export.md)
-    [ $p = nxexport ] && more="$ZLIB -I$LZ/include -I$QR $QR/qrcodegen.c $LZ/lib/liblzma.a"
+    # (a file or folder out as a photo or as text, and back: docs/apps/export.md)
+    [ $p = nxexport ] && more="$ZLIB -I$LZ/include $LZ/lib/liblzma.a"
     [ $p = nxcalc ] || [ $p = nxsolitaire ] && more="-lm"
     # the monitor and Paint move pictures with the worker cores (ui_bulk.h) and the browser
     # makes its strips there: the library every program has for them

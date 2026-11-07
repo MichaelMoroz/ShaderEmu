@@ -20,6 +20,60 @@ public static partial class ShaderEmuBuilder
         return key;
     }
 
+    // The cube before the panel that VRChat's camera is put into for a photo of a file (docs/apps/export.md, "A photo"): one
+    // renderer of two submeshes, the cube everyone sees (PhotoCube.shader) and a triangle Photo.shader makes the whole of the
+    // camera's picture while the camera is inside the cube. A child of the panel, so it goes with it to a classroom place.
+    static void PhotoCube(EmuClip clip, RectTransform panel)
+    {
+        const float Side = 0.45f;   // metres: a camera held up to the panel fits, a passer-by's head does not reach in by chance
+        string path = Generated + "/PhotoCube.asset";
+        Mesh mesh = AssetDatabase.LoadAssetAtPath<Mesh>(path);
+        if (mesh == null)
+        {
+            mesh = new Mesh { name = "PhotoCube" };
+            AssetDatabase.CreateAsset(mesh, path);
+        }
+        mesh.Clear();
+        var vertices = new List<Vector3>();
+        var cube = new List<int>();
+        Vector3[] faces = { Vector3.right, Vector3.left, Vector3.up, Vector3.down, Vector3.forward, Vector3.back };
+        foreach (Vector3 n in faces)
+        {
+            Vector3 u = Vector3.Cross(n, Mathf.Abs(n.y) > 0.5f ? Vector3.forward : Vector3.up), v = Vector3.Cross(n, u);
+            int b = vertices.Count;
+            vertices.Add(0.5f * (n - u - v)); vertices.Add(0.5f * (n + u - v)); vertices.Add(0.5f * (n + u + v)); vertices.Add(0.5f * (n - u + v));
+            cube.AddRange(new[] { b, b + 1, b + 2, b, b + 2, b + 3 });
+        }
+        int t = vertices.Count;   // 24: the triangle's indices are 24 to 26, which Photo.shader takes by their two low bits
+        vertices.Add(Vector3.zero); vertices.Add(Vector3.zero); vertices.Add(Vector3.zero);
+        mesh.SetVertices(vertices);
+        mesh.subMeshCount = 2;
+        mesh.SetTriangles(cube, 0);
+        mesh.SetTriangles(new[] { t, t + 1, t + 2 }, 1, false);
+        mesh.bounds = new Bounds(Vector3.zero, Vector3.one);   // (the cube: a camera inside it sees it, so it is not culled)
+        EditorUtility.SetDirty(mesh);
+
+        Transform old = panel.Find("Photo cube");
+        if (old != null) Object.DestroyImmediate(old.gameObject);
+        GameObject go = new GameObject("Photo cube");
+        go.transform.SetParent(panel, false);
+        go.transform.localPosition = new Vector3(0, 0, -Side * 0.5f / panel.localScale.z - 30f);   // (just before the panel's face)
+        go.transform.localRotation = Quaternion.identity;
+        go.transform.localScale = Vector3.one * (Side / panel.localScale.x);
+        go.AddComponent<MeshFilter>().sharedMesh = mesh;
+        MeshRenderer r = go.AddComponent<MeshRenderer>();
+        Material photo = Mat("Photo", "ShaderEmu/Photo");
+        r.sharedMaterials = new[] { Mat("PhotoCube", "ShaderEmu/PhotoCube"), photo };
+        r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        r.receiveShadows = false;
+        r.lightProbeUsage = UnityEngine.Rendering.LightProbeUsage.Off;
+        r.reflectionProbeUsage = UnityEngine.Rendering.ReflectionProbeUsage.Off;
+        r.allowOcclusionWhenDynamic = false;
+        r.enabled = false;
+        clip.photo = r;
+        clip.photoMaterial = photo;
+    }
+
     static void Clip(Transform computer, EmuMachine machine, Vector3 dispAt)
     {
         Gone(computer, "Clip panel");
@@ -63,6 +117,7 @@ public static partial class ShaderEmuBuilder
         Button give = MakeButton(panel, "Give", "To the machine", 1430, 810, 240, 70, 26, out unused);
         OnClick(give, clip, "Give");
         clip.panel = panel.gameObject;
+        PhotoCube(clip, panel);
         clip.backButton = back.gameObject;
         clip.onButton = on.gameObject;
         clip.giveButton = give.gameObject;

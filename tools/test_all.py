@@ -828,13 +828,21 @@ CASES = [
          'NXEXPORT_PACK=zip nxexport --text /tmp/t.plain /tmp/e/d; nxexport --decode /tmp/t.plain /tmp/p > /dev/null; diff -r /tmp/e/d /tmp/p/imported/d && echo SAME-plain',
          wall=200, has=[r'^SAME-zip', r'^SAME-tgz', r'^SAME-txz', r'^SAME-as', r'^SAME-plain', r'text of d\.zip: \d+ characters'],
          never=[r'BOUND BROKEN']),
-    case('export-qr', 'desktop apps', 'nxexport --text /tmp/t.txt /usr/share/openttd/test.cfg; nxexport --qr medium /tmp/t.txt; nxexport --qr big /tmp/t.txt',
-         wall=120, sums=[(r'nxexport: \d+ characters in \d+ codes of at most \d+, sum ([0-9a-f]+)', ['d6bf0b7e', 'b2ac2cc5'])]),  # base64 alone since 7 November 2026: no data: head, no K/N:
     case('export-clip', 'desktop apps', 'echo clip-words > /tmp/clipboard; nxexport --clipboard; NXEXPORT_PRINT=1 nxexport --push; nxexport --import /tmp/imp; '
          'cat "/tmp/imp/from host/hello.txt"', wall=120,
          env={'RVC_CLIP': os.path.join(ROOT, 'build', 'test_clip'), 'RVC_CLIP_IN': os.path.join(ROOT, 'tools', 'clip', 'paste-zip.txt')},
          has=[r'clipboard \(11 bytes\) to the host: 200', r'kept by the host: 200', r'imported /tmp/imp/from host\.zip: 248 bytes, sum [0-9a-f]+, unpacked into',
               r'^hello from the host']),
+    # a photo (docs/apps/export.md, "A photo"): the bitmap a VRChat camera's picture saved from Paint is, made by rvc_cpu
+    # (RVC_PHOTO) as Photo.shader draws it, is a zip of the folder; and one too large for 1920 x 1080 is refused
+    case('export-photo', 'desktop apps', 'mkdir -p /tmp/e/d/sub; echo hello-pc > /tmp/e/d/a.txt; cp /etc/passwd /tmp/e/d/sub/; '
+         'head -c 300000 /usr/share/doom1.wad > /tmp/e/d/w.bin; head -c 3000 /dev/urandom > /tmp/e/d/r.bin; '  # (r.bin: no bitmap of an earlier run passes)
+         'nxexport --photo /tmp/e/d; md5sum /tmp/e/d/a.txt /tmp/e/d/sub/passwd /tmp/e/d/w.bin /tmp/e/d/r.bin; '
+         'head -c 6300000 /dev/urandom > /tmp/e/big; nxexport --photo /tmp/e/big', wall=200,
+         env={'RVC_PHOTO': os.path.join(ROOT, 'build', 'test_photo.bmp'), 'RVC_PHOTO_SIZE': '1920x1080'},
+         has=[r'photo of d\.zip: \d+ bytes of entries and \d+ of its directory, 1920 x 1080 at most, sum [0-9a-f]+: 200',
+              r'photo of big\.zip: .* 2560 x 1440 at most, .*: 0$'],
+         zipped=[(os.path.join(ROOT, 'build', 'test_photo.bmp'), '/tmp/e/')]),
     # the whole way: a folder saved to the host (rvc_cpu --persist), taken away, loaded again: the same files
     case('apps-persist-host', 'desktop apps', 'mkdir -p /persistence/a; cp /etc/passwd /persistence/a/p.txt; head -c 300000 /usr/share/doom1.wad > /persistence/a/w; '
          'S1=$(find /persistence -type f | sort | xargs md5sum | md5sum); nxpersist save; rm -rf /persistence/*; nxpersist load!; '
@@ -1128,6 +1136,18 @@ def check(c, text, err, races, done):
     for p in c.get('never', []):
         if re.search(p, text, re.M):
             why.append(f'a line /{p}/')
+    for path, prefix in c.get('zipped', []):   # a file the host made is a zip whose members are the guest's files (md5sum lines)
+        import zipfile
+        sums = dict((n, m) for m, n in re.findall(r'^([0-9a-f]{32})  (\S+)$', text, re.M))
+        try:
+            with zipfile.ZipFile(path) as z:
+                bad = z.testzip()
+                names = [n for n in z.namelist() if not n.endswith('/')]
+                wrong = [n for n in names if hashlib.md5(z.read(n)).hexdigest() != sums.get(prefix + n)]
+            if bad or wrong or not names:
+                why.append(f'{os.path.basename(path)}: a bad CRC in {bad}' if bad else f"{os.path.basename(path)}: {len(wrong)} of {len(names)} members not the guest's")
+        except (OSError, zipfile.BadZipFile) as e:
+            why.append(f'{os.path.basename(path)} is no zip: {e}')
     for p, n in c.get('count', []):
         got = len(re.findall(p, text, re.M))
         if not (n[0] <= got <= n[1] if isinstance(n, tuple) else got == n):

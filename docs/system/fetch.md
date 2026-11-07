@@ -81,6 +81,8 @@ of the machine's own network itself: `docs/apps/web.md`, "Addresses the machine 
   Asked for as a file, a picture with the mark is answered with status 201 and those bytes,
   header first (256 + the file's length in all). A picture without it is answered as a
   picture is: pixels, status 200.
+- **A photo of a zip** (`docs/apps/export.md`, "A photo"): a picture VRChat's camera took of the world's photo of a file
+  has no mark and comes as pixels; `open` finds the zip in them by the end of its top row and saves `NAME.zip`.
 - `python tools\file_to_png.py FILE` makes such a picture (and `--back`, `--check`);
   `tools\file_to_png.html` does the same in a browser, with no server. Up to 2048 x 2048
   pixels, 12 MB. The picture must arrive unchanged: a host that scales it or makes a JPEG of

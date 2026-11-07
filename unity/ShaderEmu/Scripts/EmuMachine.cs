@@ -908,6 +908,34 @@ public class EmuMachine : UdonSharpBehaviour
             }
             return;
         }
+        if (address.StartsWith("photo:"))
+        {
+            // a file drawn into VRChat's camera's pictures (docs/apps/export.md, "A photo"): "show=TEXEL,ENTRIES,TAIL,NAME", "hide"
+            heldImage = false;
+            fetchOffset = 0;
+            fetchLength = 0;
+            fetchStatus = 400;
+            if (clip == null) fetchStatus = 404;
+            else if (address == "photo:hide")
+            {
+                clip.HidePhoto();
+                fetchStatus = 200;
+            }
+            else if (address.StartsWith("photo:show="))
+            {
+                string[] parts = address.Substring(11).Split(',');
+                int texel, entries, tail;
+                if (parts.Length >= 4 && int.TryParse(parts[0], out texel) && int.TryParse(parts[1], out entries) &&
+                    int.TryParse(parts[2], out tail) && tail >= 22 && entries >= 0)
+                {
+                    string name = parts[3];
+                    for (int i = 4; i < parts.Length; i++) name += "," + parts[i];
+                    fetchStatus = clip.ShowPhoto(state, texel, entries, tail, name) ? 200 : 404;
+                }
+            }
+            fetchState = FetchReady;
+            return;
+        }
         if (address.StartsWith("persist:"))
         {
             // the guest's kept folder: answered from PlayerData, once VRChat has brought it

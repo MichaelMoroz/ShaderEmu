@@ -14,6 +14,9 @@ using VRC.Udon.Common.Interfaces;
 //   clip:ask   the field shown empty, for a paste; "To the machine" keeps what is in it
 //   clip:take  what was kept, once (404 until there is something)
 //   clip:hide  the field put away
+// and its "photo:" addresses (docs/apps/export.md, "A photo"):
+//   photo:show=TEXEL,ENTRIES,TAIL,NAME  a zip in RAM drawn into VRChat's camera's pictures while the camera is in the
+//                                       cube before the panel (Photo.shader), the panel saying how; photo:hide
 // The Clipboard key of the wall's computer and of a classroom place shows the machine's clipboard; its "To the
 // machine" puts the field's text on the machine's clipboard (the bar runs nxexport --paste for "clip:paste").
 [UdonBehaviourSyncMode(BehaviourSyncMode.None)]
@@ -27,6 +30,8 @@ public class EmuClip : UdonSharpBehaviour
     public InputField field;
     public TextMeshProUGUI titleLabel, pageLabel, giveLabel;
     public GameObject giveButton, backButton, onButton;
+    public MeshRenderer photo;            // the cube before the panel: PhotoCube.shader, then Photo.shader (its second submesh)
+    public Material photoMaterial;        // ShaderEmu/Photo
 
     public const int Page = 8000;          // characters a page: a legacy Text draws at most 16,383 (four vertices each)
 
@@ -37,7 +42,7 @@ public class EmuClip : UdonSharpBehaviour
     private bool wantedShown;                    // show (the field comes up) or set (only kept)
     private string text = "", board = "", title = "";
     private int page, pages;
-    private int mode;                            // 0 shown to copy, 1 asked for a paste, 2 the machine's clipboard
+    private int mode;                            // 0 shown to copy, 1 asked for a paste, 2 the machine's clipboard, 3 a photo
     private bool given;
     private byte[] gift;                         // what "To the machine" kept for clip:take
     private bool home;
@@ -49,6 +54,7 @@ public class EmuClip : UdonSharpBehaviour
     void Start()
     {
         if (panel != null) panel.SetActive(false);
+        if (photo != null) photo.enabled = false;
         if (clipTest) SendCustomEventDelayedSeconds("TestStep", 2f);
     }
 
@@ -245,12 +251,13 @@ public class EmuClip : UdonSharpBehaviour
         int from = page * Page;
         field.text = from < text.Length ? text.Substring(from, Mathf.Min(Page, text.Length - from)) : "";
         if (titleLabel != null)
-            titleLabel.text = mode == 1 ? "Paste the text for the machine here (Ctrl+V), then press To the machine." :
+            titleLabel.text = mode == 3 ? title :
+                              mode == 1 ? "Paste the text for the machine here (Ctrl+V), then press To the machine." :
                               mode == 2 ? "The machine's clipboard. Copy it (Ctrl+A, Ctrl+C), or write here and press To the machine." :
                               title + ". Copy it: click the field, Ctrl+A, Ctrl+C" + (pages > 1 ? ", page by page." : ".");
         if (pageLabel != null) pageLabel.text = pages > 1 ? "Page " + (page + 1) + " of " + pages + "  (" + text.Length + " characters)" :
                                                 text.Length + " characters";
-        if (giveButton != null) giveButton.SetActive(mode != 0);
+        if (giveButton != null) giveButton.SetActive(mode == 1 || mode == 2);
         if (backButton != null) backButton.SetActive(pages > 1);
         if (onButton != null) onButton.SetActive(pages > 1);
     }
@@ -280,6 +287,34 @@ public class EmuClip : UdonSharpBehaviour
         if (panel != null && mode != 2) panel.SetActive(false);
     }
 
+    // A photo of a file (docs/apps/export.md, "A photo"): the zip at RAM texel `texel` (from 0x80000000), `entries` bytes of
+    // its entries and `tail` of its directory, drawn by Photo.shader into the camera's pictures while the camera is in the cube.
+    public bool ShowPhoto(Texture state, int texel, int entries, int tail, string name)
+    {
+        if (photo == null || photoMaterial == null) return false;
+        int at = 64 * 2048 + texel;   // (RAM's texels begin at the state texture's row 64)
+        photoMaterial.SetTexture("_State", state);
+        photoMaterial.SetVector("_At", new Vector4(at % 2048, at / 2048, 0, 0));
+        photoMaterial.SetVector("_Lengths", new Vector4(entries / 65536, entries % 65536, tail / 65536, tail % 65536));
+        photo.enabled = true;
+        title = "A photo of " + name + " (" + (entries + tail) + " bytes)";
+        text = "1. Open VRChat's camera and hold it inside the glowing cube in front of this panel: its picture becomes the file " +
+               "(coloured noise). Take the picture. Any of the camera's sizes; a smaller one than the file needs shows red.\n\n" +
+               "2. On your PC the picture is in Pictures\\VRChat as a PNG. Use that file itself, not a copy shared or uploaded " +
+               "(those may be recompressed).\n\n" +
+               "3. Open it in Paint, then File, Save as, BMP picture (a 24-bit bitmap). Never JPEG: it changes the bytes.\n\n" +
+               "4. Rename the .bmp to .zip (Windows must show file name extensions: File Explorer, View, Show, File name extensions) " +
+               "and open it: it is the zip of " + name + ". A damaged picture fails the zip's check instead of giving wrong files.";
+        Show(3);
+        return true;
+    }
+
+    public void HidePhoto()
+    {
+        if (photo != null) photo.enabled = false;
+        if (panel != null && mode == 3) panel.SetActive(false);
+    }
+
     // ---- the keys ----
 
     // The Clipboard key of the wall's computer or of a place: the machine's clipboard as the bar last handed it over.
@@ -302,6 +337,7 @@ public class EmuClip : UdonSharpBehaviour
     public void Close()
     {
         if (panel != null) panel.SetActive(false);
+        if (photo != null) photo.enabled = false;
     }
 
     // To the machine: what the field holds, kept for the guest's clip:take. For the clipboard the machine is told

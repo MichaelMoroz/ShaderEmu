@@ -42,7 +42,7 @@ One file per subject. A doc names another by its file name, which is unique acro
 ## apps
 
 - [bench.md](apps/bench.md) – The benchmark: `nxperf`
-- [export.md](apps/export.md) – Export and import: a file or folder out as text or QR codes, pasted text in (`nxexport`)
+- [export.md](apps/export.md) – Export and import: a file or folder out as a photo VRChat's camera takes (a zip on a PC) or as text, and in by a link to that photo or pasted text (`nxexport`, `open`)
 - [ide.md](apps/ide.md) – The IDE
 - [imgui.md](apps/imgui.md) – Dear ImGui
 - [play.md](apps/play.md) – An audio player: `nxplay`

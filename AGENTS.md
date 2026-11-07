@@ -296,8 +296,14 @@
   sends autosaves, logs and pictures of the screen to `/tmp`. After a change to nxpersist's bytes `test_all.py apps-persist-blocks
   apps-persist-host` must pass (with `--races` too) and versions 1 to 3 still load.
 - The text field in front of the screen is the guest's `clip:` addresses (`docs/system/clipboard.md`): a host answers show, set,
-  ask, take and hide (the world's `EmuClip`, the harnesses' `RVC_CLIP`), or 404 to all; `nxexport` makes and takes its text (a
-  data: address), and the bar hands the clipboard over when it changes.
+  ask, take and hide (the world's `EmuClip`, the harnesses' `RVC_CLIP`), or 404 to all; `nxexport` makes and takes its text (base64
+  alone by default, or a data: address), and the bar hands the clipboard over when it changes.
+- A file leaves the world as a photo (7 November 2026, the developer's idea; `docs/apps/export.md`, "A photo"): `nxexport`'s
+  `photo:show` has `Photo.shader` draw a zip over the whole picture of VRChat's camera while it is inside the pulsing cube
+  before the panel (`_VRChatCameraMode` not 0: never the player's own view), as the bytes of the 24-bit bitmap Paint saves,
+  so the picture saved as BMP and renamed `.zip` is the zip; `open` finds the zip in a link to that PNG. The shader and
+  `rvc_persist.h`'s `photoByte` are one layout: a change to either changes both, and `test_all.py export-photo` (the bitmap
+  `rvc_cpu` makes opened as a zip) must pass. QR codes went with it.
 - A setting a program wants kept is a key of the registry all programs share (`registry.h`,
   `nxreg`; `/persistence/registry`, `docs/system/persist.md`), not a file of its own: `program.name`,
   set at once, read at start. A test that must have the defaults does not read it (`RAY_FRAMES`).

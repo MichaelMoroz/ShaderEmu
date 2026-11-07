@@ -1,9 +1,9 @@
 /*
- * nxexport: a file or folder taken out of the machine as text a visitor can copy, or as QR codes a phone can
- * scan, and text pasted in front of the screen brought in again (docs/apps/export.md, docs/system/clipboard.md).
+ * nxexport: a file or folder taken out of the machine as a photo VRChat's camera takes (a zip a PC opens), or as
+ * text a visitor copies, and text pasted in front of the screen brought in again (docs/apps/export.md, docs/system/clipboard.md).
  *
- *   nxexport PATH ...           the window: how it is packed (as it is, Zip, tar.gz, tar.xz and a level), and
- *                               to QR codes or to the text field the host shows in front of the screen
+ *   nxexport PATH ...           the window: a photo of a zip, or text (as it is, Zip, tar.gz, tar.xz and a level) in the
+ *                               field the host shows in front of the screen
  *   nxexport --list FILE        the same for the paths FILE has, a line each (the file manager's selection)
  *   nxexport --import [FOLDER]  the field in front of the screen asked for text: what is pasted there is a file of
  *                               FOLDER (default /root/Desktop), and an archive is unpacked beside it
@@ -13,15 +13,21 @@
  * For tests, without a window:
  *   nxexport --pack as|zip|tgz|txz LEVEL OUT PATH ...   packs and prints "nxexport: packed ...: N bytes, sum S"
  *   nxexport --text OUT PATH ...                         the text a visitor copies (a data: address), as the window makes it
- *   nxexport --qr BIG|MEDIUM|DENSE TEXTFILE              the codes of that text: their count and a sum of every module
  *   nxexport --decode TEXTFILE FOLDER                    imports TEXTFILE's text as a paste would
- *   NXEXPORT_PACK=zip|tgz|txz|as NXEXPORT_LEVEL=N NXEXPORT_TO=qr|text NXEXPORT_PRINT=1: the window's choices and what it does
+ *   nxexport --photo PATH ...                            packs a zip and shows it as a photo (photo:show), as the window does
+ *   NXEXPORT_PACK=zip|tgz|txz|as NXEXPORT_LEVEL=N NXEXPORT_TO=text|photo NXEXPORT_PRINT=1: the window's choices and what it does
+ *
+ * A photo (docs/apps/export.md, "A photo"): the world draws a zip over the whole picture of VRChat's camera while the
+ * camera is inside the panel before the screen (Photo.shader), its bytes laid out as a 24-bit BMP's pixels are. Saved
+ * from Paint as a 24-bit bitmap, the file renamed .zip is the zip: the BMP's 54-byte header, the zip's entries (their
+ * offsets counted from the file's start), nothing, and its directory at the file's very end, whose one word that
+ * depends on the photo's size (where the directory begins) the shader writes.
  *
  * The text is base64 alone by default, for a computer outside the world: `certutil -decode FILE NAME` or
- * `base64 -d FILE > NAME` makes the file; many codes or parts are cut on groups of 4 letters with nothing
+ * `base64 -d FILE > NAME` makes the file; the field's parts are cut on groups of 4 letters with nothing
  * added, so joined in order they are the text. NXEXPORT_FORM=data makes a data: address instead,
- * "data:TYPE;name=NAME;base64,DATA", whose codes each begin "K/N:". The window says, before packing, the most
- * characters and codes it can be (measure, packed_most: bounds that hold whatever the files hold).
+ * "data:TYPE;name=NAME;base64,DATA". The window says, before packing, the most characters it can be, or
+ * the camera's size the photo needs (measure, packed_most: bounds that hold whatever the files hold).
  */
 #include <ctype.h>
 #include <stdarg.h>
@@ -32,7 +38,6 @@
 #include <time.h>
 #include "zlib.h"
 #include "lzma.h"
-#include "qrcodegen.h"
 #include "ui.h"
 #include "ui_ask.h"
 #include "host_ask.h"
@@ -42,21 +47,22 @@
 #define HEIGHT 520
 #define PATHS_MOST 256
 #define TEXT_PART (HOST_DATA_MOST - 256)	/* what one showing of the field holds: more is shown in parts */
-#define CODES_MOST 400
 #define ARCHIVE "/tmp/nxexport.tar"
 
 enum { AS_IS, ZIP, TGZ, TXZ };
 static const char *const packing_names[] = { "As it is", "Zip", "tar.gz", "tar.xz" };
 static const char *const packing_keys[] = { "as", "zip", "tgz", "txz" };
-enum { TO_QR, TO_TEXT };
+enum { TO_TEXT, TO_PHOTO };
+#define BMP_HEAD 54	/* a 24-bit bitmap's header as Paint saves it: the photo's bytes begin after it */
 enum { PLAIN, DATA };	/* the text: base64 alone (any computer decodes it as it is), or a data: address */
 static const char *const form_names[] = { "Base64 only", "data: address" };
-enum { BIG, MEDIUM, DENSE };
-static const char *const density_names[] = { "Big", "Medium", "Dense" };
-static const int density_versions[] = { 10, 20, 30 };	/* the largest QR version used: 57, 97 and 137 modules */
 
 static char *paths[PATHS_MOST];
-static int npaths, packing = ZIP, level = 9, target = TO_TEXT, density = MEDIUM, form = PLAIN, print, windowed;
+static unsigned zip_shift, zip_tail;	/* a photo's zip: offsets from the file's start; the directory and its end */
+static unsigned char *photo;	/* what the world draws while it is shown: the entries, then the directory (16-byte aligned) */
+static unsigned photo_entries, photo_tail;
+static int photo_shown;
+static int npaths, packing = ZIP, level = 9, target = TO_PHOTO, form = PLAIN, print, windowed;
 static GR_WINDOW_ID window;
 static char status[200];
 
@@ -66,9 +72,7 @@ static size_t packed_n;
 static char packed_name[160];
 static char *text;
 static size_t text_n;
-/* the codes: each part's text starts at code_at[k], code_len[k] long; the code shown */
-static size_t code_at[CODES_MOST], code_len[CODES_MOST];
-static int codes, code_shown, showing_codes, text_part, text_parts;
+static int text_part, text_parts;
 
 static void say(const char *format, ...) __attribute__((format(printf, 1, 2)));
 
@@ -249,7 +253,7 @@ zip_entry(const char *path, const struct stat *st, int folder)
 	unsigned char *data = NULL, *small = NULL;
 	size_t n = 0, csize = 0, nlen;
 	unsigned t16, d16, method = 0;
-	uint32_t crc = 0, offset = (uint32_t)zip_out.n;
+	uint32_t crc = 0, offset = (uint32_t)zip_out.n + zip_shift;
 	char named[512];
 
 	while (*name == '/')
@@ -342,7 +346,9 @@ pack_zip(struct grow *out)
 
 		put(&zip_out, zip_central.p, zip_central.n);
 		put32(&zip_out, 0x06054b50), put16(&zip_out, 0), put16(&zip_out, 0), put16(&zip_out, (unsigned)zip_entries);
-		put16(&zip_out, (unsigned)zip_entries), put32(&zip_out, size), put32(&zip_out, at), put16(&zip_out, 0);
+		/* (a photo's directory begins where the photo's size puts it: the world writes that word) */
+		put16(&zip_out, (unsigned)zip_entries), put32(&zip_out, size), put32(&zip_out, zip_shift ? 0 : at), put16(&zip_out, 0);
+		zip_tail = size + 22;
 	}
 	free(zip_central.p);
 	*out = zip_out;
@@ -626,6 +632,9 @@ pack(void)
 	}
 	if (packing == AS_IS && (npaths > 1 || is_folder(paths[0])))
 		packing = ZIP;	/* (a folder or many files cannot go as one file is) */
+	if (target == TO_PHOTO)
+		packing = ZIP;	/* (a photo is a zip: only a zip's reader takes the bitmap's header before it) */
+	zip_shift = target == TO_PHOTO ? BMP_HEAD : 0;
 	if (packing == AS_IS) {
 		if (!(packed = read_whole(paths[0], &packed_n))) {
 			say("%s could not be read.", base_name(paths[0]));
@@ -666,94 +675,6 @@ pack(void)
 	return 1;
 }
 
-/* ---- QR codes ---- */
-
-static size_t code_capacity(int d);
-
-/* What one code of many holds: in base64 alone a whole number of 4 letters (each part decodes by itself, and the
- * parts joined are the text), in a data: address the capacity less its "K/N:" ("400/400:" is 8). */
-static size_t
-code_room(void)
-{
-	size_t c = code_capacity(density);
-
-	return form == PLAIN ? c & ~(size_t)3 : c > 12 ? c - 12 : c;
-}
-
-/* How many codes of size d `chars` letters are, in the chosen form: one holds the text alone, with no "1/1:". */
-static unsigned long long
-codes_for(unsigned long long chars, int d)
-{
-	size_t c = code_capacity(d), room = form == PLAIN ? c & ~(size_t)3 : c - 12;
-
-	return chars <= c ? 1 : (chars + room - 1) / room;
-}
-
-/* The most bytes of text one code of size d holds (byte mode, ECC M). */
-static size_t
-code_capacity(int d)
-{
-	static size_t room[3];
-	static uint8_t qr[qrcodegen_BUFFER_LEN_MAX], temp[qrcodegen_BUFFER_LEN_MAX];
-	char *probe;
-	size_t lo = 1, hi = 3000;
-
-	if (room[d])
-		return room[d];
-	if (!(probe = malloc(hi + 1)))
-		return 100;
-	memset(probe, 'a', hi);
-	while (lo < hi) {	/* (the largest that fits) */
-		size_t mid = (lo + hi + 1) / 2;
-
-		probe[mid] = 0;
-		if (qrcodegen_encodeText(probe, temp, qr, qrcodegen_Ecc_MEDIUM, 1, density_versions[d], qrcodegen_Mask_AUTO, false))
-			lo = mid;
-		else
-			hi = mid - 1;
-		probe[mid] = 'a';
-	}
-	free(probe);
-	return room[d] = lo;
-}
-
-/* The text cut into codes: false if it would be more than CODES_MOST. */
-static int
-make_codes(void)
-{
-	size_t room = code_room(), at = 0;
-	int n;
-
-	n = (int)codes_for(text_n, density);
-	if (n > CODES_MOST)
-		return 0;
-	for (codes = 0; codes < n; codes++) {
-		code_at[codes] = at;
-		code_len[codes] = n == 1 ? text_n : (text_n - at < room ? text_n - at : room);
-		at += code_len[codes];
-	}
-	code_shown = 0;
-	return 1;
-}
-
-/* Code k made; its size in modules, 0 if it did not fit. */
-static int
-make_code(int k, uint8_t qr[qrcodegen_BUFFER_LEN_MAX])
-{
-	static uint8_t temp[qrcodegen_BUFFER_LEN_MAX];
-	char *part = malloc(code_len[k] + 16);
-	int head, ok;
-
-	if (!part)
-		return 0;
-	head = codes > 1 && form == DATA ? snprintf(part, 16, "%d/%d:", k + 1, codes) : 0;
-	memcpy(part + head, text + code_at[k], code_len[k]);
-	part[head + code_len[k]] = 0;
-	ok = qrcodegen_encodeText(part, temp, qr, qrcodegen_Ecc_MEDIUM, 1, density_versions[density], qrcodegen_Mask_AUTO, false);
-	free(part);
-	return ok ? qrcodegen_getSize(qr) : 0;
-}
-
 /* ---- the host's field ---- */
 
 /* The text from `from`, n bytes (at most TEXT_PART), shown in the field in front of the screen: the host's status. */
@@ -775,8 +696,8 @@ show_text_part(void)
 	int answer;
 
 	if (form == PLAIN)
-		snprintf(what, sizeof what, "%s, %zu bytes%s: copy it into a file, then certutil -decode FILE \"%s\" (Windows) or "
-			 "base64 -d FILE > \"%s\"", packed_name, packed_n, text_parts > 1 ? ", parts joined in order" : "", packed_name, packed_name);
+		snprintf(what, sizeof what, "%s, %zu bytes%s. On a PC: paste it into Notepad, save as data.txt, then in a command prompt: "
+			 "certutil -decode data.txt \"%s\"", packed_name, packed_n, text_parts > 1 ? " (every part, in order)" : "", packed_name);
 	else
 		snprintf(what, sizeof what, "%s, %zu bytes%s: paste it into a browser's address bar to save the file", packed_name, packed_n,
 			 text_parts > 1 ? ", parts joined in order" : "");
@@ -794,6 +715,51 @@ show_text_part(void)
 		    "This host shows no text field (answer %d): the text is on the clipboard.", answer);
 }
 
+/* ---- a photo ---- */
+
+/* The world asked to draw the packed zip into VRChat's camera's pictures; the host's answer. */
+static int
+photo_show(void)
+{
+	char address[256];
+	unsigned n = (unsigned)packed_n;
+
+	free(photo), photo = NULL;
+	if (n < zip_tail || !host_open() || !(photo = aligned_alloc(16, (n + 15) & ~15u)))
+		return 0;
+	memcpy(photo, packed, n);
+	photo_entries = n - zip_tail, photo_tail = zip_tail;
+	/* (the bytes' first texel of RAM, counted from 0x80000000 as the state texture has them; a name for the panel) */
+	snprintf(address, sizeof address, "photo:show=%u,%u,%u,%s", (unsigned)(((uintptr_t)photo - 0x80000000u) / 16), photo_entries,
+		 photo_tail, packed_name);
+	photo_shown = host_ask(address, 0, 20) == 200;
+	return photo_shown ? 200 : 0;
+}
+
+static void
+photo_hide(void)
+{
+	if (photo_shown)
+		host_ask("photo:hide", 0, 10);
+	photo_shown = 0;
+}
+
+/* The smallest of VRChat's camera's sizes a photo of `bytes` bytes fits (the bitmap's pixels), or 0. */
+static const char *
+photo_size(unsigned long long bytes)
+{
+	static const unsigned sizes[][2] = { { 1920, 1080 }, { 2560, 1440 }, { 3840, 2160 } };
+	static char text[40];
+	int i;
+
+	for (i = 0; i < 3; i++)
+		if (BMP_HEAD + bytes <= BMP_HEAD + 3ull * sizes[i][0] * sizes[i][1]) {
+			snprintf(text, sizeof text, "%u x %u", sizes[i][0], sizes[i][1]);
+			return text;
+		}
+	return NULL;
+}
+
 /* ---- the window ---- */
 
 struct key {
@@ -803,7 +769,7 @@ struct key {
 };
 static struct key keys[24];
 static int nkeys;
-enum { K_PACK = 1, K_LEVEL = 10, K_QR = 20, K_TEXT, K_FORM = 25, K_DENSITY = 30, K_GO = 40, K_PREV, K_NEXT, K_BACK, K_CLOSE };
+enum { K_PACK = 1, K_LEVEL = 10, K_TEXT = 20, K_PHOTO, K_FORM = 25, K_GO = 40, K_CLOSE };
 
 static void
 key(int x, int y, int w, int h, int id, const char *label, int down)
@@ -811,46 +777,6 @@ key(int x, int y, int w, int h, int id, const char *label, int down)
 	if (nkeys < (int)(sizeof keys / sizeof keys[0]))
 		keys[nkeys++] = (struct key){ x, y, w, h, id, label, down };
 	ui_button(window, x, y, w, h, label, down);
-}
-
-static void
-draw_code(void)
-{
-	static uint8_t qr[qrcodegen_BUFFER_LEN_MAX];
-	int size = make_code(code_shown, qr), area = HEIGHT - 84, scale, x0, y0, x, y;
-	char line[200];
-
-	ui_fill(window, 0, 0, WIDTH, HEIGHT, UI_FACE);
-	if (!size) {
-		ui_text(window, 20, 20, "The code could not be made.", -1, BLACK, 0);
-		return;
-	}
-	scale = area / (size + 8);
-	x0 = (WIDTH - (size + 8) * scale) / 2, y0 = 10;
-	ui_fill(window, x0, y0, (size + 8) * scale, (size + 8) * scale, WHITE);
-	GrSetGCForeground(ui_gc, BLACK);
-	for (y = 0; y < size; y++)
-		for (x = 0; x < size; x++) {
-			int run = 0;
-
-			while (x + run < size && qrcodegen_getModule(qr, x + run, y))
-				run++;
-			if (run)
-				GrFillRect(window, ui_gc, x0 + (x + 4) * scale, y0 + (y + 4) * scale, run * scale, scale);
-			x += run;
-		}
-	nkeys = 0;
-	if (form == PLAIN)
-		snprintf(line, sizeof line, "%s%s: certutil -decode FILE \"%s\" or base64 -d FILE > \"%s\"", codes > 1 ? "The scans in order in one file" : "The scan in a file",
-			 "", packed_name, packed_name);
-	else
-		snprintf(line, sizeof line, "%s", codes > 1 ? "Each begins K/N: - joined in order without it, a data: address" : "A data: address: a browser saves it");
-	ui_text_fit(window, 20, HEIGHT - 66, WIDTH - 40, line, UI_SHADOW);
-	snprintf(line, sizeof line, "Code %d of %d", code_shown + 1, codes);
-	ui_text(window, 20, HEIGHT - 38, line, -1, BLACK, 0);
-	key(200, HEIGHT - 42, 100, 26, K_PREV, "< Previous", 0);
-	key(310, HEIGHT - 42, 100, 26, K_NEXT, "Next >", 0);
-	key(440, HEIGHT - 42, 100, 26, K_BACK, "Back", 0);
 }
 
 /* 1234567 as "1,234,567". */
@@ -875,10 +801,6 @@ draw(void)
 	char line[200];
 	int i, y = 14;
 
-	if (showing_codes) {
-		draw_code();
-		return;
-	}
 	nkeys = 0;
 	ui_fill(window, 0, 0, WIDTH, HEIGHT, UI_FACE);
 	if (npaths == 1)
@@ -888,8 +810,11 @@ draw(void)
 	ui_text(window, 20, y, line, -1, BLACK, 0);
 	y += 34;
 	ui_text(window, 20, y + 6, "Packed as:", -1, BLACK, 0);
-	for (i = 0; i < 4; i++)
-		key(120 + i * 104, y, 96, 26, K_PACK + i, packing_names[i], packing == i);
+	if (target == TO_PHOTO)	/* (a photo is a zip: only a zip's reader takes the bitmap's header before it) */
+		ui_text(window, 120, y + 6, "Zip (a photo is always a zip)", -1, BLACK, 0);
+	else
+		for (i = 0; i < 4; i++)
+			key(120 + i * 104, y, 96, 26, K_PACK + i, packing_names[i], packing == i);
 	y += 40;
 	snprintf(line, sizeof line, "Level: %d", level);
 	ui_text(window, 20, y + 3, packing == AS_IS ? "Level: -" : line, -1, BLACK, 0);
@@ -899,37 +824,34 @@ draw(void)
 		UI_SHADOW, 0);
 	y += 34;
 	ui_text(window, 20, y + 6, "To:", -1, BLACK, 0);
-	key(120, y, 140, 26, K_TEXT, "Text (base64)", target == TO_TEXT);
-	key(268, y, 140, 26, K_QR, "QR codes", target == TO_QR);
+	key(120, y, 140, 26, K_PHOTO, "Photo (a zip)", target == TO_PHOTO);
+	key(268, y, 140, 26, K_TEXT, "Text (base64)", target == TO_TEXT);
 	y += 34;
-	ui_text(window, 20, y + 6, "Text as:", -1, BLACK, 0);
-	for (i = 0; i < 2; i++)
-		key(120 + i * 148, y, 140, 26, K_FORM + i, form_names[i], form == i);
-	y += 34;
-	if (target == TO_QR) {
-		ui_text(window, 20, y + 6, "Codes:", -1, BLACK, 0);
-		for (i = 0; i < 3; i++)
-			key(120 + i * 104, y, 96, 26, K_DENSITY + i, density_names[i], density == i);
+	if (target == TO_TEXT) {
+		ui_text(window, 20, y + 6, "Text as:", -1, BLACK, 0);
+		for (i = 0; i < 2; i++)
+			key(120 + i * 148, y, 140, 26, K_FORM + i, form_names[i], form == i);
 	}
-	y += 36;
+	y += 44;
 	if (have.done) {	/* (what it will be at most, before anything is packed) */
 		unsigned long long most = packed_most(packing), chars = text_chars(packing, most);
-		char n1[32], n2[32], n3[32];
+		char n1[32], n2[32];
 
-		snprintf(line, sizeof line, "%s bytes in %u file%s: %s %s characters%s.", grouped(have.bytes, n1), have.files,
-			 have.files == 1 ? "" : "s", packing == AS_IS ? "the text is" : "at most", grouped(chars, n2), packing == AS_IS ? "" : " before packing");
+		if (target == TO_PHOTO)
+			snprintf(line, sizeof line, "%s bytes in %u file%s.", grouped(have.bytes, n1), have.files, have.files == 1 ? "" : "s");
+		else
+			snprintf(line, sizeof line, "%s bytes in %u file%s: %s %s characters%s.", grouped(have.bytes, n1), have.files,
+				 have.files == 1 ? "" : "s", packing == AS_IS ? "the text is" : "at most", grouped(chars, n2), packing == AS_IS ? "" : " before packing");
 		ui_text_fit(window, 20, y, WIDTH - 40, line, BLACK);
 		y += 18;
-		if (target == TO_QR) {
-			unsigned long long k = codes_for(chars, density);
+		if (target == TO_PHOTO) {
+			const char *size = photo_size(packed_most(ZIP));
 
-			if (k == 1)
-				snprintf(line, sizeof line, "Fits in one %s code (it holds %s), whatever it packs to.", density_names[density],
-					 grouped(code_capacity(density), n1));
+			if (size)
+				snprintf(line, sizeof line, "A zip of it fits a photo of %s or larger, whatever it packs to.", size);
 			else
-				snprintf(line, sizeof line, "Up to %s %s codes (one holds %s, a Dense one %s)%s.", grouped(k, n1), density_names[density],
-					 grouped(code_capacity(density), n2), grouped(code_capacity(DENSE), n3), k > CODES_MOST ? ": more than shown, unless packed smaller" :
-					 packing == AS_IS ? "" : ": fewer once packed");
+				snprintf(line, sizeof line, "A zip of it may need more than a 3840 x 2160 photo (%s bytes): it fits if it packs smaller.",
+					 grouped(packed_most(ZIP), n1));
 		} else {
 			unsigned long long k = (chars + TEXT_PART - 1) / TEXT_PART;
 
@@ -942,20 +864,25 @@ draw(void)
 		ui_text_fit(window, 20, y, WIDTH - 40, line, BLACK);
 	}
 	y += 30;
-	key(20, y, 140, 30, K_GO, target == TO_QR ? "Make the codes" : text_parts > 1 && text_part + 1 < text_parts ? "Next part" :
+	key(20, y, 140, 30, K_GO, target == TO_PHOTO ? (photo_shown ? "Stop the photo" : "Show the photo") : text_parts > 1 && text_part + 1 < text_parts ? "Next part" :
 	    "Export", 0);
 	key(WIDTH - 120, y, 100, 30, K_CLOSE, "Close", 0);
 	y += 46;
 	ui_text_fit(window, 20, y, WIDTH - 40, status, BLACK);
 	y += 30;
-	if (form == PLAIN) {
-		ui_text(window, 20, y, "Base64 alone: any computer makes the file of it as it is.", -1, UI_SHADOW, 0);
-		ui_text(window, 20, y + 18, "Windows: certutil -decode FILE NAME. Linux: base64 -d FILE > NAME.", -1, UI_SHADOW, 0);
-		ui_text(window, 20, y + 36, "Many codes or parts: their texts joined in order, in one file.", -1, UI_SHADOW, 0);
+	if (target == TO_PHOTO) {
+		ui_text(window, 20, y, "Hold VRChat's camera inside the glowing cube before the screen and", -1, UI_SHADOW, 0);
+		ui_text(window, 20, y + 18, "take a picture (a PNG in Pictures\\VRChat). On the PC open it in Paint,", -1, UI_SHADOW, 0);
+		ui_text(window, 20, y + 36, "Save as, BMP picture (never JPEG); rename the .bmp to .zip and open it.", -1, UI_SHADOW, 0);
+		ui_text(window, 20, y + 54, "A link to that PNG opened here gives the zip back too.", -1, UI_SHADOW, 0);
+	} else if (form == PLAIN) {
+		ui_text(window, 20, y, "On a PC: click the field, Ctrl+A, Ctrl+C; paste into Notepad and save", -1, UI_SHADOW, 0);
+		ui_text(window, 20, y + 18, "it as data.txt (every part, in order); then in a command prompt:", -1, UI_SHADOW, 0);
+		ui_text(window, 20, y + 36, "certutil -decode data.txt NAME   (Linux, macOS: base64 -d data.txt > NAME)", -1, UI_SHADOW, 0);
 	} else {
-		ui_text(window, 20, y, "A data: address: a browser given it saves the file (its name kept", -1, UI_SHADOW, 0);
-		ui_text(window, 20, y + 18, "only by this machine's Import). Codes of many parts: each begins", -1, UI_SHADOW, 0);
-		ui_text(window, 20, y + 36, "K/N: - join their texts in order without it.", -1, UI_SHADOW, 0);
+		ui_text(window, 20, y, "A data: address: pasted into a browser's address bar it saves the", -1, UI_SHADOW, 0);
+		ui_text(window, 20, y + 18, "file (the name is kept only by this machine's Import); any base64", -1, UI_SHADOW, 0);
+		ui_text(window, 20, y + 36, "decoder takes what follows the comma.", -1, UI_SHADOW, 0);
 	}
 }
 
@@ -967,9 +894,26 @@ go(void)
 		show_text_part();
 		return;
 	}
+	if (target == TO_PHOTO && photo_shown) {
+		photo_hide();
+		say("The photo is no longer drawn.");
+		return;
+	}
 	say("Packing...");
 	draw();
 	GrFlush();
+	if (target == TO_PHOTO) {
+		int answer;
+
+		if (!pack())
+			return;
+		answer = photo_show();
+		if (answer == 200)
+			say("%s (%zu bytes) is drawn into the camera's pictures inside the panel: take one.", packed_name, packed_n);
+		else
+			say(host_open() ? "This host draws no photo (VRChat's world does): nothing shown." : "This machine has no way to ask its host.");
+		return;
+	}
 	if (!pack() || !make_text()) {
 		if (!status[0] || !strcmp(status, "Packing..."))
 			say("No memory for the text.");
@@ -977,15 +921,6 @@ go(void)
 	}
 	if (packing != AS_IS && have.done && text_n > text_chars(packing, packed_most(packing)))
 		say("The bound was wrong: %zu characters made.", text_n);	/* (never: a test reads it) */
-	if (target == TO_QR) {
-		if (!make_codes()) {
-			say("%zu bytes are %zu characters: more than %d codes. Pack it smaller or send it as text.", packed_n, text_n, CODES_MOST);
-			return;
-		}
-		say("%s: %zu bytes, %zu characters, %d code%s.", packed_name, packed_n, text_n, codes, codes == 1 ? "" : "s");
-		showing_codes = 1;
-		return;
-	}
 	ui_clip_set(text, (int)text_n);	/* (and on the clipboard: another program can paste it) */
 	text_parts = (int)((text_n + TEXT_PART - 1) / TEXT_PART), text_part = 0;
 	show_text_part();
@@ -1005,21 +940,16 @@ clicked(int px, int py)
 			packing = k->id - K_PACK, text_parts = 0;
 		else if (k->id == K_LEVEL)
 			level = ui_slider_value(px, k->x, k->w, 9), text_parts = 0;
-		else if (k->id == K_QR || k->id == K_TEXT)
-			target = k->id == K_QR ? TO_QR : TO_TEXT, text_parts = 0;
+		else if (k->id == K_TEXT || k->id == K_PHOTO) {
+			photo_hide();
+			target = k->id == K_PHOTO ? TO_PHOTO : TO_TEXT, text_parts = 0;
+		}
 		else if (k->id == K_FORM || k->id == K_FORM + 1)
 			form = k->id - K_FORM, text_parts = 0;
-		else if (k->id >= K_DENSITY && k->id < K_DENSITY + 3)
-			density = k->id - K_DENSITY;
 		else if (k->id == K_GO)
 			go();
-		else if (k->id == K_PREV && code_shown > 0)
-			code_shown--;
-		else if (k->id == K_NEXT && code_shown + 1 < codes)
-			code_shown++;
-		else if (k->id == K_BACK)
-			showing_codes = 0;
 		else if (k->id == K_CLOSE) {
+			photo_hide();
 			GrClose();
 			exit(0);
 		}
@@ -1031,17 +961,10 @@ clicked(int px, int py)
 static void
 key_down(int ch)
 {
-	if (showing_codes) {
-		if ((ch == MWKEY_RIGHT || ch == MWKEY_PAGEDOWN || ch == ' ') && code_shown + 1 < codes)
-			code_shown++;
-		else if ((ch == MWKEY_LEFT || ch == MWKEY_PAGEUP) && code_shown > 0)
-			code_shown--;
-		else if (ch == MWKEY_ESCAPE)
-			showing_codes = 0;
-		draw();
-	} else if (ch == MWKEY_ENTER)
+	if (ch == MWKEY_ENTER)
 		go(), draw();
 	else if (ch == MWKEY_ESCAPE) {
+		photo_hide();
 		GrClose();
 		exit(0);
 	}
@@ -1064,8 +987,6 @@ export_window(void)
 	if (getenv("NXEXPORT_GO")) {	/* (a test's: the choices made, and Export pressed at once) */
 		ui_framed();
 		go();
-		if (print && target == TO_QR && codes)
-			printf("nxexport: showing code 1 of %d\n", codes), fflush(stdout);
 	}
 	for (;;) {
 		ui_next_event(&event);
@@ -1082,6 +1003,7 @@ export_window(void)
 			key_down(event.keystroke.ch);
 			break;
 		case GR_EVENT_TYPE_CLOSE_REQ:
+			photo_hide();
 			GrClose();
 			return 0;
 		}
@@ -1099,7 +1021,7 @@ base64_value(int c)
 }
 
 /*
- * Pasted text made a file: a data: address (its name kept), parts of QR codes ("K/N:"), or base64 alone. What is
+ * Pasted text made a file: a data: address (its name kept), the "K/N:" parts of an older export's codes, or base64 alone. What is
  * none of these is text, saved as it is. The bytes at *out, their name at name (empty when it has none).
  */
 static size_t
@@ -1535,15 +1457,13 @@ main(int argc, char **argv)
 	if ((e = getenv("NXEXPORT_LEVEL")))
 		level = atoi(e);
 	if ((e = getenv("NXEXPORT_TO")))
-		target = !strcmp(e, "qr") ? TO_QR : TO_TEXT;
+		target = !strcmp(e, "text") ? TO_TEXT : TO_PHOTO;
 	if ((e = getenv("NXEXPORT_FORM")))
 		form = !strcmp(e, "data") ? DATA : PLAIN;
-	if ((e = getenv("NXEXPORT_CODES")))
-		density = !strcmp(e, "big") ? BIG : !strcmp(e, "dense") ? DENSE : MEDIUM;
 	if (argc > 1 && !strcmp(argv[1], "--pack") && argc > 5 && choose(argv[2]) >= 0) {
 		FILE *f;
 
-		packing = choose(argv[2]), level = atoi(argv[3]);
+		packing = choose(argv[2]), level = atoi(argv[3]), target = TO_TEXT;
 		take_paths(argv + 5, argc - 5);
 		if (!pack() || !(f = fopen(argv[4], "wb")))
 			return 1;
@@ -1555,6 +1475,7 @@ main(int argc, char **argv)
 	if (argc > 3 && !strcmp(argv[1], "--text")) {
 		FILE *f;
 
+		target = TO_TEXT;
 		take_paths(argv + 3, argc - 3);
 		if (npaths == 1 && !is_folder(paths[0]) && !getenv("NXEXPORT_PACK"))
 			packing = AS_IS;	/* (one file: as it is, unless asked, as the window has it) */
@@ -1568,25 +1489,21 @@ main(int argc, char **argv)
 		       packed_most(packing), text_n <= text_chars(packing, packed_most(packing)) ? "bound held" : "BOUND BROKEN");
 		return 0;
 	}
-	if (argc > 3 && !strcmp(argv[1], "--qr")) {
-		static uint8_t qr[qrcodegen_BUFFER_LEN_MAX];
-		uint32_t h = 2166136261u;
-		int k, x, y, size;
+	if (argc > 2 && !strcmp(argv[1], "--photo")) {
+		int answer;
 
-		density = !strcmp(argv[2], "big") || !strcmp(argv[2], "BIG") ? BIG : !strcmp(argv[2], "dense") || !strcmp(argv[2], "DENSE") ? DENSE : MEDIUM;
-		if (!(text = (char *)read_whole(argv[3], &text_n)) || !make_codes())
+		target = TO_PHOTO;
+		take_paths(argv + 2, argc - 2);
+		measure();
+		if (!pack())
 			return 1;
-		for (k = 0; k < codes; k++) {
-			if (!(size = make_code(k, qr)))
-				return 1;
-			for (y = 0; y < size; y++)
-				for (x = 0; x < size; x++)
-					h = (h ^ (uint32_t)qrcodegen_getModule(qr, x, y)) * 16777619u;
-			if (k == 0)
-				printf("nxexport: code 1 is %d modules across\n", size);
-		}
-		printf("nxexport: %zu characters in %d codes of at most %zu, sum %08x\n", text_n, codes, code_room(), h);
-		return 0;
+		answer = photo_show();
+		printf("nxexport: photo of %s: %u bytes of entries and %u of its directory, %s at most, sum %08x: %d\n", packed_name, photo_entries,
+		       photo_tail, photo_size(packed_n) ? photo_size(packed_n) : "too large", fnv(packed, packed_n), answer);
+		if (getenv("NXEXPORT_PHOTO_HOLD"))
+			sleep((unsigned)atoi(getenv("NXEXPORT_PHOTO_HOLD")));
+		photo_hide();
+		return answer != 200;
 	}
 	if (argc > 3 && !strcmp(argv[1], "--decode")) {
 		size_t n;
