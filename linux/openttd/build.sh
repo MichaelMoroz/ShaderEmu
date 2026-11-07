@@ -187,6 +187,17 @@ cat > "$OUT/usr/bin/openttd" <<'EOF'
 #!/bin/sh
 # settings and saved games go to the folder the host keeps (docs/system/persist.md), else to /tmp
 P=/persistence; mkdir -p $P/openttd 2>/dev/null || P=/tmp
+# but not its autosaves (a busy map's is 1.2 MB, and one in the folder left nothing else saved) and its pictures of the
+# screen: those are links to /tmp, and one an older start left in the folder goes there (docs/games/openttd.md, "Saves")
+if [ $P = /persistence ]; then
+    for d in save/autosave screenshot; do
+        mkdir -p /tmp/openttd-$(basename $d) $P/openttd/save
+        if [ -d $P/openttd/$d ] && [ ! -L $P/openttd/$d ]; then
+            mv $P/openttd/$d/* /tmp/openttd-$(basename $d)/ 2>/dev/null; rm -rf $P/openttd/$d
+        fi
+        [ -L $P/openttd/$d ] || ln -s /tmp/openttd-$(basename $d) $P/openttd/$d
+    done
+fi
 XDG_DATA_HOME=$P XDG_CONFIG_HOME=$P exec openttd.bin "$@"
 EOF
 chmod 755 "$OUT/usr/bin/openttd"

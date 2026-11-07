@@ -424,6 +424,19 @@ void aoe_events(void) {
         float vx, vy; int selected;
         aoe_view_place(&vx, &vy, &selected);
         fprintf(stderr, "aoeview: %d %d selected %d\n", (int) (vx * 100), (int) (vy * 100), selected);
+    } else if (!strcmp(what, "save")) {
+        // "save NAME": the game saved as the Save window saves it, into savegame/NAME.gam of AOE_HOME (docs/games/aoe.md, "Saved games")
+        extern int aoe_script_save(const char* name);
+        char name[64] = "script";
+        sscanf(script, "%*d %*s %63[^ ;]", name);
+        int saved = aoe_script_save(name);
+        fprintf(stderr, "aoe: saved %s: %s\n", name, saved ? "ok" : "NOT saved");
+    } else if (!strcmp(what, "load")) {
+        extern int aoe_script_load(const char* name);
+        char name[64] = "script";
+        sscanf(script, "%*d %*s %63[^ ;]", name);
+        int loaded = aoe_script_load(name);
+        fprintf(stderr, "aoe: loaded %s: %s\n", name, loaded ? "ok" : "NOT loaded");
     } else if (!strcmp(what, "quit")) {
         fprintf(stderr, "aoe: script's end, frames %ld\n", frames);
         aoe_window_close();

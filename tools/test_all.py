@@ -780,9 +780,17 @@ CASES = [
          '[ "$(md5sum < /root/big)" = "$(md5sum < /tmp/f)" ] && echo SAME; ls -l /tmp/f', wall=200, has=[r'^GET=0', r'^SAME', r' 2097152 .*/tmp/f']),
     case('apps-menus', 'desktop apps', "nx; sleep 3; nxfuzz start:e:nxedit wait:e:20 sleep:500 menus:e close:e:x end", True,
          wall=200, has=[r'^FZ-DONE 0', r'FZ menus e: 1\d menus, \d{2,3} rows'], never=[r'FZ-BAD']),
-    # a folder level 1 leaves over the limit goes on to harder levels (docs/system/persist.md): no host answers here, so 404 is its having fit
+    # a folder that deflate's level 1 leaves over the limit fits by LZMA (docs/system/persist.md, "The bytes"): no host answers here, so 404 is its having fit
     case('apps-persist-harder', 'desktop apps', 'mkdir -p /persistence; awk "BEGIN{srand(1);for(i=0;i<27500;i++)print int(rand()*1000000)}" > /persistence/t; nxpersist save; echo save=$?; rm /persistence/t', wall=300,
-         has=[r'Compressing data harder', r'answer 404', r'^save=1']),
+         has=[r'Compressing data', r'answer 404', r'^save=1']),
+    # version 3's blocks on the worker cores, each primed with the block before: packed and unpacked to the same bytes, and one stream's (version 2) too
+    case('apps-persist-blocks', 'desktop apps', 'cat /usr/share/openttd/busy.sav /usr/share/doom1.wad | head -c 700000 > /tmp/t; nxpersist test /tmp/t; NXPERSIST_FORMAT=2 nxpersist test /tmp/t',
+         True, wall=300, has=[r'test /tmp/t: 700000 bytes packed to \d+ in [\d.]+ s, unpacked in [\d.]+ s: the same'], never=[r'WRONG']),
+    # the whole way: a folder saved to the host (rvc_cpu --persist), taken away, loaded again: the same files
+    case('apps-persist-host', 'desktop apps', 'mkdir -p /persistence/a; cp /etc/passwd /persistence/a/p.txt; head -c 300000 /usr/share/doom1.wad > /persistence/a/w; '
+         'S1=$(find /persistence -type f | sort | xargs md5sum | md5sum); nxpersist save; rm -rf /persistence/*; nxpersist load!; '
+         'S2=$(find /persistence -type f | sort | xargs md5sum | md5sum); [ "$S1" = "$S2" ] && echo PERSIST-SAME',
+         wall=300, more=['--persist', os.path.join(ROOT, 'build', 'test_persist.blob')], has=[r'Saved: \d+ KB of 96', r'^PERSIST-SAME']),
     case('apps-persist-big', 'desktop apps', "mkdir -p /persistence; dd if=/dev/zero of=/persistence/big bs=1M count=9 2>/dev/null; nxpersist save; echo save=$?; rm /persistence/big", wall=120, has=[r'^save=1']),
     case('apps-clock-kept', 'desktop apps', "nxreg set nxclock.alarm 09:30; nxreg set nxclock.size 500x420; nxreg set nxclock.24h 1; nxreg set nxclock.seconds 1; nxreg set nxclock.alarm_on 0; nxreg set nxclock.timer 300; nx; sleep 3; nxfuzz start:c:nxclock wait:c:20 wins close:c:x end", True,
          wall=120, has=[r'FZ win \d+ .* 50\dx4\d\d "', r'^FZ-DONE 0']),

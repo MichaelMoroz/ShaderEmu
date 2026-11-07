@@ -8,10 +8,13 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <time.h>
 #include "zlib.h"
 #include "lzma.h"
 #include "ui.h"
 #include "ui_ask.h"
+#include "mcw.h"
+#include "mcwx.h"
 
 #define FOLDER "/persistence"
 #define TAR "/tmp/nxpersist.tar"
@@ -23,7 +26,7 @@
 #define REG_REPLY 68
 #define REG_ADDRESS 72
 #define KIND_FILE 3
-#define HEADER 16		/* "SEPD", a version (1 gzip, 2 xz), the packed bytes' count, their CRC-32 */
+#define HEADER 16		/* "SEPD", a version (1 gzip, 2 xz, 3 blocks), the packed bytes' count, their CRC-32 */
 #define DICT_MOST 0x200000	/* LZMA's dictionary, and so what a load must find in one piece */
 #define DICT_LEAST 0x40000
 #define WIDTH 320
@@ -249,6 +252,303 @@ unlzmaed(const unsigned char *in, long n, unsigned char *out, uint32_t size)
 	return done;
 }
 
+/*
+ * Version 3: the folder's archive in blocks, each block raw LZMA2 by itself on a worker core, with
+ * the bytes before it (PRIME, or all there are) as its preset dictionary: nearly what one stream
+ * of the whole would be, and as long as one block takes (docs/system/persist.md, "The bytes").
+ * After the header: the archive's size, the block's, the prime's, the count, then a word a block
+ * (its packed length; the top bit set when it was packed as text), then the blocks.
+ */
+#define BLOCK 0x40000
+#define PRIME 0x40000
+#define WORKERS_MOST 16	/* (an encoder's arena is some MB: memory, not cores, is what limits them) */
+#define BLOCKS_MOST 1024
+#define TEXT_BIT 0x80000000u
+
+extern const char etext[];
+extern void _start(void);
+
+struct block {			/* one core writes it: 16 bytes */
+	uint32_t start, length, made, status;	/* status: 0 to do, 1 made (text: 3), 2 failed */
+} __attribute__((aligned(16)));
+
+struct arena {			/* a core's memory for its encoder: bumped, put back at every block */
+	unsigned char *base;
+	uint32_t size, used, pad;
+} __attribute__((aligned(16)));
+
+static struct {
+	const unsigned char *raw;
+	unsigned char *out;	/* block i's packed bytes at out + i * room */
+	uint32_t room, prime, blocks_count;
+	struct block *blocks;
+	struct arena *arenas;	/* one a core: 0 the first */
+} pk;
+
+static void *
+arena_alloc(void *opaque, size_t count, size_t size)
+{
+	struct arena *a = opaque;
+	size_t n = (count * size + 15) & ~(size_t)15;
+	void *p;
+
+	if (n > a->size - a->used)
+		return NULL;
+	p = a->base + a->used;
+	a->used += (uint32_t)n;
+	return p;
+}
+
+static void
+arena_free(void *opaque, void *p)
+{
+	(void)opaque, (void)p;
+}
+
+/* Mostly letters, digits, spaces and line ends: LZMA's literals then go by the byte before (lc 3); a
+ * game's binary saves pack better with none (lc 0: OpenTTD's 1.2 MB 137 KB against 140). */
+static int
+text_like(const unsigned char *p, uint32_t n)
+{
+	uint32_t i, plain = 0, zeros = 0;
+
+	/* (zeros are not counted: an archive's headers and their padding are mostly zeros, around text) */
+	for (i = 0; i < n; i++)
+		plain += (p[i] >= 32 && p[i] < 127) || p[i] == '\n' || p[i] == '\t' || p[i] == '\r', zeros += p[i] == 0;
+	n -= zeros;
+	return n > 0 && plain >= n - n / 10;
+}
+
+/* The encoder's (NXPERSIST_MF, _NICE, _DEPTH): hash chains, whose stores are few, as a worker's write cache wants (bt4's
+ * tree took a worker three times as long: an Age of Empires save of 1.75 MB 143.5 s to 67,133 bytes, hc4 57.7 s to 69,211) */
+static int opt_mf = LZMA_MF_HC4, opt_nice = 64, opt_depth = 24;
+
+/* The options of block `start`, `length` long, with what lies before it: the encoder's and the decoder's. */
+static void
+block_options(lzma_options_lzma *o, lzma_filter *f, const unsigned char *raw, uint32_t start, uint32_t length, uint32_t prime, int text)
+{
+	uint32_t before = start < prime ? start : prime, dict = before + length;
+
+	lzma_lzma_preset(o, 6);
+	o->dict_size = dict < LZMA_DICT_SIZE_MIN ? LZMA_DICT_SIZE_MIN : dict;
+	o->preset_dict = before ? raw + start - before : NULL;
+	o->preset_dict_size = before;
+	o->nice_len = opt_nice, o->mf = opt_mf, o->depth = opt_depth;
+	o->lc = text ? 3 : 0, o->lp = 0, o->pb = 0;
+	f[0].id = LZMA_FILTER_LZMA2, f[0].options = o;
+	f[1].id = LZMA_VLI_UNKNOWN, f[1].options = NULL;
+}
+
+/* Packs block i on whichever core runs it, out of that core's arena (NULL: malloc's, the first core's after a failure). */
+static void
+pack_block(uint32_t i, struct arena *a)
+{
+	struct block *b = &pk.blocks[i];
+	lzma_allocator mine = { arena_alloc, arena_free, a };
+	lzma_stream z = LZMA_STREAM_INIT;
+	lzma_options_lzma o;
+	lzma_filter f[2];
+	lzma_ret r = LZMA_OK;
+	int text = text_like(pk.raw + b->start, b->length);
+
+	if (a)
+		a->used = 0, z.allocator = &mine;
+	block_options(&o, f, pk.raw, b->start, b->length, pk.prime, text);
+	if (lzma_raw_encoder(&z, f) != LZMA_OK) {
+		b->status = 2;
+		return;
+	}
+	z.next_in = pk.raw + b->start;
+	z.next_out = pk.out + (size_t)i * pk.room, z.avail_out = pk.room;
+	if (a && mcw_on_worker()) {
+		z.avail_in = b->length;
+		while (r == LZMA_OK)
+			r = lzma_code(&z, LZMA_FINISH);
+	} else {
+		/* on the first core, in pieces: the window's bar moves */
+		uint32_t fed = 0;
+
+		while (r == LZMA_OK) {
+			uint32_t here = b->length - fed < 0x4000 ? b->length - fed : 0x4000;
+
+			z.avail_in += here, fed += here;
+			do
+				r = lzma_code(&z, fed == b->length ? LZMA_FINISH : LZMA_RUN);
+			while (r == LZMA_OK && z.avail_in && z.avail_out);
+			if (r == LZMA_OK && z.avail_out == 0)
+				r = LZMA_BUF_ERROR;
+			if (pk.blocks_count == 1)
+				show(doing, (int)((uint64_t)fed * 256 / (b->length ? b->length : 1)));
+		}
+	}
+	b->made = (uint32_t)z.total_out;
+	lzma_end(&z);
+	b->status = r == LZMA_STREAM_END ? 1 + 2 * text : 2;
+	if (b->status == 3)
+		b->status = 1, b->made |= TEXT_BIT;
+}
+
+static void
+pack_some(void *ctx, uint32_t from, uint32_t to)
+{
+	(void)ctx;
+	for (; from < to; from++)
+		pack_block(from, pk.arenas[mcw_self()].base ? &pk.arenas[mcw_self()] : NULL);
+}
+
+/* What the blocks made of `n` bytes: the payload of version 3 in `out`, its length; 0 if there was no memory. */
+static long
+blocked(const unsigned char *raw, long n, unsigned char **made)
+{
+	const char *e;
+	uint32_t block, count, i, have = 0, done, k;
+	size_t need, at;
+	lzma_options_lzma o;
+	lzma_filter f[2];
+	unsigned char *out;
+	int most, workers = 0;
+
+	most = (e = getenv("NXPERSIST_WORKERS")) ? atoi(e) : WORKERS_MOST;
+	if ((e = getenv("NXPERSIST_MF")))
+		opt_mf = !strcmp(e, "hc4") ? LZMA_MF_HC4 : LZMA_MF_BT4;
+	if ((e = getenv("NXPERSIST_NICE")))
+		opt_nice = atoi(e);
+	if ((e = getenv("NXPERSIST_DEPTH")))
+		opt_depth = atoi(e);
+	block = (e = getenv("NXPERSIST_BLOCK")) ? (uint32_t)atoi(e) : 0;
+	pk.prime = (e = getenv("NXPERSIST_PRIME")) ? (uint32_t)atoi(e) : PRIME;
+	/* (a folder of one block is packed on this core, which does it three times as fast as a worker) */
+	block = block < 4096 ? BLOCK : (block + 15) & ~15u;
+	count = n ? (uint32_t)((n + block - 1) / block) : 1;
+	if (count > BLOCKS_MOST)
+		return 0;
+	pk.raw = raw;
+	pk.blocks_count = count;
+	pk.room = (block + block / 16 + 1024 + 15) & ~15u;
+	pk.blocks = aligned_alloc(16, count * sizeof *pk.blocks);
+	pk.out = malloc((size_t)count * pk.room);
+	if (!pk.blocks || !pk.out)
+		return 0;
+	for (i = 0; i < count; i++) {
+		pk.blocks[i].start = i * block;
+		pk.blocks[i].length = (uint32_t)(n - i * block < block ? n - i * block : block);
+		pk.blocks[i].made = pk.blocks[i].status = 0;
+	}
+	/* the workers, each with an arena the size of the largest block's encoder, as many as memory has */
+	block_options(&o, f, raw, block, block, pk.prime, 0);
+	need = ((size_t)lzma_raw_encoder_memusage(f) + 0x10000 + 15) & ~(size_t)15;
+	if (most > 0 && count > 1) {
+		const char *text = (const char *)((uintptr_t)_start & ~(uintptr_t)4095);
+
+		/* (a worker stops at every page of code no core has run yet: read it here first) */
+		mcw_touch_code(text, (unsigned)(etext - text));
+		workers = mcw_open(most < (int)count ? most : (int)count);
+	}
+	pk.arenas = aligned_alloc(16, (workers + 1) * sizeof *pk.arenas);
+	if (!pk.arenas)
+		return 0;
+	for (k = 0; k <= (uint32_t)workers; k++) {
+		pk.arenas[k].base = k ? malloc(need) : NULL;	/* (the first core uses malloc's) */
+		pk.arenas[k].size = (uint32_t)need, pk.arenas[k].used = 0;
+		if (k && !pk.arenas[k].base)
+			break;
+		if (k)
+			mcw_touch(pk.arenas[k].base, (unsigned)need);
+		have = k;
+	}
+	mcw_touch(pk.out, count * pk.room);
+	if (have > 0) {
+		mcw_for_opts opts = { 0 };
+
+		opts.grain = 1, opts.workers = (int)have, opts.first_idle = 1;
+		mcw_for_begin(count, pack_some, NULL, &opts);
+		while (!mcw_for_ready()) {
+			for (i = done = 0; i < count; i++)
+				done += pk.blocks[i].status != 0;
+			show(doing, (int)(done * 256 / count));
+			mcw_rest();
+			usleep(100000);
+		}
+		mcw_for_wait();
+		mcw_for_end();
+	}
+	for (i = done = 0; i < count; i++) {
+		/* what no worker made, or made in too little memory: here, in malloc's */
+		if (pk.blocks[i].status != 1)
+			pk.blocks[i].status = 0, pack_block(i, NULL);
+		if (pk.blocks[i].status != 1)
+			return 0;
+		show(doing, (int)(++done * 256 / count));
+	}
+	for (k = 1; k <= have; k++)
+		free(pk.arenas[k].base);
+	free(pk.arenas);
+	if (workers)
+		mcw_close();
+	need = 16 + 4 * (size_t)count;
+	for (i = 0; i < count; i++)
+		need += pk.blocks[i].made & ~TEXT_BIT;
+	if ((out = malloc(need)) == NULL)
+		return 0;
+	memcpy(out, &(uint32_t){ (uint32_t)n }, 4);
+	memcpy(out + 4, &block, 4);
+	memcpy(out + 8, &pk.prime, 4);
+	memcpy(out + 12, &count, 4);
+	for (i = 0, at = 16 + 4 * (size_t)count; i < count; i++) {
+		uint32_t length = pk.blocks[i].made & ~TEXT_BIT;
+
+		memcpy(out + 16 + 4 * i, &pk.blocks[i].made, 4);
+		memcpy(out + at, pk.out + (size_t)i * pk.room, length);
+		at += length;
+	}
+	free(pk.out);
+	free(pk.blocks);
+	*made = out;
+	return (long)need;
+}
+
+/* Unpacks what blocked made into `raw`, `size` bytes; 0 if it could not. */
+static int
+unblocked(const unsigned char *in, long n, unsigned char *raw, uint32_t size)
+{
+	uint32_t block, prime, count, i, word;
+	size_t at;
+
+	if (n < 16)
+		return 0;
+	memcpy(&block, in + 4, 4);
+	memcpy(&prime, in + 8, 4);
+	memcpy(&count, in + 12, 4);
+	if (block < 16 || count == 0 || count > BLOCKS_MOST || (uint64_t)block * count < size || (uint64_t)block * (count - 1) >= (size ? size : 1) ||
+	    16 + 4 * (uint64_t)count > (uint64_t)n)
+		return 0;
+	for (i = 0, at = 16 + 4 * (size_t)count; i < count; i++) {
+		lzma_stream z = LZMA_STREAM_INIT;
+		lzma_options_lzma o;
+		lzma_filter f[2];
+		lzma_ret r = LZMA_OK;
+		uint32_t start = i * block, length = size - start < block ? size - start : block, packed;
+
+		memcpy(&word, in + 16 + 4 * i, 4);
+		packed = word & ~TEXT_BIT;
+		if (packed > (uint64_t)n - at)
+			return 0;
+		block_options(&o, f, raw, start, length, prime, (word & TEXT_BIT) != 0);
+		if (lzma_raw_decoder(&z, f) != LZMA_OK)
+			return 0;
+		z.next_in = in + at, z.avail_in = packed;
+		z.next_out = raw + start, z.avail_out = length;
+		while (r == LZMA_OK)
+			r = lzma_code(&z, LZMA_FINISH);
+		lzma_end(&z);
+		if ((r != LZMA_STREAM_END && !(r == LZMA_BUF_ERROR && z.avail_out == 0)) || z.total_out != length)
+			return 0;
+		at += packed;
+		show(doing, (int)((uint64_t)(i + 1) * 256 / count));
+	}
+	return 1;
+}
+
 static int
 save(void)
 {
@@ -285,10 +585,24 @@ save(void)
 		say("No memory to pack the folder in.", 1);
 		return 1;
 	}
-	/* fast first; LZMA only for a folder that does not fit, with less memory if it cannot have it,
-	   and not for one twice too large: 1.2 MB of OpenTTD's map took 11 minutes at preset 6, to 146 KB */
-	length = deflated(raw, n, packed + HEADER, room, 1);
-	if (length == 0 ? n < 2 * MOST : HEADER + length > MOST && HEADER + length < 2 * MOST) {
+	/* LZMA in blocks on the worker cores (version 3); without the memory for it, as before: deflate
+	   first, LZMA as one stream only for a folder that does not fit, and not for one twice too large
+	   (1.2 MB of OpenTTD's map took 11 minutes at preset 6 on one core, to 146 KB) */
+	{
+		unsigned char *made = NULL;
+		const char *e = getenv("NXPERSIST_FORMAT");
+
+		length = e && atoi(e) < 3 ? 0 : blocked(raw, n, &made);
+		if (length > 0 && length <= room) {
+			memcpy(packed + HEADER, made, length);
+			version = 3;
+		} else
+			length = 0;
+		free(made);
+	}
+	if (version == 3)
+		;
+	else if ((length = deflated(raw, n, packed + HEADER, room, 1)), length == 0 ? n < 2 * MOST : HEADER + length > MOST && HEADER + length < 2 * MOST) {
 		long smaller = 0;
 
 		show("Compressing data harder...", 0);
@@ -349,11 +663,20 @@ load(const char *address)
 	memcpy(packed, fetched, total);
 	memcpy(words, packed + 4, 12);
 	memcpy(&size, packed + total - 4, 4);	/* a gzip file, and what lzmaed makes, ends with what it unpacks to */
+	if (words[0] == 3)
+		memcpy(&size, packed + HEADER, 4);	/* (blocks begin with it) */
 	open_window("Decompressing persistence data...");
-	if (memcmp(packed, "SEPD", 4) || (words[0] != 1 && words[0] != 2) || words[1] != total - HEADER || crc32(0, packed + HEADER, total - HEADER) != words[2] ||
+	if (memcmp(packed, "SEPD", 4) || words[0] < 1 || words[0] > 3 || words[1] != total - HEADER || crc32(0, packed + HEADER, total - HEADER) != words[2] ||
 	    size > RAW_MOST || (raw = malloc(size + 1)) == NULL) {
 		say("The kept data is damaged: not unpacked.", 0);
 		return 1;
+	}
+	if (words[0] == 3) {
+		if (!unblocked(packed + HEADER, total - HEADER, raw, size) || (file = fopen(TAR, "wb")) == NULL) {
+			say("The kept data is damaged: not unpacked.", 0);
+			return 1;
+		}
+		goto unpacked;
 	}
 	if (words[0] == 2) {
 		if (!unlzmaed(packed + HEADER, total - HEADER - 4, raw, size) || (file = fopen(TAR, "wb")) == NULL) {
@@ -431,6 +754,43 @@ main(int argc, char **argv)
 			printf("%.*s\n", (int)regs[REG_REPLY + 1], (const char *)fetched);
 		else
 			status = 1;
+	} else if (!strcmp(what, "test") && argc > 2) {
+		/* packs a file as a save packs the folder's archive and unpacks it again: the sizes, the
+		 * seconds and whether it came back the same (NXPERSIST_FORMAT=1 the way before) */
+		FILE *in = fopen(argv[2], "rb");
+		unsigned char *raw, *made = NULL, *back;
+		long n, length;
+		struct timespec t0, t1, t2;
+
+		if (!in)
+			return 1;
+		fseek(in, 0, SEEK_END), n = ftell(in), rewind(in);
+		raw = malloc(n + 1), back = malloc(n + 1);
+		if (!raw || !back || fread(raw, 1, n, in) != (size_t)n)
+			return 1;
+		fclose(in);
+		clock_gettime(CLOCK_MONOTONIC, &t0);
+		if (getenv("NXPERSIST_FORMAT") && atoi(getenv("NXPERSIST_FORMAT")) == 1) {
+			made = malloc(n + 4096);
+			length = deflated(raw, n, made, n + 4096, 1);
+			clock_gettime(CLOCK_MONOTONIC, &t1);
+			t2 = t1;
+			status = length == 0;
+		} else if (getenv("NXPERSIST_FORMAT") && atoi(getenv("NXPERSIST_FORMAT")) == 2) {
+			made = malloc(n + 4096);
+			length = lzmaed(raw, n, made, n + 4096, n < DICT_MOST ? (n < DICT_LEAST ? DICT_LEAST : (uint32_t)n) : DICT_MOST);
+			clock_gettime(CLOCK_MONOTONIC, &t1);
+			t2 = t1;
+			status = length == 0;
+		} else {
+			length = blocked(raw, n, &made);
+			clock_gettime(CLOCK_MONOTONIC, &t1);
+			status = !length || !unblocked(made, length, back, (uint32_t)n) || memcmp(raw, back, n) != 0;
+			clock_gettime(CLOCK_MONOTONIC, &t2);
+		}
+		printf("nxpersist: test %s: %ld bytes packed to %ld in %.1f s, unpacked in %.1f s: %s\n", argv[2], n, length,
+		       (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9, (t2.tv_sec - t1.tv_sec) + (t2.tv_nsec - t1.tv_nsec) / 1e9,
+		       status ? "WRONG" : "the same");
 	} else if (!strcmp(what, "off"))
 		status = ask("power:off", 0, 3) != 200;	/* a host that can switches the machine off (nxoff) */
 	else

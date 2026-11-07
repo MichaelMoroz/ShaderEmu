@@ -639,6 +639,16 @@ extern "C" int Inf32Decode(void* compressed, int offset, void* file_size, void* 
     int* started = (int*) state;   // cleared by the file's opening
     if (!*started) {
         *started = 1;
+        if (*in_size >= 4 && !memcmp(compressed, "AOEU", 4)) {
+            // what aoe_save.c wrote: the bytes as they are (docs/games/aoe.md, "Saved games")
+            free(inf_data);
+            inf_len = *in_size - 4;
+            inf_data = (unsigned char*) malloc(inf_len ? inf_len : 1);
+            if (!inf_data) inf_len = 0;
+            else memcpy(inf_data, (const unsigned char*) compressed + 4, inf_len);
+            inf_at = 0;
+            goto inflated;
+        }
         if (ahead_take(compressed, *in_size)) goto inflated;
         Inf z;
         memset(&z, 0, sizeof z);

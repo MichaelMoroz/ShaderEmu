@@ -66,10 +66,14 @@ mkdir -p "$OBJ"; echo "$FLAGS ${PGO_SUM:-}" > "$OBJ/flags.new"; cmp -s "$OBJ/fla
 newest=$(ls -t "$SRC"/include/*.h "$HERE"/win/*.h | sed -n 1p)   # (not head: under pipefail ls then dies of SIGPIPE, exit 141)
 one() {
     f=$1; o=$OBJ/$(basename "${f%.*}").o
+    # upstream's deflate under other names: port/aoe_save.c writes what the game saves as it is, and calls these for AOE_SAVE=deflate
+    case "$f" in */Deflate.c) rm -f "$o"; o=$OBJ/Deflate-up.o ;; esac
     if [ ! -f "$o" ] || [ "$f" -nt "$o" ] || [ "$newest" -nt "$o" ]; then
         rm -f "$o"
         case "$f" in
             */window.c) rv32-cc -O2 -fno-pie -w -g -I$HERE/port -I$REPO/linux/apps -idirafter $REPO/programs/linux/include -I$WORK/src/microwindows/src/include -I$REPO/linux/userland -c "$f" -o "$o" 2>&1 | grep -E 'error' | head -20 || true ;;
+            */Deflate.c) rv32-cc $CFLAGS -Ddeflate_init=aoe_up_deflate_init -Ddeflate_data=aoe_up_deflate_data -Ddeflate_deinit=aoe_up_deflate_deinit \
+                -Ddeflate_buf_size=aoe_up_deflate_buf_size -c "$f" -o "$o" 2>&1 | grep -E 'error' | head -20 || true ;;
             *.cpp) rv32-c++ $FLAGS -c "$f" -o "$o" 2>&1 | grep -E 'error' | head -20 || true ;;
             *) rv32-cc $CFLAGS -c "$f" -o "$o" 2>&1 | grep -E 'error' | head -20 || true ;;
         esac
@@ -125,7 +129,7 @@ fi
 [ "$1" = --unpack ] && exit 0	# (only that: a test unpacks first, then plays)
 P=/persistence; mkdir -p $P/aoe 2>/dev/null || P=/tmp; mkdir -p $P/aoe
 # (not exec: the shell waits, and deletes what was unpacked however the game ends)
-trap 'rm -rf $D' EXIT; trap 'exit 143' TERM INT HUP
+trap 'rm -rf $D /tmp/aoe-scratch' EXIT; trap 'exit 143' TERM INT HUP
 AOE_DATA=${AOE_DATA:-$D} AOE_HOME=${AOE_HOME:-$P/aoe} aoe.bin "$@"
 EOF
 chmod +x "$OUT/usr/bin/aoe"

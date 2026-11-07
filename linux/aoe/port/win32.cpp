@@ -53,12 +53,23 @@ static const char* data_file(const char* base) {
     return 0;
 }
 
+// What the game writes that is not worth keeping goes to a folder of /tmp, not the home the host keeps
+// (docs/games/aoe.md, "Saved games"): its logs (every .txt it writes: aoedoppl.txt, AOELOG.txt and the
+// others, nothing it reads back) and its pictures of the screen (.bmp). AOE_SCRATCH is that folder.
+static const char* scratch_dir(void) { const char* d = getenv("AOE_SCRATCH"); return d ? d : "/tmp/aoe-scratch"; }
+static int scratch_kind(const char* lower) {
+    const char* dot = strrchr(lower, '.');
+    return dot && (!strcmp(dot, ".txt") || !strcmp(dot, ".bmp"));
+}
+
 // the path a game's name is to be read from; 0 if there is none
 static int resolve_read(const char* name, char* out, int size) {
     char l[300];
     lower_path(l, name, sizeof l);
     snprintf(out, size, "%s/%s", home_dir(), l);
     if (access(out, 0) == 0) return 1;
+    snprintf(out, size, "%s/%s", scratch_dir(), l);
+    if (scratch_kind(l) && access(out, 0) == 0) return 1;
     const char* base = strrchr(l, '/');
     base = base ? base + 1 : l;
     // the expansion's folder has the same files' names, and the trial no expansion
@@ -78,7 +89,7 @@ static void make_parents(const char* path) {
 static void resolve_write(const char* name, char* out, int size) {
     char l[300];
     lower_path(l, name, sizeof l);
-    snprintf(out, size, "%s/%s", home_dir(), l);
+    snprintf(out, size, "%s/%s", scratch_kind(l) ? scratch_dir() : home_dir(), l);
     make_parents(out);
 }
 extern "C" int aoe_open(const char* name, int flags, ...) {

@@ -7,6 +7,7 @@
 #include <string.h>
 #include <stdio.h>
 #include "../include/world.h"
+#include "../include/tribegam.h"
 #include "aoe_cores.h"
 
 unsigned long aoe_clock_ms(void);
@@ -122,6 +123,23 @@ int aoe_world_run(RGE_Game_World* world, unsigned char* state) {
 // Before an input that is not a move, a save, a quit: the update to its end (handle_game_update takes it as ever)
 void aoe_world_finish(void) {
     while (w.running) resume(now_time() + 0x7fffffff);
+}
+
+// The script's "save NAME" (host.cpp): the game saved as its Save window saves it, the update first at its end
+extern RGE_Base_Game* rge_base_game;
+int aoe_script_save(const char* name) {
+    char file[80];
+    aoe_world_finish();
+    snprintf(file, sizeof file, "%s.gam", name);
+    return rge_base_game ? ((TRIBE_Game*) rge_base_game)->save_game(file) : 0;
+}
+
+// and "load NAME": as the Load window loads savegame/NAME.gam
+int aoe_script_load(const char* name) {
+    char file[80];
+    aoe_world_finish();
+    snprintf(file, sizeof file, "%s.gam", name);
+    return rge_base_game ? ((TRIBE_Game*) rge_base_game)->load_game(file) : 0;
 }
 
 // RGE_Object_List::update, between two objects

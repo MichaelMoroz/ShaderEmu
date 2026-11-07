@@ -21,20 +21,21 @@ mkdir -p "$OUT/bin" "$OUT/share" "$WORK/src/apps"
 Z=$WORK/src/zlib-1.3.1
 [ -f "$Z/deflate.c" ] || (cd "$WORK/src" && curl -fsSL -o zlib-1.3.1.tar.gz https://zlib.net/fossils/zlib-1.3.1.tar.gz && tar -xzf zlib-1.3.1.tar.gz)
 ZLIB="-w -I$Z $Z/deflate.c $Z/trees.c $Z/inflate.c $Z/inftrees.c $Z/inffast.c $Z/adler32.c $Z/crc32.c $Z/zutil.c"
-# and liblzma for a folder that level 1 leaves too large
-LZ=$WORK/src/xz-apps
+# and liblzma: the folder's blocks on the worker cores (hc4: a worker's stores are few) and one stream as before (bt4)
+LZ=$WORK/src/xz-apps-hc4
 if [ ! -f "$LZ/lib/liblzma.a" ]; then
     mkdir -p "$LZ/src"
     curl -fsSL https://github.com/tukaani-project/xz/releases/download/v5.8.1/xz-5.8.1.tar.gz | tar -xz -C "$LZ/src" --strip-components=1
     (cd "$LZ/src" && ./configure --host=riscv32-linux-musl --prefix="$LZ" CC=rv32-cc CFLAGS=-O2 --disable-shared --enable-static \
-        --enable-encoders=lzma1,lzma2 --enable-decoders=lzma1,lzma2 --enable-match-finders=bt4 --enable-checks=crc32 --disable-threads --disable-nls \
+        --enable-encoders=lzma1,lzma2 --enable-decoders=lzma1,lzma2 --enable-match-finders=hc4,bt4 --enable-checks=crc32 --disable-threads --disable-nls \
         --disable-xz --disable-xzdec --disable-lzmadec --disable-lzmainfo --disable-lzma-links --disable-scripts --disable-doc \
         --disable-microlzma --disable-lzip-decoder > /dev/null && make -s -j"$(nproc)" > /dev/null && make -s install > /dev/null)
 fi
 # the programs compile at once, a process each; the build fails if any of them does
 build_one() {
     local p=$1 more=""
-    [ $p = nxpersist ] && more="$ZLIB -I$LZ/include $LZ/lib/liblzma.a"
+    # (its blocks are packed on the worker cores: docs/system/persist.md, "The bytes")
+    [ $p = nxpersist ] && more="$ZLIB -I$LZ/include -I$REPO/programs/mc $LZ/lib/liblzma.a $WORK/src/libmedia/mcw.o $WORK/src/libmedia/mcwx.o"
     [ $p = nxcalc ] || [ $p = nxsolitaire ] && more="-lm"
     # the monitor and Paint move pictures with the worker cores (ui_bulk.h) and the browser
     # makes its strips there: the library every program has for them
