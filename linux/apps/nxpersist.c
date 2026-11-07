@@ -37,12 +37,20 @@ static unsigned char *fetched;
 static GR_WINDOW_ID window;	/* 0: no window system, and lines on the console */
 static const char *doing = "";
 static int part;		/* of 256 */
+static char amount[48];		/* "0.6 of 1.5 MB", beside what is being done */
 
 static void
 draw(void)
 {
 	ui_fill(window, 0, 0, WIDTH, HEIGHT, UI_FACE);
 	ui_text(window, 14, 14, doing, -1, BLACK, 0);
+	if (amount[0]) {
+		int tw, th, tb;
+
+		GrSetGCFont(ui_gc, ui_var);
+		GrGetGCTextSize(ui_gc, amount, -1, GR_TFASCII, &tw, &th, &tb);
+		ui_text(window, WIDTH - 14 - tw, 14, amount, -1, UI_SHADOW, 0);
+	}
 	ui_bevel(window, 14, 40, WIDTH - 28, 16, 1);
 	ui_fill(window, 16, 42, (WIDTH - 32) * part / 256, 12, UI_SELECTED);
 	GrFlush();
@@ -52,6 +60,8 @@ draw(void)
 static void
 show(const char *text, int of_256)
 {
+	if (text != doing)
+		amount[0] = 0;
 	if (!window && text != doing)
 		printf("nxpersist: %s\n", text);
 	doing = text, part = of_256;
@@ -268,8 +278,9 @@ unlzmaed(const unsigned char *in, long n, unsigned char *out, uint32_t size)
 extern const char etext[];
 extern void _start(void);
 
-struct block {			/* one core writes it: 16 bytes */
+struct block {			/* one core writes it: two texels */
 	uint32_t start, length, made, status;	/* status: 0 to do, 1 made (text: 3), 2 failed */
+	uint32_t fed, pad[3];	/* how much of it the encoder has taken: the first core's bar */
 } __attribute__((aligned(16)));
 
 struct arena {			/* a core's memory for its encoder: bumped, put back at every block */
@@ -339,6 +350,20 @@ block_options(lzma_options_lzma *o, lzma_filter *f, const unsigned char *raw, ui
 	f[1].id = LZMA_VLI_UNKNOWN, f[1].options = NULL;
 }
 
+/* The bar: the bytes the encoders have taken, of all of them (read by the first core: each block's word is its core's). */
+static void
+told_fed(void)
+{
+	uint64_t fed = 0, n = 0;
+	uint32_t i;
+
+	for (i = 0; i < pk.blocks_count; i++)
+		fed += pk.blocks[i].status == 1 || pk.blocks[i].status == 3 ? pk.blocks[i].length : pk.blocks[i].fed, n += pk.blocks[i].length;
+	snprintf(amount, sizeof amount, "%llu.%llu of %llu.%llu MB", (unsigned long long)(fed >> 20), (unsigned long long)((fed & 0xfffff) * 10 >> 20),
+		 (unsigned long long)(n >> 20), (unsigned long long)((n & 0xfffff) * 10 >> 20));
+	show(doing, (int)(n ? fed * 256 / n : 0));
+}
+
 /* Packs block i on whichever core runs it, out of that core's arena (NULL: malloc's, the first core's after a failure). */
 static void
 pack_block(uint32_t i, struct arena *a)
@@ -360,12 +385,9 @@ pack_block(uint32_t i, struct arena *a)
 	}
 	z.next_in = pk.raw + b->start;
 	z.next_out = pk.out + (size_t)i * pk.room, z.avail_out = pk.room;
-	if (a && mcw_on_worker()) {
-		z.avail_in = b->length;
-		while (r == LZMA_OK)
-			r = lzma_code(&z, LZMA_FINISH);
-	} else {
-		/* on the first core, in pieces: the window's bar moves */
+	{
+		/* in pieces, how far told in the block (the window's bar moves while the workers pack: the encoder's
+		   output is the same for any pieces) */
 		uint32_t fed = 0;
 
 		while (r == LZMA_OK) {
@@ -377,8 +399,9 @@ pack_block(uint32_t i, struct arena *a)
 			while (r == LZMA_OK && z.avail_in && z.avail_out);
 			if (r == LZMA_OK && z.avail_out == 0)
 				r = LZMA_BUF_ERROR;
-			if (pk.blocks_count == 1)
-				show(doing, (int)((uint64_t)fed * 256 / (b->length ? b->length : 1)));
+			b->fed = fed - (uint32_t)z.avail_in;
+			if (!mcw_on_worker())
+				told_fed();
 		}
 	}
 	b->made = (uint32_t)z.total_out;
@@ -432,7 +455,7 @@ blocked(const unsigned char *raw, long n, unsigned char **made)
 	for (i = 0; i < count; i++) {
 		pk.blocks[i].start = i * block;
 		pk.blocks[i].length = (uint32_t)(n - i * block < block ? n - i * block : block);
-		pk.blocks[i].made = pk.blocks[i].status = 0;
+		pk.blocks[i].made = pk.blocks[i].status = pk.blocks[i].fed = 0;
 	}
 	/* the workers, each with an arena the size of the largest block's encoder, as many as memory has */
 	block_options(&o, f, raw, block, block, pk.prime, 0);
@@ -463,9 +486,7 @@ blocked(const unsigned char *raw, long n, unsigned char **made)
 		opts.grain = 1, opts.workers = (int)have, opts.first_idle = 1;
 		mcw_for_begin(count, pack_some, NULL, &opts);
 		while (!mcw_for_ready()) {
-			for (i = done = 0; i < count; i++)
-				done += pk.blocks[i].status != 0;
-			show(doing, (int)(done * 256 / count));
+			told_fed();
 			mcw_rest();
 			usleep(100000);
 		}
@@ -478,8 +499,9 @@ blocked(const unsigned char *raw, long n, unsigned char **made)
 			pk.blocks[i].status = 0, pack_block(i, NULL);
 		if (pk.blocks[i].status != 1)
 			return 0;
-		show(doing, (int)(++done * 256 / count));
+		done++;
 	}
+	told_fed();
 	for (k = 1; k <= have; k++)
 		free(pk.arenas[k].base);
 	free(pk.arenas);

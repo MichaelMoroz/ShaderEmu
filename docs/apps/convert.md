@@ -29,7 +29,8 @@ PNG GIF BMP PPM TGA; sound: WAV FLAC; films: AVI GIF WAV FLAC JPEGs PNGs); under
 to 200%, the size it makes beside it), for a film's GIF or pictures every how many, for an AVI the sound. Save as is
 beside the file with the new ending, and never a file that is there (`Fox.png`, `Fox-2.png`, ...); Name... asks for
 another (`ui_save_file`, which asks before it replaces one). Convert (or Enter) works with a bar and a line saying
-what it is doing; Escape stops it, and so does closing the window. Escape otherwise closes it. After a conversion the name offered is the next free one,
+what it is doing (a picture: decoding the first half of the bar, resizing and encoding the rest, each told by libmedia's
+loops on the workers as their pieces end; a sound: decoding, then encoding); Escape stops it, and so does closing the window. Escape otherwise closes it. After a conversion the name offered is the next free one,
 so a second Convert never writes over the first. Choosing GIF for a film sets 50% and every second picture: an
 animation of every picture at full size is seldom wanted, and one over 48 MB of pixels is refused.
 

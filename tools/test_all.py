@@ -821,12 +821,15 @@ CASES = [
     # image (their count and every module's sum); the field in front of the screen as the harness's files (RVC_CLIP: shown, kept), and a
     # paste of a zip (RVC_CLIP_IN, tools/clip/paste-zip.txt) imported and unpacked (docs/system/clipboard.md)
     case('export-text', 'desktop apps', 'mkdir -p /tmp/e/d/sub; cp /etc/passwd /etc/group /tmp/e/d/; cp /usr/share/openttd/test.cfg /tmp/e/d/sub/; '
-         'head -c 50000 /usr/share/doom1.wad > /tmp/e/d/sub/w.bin; for k in zip tgz txz; do NXEXPORT_PACK=$k NXEXPORT_LEVEL=6 nxexport --text /tmp/t.$k /tmp/e/d; '
+         'head -c 50000 /usr/share/doom1.wad > /tmp/e/d/sub/w.bin; for k in zip tgz txz; do NXEXPORT_FORM=data NXEXPORT_PACK=$k NXEXPORT_LEVEL=6 nxexport --text /tmp/t.$k /tmp/e/d; '
          'rm -rf /tmp/b; nxexport --decode /tmp/t.$k /tmp/b > /dev/null; diff -r /tmp/e/d /tmp/b/d && echo SAME-$k; done; '
-         'nxexport --text /tmp/t.as /etc/passwd; nxexport --decode /tmp/t.as /tmp/c > /dev/null; cmp /etc/passwd /tmp/c/passwd && echo SAME-as',
-         wall=200, has=[r'^SAME-zip', r'^SAME-tgz', r'^SAME-txz', r'^SAME-as', r'text of d\.zip: \d+ characters']),
+         'NXEXPORT_FORM=data nxexport --text /tmp/t.as /etc/passwd; nxexport --decode /tmp/t.as /tmp/c > /dev/null; cmp /etc/passwd /tmp/c/passwd && echo SAME-as; '
+         # base64 alone (the default, for a computer outside): no name, so imported.zip, unpacked beside it
+         'NXEXPORT_PACK=zip nxexport --text /tmp/t.plain /tmp/e/d; nxexport --decode /tmp/t.plain /tmp/p > /dev/null; diff -r /tmp/e/d /tmp/p/imported/d && echo SAME-plain',
+         wall=200, has=[r'^SAME-zip', r'^SAME-tgz', r'^SAME-txz', r'^SAME-as', r'^SAME-plain', r'text of d\.zip: \d+ characters'],
+         never=[r'BOUND BROKEN']),
     case('export-qr', 'desktop apps', 'nxexport --text /tmp/t.txt /usr/share/openttd/test.cfg; nxexport --qr medium /tmp/t.txt; nxexport --qr big /tmp/t.txt',
-         wall=120, sums=[(r'nxexport: \d+ characters in \d+ codes of at most \d+, sum ([0-9a-f]+)', ['b361f51b', 'eaa13062'])]),
+         wall=120, sums=[(r'nxexport: \d+ characters in \d+ codes of at most \d+, sum ([0-9a-f]+)', ['d6bf0b7e', 'b2ac2cc5'])]),  # base64 alone since 7 November 2026: no data: head, no K/N:
     case('export-clip', 'desktop apps', 'echo clip-words > /tmp/clipboard; nxexport --clipboard; NXEXPORT_PRINT=1 nxexport --push; nxexport --import /tmp/imp; '
          'cat "/tmp/imp/from host/hello.txt"', wall=120,
          env={'RVC_CLIP': os.path.join(ROOT, 'build', 'test_clip'), 'RVC_CLIP_IN': os.path.join(ROOT, 'tools', 'clip', 'paste-zip.txt')},

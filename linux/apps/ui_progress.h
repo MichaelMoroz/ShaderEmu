@@ -1,7 +1,9 @@
 /* ui_progress.h: a small window that says what is being loaded or unpacked and how far it has
  * come, a bar and a line under it. It opens only after PROGRESS_LATER ms (a short job shows
  * nothing) and only where a window system answers. Closing it (its frame's button, Alt+F4)
- * takes it away at once and sets progress_closed: the job is then to stop. */
+ * takes it away at once and sets progress_closed: the job is then to stop. A program with a window of its own
+ * (ui_init done) shares its connection; what came for its other windows meanwhile is dropped, but an exposure
+ * sets progress_others_exposed, and it draws itself again after progress_end. */
 #ifndef SHADEREMU_APPS_UI_PROGRESS_H
 #define SHADEREMU_APPS_UI_PROGRESS_H
 
@@ -19,7 +21,7 @@ static GR_WINDOW_ID progress_window;
 static int progress_state;	/* 0 not begun, 1 waiting to show, 2 shown, -1 no window system */
 static unsigned progress_began, progress_drawn = ~0u, progress_mapped;
 static char progress_title[120], progress_line[80];
-static int progress_closed, progress_connected;	/* closed by its user; a connection is open */
+static int progress_closed, progress_connected, progress_others_exposed;	/* closed by its user; a connection is open */
 static void progress_end(void);
 
 static unsigned
@@ -41,9 +43,13 @@ progress_poll(void)
 		GrCheckNextEvent(&event);
 		if (event.type == GR_EVENT_TYPE_NONE)
 			break;
-		if (event.type == GR_EVENT_TYPE_EXPOSURE)
-			progress_drawn = ~0u;
-		if (event.type == GR_EVENT_TYPE_CLOSE_REQ) {
+		if (event.type == GR_EVENT_TYPE_EXPOSURE) {
+			if (event.exposure.wid == progress_window)
+				progress_drawn = ~0u;
+			else
+				progress_others_exposed = 1;
+		}
+		if (event.type == GR_EVENT_TYPE_CLOSE_REQ && event.general.wid == progress_window) {
 			progress_closed = 1;
 			progress_end();
 		}
@@ -57,6 +63,7 @@ progress_begin(const char *title)
 	snprintf(progress_title, sizeof progress_title, "%s", title);
 	progress_began = progress_ms();
 	progress_state = 1;
+	progress_closed = progress_others_exposed = 0;
 }
 
 /* How far: `done` of `total` (a total of 0: the bar is empty, the line says why). */
@@ -70,10 +77,12 @@ progress_show(unsigned long long done, unsigned long long total, const char *lin
 		const GR_SCREEN_INFO *screen;
 
 		progress_state = -1;
-		if (GrOpen() < 0)
-			return;
-		progress_connected = 1;
-		ui_init();
+		if (!ui_gc) {	/* (a program with no window yet: a connection of its own) */
+			if (GrOpen() < 0)
+				return;
+			progress_connected = 1;
+			ui_init();
+		}
 		screen = ui_screen();
 		progress_window = GrNewWindowEx(UI_FIXED, progress_title, GR_ROOT_WINDOW_ID, (screen->cols - PROGRESS_W) / 2,
 			(screen->rows - PROGRESS_H) / 3, PROGRESS_W, PROGRESS_H, UI_FACE);

@@ -82,8 +82,10 @@ CRC-32. A save makes version 3 (7 November 2026); versions 1 and 2, which saves 
 block is raw LZMA2 by itself, with the 256 KB before it (or all there is) as its preset dictionary: what
 it would find in one stream of the whole is found, but every block is a job of its own, on up to 16
 workers (memory, not cores, limits them: each has an arena of some MB for its encoder, made and touched
-by the first core). An archive of one block is packed on the first core, a piece at a time for the
-window's bar. After the header: the archive's size, the block's, the dictionary's before a block, the
+by the first core). An archive of one block is packed on the first core. Every encoder takes its block in
+pieces of 16 KB and writes how far it has come in its block's record (a block is two texels, one core's):
+the first core sums them for the window's bar and its "1.3 of 1.6 MB", which moves while the workers pack
+(before, a folder of six blocks on six workers showed nothing until all six were done). After the header: the archive's size, the block's, the dictionary's before a block, the
 count, a word a block (its packed length, the top bit set when it was packed as text), then the blocks.
 A load unpacks them in order on the first core, each with the bytes before it as its dictionary.
 
@@ -138,7 +140,7 @@ wrote. The text field in front of the screen is asked for the same way (`clip:`,
 The `nx` script runs `nxpersist load` after the window system and before the desktop and the
 bar, once a session (`/tmp/nxpersist.loaded`); a kept screen size other than the running one
 starts the desktop over once. With a window system `nxpersist` shows a window with what it is
-doing and a bar; without one it prints lines.
+doing, how much of how much, and a bar; without one it prints lines.
 
 ## Hosts
 

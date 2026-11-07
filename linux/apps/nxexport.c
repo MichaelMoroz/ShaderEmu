@@ -17,9 +17,11 @@
  *   nxexport --decode TEXTFILE FOLDER                    imports TEXTFILE's text as a paste would
  *   NXEXPORT_PACK=zip|tgz|txz|as NXEXPORT_LEVEL=N NXEXPORT_TO=qr|text NXEXPORT_PRINT=1: the window's choices and what it does
  *
- * The text is a data: address, "data:TYPE;name=NAME;base64,DATA": a browser that is given it saves the file,
- * and every base64 decoder takes what follows the comma. Many QR codes are the same text in parts, each code
- * "K/N:" and its part: joined in order without those, they are the text again.
+ * The text is base64 alone by default, for a computer outside the world: `certutil -decode FILE NAME` or
+ * `base64 -d FILE > NAME` makes the file; many codes or parts are cut on groups of 4 letters with nothing
+ * added, so joined in order they are the text. NXEXPORT_FORM=data makes a data: address instead,
+ * "data:TYPE;name=NAME;base64,DATA", whose codes each begin "K/N:". The window says, before packing, the most
+ * characters and codes it can be (measure, packed_most: bounds that hold whatever the files hold).
  */
 #include <ctype.h>
 #include <stdarg.h>
@@ -34,6 +36,7 @@
 #include "ui.h"
 #include "ui_ask.h"
 #include "host_ask.h"
+#include "ui_progress.h"
 
 #define WIDTH 560
 #define HEIGHT 520
@@ -46,12 +49,14 @@ enum { AS_IS, ZIP, TGZ, TXZ };
 static const char *const packing_names[] = { "As it is", "Zip", "tar.gz", "tar.xz" };
 static const char *const packing_keys[] = { "as", "zip", "tgz", "txz" };
 enum { TO_QR, TO_TEXT };
+enum { PLAIN, DATA };	/* the text: base64 alone (any computer decodes it as it is), or a data: address */
+static const char *const form_names[] = { "Base64 only", "data: address" };
 enum { BIG, MEDIUM, DENSE };
-static const char *const density_names[] = { "Big codes", "Medium", "Dense" };
+static const char *const density_names[] = { "Big", "Medium", "Dense" };
 static const int density_versions[] = { 10, 20, 30 };	/* the largest QR version used: 57, 97 and 137 modules */
 
 static char *paths[PATHS_MOST];
-static int npaths, packing = ZIP, level = 9, target = TO_TEXT, density = MEDIUM, print;
+static int npaths, packing = ZIP, level = 9, target = TO_TEXT, density = MEDIUM, form = PLAIN, print, windowed;
 static GR_WINDOW_ID window;
 static char status[200];
 
@@ -66,6 +71,27 @@ static size_t code_at[CODES_MOST], code_len[CODES_MOST];
 static int codes, code_shown, showing_codes, text_part, text_parts;
 
 static void say(const char *format, ...) __attribute__((format(printf, 1, 2)));
+
+/* What the paths hold, before packing (measure): for the bounds the window shows before Export. */
+static struct {
+	unsigned long long bytes, tar;	/* the files' bytes; what busybox's tar of them is at most */
+	unsigned long long zip_heads;	/* a zip's headers of every entry */
+	unsigned files, entries;
+	int done;
+} have;
+static unsigned long long packed_so_far;	/* the files' bytes packed: the bar */
+static int stopped;	/* the bar's window closed: the packing ends */
+
+/* The bar, in the window's programs only (a test's command line shows none): `done` of `total`, and a line. */
+static void
+bar(unsigned long long done, unsigned long long total, const char *line)
+{
+	if (!windowed)
+		return;
+	progress_show(done, total, line ? line : progress_megabytes(done, total));
+	if (progress_closed)
+		stopped = 1;
+}
 
 static void
 say(const char *format, ...)
@@ -196,9 +222,22 @@ deflate_raw(const unsigned char *in, size_t n, unsigned char *out, size_t room, 
 	memset(&z, 0, sizeof z);
 	if (deflateInit2(&z, lvl, Z_DEFLATED, -15, 9, Z_DEFAULT_STRATEGY) != Z_OK)
 		return 0;
-	z.next_in = (unsigned char *)in, z.avail_in = (uInt)n;
 	z.next_out = out, z.avail_out = (uInt)room;
-	made = deflate(&z, Z_FINISH) == Z_STREAM_END ? z.total_out : 0;
+	{	/* (in pieces of 64 KB: the bar moves) */
+		size_t fed = 0;
+		int r = Z_OK;
+
+		while (r == Z_OK && !stopped) {
+			size_t here = n - fed < 0x10000 ? n - fed : 0x10000;
+
+			z.next_in = (unsigned char *)in + fed, z.avail_in = (uInt)here, fed += here;
+			r = deflate(&z, fed == n ? Z_FINISH : Z_NO_FLUSH);
+			if (r == Z_OK && z.avail_out == 0)
+				r = Z_BUF_ERROR;
+			bar(packed_so_far + fed, have.bytes, NULL);
+		}
+		made = r == Z_STREAM_END ? z.total_out : 0;
+	}
 	deflateEnd(&z);
 	return made < n ? made : 0;
 }
@@ -244,6 +283,10 @@ zip_entry(const char *path, const struct stat *st, int folder)
 	put32(&zip_central, (uint32_t)(st->st_mode & 0xffff) << 16 | (folder ? 0x10 : 0)), put32(&zip_central, offset);
 	put(&zip_central, named, nlen);
 	zip_entries++;
+	packed_so_far += n;
+	bar(packed_so_far, have.bytes, NULL);
+	if (stopped)
+		zip_out.failed = 1;
 	free(data);
 	free(small);
 }
@@ -324,7 +367,25 @@ tar_paths(void)
 		execvp("tar", args);
 		_exit(127);
 	}
-	return pid > 0 && waitpid(pid, &status, 0) == pid && status == 0;
+	if (pid <= 0)
+		return 0;
+	for (;;) {	/* (the archive's size against what it is at most: the bar) */
+		struct stat st;
+		pid_t got = waitpid(pid, &status, windowed ? WNOHANG : 0);
+
+		if (got == pid)
+			break;
+		if (got < 0)
+			return 0;
+		bar(stat(ARCHIVE, &st) == 0 ? (unsigned long long)st.st_size : 0, have.tar, "Gathering the files");
+		if (stopped) {
+			kill(pid, SIGTERM);
+			waitpid(pid, &status, 0);
+			return 0;
+		}
+		usleep(100000);
+	}
+	return status == 0;
 }
 
 static int
@@ -338,9 +399,20 @@ pack_tgz(struct grow *out, const unsigned char *raw, size_t n)
 	out->room = n + n / 8 + 1024, out->p = malloc(out->room);
 	if (!out->p || deflateInit2(&z, level < 1 ? 1 : level, Z_DEFLATED, 31, 9, Z_DEFAULT_STRATEGY) != Z_OK)
 		return 0;
-	z.next_in = (unsigned char *)raw, z.avail_in = (uInt)n;
 	z.next_out = out->p, z.avail_out = (uInt)out->room;
-	done = deflate(&z, Z_FINISH) == Z_STREAM_END;
+	{
+		size_t fed = 0;
+		int r = Z_OK;
+
+		while (r == Z_OK && !stopped) {
+			size_t here = n - fed < 0x10000 ? n - fed : 0x10000;
+
+			z.next_in = (unsigned char *)raw + fed, z.avail_in = (uInt)here, fed += here;
+			r = deflate(&z, fed == n ? Z_FINISH : Z_NO_FLUSH);
+			bar(fed, n, NULL);
+		}
+		done = r == Z_STREAM_END;
+	}
 	out->n = z.total_out;
 	deflateEnd(&z);
 	return done;
@@ -367,10 +439,20 @@ pack_txz(struct grow *out, const unsigned char *raw, size_t n)
 	f[1].id = LZMA_VLI_UNKNOWN, f[1].options = NULL;
 	if (lzma_stream_encoder(&z, f, LZMA_CHECK_CRC32) != LZMA_OK)
 		return 0;
-	z.next_in = raw, z.avail_in = n;
 	z.next_out = out->p, z.avail_out = out->room;
-	while (r == LZMA_OK)
-		r = lzma_code(&z, LZMA_FINISH);
+	{
+		size_t fed = 0;
+
+		while (r == LZMA_OK && !stopped) {	/* (in pieces of 64 KB: the bar) */
+			size_t here = n - fed < 0x10000 ? n - fed : 0x10000;
+
+			z.next_in = raw + fed, z.avail_in = here, fed += here;
+			do
+				r = lzma_code(&z, fed == n ? LZMA_FINISH : LZMA_RUN);
+			while (r == LZMA_OK && z.avail_in);
+			bar(fed, n, NULL);
+		}
+	}
 	out->n = z.total_out;
 	lzma_end(&z);
 	return r == LZMA_STREAM_END;
@@ -393,7 +475,24 @@ type_of(void)
 
 static const char base64_letters[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-/* The text: "data:TYPE;name=NAME;base64," and the bytes. */
+/* The name as an address may have it: what is not a letter, digit or one of a few signs as %XX. */
+static void
+escaped(const char *from, char *name, size_t room)
+{
+	size_t i, h;
+
+	for (i = h = 0; from[i] && h < room - 4; i++) {
+		unsigned char c = (unsigned char)from[i];
+
+		if (isalnum(c) || strchr("._-()", c))
+			name[h++] = (char)c;
+		else
+			h += (size_t)snprintf(name + h, room - h, "%%%02X", c);
+	}
+	name[h] = 0;
+}
+
+/* The text: base64 alone, or "data:TYPE;name=NAME;base64," and the bytes. */
 static int
 make_text(void)
 {
@@ -401,17 +500,8 @@ make_text(void)
 	size_t i, h, at;
 	const unsigned char *p = packed;
 
-	/* (the name as an address may have it: what is not a letter, digit or one of a few signs as %XX) */
-	for (i = h = 0; packed_name[i] && h < sizeof name - 4; i++) {
-		unsigned char c = (unsigned char)packed_name[i];
-
-		if (isalnum(c) || strchr("._-()", c))
-			name[h++] = (char)c;
-		else
-			h += (size_t)snprintf(name + h, sizeof name - h, "%%%02X", c);
-	}
-	name[h] = 0;
-	h = (size_t)snprintf(head, sizeof head, "data:%s;name=%s;base64,", type_of(), name);
+	escaped(packed_name, name, sizeof name);
+	h = form == DATA ? (size_t)snprintf(head, sizeof head, "data:%s;name=%s;base64,", type_of(), name) : 0;
 	free(text);
 	text_n = h + (packed_n + 2) / 3 * 4;
 	if (!(text = malloc(text_n + 1)))
@@ -431,6 +521,93 @@ make_text(void)
 	}
 	text[text_n] = 0;
 	return 1;
+}
+
+/* What packing `pk` names its file. */
+static void
+name_of(int pk, char *to, size_t room)
+{
+	if (pk == AS_IS)
+		snprintf(to, room, "%s", base_name(paths[0]));
+	else
+		snprintf(to, room, "%s.%s", npaths > 1 ? "exported" : base_name(paths[0]), pk == ZIP ? "zip" : pk == TGZ ? "tar.gz" : "tar.xz");
+}
+
+static size_t measure_base;
+
+static unsigned long long
+in_512(unsigned long long n)
+{
+	return (n + 511) & ~511ull;
+}
+
+/* An entry's share of the bounds: its name in the archive (a folder's with its "/"). */
+static int
+measured(const char *path, const struct stat *st, int kind, struct FTW *at)
+{
+	size_t name = strlen(path) > measure_base ? strlen(path) - measure_base : strlen(path);
+
+	(void)at;
+	if (kind == FTW_D)
+		name++;
+	have.entries++;
+	have.tar += 512 + (name > 99 ? 512 + in_512(name + 1) : 0);	/* (a long name: GNU's entry before it) */
+	if (kind == FTW_F) {
+		have.files++, have.bytes += (unsigned long long)st->st_size;
+		have.tar += in_512((unsigned long long)st->st_size);
+	} else if (kind != FTW_D)
+		have.tar += 512 + 1024;	/* (a link: its target's name) */
+	if (kind == FTW_F || kind == FTW_D)
+		have.zip_heads += 30 + 46 + 2 * (unsigned long long)name;
+	return 0;
+}
+
+/* The paths walked once: what they hold, and the parts of the bounds no choice changes. */
+static void
+measure(void)
+{
+	char base[512];
+	int i;
+	struct stat st;
+
+	memset(&have, 0, sizeof have);
+	common_parent(base, sizeof base);
+	measure_base = base[0] ? strlen(base) + 1 : 1;
+	for (i = 0; i < npaths; i++)
+		if (is_folder(paths[i]))
+			nftw(paths[i], measured, 16, FTW_PHYS);
+		else if (lstat(paths[i], &st) == 0)
+			measured(paths[i], &st, S_ISREG(st.st_mode) ? FTW_F : FTW_SL, NULL);
+	have.tar = (have.tar + 1024 + 10239) / 10240 * 10240;	/* (the end's two blocks, and a whole record) */
+	have.done = 1;
+}
+
+/* The most bytes packing `pk` can make of the paths, whatever they hold: zlib's and liblzma's own bounds. */
+static unsigned long long
+packed_most(int pk)
+{
+	unsigned long long t = have.tar;
+
+	if (pk == AS_IS)
+		return have.bytes;
+	if (pk == ZIP)	/* (a file deflate makes no smaller is stored) */
+		return have.bytes + have.zip_heads + 22;
+	if (pk == TGZ)	/* (deflateBound's for any level and memory, and gzip's head and tail) */
+		return t + ((t + 7) >> 3) + ((t + 63) >> 6) + 5 + 18;
+	return lzma_stream_buffer_bound((size_t)t) + 64;
+}
+
+/* The text's characters for `bytes` bytes of packing `pk`, in the chosen form. */
+static unsigned long long
+text_chars(int pk, unsigned long long bytes)
+{
+	char name[160], esc[200];
+
+	if (form == PLAIN)
+		return (bytes + 2) / 3 * 4;
+	name_of(pk, name, sizeof name);
+	escaped(name, esc, sizeof esc);
+	return strlen("data:application/octet-stream;name=;base64,") + strlen(esc) + (bytes + 2) / 3 * 4;
 }
 
 /* Packs the paths as chosen into `packed`; false (and the status says why) if it could not. */
@@ -457,8 +634,14 @@ pack(void)
 		snprintf(packed_name, sizeof packed_name, "%s", base_name(paths[0]));
 		return 1;
 	}
-	snprintf(packed_name, sizeof packed_name, "%s%s.%s", npaths > 1 ? "exported" : base_name(paths[0]), npaths > 1 ? "" : "",
-		 packing == ZIP ? "zip" : packing == TGZ ? "tar.gz" : "tar.xz");
+	name_of(packing, packed_name, sizeof packed_name);
+	packed_so_far = 0, stopped = 0;
+	if (windowed) {
+		char title[200];
+
+		snprintf(title, sizeof title, "Packing %s", packed_name);
+		progress_begin(title);
+	}
 	if (packing == ZIP)
 		ok = pack_zip(&out);
 	else {
@@ -469,9 +652,14 @@ pack(void)
 			free(raw);
 		}
 	}
+	if (windowed)
+		progress_end();
 	if (!ok) {
 		free(out.p);
-		say("Could not be packed: %s.", out.failed ? "no memory, or a file could not be read" : "no memory");
+		if (stopped)
+			say("Stopped: nothing was exported.");
+		else
+			say("Could not be packed: %s.", out.failed ? "no memory, or a file could not be read" : "no memory");
 		return 0;
 	}
 	packed = out.p, packed_n = out.n;
@@ -480,17 +668,38 @@ pack(void)
 
 /* ---- QR codes ---- */
 
-/* The most bytes of text one code of the chosen size holds (byte mode, ECC M), less its "K/N:". */
+static size_t code_capacity(int d);
+
+/* What one code of many holds: in base64 alone a whole number of 4 letters (each part decodes by itself, and the
+ * parts joined are the text), in a data: address the capacity less its "K/N:" ("400/400:" is 8). */
 static size_t
 code_room(void)
+{
+	size_t c = code_capacity(density);
+
+	return form == PLAIN ? c & ~(size_t)3 : c > 12 ? c - 12 : c;
+}
+
+/* How many codes of size d `chars` letters are, in the chosen form: one holds the text alone, with no "1/1:". */
+static unsigned long long
+codes_for(unsigned long long chars, int d)
+{
+	size_t c = code_capacity(d), room = form == PLAIN ? c & ~(size_t)3 : c - 12;
+
+	return chars <= c ? 1 : (chars + room - 1) / room;
+}
+
+/* The most bytes of text one code of size d holds (byte mode, ECC M). */
+static size_t
+code_capacity(int d)
 {
 	static size_t room[3];
 	static uint8_t qr[qrcodegen_BUFFER_LEN_MAX], temp[qrcodegen_BUFFER_LEN_MAX];
 	char *probe;
 	size_t lo = 1, hi = 3000;
 
-	if (room[density])
-		return room[density];
+	if (room[d])
+		return room[d];
 	if (!(probe = malloc(hi + 1)))
 		return 100;
 	memset(probe, 'a', hi);
@@ -498,14 +707,14 @@ code_room(void)
 		size_t mid = (lo + hi + 1) / 2;
 
 		probe[mid] = 0;
-		if (qrcodegen_encodeText(probe, temp, qr, qrcodegen_Ecc_MEDIUM, 1, density_versions[density], qrcodegen_Mask_AUTO, false))
+		if (qrcodegen_encodeText(probe, temp, qr, qrcodegen_Ecc_MEDIUM, 1, density_versions[d], qrcodegen_Mask_AUTO, false))
 			lo = mid;
 		else
 			hi = mid - 1;
 		probe[mid] = 'a';
 	}
 	free(probe);
-	return room[density] = lo > 12 ? lo - 12 : lo;	/* ("K/N:" is 9 at most: 400/400:) */
+	return room[d] = lo;
 }
 
 /* The text cut into codes: false if it would be more than CODES_MOST. */
@@ -515,9 +724,7 @@ make_codes(void)
 	size_t room = code_room(), at = 0;
 	int n;
 
-	n = (int)((text_n + room - 1) / room);
-	if (text_n <= room + 12)
-		n = 1;	/* (one code: the text alone, no "1/1:") */
+	n = (int)codes_for(text_n, density);
 	if (n > CODES_MOST)
 		return 0;
 	for (codes = 0; codes < n; codes++) {
@@ -535,10 +742,11 @@ make_code(int k, uint8_t qr[qrcodegen_BUFFER_LEN_MAX])
 {
 	static uint8_t temp[qrcodegen_BUFFER_LEN_MAX];
 	char *part = malloc(code_len[k] + 16);
-	int head = codes > 1 ? snprintf(part, 16, "%d/%d:", k + 1, codes) : 0, ok;
+	int head, ok;
 
 	if (!part)
 		return 0;
+	head = codes > 1 && form == DATA ? snprintf(part, 16, "%d/%d:", k + 1, codes) : 0;
 	memcpy(part + head, text + code_at[k], code_len[k]);
 	part[head + code_len[k]] = 0;
 	ok = qrcodegen_encodeText(part, temp, qr, qrcodegen_Ecc_MEDIUM, 1, density_versions[density], qrcodegen_Mask_AUTO, false);
@@ -562,14 +770,21 @@ show_in_field(const char *what, const char *from, size_t n)
 static void
 show_text_part(void)
 {
-	char what[200];
+	char what[256];
 	size_t from = (size_t)text_part * TEXT_PART, n = text_n - from < TEXT_PART ? text_n - from : TEXT_PART;
 	int answer;
 
-	if (text_parts > 1)
-		snprintf(what, sizeof what, "%s: part %d of %d (join the parts in order)", packed_name, text_part + 1, text_parts);
+	if (form == PLAIN)
+		snprintf(what, sizeof what, "%s, %zu bytes%s: copy it into a file, then certutil -decode FILE \"%s\" (Windows) or "
+			 "base64 -d FILE > \"%s\"", packed_name, packed_n, text_parts > 1 ? ", parts joined in order" : "", packed_name, packed_name);
 	else
-		snprintf(what, sizeof what, "%s (%zu bytes)", packed_name, packed_n);
+		snprintf(what, sizeof what, "%s, %zu bytes%s: paste it into a browser's address bar to save the file", packed_name, packed_n,
+			 text_parts > 1 ? ", parts joined in order" : "");
+	if (text_parts > 1) {
+		size_t k = strlen(what);
+
+		snprintf(what + k, sizeof what - k, " (part %d of %d)", text_part + 1, text_parts);
+	}
 	answer = show_in_field(what, text + from, n);
 	if (answer == 200)
 		say("%s is in the field in front of the screen: %zu characters%s.", packed_name, n,
@@ -588,7 +803,7 @@ struct key {
 };
 static struct key keys[24];
 static int nkeys;
-enum { K_PACK = 1, K_LEVEL = 10, K_QR = 20, K_TEXT, K_DENSITY = 30, K_GO = 40, K_PREV, K_NEXT, K_BACK, K_CLOSE };
+enum { K_PACK = 1, K_LEVEL = 10, K_QR = 20, K_TEXT, K_FORM = 25, K_DENSITY = 30, K_GO = 40, K_PREV, K_NEXT, K_BACK, K_CLOSE };
 
 static void
 key(int x, int y, int w, int h, int id, const char *label, int down)
@@ -602,8 +817,8 @@ static void
 draw_code(void)
 {
 	static uint8_t qr[qrcodegen_BUFFER_LEN_MAX];
-	int size = make_code(code_shown, qr), area = HEIGHT - 60, scale, x0, y0, x, y;
-	char line[80];
+	int size = make_code(code_shown, qr), area = HEIGHT - 84, scale, x0, y0, x, y;
+	char line[200];
 
 	ui_fill(window, 0, 0, WIDTH, HEIGHT, UI_FACE);
 	if (!size) {
@@ -625,11 +840,33 @@ draw_code(void)
 			x += run;
 		}
 	nkeys = 0;
+	if (form == PLAIN)
+		snprintf(line, sizeof line, "%s%s: certutil -decode FILE \"%s\" or base64 -d FILE > \"%s\"", codes > 1 ? "The scans in order in one file" : "The scan in a file",
+			 "", packed_name, packed_name);
+	else
+		snprintf(line, sizeof line, "%s", codes > 1 ? "Each begins K/N: - joined in order without it, a data: address" : "A data: address: a browser saves it");
+	ui_text_fit(window, 20, HEIGHT - 66, WIDTH - 40, line, UI_SHADOW);
 	snprintf(line, sizeof line, "Code %d of %d", code_shown + 1, codes);
 	ui_text(window, 20, HEIGHT - 38, line, -1, BLACK, 0);
 	key(200, HEIGHT - 42, 100, 26, K_PREV, "< Previous", 0);
 	key(310, HEIGHT - 42, 100, 26, K_NEXT, "Next >", 0);
 	key(440, HEIGHT - 42, 100, 26, K_BACK, "Back", 0);
+}
+
+/* 1234567 as "1,234,567". */
+static const char *
+grouped(unsigned long long v, char *to)
+{
+	char d[32];
+	int n = snprintf(d, sizeof d, "%llu", v), i, k = 0;
+
+	for (i = 0; i < n; i++) {
+		if (i && (n - i) % 3 == 0)
+			to[k++] = ',';
+		to[k++] = d[i];
+	}
+	to[k] = 0;
+	return to;
 }
 
 static void
@@ -665,21 +902,61 @@ draw(void)
 	key(120, y, 140, 26, K_TEXT, "Text (base64)", target == TO_TEXT);
 	key(268, y, 140, 26, K_QR, "QR codes", target == TO_QR);
 	y += 34;
+	ui_text(window, 20, y + 6, "Text as:", -1, BLACK, 0);
+	for (i = 0; i < 2; i++)
+		key(120 + i * 148, y, 140, 26, K_FORM + i, form_names[i], form == i);
+	y += 34;
 	if (target == TO_QR) {
 		ui_text(window, 20, y + 6, "Codes:", -1, BLACK, 0);
 		for (i = 0; i < 3; i++)
 			key(120 + i * 104, y, 96, 26, K_DENSITY + i, density_names[i], density == i);
 	}
-	y += 44;
+	y += 36;
+	if (have.done) {	/* (what it will be at most, before anything is packed) */
+		unsigned long long most = packed_most(packing), chars = text_chars(packing, most);
+		char n1[32], n2[32], n3[32];
+
+		snprintf(line, sizeof line, "%s bytes in %u file%s: %s %s characters%s.", grouped(have.bytes, n1), have.files,
+			 have.files == 1 ? "" : "s", packing == AS_IS ? "the text is" : "at most", grouped(chars, n2), packing == AS_IS ? "" : " before packing");
+		ui_text_fit(window, 20, y, WIDTH - 40, line, BLACK);
+		y += 18;
+		if (target == TO_QR) {
+			unsigned long long k = codes_for(chars, density);
+
+			if (k == 1)
+				snprintf(line, sizeof line, "Fits in one %s code (it holds %s), whatever it packs to.", density_names[density],
+					 grouped(code_capacity(density), n1));
+			else
+				snprintf(line, sizeof line, "Up to %s %s codes (one holds %s, a Dense one %s)%s.", grouped(k, n1), density_names[density],
+					 grouped(code_capacity(density), n2), grouped(code_capacity(DENSE), n3), k > CODES_MOST ? ": more than shown, unless packed smaller" :
+					 packing == AS_IS ? "" : ": fewer once packed");
+		} else {
+			unsigned long long k = (chars + TEXT_PART - 1) / TEXT_PART;
+
+			if (k <= 1)
+				snprintf(line, sizeof line, "One showing of the field holds it (%s characters), whatever it packs to.", grouped(TEXT_PART, n1));
+			else
+				snprintf(line, sizeof line, "Up to %s showings of the field (%s characters each)%s.", grouped(k, n1), grouped(TEXT_PART, n2),
+					 packing == AS_IS ? "" : ": fewer once packed");
+		}
+		ui_text_fit(window, 20, y, WIDTH - 40, line, BLACK);
+	}
+	y += 30;
 	key(20, y, 140, 30, K_GO, target == TO_QR ? "Make the codes" : text_parts > 1 && text_part + 1 < text_parts ? "Next part" :
 	    "Export", 0);
 	key(WIDTH - 120, y, 100, 30, K_CLOSE, "Close", 0);
 	y += 46;
 	ui_text_fit(window, 20, y, WIDTH - 40, status, BLACK);
 	y += 30;
-	ui_text(window, 20, y, "The text is a data: address. A browser given it saves the file; any", -1, UI_SHADOW, 0);
-	ui_text(window, 20, y + 18, "base64 decoder takes what follows the comma. Codes of many parts:", -1, UI_SHADOW, 0);
-	ui_text(window, 20, y + 36, "each begins K/N: - join their texts in order without it.", -1, UI_SHADOW, 0);
+	if (form == PLAIN) {
+		ui_text(window, 20, y, "Base64 alone: any computer makes the file of it as it is.", -1, UI_SHADOW, 0);
+		ui_text(window, 20, y + 18, "Windows: certutil -decode FILE NAME. Linux: base64 -d FILE > NAME.", -1, UI_SHADOW, 0);
+		ui_text(window, 20, y + 36, "Many codes or parts: their texts joined in order, in one file.", -1, UI_SHADOW, 0);
+	} else {
+		ui_text(window, 20, y, "A data: address: a browser given it saves the file (its name kept", -1, UI_SHADOW, 0);
+		ui_text(window, 20, y + 18, "only by this machine's Import). Codes of many parts: each begins", -1, UI_SHADOW, 0);
+		ui_text(window, 20, y + 36, "K/N: - join their texts in order without it.", -1, UI_SHADOW, 0);
+	}
 }
 
 static void
@@ -698,6 +975,8 @@ go(void)
 			say("No memory for the text.");
 		return;
 	}
+	if (packing != AS_IS && have.done && text_n > text_chars(packing, packed_most(packing)))
+		say("The bound was wrong: %zu characters made.", text_n);	/* (never: a test reads it) */
 	if (target == TO_QR) {
 		if (!make_codes()) {
 			say("%zu bytes are %zu characters: more than %d codes. Pack it smaller or send it as text.", packed_n, text_n, CODES_MOST);
@@ -728,6 +1007,8 @@ clicked(int px, int py)
 			level = ui_slider_value(px, k->x, k->w, 9), text_parts = 0;
 		else if (k->id == K_QR || k->id == K_TEXT)
 			target = k->id == K_QR ? TO_QR : TO_TEXT, text_parts = 0;
+		else if (k->id == K_FORM || k->id == K_FORM + 1)
+			form = k->id - K_FORM, text_parts = 0;
 		else if (k->id >= K_DENSITY && k->id < K_DENSITY + 3)
 			density = k->id - K_DENSITY;
 		else if (k->id == K_GO)
@@ -774,6 +1055,8 @@ export_window(void)
 	if (GrOpen() < 0)
 		return 1;
 	ui_init();
+	windowed = 1;
+	measure();
 	window = GrNewWindowEx(UI_FIXED, "Export", GR_ROOT_WINDOW_ID, -1, -1, WIDTH, HEIGHT, UI_FACE);
 	GrSelectEvents(window, GR_EVENT_MASK_EXPOSURE | GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_BUTTON_DOWN | GR_EVENT_MASK_CLOSE_REQ);
 	GrMapWindow(window);
@@ -915,13 +1198,19 @@ static int
 run_and_wait(char *const args[])
 {
 	int status = -1;
-	pid_t pid = real_vfork();
+	pid_t pid = real_vfork(), got;
 
 	if (pid == 0) {
 		execvp(args[0], args);
 		_exit(127);
 	}
-	return pid > 0 && waitpid(pid, &status, 0) == pid && WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+	if (pid <= 0)
+		return -1;
+	while ((got = waitpid(pid, &status, windowed ? WNOHANG : 0)) == 0) {	/* (the bar answers its window meanwhile) */
+		bar(0, 0, "Unpacking");
+		usleep(100000);
+	}
+	return got == pid && WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 }
 
 /* An archive unpacked into a folder beside it (its name without the ending): that folder, or "" if it is none. */
@@ -972,17 +1261,20 @@ unpack_beside(const char *file, char *folder, size_t room)
 		}
 		z.next_in = head, z.avail_in = in_n;
 		for (;;) {
-			z.next_out = raw + z.total_out, z.avail_out = room_out - z.total_out;
+			size_t left = room_out - z.total_out;
+
+			z.next_out = raw + z.total_out, z.avail_out = left < 0x40000 ? left : 0x40000;	/* (in pieces: the bar) */
 			r = lzma_code(&z, LZMA_FINISH);
+			bar(in_n - z.avail_in, in_n, "Unpacking the .xz");
 			if (r != LZMA_OK && r != LZMA_BUF_ERROR)
 				break;
-			if (z.avail_out == 0) {
+			if (z.total_out == room_out) {
 				unsigned char *more = realloc(raw, room_out * 2);
 
 				if (!more)
 					break;
 				raw = more, room_out *= 2;
-			} else if (r == LZMA_BUF_ERROR)
+			} else if (r == LZMA_BUF_ERROR && z.avail_out)
 				break;
 		}
 		if (r == LZMA_STREAM_END && (t = fopen(tar_file, "wb"))) {
@@ -1057,7 +1349,11 @@ take_in(const char *in, size_t n, const char *folder)
 		return 1;
 	}
 	free(bytes);
+	if (windowed)
+		progress_begin("Unpacking what was pasted");
 	unpack_beside(path, unpacked, sizeof unpacked);
+	if (windowed)
+		progress_end();
 	if (unpacked[0])
 		say("Imported %s (%zu bytes), unpacked into %s.", path, made, unpacked);
 	else
@@ -1087,6 +1383,7 @@ import_window(const char *folder)
 	asked = host_ask("clip:ask", 0, 20);
 	if (GrOpen() >= 0) {
 		ui_init();
+		windowed = 1;
 		window = GrNewWindowEx(UI_FIXED, "Import", GR_ROOT_WINDOW_ID, -1, -1, 520, 150, UI_FACE);
 		GrSelectEvents(window, GR_EVENT_MASK_EXPOSURE | GR_EVENT_MASK_BUTTON_DOWN | GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_CLOSE_REQ);
 		GrMapWindow(window);
@@ -1239,6 +1536,8 @@ main(int argc, char **argv)
 		level = atoi(e);
 	if ((e = getenv("NXEXPORT_TO")))
 		target = !strcmp(e, "qr") ? TO_QR : TO_TEXT;
+	if ((e = getenv("NXEXPORT_FORM")))
+		form = !strcmp(e, "data") ? DATA : PLAIN;
 	if ((e = getenv("NXEXPORT_CODES")))
 		density = !strcmp(e, "big") ? BIG : !strcmp(e, "dense") ? DENSE : MEDIUM;
 	if (argc > 1 && !strcmp(argv[1], "--pack") && argc > 5 && choose(argv[2]) >= 0) {
@@ -1259,11 +1558,14 @@ main(int argc, char **argv)
 		take_paths(argv + 3, argc - 3);
 		if (npaths == 1 && !is_folder(paths[0]) && !getenv("NXEXPORT_PACK"))
 			packing = AS_IS;	/* (one file: as it is, unless asked, as the window has it) */
+		measure();
 		if (!pack() || !make_text() || !(f = fopen(argv[2], "wb")))
 			return 1;
 		fwrite(text, 1, text_n, f);
 		fclose(f);
 		printf("nxexport: text of %s: %zu characters, sum %08x\n", packed_name, text_n, fnv((unsigned char *)text, text_n));
+		printf("nxexport: before packing at most %llu characters (%llu bytes), %s\n", text_chars(packing, packed_most(packing)),
+		       packed_most(packing), text_n <= text_chars(packing, packed_most(packing)) ? "bound held" : "BOUND BROKEN");
 		return 0;
 	}
 	if (argc > 3 && !strcmp(argv[1], "--qr")) {

@@ -338,10 +338,20 @@ default_out(void)
 
 /* ---------------------------------------------------------------- pictures */
 
+static const char *library_doing = "decoding";	/* what the library's loops are at (their pieces tell how far) */
+static unsigned stage_from, stage_to = 1000;	/* and the part of the bar that stage has, of 1000 (it never goes back) */
+
+static void
+stage(const char *what, unsigned from, unsigned to)
+{
+	library_doing = what, stage_from = from, stage_to = to;
+	progress(from, 1000, what);
+}
+
 static void
 told_by_library(uint32_t done, uint32_t total)
 {
-	progress(done, total, "decoding");
+	progress(stage_from + (total ? (unsigned)((unsigned long long)done * (stage_to - stage_from) / total) : 0), 1000, library_doing);
 }
 
 /* Pixels of w x h, 3 or 4 channels, rows on whole 16 bytes. */
@@ -390,26 +400,32 @@ convert_picture(void)
 	memset(&in, 0, sizeof in);
 	in.channels = channels;
 	in.background = 0xffffff;
+	stage("decoding", 0, 500);
 	media_progress = told_by_library;
 	why = media_image_decode(src.data, src.size, &in, workers_opened);
 	media_progress = NULL;
 	if (why)
 		return why;
 	size_made(&w, &h);
-	progress(1, 2, "encoding");
+	media_progress = told_by_library;	/* (the encoders' loops on the workers tell their pieces too) */
 	if (w != in.width || h != in.height) {
+		stage("resizing", 500, 600);
 		if (!image_alloc(&out, w, h, channels)) {
 			media_image_free(&in);
 			return "not enough memory for the picture made";
 		}
 		media_image_fit(&in, &out, 0, workers_opened);
 		media_image_free(&in);
+		stage("encoding", 600, 1000);
 		why = picture_write(&out, job.to, out_path, workers_opened);
 		free(out.pixels);
 	} else {
+		stage("encoding", 500, 1000);
 		why = picture_write(&in, job.to, out_path, workers_opened);
 		media_image_free(&in);
 	}
+	media_progress = NULL;
+	stage_from = 0, stage_to = 1000, library_doing = "decoding";
 	if (!why)
 		snprintf(made, sizeof made, "%s: %s picture, %d x %d", out_path, format_names[job.to], w, h);
 	return why;
@@ -424,11 +440,12 @@ sound_write(const int16_t *pcm, uint32_t frames, int rate, int channels)
 	uint8_t *f;
 	const char *why;
 
-	progress(1, 2, "encoding");
+	stage("encoding", 500, 1000);
 	media_progress = told_by_library;
 	f = job.to == F_FLAC ? media_flac_encode(pcm, frames, rate, channels, &size, workers_opened)
 			      : media_wav_encode(pcm, frames, rate, channels, &size);
 	media_progress = NULL;
+	stage_from = 0, stage_to = 1000, library_doing = "decoding";
 	if (!f)
 		return "not enough memory to encode the sound";
 	why = write_file(out_path, f, size);
@@ -456,9 +473,11 @@ convert_sound(void)
 		media_audio_close(a);
 		return "not enough memory for the sound";
 	}
-	progress(0, 2, "decoding");
+	stage("decoding", 0, 500);
 	if (info.frames && info.pieces) {
+		media_progress = told_by_library;
 		frames = media_audio_decode_all(a, pcm, most, workers_opened);
+		media_progress = NULL;
 	} else {
 		int n;
 
@@ -467,7 +486,7 @@ convert_sound(void)
 
 			if ((n = media_audio_read(a, pcm + frames * (uint32_t)info.channels, (int)want)) <= 0)
 				break;
-			progress(frames, most, "decoding");
+			progress((unsigned)((unsigned long long)frames * 500 / most), 1000, "decoding");
 		}
 	}
 	media_audio_close(a);
