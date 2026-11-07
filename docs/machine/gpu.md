@@ -537,6 +537,13 @@ take a vertex from there by its draw ID (`gpu_vertex_made`). The row past the me
 turn of the list's first draw in perspective with a modelview, the program's up axis, the picture's size and the list's
 address, which the clears and the holodeck read in place of RAM.
 
+In Unity the pass is a mesh on layer 25 drawn by its own camera, and it draws only where the target is 512 x 385
+(`_ScreenParams`, as the tick's and the commit's meshes check theirs): the scene's reference camera saw every layer, and a
+player's camera, which takes its mask, drew the made floats over the bottom of the view, as many rows as the list had
+vertices, blooming red in a VRChat build whenever Quake drew its colour flash (6 November 2026). The reference camera now
+leaves the machine's layers 22 to 25 out (`ShaderEmuModels.cs`), and what the holodeck draws into the room is clamped
+to 0 to 1 (`GpuVolumePass.cginc`, `GpuHolodeckHudPass.cginc`), as the GPU's 8-bit target clamps the screen's picture.
+
 ## Copies
 
 Command 7 copies a rectangle of the list's picture into a slot (`gpu_copy`): `x | y << 16` of the picture, `w | h << 16`, the slot,

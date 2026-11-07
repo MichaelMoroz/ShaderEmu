@@ -538,7 +538,7 @@ def classroom(b):
                "speed": [pc.SPEED_X, pc.SPEED_DOWN, pc.SPEED_W, pc.SPEED_H], "reset": pc.RESET_X,
                "power": list(pc.POWER_KEY), "osd": [pc.OSD_X, pc.OSD_PITCH, pc.CHIN], "led": pc.LED_X, "lamps": list(pc.LAMPS_X),
                "tables": [v for z in ROWS_Z for x in TABLES_X for v in (x, z)],
-               "keyboardHigh": pc.TRAY_LOW, "keyboardSlope": pc.KEYBOARD_SLOPE, "keyboardTops": pc.KEY_TOPS,
+               "keyboardHigh": pc.TRAY_AT[1], "keyboardSlope": pc.KEYBOARD_SLOPE, "keyboardTops": pc.KEY_TOPS,
                "nic": [pc.TOWER_X + card[0], card[1], back + 0.001], "nicSize": list(pc.NIC_LAMP), "hubs": hubs},
               open(os.path.join(here, "..", "unity", "ShaderEmu", "Models", "stations.json"), "w"), indent=1)
 

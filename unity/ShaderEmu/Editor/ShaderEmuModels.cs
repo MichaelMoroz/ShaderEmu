@@ -675,6 +675,9 @@ public static partial class ShaderEmuBuilder
         camera.allowHDR = true;
         camera.nearClipPlane = 0.01f;   // the world's camera: always the least VRChat takes (AGENTS.md), or a hand or a key held near the eye is cut
         camera.farClipPlane = 3000f;
+        // the machine's own passes (layers 22 to 25: the GPU's, the tick's, the commit's points, the front end's, ShaderEmuBuilder)
+        // are their cameras' alone: a player's camera, which takes this mask, drew the front end's floats over its view
+        camera.cullingMask &= ~(1 << 22 | 1 << 23 | 1 << 24 | 1 << 25);
         PostProcessLayer layer = camera.GetComponent<PostProcessLayer>();
         if (layer == null) layer = camera.gameObject.AddComponent<PostProcessLayer>();
         layer.volumeLayer = 1 << PostLayer;

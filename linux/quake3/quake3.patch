@@ -1156,7 +1156,7 @@ index afe09412..6e0ef8d1 100644
  	int			ca;
  
 -	if ( !cg_drawCrosshair.integer ) {
-+	if ( !cg_drawCrosshair.integer || SE_Seated() == 1 ) {	// (a sitter in a headset aims with the hand: tr_shaderemu.c)
++	if ( !cg_drawCrosshair.integer || SE_Seated() ) {	// (no cross before a holodeck's sitter, in a headset or at a desktop: tr_shaderemu.c)
  		return;
  	}
  
@@ -1173,7 +1173,7 @@ index afe09412..6e0ef8d1 100644
  	refEntity_t ent;
  
 -	if ( !cg_drawCrosshair.integer ) {
-+	if ( !cg_drawCrosshair.integer || SE_Seated() == 1 ) {	// (a sitter in a headset aims with the hand: tr_shaderemu.c)
++	if ( !cg_drawCrosshair.integer || SE_Seated() ) {	// (no cross before a holodeck's sitter, in a headset or at a desktop: tr_shaderemu.c)
  		return;
  	}
  

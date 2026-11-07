@@ -525,7 +525,7 @@ public class EmuHolodeck : UdonSharpBehaviour
                     screenGuards[k].SetPositionAndRotation(screen.position, screen.rotation);
                     screenGuards[k].localScale = screen.lossyScale;
                 }
-                if (me) PlaceKeyboard(screen, frames[k], large == 1 ? null : Plate(k));
+                if (me) PlaceKeyboard(screen, frames[k], large == 1 ? null : Plate(k), eyes != null && k < eyes.Length ? eyes[k] : null);
             }
 
             string who = occupant[k] == 0 ? "FREE" : me ? Networking.LocalPlayer.displayName : NameOf(occupant[k]);
@@ -615,7 +615,9 @@ public class EmuHolodeck : UdonSharpBehaviour
 
     private GameObject Plate(int k) { return plates != null && k < plates.Length ? plates[k] : null; }
 
-    private void PlaceKeyboard(Transform screen, Transform frame, GameObject under)
+    private const float KeyboardNear = 0.35f, KeyboardDown = 32f;
+
+    private void PlaceKeyboard(Transform screen, Transform frame, GameObject under, Transform eye)
     {
         if (keyboard == null) return;
         Transform kb = keyboard.transform;
@@ -628,6 +630,18 @@ public class EmuHolodeck : UdonSharpBehaviour
         {
             plate.GetWorldCorners(plateCorners);
             for (int i = 0; i < 4; i++) below = Mathf.Min(below, Vector3.Dot(plateCorners[i] - bottom, screen.up));
+        }
+        if (plate != null && eye != null)
+        {
+            // Under the plate, 0.77 m off, the console's brown pad and the seat's armrest covered a third of the keyboard
+            // (ShaderEmuSight). It floats KeyboardNear from the eye, KeyboardDown degrees under its level, facing it, as
+            // wide to the eye as it was there: nothing of the room is between, and it hides none of the plate or screen.
+            Vector3 ahead = Vector3.ProjectOnPlane(screen.position - eye.position, Vector3.up).normalized;
+            Vector3 dir = Quaternion.AngleAxis(KeyboardDown, Vector3.Cross(Vector3.up, ahead)) * ahead;
+            Vector3 hung = bottom + screen.up * (below - KeyboardGap);
+            kb.localScale *= KeyboardNear / Mathf.Max(Vector3.Distance(eye.position, hung), KeyboardNear);
+            kb.SetPositionAndRotation(eye.position + dir * KeyboardNear, Quaternion.LookRotation(dir, Vector3.ProjectOnPlane(Vector3.up, dir).normalized));
+            return;
         }
         Vector3 edge = bottom + screen.up * (below - KeyboardGap);
         float floor = frame.position.y + KeyboardFloor;

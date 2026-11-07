@@ -20,7 +20,7 @@ public class EmuShare : UdonSharpBehaviour
     [UdonSynced] public int pointer;     // x, y (12 bits each), buttons << 24, on the display << 28
     [UdonSynced] public int station = -1;   // the classroom's computer this player has (docs/world/stations.md); -1: none
     [UdonSynced] public int stationMode; // what that computer's tube shows: 0 the display, 1 the console
-    [UdonSynced] public int speed = 3;   // their machine's speed step (EmuMachine.speedSlider, 1 to 16 ticks a frame): its tower's slider shows it
+    [UdonSynced] public int speed = 4 | 12 << 8;   // their machine's speed step (EmuMachine.speedSlider, 1 to 16 ticks a frame) and, from bit 8, its tick's step (tickSlider, 1,024 instructions each): its tower shows them
     // The senders this player shows on some screen (EmuStreams), one a slot: the sender's number
     // (16 bits) and a count << 16 that goes up with each asking; and what is asked for again:
     // a packet number's low 16 bits and how many from it << 16 (none: everything).

@@ -198,7 +198,7 @@ public class EmuMachine : UdonSharpBehaviour
     private float gpuBusyUntil;        // lists have come lately: the GPU's camera draws every round
 
     private bool powered, paused;
-    private int rounds = 3, ticks = TicksPerRound;   // 3 ticks a frame by default (the speed slider's step 3)
+    private int rounds = 4, ticks = TicksPerRound;   // 4 ticks a frame by default (the speed slider's step 4)
     private int tickSize = TicksPerRound;   // the tick slider's: a round's pass at most
     private float reached = 1f;             // of a pass's instructions, what core 0 ran, lately
     // Steady: so many instructions a second, however long a frame is, as far as the frame rate allows.
@@ -340,11 +340,25 @@ public class EmuMachine : UdonSharpBehaviour
 
     // The speed slider's step (1 to 16 ticks a frame), and setting it from elsewhere (a classroom
     // tower's slider, the same steps): the slider's own event applies it.
-    public int SpeedStep() { return speedSlider != null ? Mathf.RoundToInt(speedSlider.value) : 3; }
+    public int SpeedStep() { return speedSlider != null ? Mathf.RoundToInt(speedSlider.value) : 4; }
     public void SetSpeedStep(int step)
     {
         if (speedSlider != null) speedSlider.value = Mathf.Clamp(step, (int)speedSlider.minValue, (int)speedSlider.maxValue);
     }
+
+    // The tick slider's step (instructions a tick in steps of 1,024, 1 to 32), and setting it from a classroom
+    // tower's slider: the slider's own event applies it. What a tower shows of its machine besides.
+    public int TickSizeStep() { return tickSlider != null ? Mathf.RoundToInt(tickSlider.value) : TicksPerRound / TickStep; }
+    public void SetTickSizeStep(int step)
+    {
+        if (tickSlider != null) tickSlider.value = Mathf.Clamp(step, (int)tickSlider.minValue, (int)tickSlider.maxValue);
+    }
+    public int Rounds() { return steady ? steadyRounds : rounds; }
+    public int TickSize() { return tickSize; }
+    public float Reached() { return reached; }
+    public bool IsPaused() { return paused; }
+    public bool IsSteady() { return steady; }
+    public float SteadyTarget() { return targetIps; }
 
     public void TickChanged()
     {

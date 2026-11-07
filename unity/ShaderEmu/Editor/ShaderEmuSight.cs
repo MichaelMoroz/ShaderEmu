@@ -68,7 +68,7 @@ public static class ShaderEmuSight
                     screen.localPosition = large == 1 ? holo.largeAt : holo.screenAt;
                     screen.localEulerAngles = large == 1 ? Vector3.zero : holo.screenTurn;
                     screen.localScale = large == 1 ? holo.largeSize : holo.screenSize;
-                    place.Invoke(holo, new object[] { screen, holo.frames[k], large == 1 ? null : Item(holo.plates, k) });
+                    place.Invoke(holo, new object[] { screen, holo.frames[k], large == 1 ? null : Item(holo.plates, k), holo.eyes != null && k < holo.eyes.Length ? holo.eyes[k] : null });
                     Canvas.ForceUpdateCanvases();
                     Vector3 eye = holo.eyes[k].position;
                     var list = new List<Target>();
@@ -86,6 +86,7 @@ public static class ShaderEmuSight
                     string view = "room " + k + ", " + (large == 1 ? "large screen" : "small screen");
                     int here = 0;
                     var lines = new StringBuilder();
+                    var byWhat = new Dictionary<string, int>();
                     foreach (Target t in list)
                     {
                         targets++;
@@ -98,11 +99,15 @@ public static class ShaderEmuSight
                         }
                         if (hits == 0) continue;
                         here++;
+                        byWhat.TryGetValue(by, out int seen);
+                        byWhat[by] = seen + 1;
                         if (here <= 12) lines.Append("\n    " + t.name + ": " + hits + " of " + t.points.Length + " points behind " + by);
                     }
                     views++;
                     blocked += here;
-                    report.Append("\n  " + view + ": " + (here == 0 ? "all " + list.Count + " seen" : here + " of " + list.Count + " covered") + lines);
+                    report.Append("\n  " + view + ": " + (here == 0 ? "all " + list.Count + " seen" : here + " of " + list.Count + " covered"));
+                    foreach (KeyValuePair<string, int> b in byWhat) report.Append("; " + b.Value + " by " + b.Key);
+                    report.Append(lines);
                     if (here > 12) report.Append("\n    (and " + (here - 12) + " more)");
                 }
             }
@@ -193,7 +198,9 @@ public static class ShaderEmuSight
         foreach (MeshRenderer r in Object.FindObjectsOfType<MeshRenderer>())
         {
             if (!r.enabled || !r.gameObject.activeInHierarchy || Under(r.transform, skip)) continue;
-            if (r.bounds.Contains(eye)) continue;   // what holds the eye (a room's shell) covers nothing before it
+            // (a mesh whose box holds the eye is tried too: the seats and the consoles are one mesh for all eight rooms, and
+            // skipping them hid the seat's right armrest pad over the keyboard, 6 November 2026; a room's shell around the eye
+            // meets no segment from the eye to a thing inside it)
             MeshFilter f = r.GetComponent<MeshFilter>();
             if (f == null || f.sharedMesh == null) continue;
             Material m = r.sharedMaterial;

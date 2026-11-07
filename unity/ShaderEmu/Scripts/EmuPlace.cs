@@ -11,6 +11,7 @@ public class EmuPlace : UdonSharpBehaviour
     public int place;
     public UnityEngine.UI.Slider speed;   // the speed's slider on the tower, where the floppy drive was
     public UnityEngine.UI.Slider volume;  // the sound's volume on the monitor, over its keys
+    public UnityEngine.UI.Slider tick;    // instructions a tick, on the tower over its vents
 
     public void Power() { stations.Act(place, 0); }
     public void ResetKey() { stations.Act(place, 1); }   // (Reset is Unity's own, called when a component is added)
@@ -25,4 +26,7 @@ public class EmuPlace : UdonSharpBehaviour
     public void SteadyPointer() { stations.Act(place, 11); }
     public void SpeedMoved() { stations.SpeedMoved(place, speed); }
     public void VolumeMoved() { stations.VolumeMoved(place, volume); }
+    public void TickMoved() { stations.TickMoved(place, tick); }
+    public void SaveKey() { stations.Act(place, 13); }           // the tower's Save (/persistence)
+    public void PauseKey() { stations.Act(place, 12); }          // the tower's Pause
 }

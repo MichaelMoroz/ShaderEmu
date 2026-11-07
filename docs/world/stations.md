@@ -54,8 +54,10 @@ place is up to 15 mm off its spot and turned up to 3.5 degrees, its keyboard up 
 `ShaderEmuStations.cs` puts each place's tube, keyboard and keys there ("Station N" is a frame
 of the place; everything of it is a child). There are no seats: the chairs are furniture.
 
-The keyboard is 1.3 times a real one (`KEY_SCALE` in `world/pc.py`), for beams. It lies flat
-(no feet, `KEYBOARD_SLOPE` 0), its caps are the console keyboard's shape (the insets of
+The keyboard is 1.3 times a real one (`KEY_SCALE` in `world/pc.py`), for beams. It is turned to
+the sitter by 7 degrees (`KEYBOARD_SLOPE`): the tray stands on its underside's front edge and on two
+legs folded out under its back (`LEG_X`, `LEG_IN`), each square to the tray and down to the table at its
+front edge, and `TRAY_AT` lifts the tray's frame so that the front edge lies on the table. Its caps are the console keyboard's shape (the insets of
 `world/pc_faces.py`, which `world/computer.py` and `Keyboard.png` share) and all as high, and
 it has the capture key ("Use my keyboard") where the console's layout has it, over the number
 pad. `stations.json` says where Unity lays the keys' rectangles: `keyboardHigh` (the tray's own
@@ -120,10 +122,20 @@ has, or whose machine is off, is dark. The den's own tower shows this visitor's.
 badge stays.
 
 **The speed's slider** on each tower stands under the place's key
-(`StationSpeed` in `ShaderEmuStations.cs`, "Station N speed"): Snail to Turbo over it, and under
-it the instructions a frame of each step, 4k, 8k, 16k, 32k, 64k, 128k and 256k: steps 1 to 7 of the
-control panel's speed slider (`EmuMachine.speedSlider`, 2,048 doubled a step), which moves with
-it. It shows its owner's machine's step to everybody: the step travels in their `EmuShare` as
+(`StationSpeed` in `ShaderEmuStations.cs`, "Station N speed"): ticks a frame, 1 to 16, Snail and Turbo
+named at the track's ends and 1, 4, 8, 12 and 16 under the handle's places, and over it what the step
+makes with the tick ("4 ticks a frame = 49,152 IPF", written by `EmuStations.Tower`). It is the control
+panel's speed slider (`EmuMachine.speedSlider`), which moves with it.
+
+**The tick's panel** over the grille below (`StationTick`, "Station N tick"): instructions a tick, 1K
+to 32K, and how much of a tick core 0 reaches, then two keys, Pause (Resume while paused) and Save
+(`/persistence` into this player's data, `EmuPersist.Save`; the line above says how it went for 8 s).
+Both panels are one grid: 9 mm in at the sides, a scale's first and last numbers at the track's ends
+(`Scale`, `SliderStep`: the handle's middle runs from half a handle in at either end), the keys as wide
+as the track. Every panel on a case lies 1 mm off its face (`PanelOff`) and its keys' caps run back to
+the face (`ShaderEmuRetro.KeyCap`'s `back`): at 3 mm they stood in the air. The model's own keys (the
+tower's power key, 10.5 mm proud; the monitor's six keys, 7 mm, and its power knob, 8 mm) are the
+model's, with crisp edges: shallower and mostly bevel they read as print from a seat. It shows its owner's machine's step to everybody: the step travels in their `EmuShare` as
 `speed`, which `EmuStations.Assign` keeps equal to their slider. Only the owner can move it: on
 anybody else's client it is not interactable, and a move that gets through is put back
 (`EmuStations.SpeedMoved`). A free place's shows step 4. Step 0 set on the

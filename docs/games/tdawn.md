@@ -194,7 +194,13 @@ is (index 0, which the game never draws).
   rows fill a shelf, and a fourth found no room, so its draws were magenta. Shapes from row 1,008, as before, lay in the
   views a half apart too, and a battle drew from five (the two sprite views and the two mask views): Red Alert's and Tiberian
   Dawn's maps blinked pink in the world. A new texture of the map's must fit beside those three, on the shelf's last
-  1,018 columns or under them in 1,022 rows.
+  1,018 columns or under them in 1,022 rows. A texture drawn two ways is two copies: the placing cursor's cells
+  (`ShaderEmu_GL_Stamp`, TRANS.ICN's icons) were drawn keyed from the icons' view, which the cells' quads draw plain,
+  and that keyed copy, a fourth of 1,024 rows, had no room: a building being placed stood on magenta squares. Since
+  7 November 2026 those icons are put into the shapes' rows (`stamp_of`, forgotten with the shapes) and drawn through
+  the last view. `TDAWN_PLACE=F` puts a power plant under the cursor at frame F, its footprint by the view's corner, and
+  says `placing shown` ten frames later (a mark for a capture); `SEGL_UPLOADS` was the debugging print that found it
+  (a list's uploads that found no room: three of 1,024 rows placed, the icons' address drawn by three commands with no slot).
 - All sprites are in the blended pass with no depth, so that a shape and its shadow keep the
   game's order. What does not fit (a shape with the cloak effect, a full atlas: "A long battle", a map of
   more than 64 x 64 cells) the game draws itself, into the page; `TDAWN_RENDER=soft` makes it all.

@@ -269,9 +269,10 @@ Doom, Quake, Quake III, ClassiCube and Half-Life read those words, each in its o
   the floor is too near it tips back further, to 85 degrees, and then rises, its lowest edge
   12 cm over the floor (the largest screen, 3.2 m, its edge 5 cm over the floor: the keyboard at 85 degrees, 12 cm
   up, in play mode). Under the console's small screen is the console's plate, its words and keys: there the keyboard
-  hangs under the plate, its top 4 cm below the plate's lowest corner along the screen's upright (6 November 2026: at
-  the screen's edge it covered the plate's "Sit down to play", NextScreen, StandUp and 3D keys in every room; now 0.50 to
-  0.60 m up, 0.77 m from the eyes, "What the sitter must see"). Before, it lay at knee height before the seat (`keyboardAt`, unused
+  floats 0.35 m from the eye point, 32 degrees under its level, facing it, as wide to the eye as it would be hung 4 cm
+  under the plate (0.23 m; `KeyboardNear`, `KeyboardDown`). Hung under the plate, 0.77 m off, the console's brown pad and
+  the seat's armrest covered a third of it in every room; at the screen's edge before that it covered the plate's "Sit down
+  to play", NextScreen, StandUp and 3D keys ("What the sitter must see"). Before, it lay at knee height before the seat (`keyboardAt`, unused
   now), where a sitter's own body hid it. It is seen wherever the screen is, the large one
   of a flat program with the console put away too. One
   for all rooms, moved to the sitter's when they sit, fed to their own machine as raw keys
@@ -317,7 +318,9 @@ each room's eye point (`eyes`) at what is meant for the sitter: every graphic of
 the screen, each at its centre and four points inside its corners, with the screen small and large (the keyboard placed by
 `EmuHolodeck.PlaceKeyboard` itself, called by reflection; what it moves is put back). A point is covered when a segment from the
 eye meets anything before it (5 mm or more): a mesh's triangles (but the program's world, the HUD and the marks) or a graphic of
-another canvas (a panel's own layers are its design). It must say 0 covered (16 views, 3,648 targets on 6 November 2026; it
+another canvas (a panel's own layers are its design). A mesh whose bounds hold the eye is tested too: the seats' and the consoles'
+models hold every eye point, and skipping them hid that the pad and armrest covered the keyboard (808 covered once they were
+tested); each room's line says what covered how many. It must say 0 covered (16 views, 3,648 targets on 6 November 2026; it
 said 40 with the keyboard at the small screen's edge). After a change that places a panel, a screen or the keyboard of the
 holodeck, run it; a new thing meant to be seen from a seat is a target of it.
 

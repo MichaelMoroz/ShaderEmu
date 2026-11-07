@@ -45,6 +45,13 @@ public class EmuStations : UdonSharpBehaviour
     public Slider[] speedSliders;
     // Each monitor's volume (EmuPlace.volume): the owner's own machine's sound, as the control panel's.
     public Slider[] volumeSliders;
+    // Each tower's second slider, instructions a tick in steps of 1,024 (EmuMachine.tickSlider), what the two make
+    // (ticks a frame and instructions a frame over the speed slider; the tick and how much of it core 0 reaches
+    // over this one) and its Pause key: the den's control panel's speed and tick, at each place
+    public Slider[] tickSliders;
+    public EmuPersist persist;    // the tower's Save: /persistence kept, as the den's storage sign does it
+    private float savedSayUntil;
+    public TMPro.TextMeshProUGUI[] speedInfos, tickInfos, pauseLabels;
 
     private const int FirstSurface = 1;   // of EmuStreams' surfaces: the classroom's are 1 to 12
     private const int SideSurface = 21;   // and the side rooms' 21 to 23 (13 to 20 are the holodecks')
@@ -62,7 +69,8 @@ public class EmuStations : UdonSharpBehaviour
     private int fieldsAt = -1;
     private int tubeFor = -1;          // the place whose tube was last turned to what its machine has
     private bool tubeHad;              // and whether the machine had a display then
-    private int[] speedShown;
+    private int[] speedShown, tickShown;
+    private string[] speedSaid, tickSaid, pauseSaid;
 
     void Start()
     {
@@ -75,7 +83,11 @@ public class EmuStations : UdonSharpBehaviour
         noRoom = new bool[count];
         for (int s = 0; s < count; s++) localMode[s] = -1;
         speedShown = new int[count];
-        for (int s = 0; s < count; s++) speedShown[s] = -1;
+        tickShown = new int[count];
+        speedSaid = new string[count];
+        tickSaid = new string[count];
+        pauseSaid = new string[count];
+        for (int s = 0; s < count; s++) { speedShown[s] = -1; tickShown[s] = -1; }
         showing = new Texture[count];
         for (int s = 0; s < count; s++) owner[s] = -1;   // not looked at yet
         if (fields != null) fields.SetActive(false);
@@ -193,6 +205,8 @@ public class EmuStations : UdonSharpBehaviour
             return;
         }
         if (what == 0) machine.Power();
+        else if (what == 12) machine.Pause();
+        else if (what == 13 && persist != null) { persist.Save(); savedSayUntil = Time.time + 8f; }   // the tower's Save: as the den's sign's
         else if (what == 1) machine.ResetMachine();
         else if (what == 3) terminal.ShowTab((terminal.Shown() + 1) % EmuTerminal.Tabs);
         else if (what == 4) terminal.ShowTab((terminal.Shown() + EmuTerminal.Tabs - 1) % EmuTerminal.Tabs);
@@ -215,12 +229,32 @@ public class EmuStations : UdonSharpBehaviour
         }
         machine.SetSpeedStep(step);
         speedShown[s] = step;
-        EmuShare mine = hub.Mine();
-        if (mine != null && mine.speed != step)
+        TellSpeed();
+    }
+
+    // A tower's tick slider: as its speed slider, the instructions a tick of its owner's machine.
+    public void TickMoved(int s, Slider slider)
+    {
+        if (slider == null || tickShown == null || s >= count) return;
+        int step = Mathf.RoundToInt(slider.value);
+        if (s != Own())
         {
-            mine.speed = step;
-            hub.StateOut();
+            if (tickShown[s] >= 0) slider.SetValueWithoutNotify(tickShown[s]);
+            return;
         }
+        machine.SetTickSizeStep(step);
+        tickShown[s] = step;
+        TellSpeed();
+    }
+
+    // This visitor's machine's two steps in their EmuShare's speed: ticks a frame, and from bit 8 the tick's
+    private void TellSpeed()
+    {
+        EmuShare mine = hub.Mine();
+        int packed = machine.SpeedStep() | machine.TickSizeStep() << 8;
+        if (mine == null || mine.speed == packed) return;
+        mine.speed = packed;
+        hub.StateOut();
     }
 
     // A monitor's volume was moved: its owner's sound takes it (the panel's slider applies it).
@@ -279,13 +313,9 @@ public class EmuStations : UdonSharpBehaviour
             keyboards[tubeFor].SetCapture(false);
         tubeFor = own;
         tubeHad = has;
-        // this visitor's machine's speed step, for their tower's slider on everybody's client
-        int step = machine.SpeedStep();
-        if (mine.speed != step)
-        {
-            mine.speed = step;
-            hub.StateOut();
-        }
+        // this visitor's machine's speed and tick steps, for their tower's sliders on everybody's client
+        int step = machine.SpeedStep(), tickStep = machine.TickSizeStep();
+        TellSpeed();
         if (pointer != null)
         {
             pointer.ownStation = own;
@@ -365,7 +395,7 @@ public class EmuStations : UdonSharpBehaviour
             }
             if (speedSliders != null && s < speedSliders.Length && speedSliders[s] != null)
             {
-                int shownStep = owner[s] == myId ? step : owner[s] > 0 ? SpeedOf(owner[s]) : 3;
+                int shownStep = owner[s] == myId ? step : owner[s] > 0 ? SpeedOf(owner[s]) & 255 : 4;
                 Slider slider = speedSliders[s];
                 if (shownStep != speedShown[s] || Mathf.RoundToInt(slider.value) != shownStep)
                 {
@@ -375,6 +405,7 @@ public class EmuStations : UdonSharpBehaviour
                 bool mineToMove = owner[s] == myId;
                 if (slider.interactable != mineToMove) slider.interactable = mineToMove;
             }
+            Tower(s, owner[s] == myId, step, tickStep);
             if (volumeSliders != null && s < volumeSliders.Length && volumeSliders[s] != null)
             {
                 Slider volume = volumeSliders[s];
@@ -436,6 +467,37 @@ public class EmuStations : UdonSharpBehaviour
         return 0;
     }
 
+    // A tower's tick slider and its words: what the owner's machine runs a frame and a tick, and of a tick
+    // how much core 0 reaches (the owner's own client alone knows that, and whether it is paused)
+    private void Tower(int s, bool mine, int step, int tickStep)
+    {
+        int packed = owner[s] > 0 && !mine ? SpeedOf(owner[s]) : 4 | 12 << 8;
+        int speed = mine ? step : packed & 255, tick = mine ? tickStep : (packed >> 8) & 255;
+        if (tick <= 0) tick = 12;   // (a client from before the tick was told: its default)
+        if (tickSliders != null && s < tickSliders.Length && tickSliders[s] != null)
+        {
+            Slider slider = tickSliders[s];
+            if (tick != tickShown[s] || Mathf.RoundToInt(slider.value) != tick)
+            {
+                tickShown[s] = tick;
+                slider.SetValueWithoutNotify(tick);
+            }
+            if (slider.interactable != mine) slider.interactable = mine;
+        }
+        int size = tick * 1024;
+        string speedText = mine && machine.IsSteady()
+            ? "Steady: " + (machine.SteadyTarget() / 1000000f).ToString("F0") + " million a second"
+            : speed + (speed == 1 ? " tick" : " ticks") + " a frame = " + (speed * size).ToString("N0") + " IPF";
+        string tickText = size.ToString("N0") + " instructions a tick"
+            + (mine && machine.IsOn() ? (machine.IsPaused() ? ", paused" : ", " + (machine.Reached() * 100f).ToString("F0") + "% reached") : "");
+        // a while after the tower's Save, the read-out says what the den's sign says of it ("Saving...", "Saved.")
+        if (mine && Time.time < savedSayUntil && persist != null && persist.saysLabel != null) tickText = persist.saysLabel.text;
+        string pauseText = mine && machine.IsPaused() ? "Resume" : "Pause";
+        if (speedInfos != null && s < speedInfos.Length && speedInfos[s] != null && speedSaid[s] != speedText) { speedSaid[s] = speedText; speedInfos[s].text = speedText; }
+        if (tickInfos != null && s < tickInfos.Length && tickInfos[s] != null && tickSaid[s] != tickText) { tickSaid[s] = tickText; tickInfos[s].text = tickText; }
+        if (pauseLabels != null && s < pauseLabels.Length && pauseLabels[s] != null && pauseSaid[s] != pauseText) { pauseSaid[s] = pauseText; pauseLabels[s].text = pauseText; }
+    }
+
     private int SpeedOf(int id)
     {
         int others = hub.ShareCount();
@@ -444,7 +506,7 @@ public class EmuStations : UdonSharpBehaviour
             EmuShare share = hub.ShareAt(i);
             if (share.ownerId == id) return share.speed;
         }
-        return 3;   // (EmuShare.speed's default)
+        return 4 | 12 << 8;   // (EmuShare.speed's default)
     }
 
     private int NetOf(int id)

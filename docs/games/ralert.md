@@ -68,6 +68,20 @@ In `linux/ralert/gl.cpp`:
 The view is 20 x 16 cells, four times Tiberian Dawn's. A held frame is the same picture as with everything drawn
 anew (`RALERT_REFRESH=1`).
 
+## A building placed
+
+A building being placed stood on magenta squares (7 November 2026, as in Tiberian Dawn: `docs/games/tdawn.md`, "The map
+on the GPU"). The placing cursor's cells (`ShaderEmu_GL_Stamp`, the theater's TRANS icons) were drawn keyed from the
+icons' rows (`icon_of`), the atlas's first view, which the cells' quads draw plain. A texture drawn two ways is two
+copies in the VRAM's scratch band, and that keyed copy was a fourth texture of 1,024 rows beside the three the band holds:
+the list's uploads found no room and those draws were of an address with no slot. Since then the cursor's icons are put
+into the shapes' rows (`stamp_of`, `stamps[]`, forgotten with the shapes in `forget` and `shapes_forget`) and drawn
+through the atlas's last view, which the shapes already draw keyed.
+
+`RALERT_PLACE=F` puts a power plant of the player's under the cursor at frame F, its footprint by the view's corner, as
+the sidebar's ready building clicked leaves it, and says `ralert: placing shown at frame ...` ten frames later (a mark
+for a capture).
+
 ## A battle
 
 `RALERT_HUNT=N` sends everything the player has after the enemy at frame N, which is the only way a mission left
@@ -224,7 +238,7 @@ From the command to the menu and to a mission's first frame is most of the wait:
 `tools/test_all.py`'s `ralert-*` cases hold what follows.
 
 - `TDAWN_AUTO=1` presses Return through the menus; `RALERT_SIDE=allies` or `soviet` answers the question of sides; `RALERT_SEED`, `RALERT_FRAMES`, `RALERT_STOP_FRAME` (with `RALERT_NO_DELAY=1`), `RALERT_STATS_MS`, `RALERT_RENDER=soft` and `RALERT_REFRESH` are Tiberian Dawn's switches (a scene from nothing every 256th time). `rastat:` lines say
-  where a frame went. `RALERT_HUNT=N` sends everything after the enemy at frame N, and `RALERT_CHECK_SCANS=1` must end with `0 of them wrongly`. `RALERT_CHECK_ZONES=1` must say `0 cells of them wrongly`, and `RALERT_CHECK_PATHS=1` `0 of them wrong` twice ("A unit's path searches", with `RALERT_WALK` and `TDAWN_PATH_CORES`). `RALERT_ATTACK`, `RALERT_ATLAS` and `RALERT_SHAKE`: "A base destroyed". `RALERT_WIN` and `TDAWN_INTERPOLATION`: "A mission won". `RALERT_FRAME_LOG`, `RALERT_MARK`,
+  where a frame went. `RALERT_HUNT=N` sends everything after the enemy at frame N, and `RALERT_CHECK_SCANS=1` must end with `0 of them wrongly`. `RALERT_CHECK_ZONES=1` must say `0 cells of them wrongly`, and `RALERT_CHECK_PATHS=1` `0 of them wrong` twice ("A unit's path searches", with `RALERT_WALK` and `TDAWN_PATH_CORES`). `RALERT_ATTACK`, `RALERT_ATLAS` and `RALERT_SHAKE`: "A base destroyed". `RALERT_WIN` and `TDAWN_INTERPOLATION`: "A mission won". `RALERT_PLACE`: "A building placed". `RALERT_FRAME_LOG`, `RALERT_MARK`,
   `RALERT_MESSAGE_GONE`, `RALERT_READY_DRAW`, `RALERT_CHECK_READY` and `RALERT_CHECK_TRIGGERS` are as Tiberian Dawn's of those names (`docs/games/tdawn.md`).
 - A scrolled picture: `TDAWN_DRAG`, `TDAWN_SELECT`, `TDAWN_SUMS`, `TDAWN_CHECK_GPU` and `TDAWN_PICTURE` are Tiberian Dawn's, under those names (`docs/games/tdawn.md`, "A scrolled picture"; the lines begin `rasum:` and `ragpu:`). The Soviet mission's sweep differs from one made whole near the view's lower left in a run of frames: there the kept scene is the game's own drawing (`RALERT_RENDER=soft`) and the scene
   made whole is not: something at the view's left edge that a scene from nothing leaves out. Not explained.

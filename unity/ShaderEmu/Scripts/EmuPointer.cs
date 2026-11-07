@@ -470,7 +470,7 @@ public class EmuPointer : UdonSharpBehaviour
         for (int k = 0; k < keyboardPlates.Length; k++)
         {
             bool holo = k == holoKeyboard;
-            if (holo ? ownHolo < 0 || holoHidden : away) continue;
+            if (holo ? ownHolo < 0 || (holoHidden && !holoFlat) : away) continue;   // (as EmuHolodeck.Arrange shows it: under a flat program's screen with the console put away too)
             if (!holo && stationKeysFrom >= 0 && k >= stationKeysFrom && k - stationKeysFrom != ownStation) continue;
             if (!keyboardPlates[k].Raycast(ray, out hit, best)) continue;
             landed = true;
@@ -849,7 +849,7 @@ public class EmuPointer : UdonSharpBehaviour
         for (int k = 0; k < keyboardPlates.Length && board < 0; k++)
         {
             bool holo = k == holoKeyboard;
-            if (holo ? ownHolo < 0 || holoHidden : away) continue;
+            if (holo ? ownHolo < 0 || (holoHidden && !holoFlat) : away) continue;   // (as EmuHolodeck.Arrange shows it: under a flat program's screen with the console put away too)
             if (!holo && stationKeysFrom >= 0 && k >= stationKeysFrom && k - stationKeysFrom != ownStation) continue;
             EmuKeyboard keys = keyboards[k];
             float wide = keys.panelWidth * 0.5f + 30f, high = keys.panelHeight * 0.5f + 30f;

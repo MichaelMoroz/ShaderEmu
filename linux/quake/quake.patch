@@ -2793,7 +2793,7 @@ index 8a0c096..d0f8f87 100644
  	else
  	{
 -		if (crosshair.value)
-+		if (crosshair.value && SE_Seated () != 1)	// (a headset sitter aims with the hand: a cross in the middle of the HUD aims nowhere)
++		if (crosshair.value && !SE_Seated ())	// (no cross before a holodeck's sitter: in a headset the hand aims, at a desktop the room's pointer)
  			Draw_Character (scr_vrect.x + scr_vrect.width/2, scr_vrect.y + scr_vrect.height/2, '+');
  		
  		SCR_DrawRam ();
@@ -2835,7 +2835,7 @@ index 8a0c096..d0f8f87 100644
 +	sb_updates = 0;	// (as GL_BeginRendering has it)
 +	qglRecordBegin (vertices, quads, runs, most);
 +	SCR_TileClear ();
-+	if (crosshair.value && SE_Seated () != 1)	// (as above: not before a headset sitter)
++	if (crosshair.value && !SE_Seated ())	// (as above: not before a holodeck's sitter)
 +		Draw_Character (scr_vrect.x + scr_vrect.width/2, scr_vrect.y + scr_vrect.height/2, '+');
 +	SCR_DrawRam ();
 +	SCR_DrawNet ();

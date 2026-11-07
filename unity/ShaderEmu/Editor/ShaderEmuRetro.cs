@@ -27,6 +27,90 @@ public static partial class ShaderEmuBuilder
     static readonly Color Amber = new Color(1f, 0.70f, 0.20f), Phosphor = new Color(0.35f, 1f, 0.45f);
     static readonly Color Faceplate = new Color(0.07f, 0.07f, 0.08f), CapColour = new Color(0.86f, 0.83f, 0.74f);
     static readonly Color RowColour = new Color(0.20f, 0.21f, 0.24f);
+    // A station's panels on its computer (ShaderEmuStations: the tower's speed, tick and place plate, FREE and EXIT; the
+    // monitor's volume and the pointer's two switches) have keys with caps that stand out of them (KeyCap): pictures of caps
+    // on the plate read as print from a seat. Their style is every panel's.
+    static bool OnCase(Canvas canvas)
+    {
+        string n = canvas.name;
+        return n.StartsWith("Station ") && (n.EndsWith(" speed") || n.EndsWith(" tick") || n.EndsWith(" volume") || n.EndsWith(" physical")
+                                            || n.EndsWith(" steady") || n.EndsWith(" panel"));
+    }
+
+    // A key on the case is a key: a cap of the case's plastic standing `depth` out of the panel, its edges bevelled, its
+    // legend on its face (before, a picture of a cap on the plate: from a seat nothing told it from print). The button
+    // itself, unseen but for the beam's tint, lies on the cap's face, so a press is still the canvas's.
+    static GameObject KeyCap(RectTransform button, float depth, Vector2 size = default, string plastic = "PlasticBeige", float back = 0f)
+    {
+        Transform parent = button.parent;
+        string name = button.name + " cap";
+        Transform old = parent.Find(name);
+        if (old != null) Object.DestroyImmediate(old.gameObject);
+        if (size == Vector2.zero) size = button.rect.size;
+        Vector3 centre = parent.InverseTransformPoint(button.TransformPoint(button.rect.center));
+        GameObject cap = new GameObject(name, typeof(MeshFilter), typeof(MeshRenderer));
+        cap.transform.SetParent(parent, false);
+        cap.transform.localPosition = new Vector3(centre.x, centre.y, back);   // its foot on the face behind the panel
+        cap.transform.localRotation = Quaternion.identity;
+        cap.transform.localScale = Vector3.one;
+        cap.GetComponent<MeshFilter>().sharedMesh = CapMesh(size.x, size.y, depth + back);
+        MeshRenderer renderer = cap.GetComponent<MeshRenderer>();
+        renderer.sharedMaterial = AssetDatabase.LoadAssetAtPath<Material>(Generated + "/" + plastic + ".mat");   // (beige: the panels' caps' colour)
+        renderer.shadowCastingMode = ShadowCastingMode.On;
+        cap.layer = button.gameObject.layer;
+        // baked with the case round it (lit by the probes alone, the caps were half as bright as the plastic beside them)
+        GameObjectUtility.SetStaticEditorFlags(cap, StaticEditorFlags.ContributeGI | StaticEditorFlags.BatchingStatic | StaticEditorFlags.ReflectionProbeStatic);
+        renderer.receiveGI = ReceiveGI.Lightmaps;
+        renderer.scaleInLightmap = 2f;
+        Vector3 at = button.localPosition;
+        button.localPosition = new Vector3(at.x, at.y, -depth - 0.2f);
+        return cap;
+    }
+
+    // A cap of w x h canvas units (millimetres on the panels), `depth` towards the viewer (-z), its top bevelled in by a
+    // fifth of its smaller side at most 2: one mesh a size, kept with the generated assets.
+    static Mesh CapMesh(float w, float h, float depth)
+    {
+        string folder = Generated + "/Keycaps";
+        if (!AssetDatabase.IsValidFolder(folder)) AssetDatabase.CreateFolder(Generated, "Keycaps");
+        string path = folder + "/cap " + Mathf.RoundToInt(w * 10) + "x" + Mathf.RoundToInt(h * 10) + "x" + Mathf.RoundToInt(depth * 10) + ".asset";
+        Mesh mesh = AssetDatabase.LoadAssetAtPath<Mesh>(path);
+        if (mesh != null) return mesh;
+        float b = Mathf.Min(2f, Mathf.Min(w, h) * 0.2f), x0 = -w / 2, x1 = w / 2, y0 = -h / 2, y1 = h / 2;
+        Vector3[] back = { new Vector3(x0, y0, 0), new Vector3(x1, y0, 0), new Vector3(x1, y1, 0), new Vector3(x0, y1, 0) };
+        // the sides stand straight for most of the depth, then the bevel leans in to the top
+        float side = -depth * 0.55f;
+        Vector3[] shoulder = { new Vector3(x0, y0, side), new Vector3(x1, y0, side), new Vector3(x1, y1, side), new Vector3(x0, y1, side) };
+        Vector3[] top = { new Vector3(x0 + b, y0 + b, -depth), new Vector3(x1 - b, y0 + b, -depth), new Vector3(x1 - b, y1 - b, -depth), new Vector3(x0 + b, y1 - b, -depth) };
+        var vertices = new List<Vector3>();
+        var uvs = new List<Vector2>();
+        var triangles = new List<int>();
+        System.Action<Vector3, Vector3, Vector3, Vector3> quad = (a, c, d, e) =>
+        {
+            int first = vertices.Count;
+            vertices.Add(a); vertices.Add(c); vertices.Add(d); vertices.Add(e);
+            foreach (Vector3 v in new[] { a, c, d, e }) uvs.Add(new Vector2(v.x / 40f + 0.5f, v.y / 40f + 0.5f));
+            // (seen from -z: clockwise there)
+            triangles.Add(first); triangles.Add(first + 2); triangles.Add(first + 1);
+            triangles.Add(first); triangles.Add(first + 3); triangles.Add(first + 2);
+        };
+        for (int i = 0; i < 4; i++)
+        {
+            int j = (i + 1) % 4;
+            quad(back[i], back[j], shoulder[j], shoulder[i]);
+            quad(shoulder[i], shoulder[j], top[j], top[i]);
+        }
+        quad(top[0], top[1], top[2], top[3]);
+        mesh = new Mesh { name = Path.GetFileNameWithoutExtension(path) };
+        mesh.SetVertices(vertices);
+        mesh.SetUVs(0, uvs);
+        mesh.SetTriangles(triangles, 0);
+        mesh.RecalculateNormals();
+        mesh.RecalculateBounds();
+        Unwrapping.GenerateSecondaryUVSet(mesh);   // (its lightmap's place)
+        AssetDatabase.CreateAsset(mesh, path);
+        return mesh;
+    }
     static readonly Color Liquid = new Color(0.62f, 0.68f, 0.56f);
     static readonly Color Over = new Color(1f, 0.95f, 0.55f, 0.30f), Held = new Color(0f, 0f, 0f, 0.45f), LitUp = new Color(1f, 0.62f, 0.10f, 0.50f);
 
@@ -498,6 +582,7 @@ public static partial class ShaderEmuBuilder
         List<Graphic> live = new List<Graphic>();      // not on the plate: the canvas draws them
         List<Graphic> print = new List<Graphic>();     // lettering: the plate's own
         Transform backTransform = canvas.transform.Find("Back");
+        bool onCase = OnCase(canvas);
         if (backTransform != null) { Image back = backTransform.GetComponent<Image>(); Picture(back, raised, Faceplate); still.Add(back); }
         HashSet<Object> done = new HashSet<Object>();
         foreach (Button button in canvas.GetComponentsInChildren<Button>(true))
@@ -506,6 +591,22 @@ public static partial class ShaderEmuBuilder
             bool tinted = image != null && Saturation(image.color) > 0.4f && image.color.a > 0.9f && !painted.Contains(image);   // made to stand out
             // the list of players: dark keys with white names, lit from within while picked
             bool row = image != null && canvas.name == "Players panel" && painted.Contains(image);
+            if (onCase && image != null && !painted.Contains(image) && !apart.Contains(button.gameObject))
+            {
+                KeyCap(button.GetComponent<RectTransform>(), 4f, default, "PlasticBeige", ShaderEmuBuilder.PanelOff * 1000f);
+                // (unseen on the cap's face but for a beam's tint: clear, Over and Held below, as a plate's keys are; kept
+                // off the plate's picture with what changes)
+                Picture(image, null, Color.white);
+                live.Add(image);
+                done.Add(image);
+                foreach (TextMeshProUGUI label in button.GetComponentsInChildren<TextMeshProUGUI>(true))
+                {
+                    Letters(label, bold, Ink);   // (as a cap's lettering always was)
+                    live.Add(label);
+                    done.Add(label);
+                }
+                continue;
+            }
             if (image != null)
             {
                 Picture(image, cap, tinted ? image.color : row ? RowColour : CapColour);

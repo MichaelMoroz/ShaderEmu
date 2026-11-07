@@ -1229,7 +1229,7 @@ index a29e9354..5db94aad 100644
  	float xscale, yscale;
  
 -	if( !clgame.ds.pCrosshair || !cl_crosshair.value )
-+	if( !clgame.ds.pCrosshair || !cl_crosshair.value || SE_Seated( ) == 1 )	// (a headset's sitter aims with the hand)
++	if( !clgame.ds.pCrosshair || !cl_crosshair.value || SE_Seated( ) )	// (no cross before a holodeck's sitter, in a headset or at a desktop)
  		return;
  
  	// any camera on or client is died

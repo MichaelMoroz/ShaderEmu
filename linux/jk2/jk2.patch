@@ -12759,7 +12759,7 @@ index d0a0df66..fd5333d2 100644
  	float		x, y;
  
 -	if ( !cg_drawCrosshair.integer )
-+	if ( !cg_drawCrosshair.integer || SE_Seated() == 1 )	// (a sitter in a headset aims with the hand: sys_shaderemu.cpp)
++	if ( !cg_drawCrosshair.integer || SE_Seated() )	// (no cross before a holodeck's sitter, in a headset or at a desktop: sys_shaderemu.cpp)
  	{
  		return;
  	}

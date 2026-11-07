@@ -131,6 +131,18 @@ static int message_rows; // the rows of the view's top the messages take
 alignas(16) static Shape shapes[SLOTS];
 static Icon icons[SLOTS];
 static int icon_count, shade_count;
+// The placing cursor's icons (ShaderEmu_GL_Stamp), drawn keyed: copies of their own in the shapes' rows, so that they are
+// drawn through the atlas's last view as the shapes are. From the icons' rows they were a keyed copy of the first view,
+// a fourth texture of 1,024 rows beside the cells' plain one, which found no room in the VRAM's band: magenta squares
+// under a building being placed (docs/games/tdawn.md, "The map on the GPU"). Forgotten with the shapes.
+enum { STAMPS = 64 };
+struct Stamp
+{
+    const void* set;
+    short icon, x, y;
+};
+static Stamp stamps[STAMPS];
+static int stamp_count;
 static unsigned char tile_done[TILES / 8];
 static signed char edge_of[TILES]; // the shroud's shape over a cell, as last worked out (-2: not yet)
 static Shape* edge_shape[64];      // and where each of those shapes is in the shades
@@ -262,6 +274,7 @@ static void forget(void)
     memset(tile_done, 0, sizeof(tile_done));
     memset(shelf_x, 0, sizeof(shelf_x));
     memset(shelf_y, 0, sizeof(shelf_y));
+    stamp_count = 0;
     icon_count = shade_count = 0;
     shelf_top = SHAPE_ROWS;
     host_tiles_clear();
@@ -283,6 +296,7 @@ static void shapes_forget(void)
     memset(shapes, 0, sizeof(shapes));
     memset(shelf_x, 0, sizeof(shelf_x));
     memset(shelf_y, 0, sizeof(shelf_y));
+    stamp_count = 0;
     shade_count = 0;
     shelf_top = SHAPE_ROWS;
     memset(host_masks() + ICON_ROWS * (ATLAS_W / 8), 0, (ATLAS_ROWS - ICON_ROWS) * (ATLAS_W / 8));
@@ -1001,17 +1015,40 @@ static void tile_make(CellClass* cellptr, int tile, int cx, int cy)
     tile_done[tile >> 3] |= 1 << (tile & 7);
 }
 
+// Where a stamp of the placing cursor is in the shapes' rows (its pixels' corner), put there the first time. False: no room.
+static bool stamp_of(const void* set, int icon, int& x, int& y)
+{
+    for (int i = 0; i < stamp_count; i++) {
+        if (stamps[i].set == set && stamps[i].icon == icon) {
+            x = stamps[i].x, y = stamps[i].y;
+            return true;
+        }
+    }
+    if (stamp_count >= STAMPS || !room(26, 26, x, y)) {
+        return false;
+    }
+    Init_Stamps((const IconControlType*)set);
+    int which = MapPtr ? MapPtr[icon] : icon;
+    host_fill(fill_icon, host_atlas() + y * ATLAS_W + x, which < IconCount ? StampPtr + which * 576 : NULL);
+    x++, y++;
+    stamps[stamp_count].set = set;
+    stamps[stamp_count].icon = (short)icon;
+    stamps[stamp_count].x = (short)x;
+    stamps[stamp_count++].y = (short)y;
+    return true;
+}
+
 // A terrain stamp of the map (the placing cursor's cells). False: the game is to draw it.
 bool ShaderEmu_GL_Stamp(void const* set, int icon, int x, int y, void const* remap, int window)
 {
     if (!ShaderEmu_GL_Emitting || window != WINDOW_TACTICAL || !set || remap) {
         return false;
     }
-    int index = icon_of(set, icon);
-    if (index < 0) {
+    int ax, ay;
+    if (!stamp_of(set, icon, ax, ay)) {
         return false;
     }
-    emit(HOST_KEYED, x + WindowList[window][WINDOWX], y + WindowList[window][WINDOWY], 24, 24, icon_x(index), icon_y(index), 0x00ffffff);
+    emit(HOST_KEYED, x + WindowList[window][WINDOWX], y + WindowList[window][WINDOWY], 24, 24, ax, ay, 0x00ffffff);
     return true;
 }
 
@@ -1253,6 +1290,32 @@ void DisplayClass::ShaderEmu_GL_Draw(bool forced)
     GraphicViewPortClass* page = LogicPage;
     host_scene_settle(); // (the scene before is made from the rectangles kept here)
     Set_Logic_Page(page); // (Render's: a join here gives back the page of between frames)
+    {
+        // TDAWN_PLACE=F: at frame F a power plant waits to be placed, its footprint by the view's corner, as
+        // HouseClass::Manual_Place leaves it (the sidebar's ready building clicked), for a test of the placing frames
+        // (docs/games/tdawn.md, "The map on the GPU"); "placing shown" ten frames later, a mark for a capture
+        static int place_at = -1, placed_at = 0;
+        if (place_at < 0) {
+            place_at = getenv("TDAWN_PLACE") ? atoi(getenv("TDAWN_PLACE")) : 0;
+        }
+        if (placed_at && (int)Frame >= placed_at + 10) {
+            fprintf(stderr, "tdawn: placing shown at frame %d (TDAWN_PLACE)\n", (int)Frame);
+            placed_at = 0;
+        }
+        if (place_at && (int)Frame >= place_at && PlayerPtr && !Map.PendingObject) {
+            BuildingClass* b = new BuildingClass(STRUCT_POWER, PlayerPtr->Class->House);
+            if (b) {
+                Map.PendingObject = &b->Class_Of();
+                Map.PendingObjectPtr = b;
+                Map.PendingHouse = PlayerPtr->Class->House;
+                Map.Set_Cursor_Shape(b->Occupy_List(true));
+                Map.Set_Cursor_Pos(Coord_Cell(Map.TacticalCoord) + 3 + 3 * MAP_CELL_W);
+                fprintf(stderr, "tdawn: placing a power plant from frame %d (TDAWN_PLACE)\n", (int)Frame);
+                placed_at = (int)Frame;
+            }
+            place_at = 0;
+        }
+    }
     if (strncmp(scenario, Scen.ScenarioName, sizeof(scenario) - 1) || (int)Frame < last_frame) {
         strncpy(scenario, Scen.ScenarioName, sizeof(scenario) - 1);
         forget();

@@ -57,7 +57,9 @@ void geom(point hud_point i[1], inout TriangleStream<hud_out> stream) {
 }
 
 float4 frag(hud_out i) : SV_Target {
-    float4 c = gpu_fragment(i.v);
+    // (clamped as the GPU's 8-bit target clamps it: the room's frame buffer is HDR, and a colour over 1 or a NaN,
+    // Quake's colour flash, bloomed red over half the view)
+    float4 c = saturate(gpu_fragment(i.v));
 #ifndef UNITY_COLORSPACE_GAMMA
     c.rgb = GammaToLinearSpace(c.rgb);
 #endif

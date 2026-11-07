@@ -594,7 +594,8 @@ public static partial class ShaderEmuBuilder
         label.fontSize = size;
         label.text = text;
         label.alignment = anchor == TextAnchor.MiddleCenter ? TextAlignmentOptions.Center
-                        : anchor == TextAnchor.UpperLeft ? TextAlignmentOptions.TopLeft : TextAlignmentOptions.Left;
+                        : anchor == TextAnchor.UpperLeft ? TextAlignmentOptions.TopLeft
+                        : anchor == TextAnchor.MiddleRight ? TextAlignmentOptions.Right : TextAlignmentOptions.Left;   // (Right was Left: a scale's last number)
         label.color = colour;
         label.raycastTarget = false;
         label.richText = false;
@@ -1310,7 +1311,7 @@ public static partial class ShaderEmuBuilder
         Label(panel, "Speed title", "Speed", bx, 196, 600, 36, 26, TextAnchor.MiddleLeft, dim);
         machine.speedLabel = Label(panel, "Speed", "", bx, 294, 600, 40, 26, TextAnchor.MiddleLeft, Color.white);
 
-        Slider slider = PanelSlider(panel, bx, 238, 48, 16, 3);   // 3 ticks a frame (EmuMachine.RoundsOf: 1 to 16)
+        Slider slider = PanelSlider(panel, bx, 238, 48, 16, 4);   // 4 ticks a frame (EmuMachine.RoundsOf: 1 to 16)
         slider.minValue = 1;
         machine.speedSlider = slider;
         machine.tickLabel = Label(panel, "Tick", "", bx, 344, 600, 34, 24, TextAnchor.MiddleLeft, dim);

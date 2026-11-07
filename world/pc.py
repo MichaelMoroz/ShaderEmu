@@ -168,6 +168,27 @@ def round_button(b, x, y, z, radius, mat, proud=0.003):
     b.lathe((x, y, z), [(radius, 0), (radius, proud * 0.7), (radius * 0.8, proud), (0, proud * 1.05)], mat, segs=20, rot=(-90, 0, 0))
 
 
+def monitor_keys(b, front):
+    """The monitor's keys a visitor presses: its power knob and the six under the glass. They are the
+    station's own parts ("rest", with their own plastics), not the bake's: baked into the shell's
+    pictures they were print, grey patches and a ring on a flat chin (6 November 2026). 7 and 8 mm
+    proud with crisp edges, their backs on the bezel's face."""
+    round_button(b, 0.18, CHIN, front, 0.011, "PlasticBeige", proud=0.008)
+    for i in range(6):
+        b.box((OSD_X + i * OSD_PITCH, CHIN, front - 0.0038), (0.017, 0.009, 0.0076), "PlasticGrey", bevel=0.0008, segs=2)
+
+
+def tower_keys(b, h):
+    """The tower's keys a visitor presses, reset and power: the station's own parts, as the monitor's
+    (monitor_keys). Their backs on the front's face: the panel and the power key's well under them
+    are the bake's, flat. Reset 7 mm proud, power 11.5 (6 mm, half of it a rounded bevel, read as print)."""
+    cy = h - SPEED_DOWN
+    b.box((RESET_X, cy + 0.004, FRONT - 0.0035), (0.013, 0.008, 0.007), "PlasticBeige", bevel=0.001, segs=2)
+    px, py = POWER_KEY[0], h - POWER_KEY[1]
+    b.box((px, py, FRONT - 0.00575), (0.034, 0.024, 0.0115), "PlasticBeige", bevel=0.0012, segs=2)
+    b.box((px, py, FRONT - 0.0117), (0.016, 0.0016, 0.0006), "PlasticGrey")
+
+
 def monitor(b):
     """A monitor of the decade, in two mouldings: a square-shouldered bezel, and behind a seam a
     housing that narrows in flat faces to the tube's neck, slotted at its sides and top."""
@@ -243,10 +264,9 @@ def monitor(b):
         # under the glass, as NEC's manual lists the front: POWER and its indicator (green when on),
         # the remote's window, and six keys (NEC's RGB 2/+ to PROCEED; named here for what they do, textures.py); and
         # behind grilles in the chin's corners, its two oval loudspeakers of 9 x 5.5 cm
-        round_button(b, 0.18, CHIN, front, 0.011, "PlasticBeige")
+        if MODE == "full":
+            monitor_keys(b, front)
         b.cyl((LED_X, CHIN, front - 0.0005), 0.0035, 0.003, "Led", segs=10, rot=(90, 0, 0))
-        for i in range(6):
-            b.box((OSD_X + i * OSD_PITCH, CHIN, front - 0.0012), (0.016, 0.008, 0.0036), "PlasticGrey", bevel=0.0014, segs=2)
         b.quad((0.075, CHIN - 0.011, front - 0.0002), (0.145, 0.007), "Details", decal="crt_osd")
         b.box((-0.06, CHIN, front - 0.0008), (0.124, 0.022, 0.0016), "MetalSteel", bevel=0.0006, segs=1)   # the maker's plate
         b.quad((-0.06, CHIN, front - 0.0018), (0.12, 0.0196), "Details", decal="crt_brand")
@@ -611,14 +631,13 @@ def tower(b):
     for x, mat, name in ((LAMPS_X[0], "Led", "power"), (LAMPS_X[1], "Amber", "turbo"), (LAMPS_X[2], "LampRed", "hdd")):   # (the disk's: a dull red lens)
         b.box((x, cy + 0.005, FRONT - 0.0016), (0.007, 0.003, 0.002), mat, bevel=0.0006, segs=1)
         legend(b, name, x, cy - 0.005, FRONT - 0.0011, back=False)
-    b.box((RESET_X, cy + 0.004, FRONT - 0.003), (0.013, 0.008, 0.004), "PlasticBeige", bevel=0.0016, segs=2)
     legend(b, "reset", RESET_X, cy - 0.007, FRONT - 0.0011, back=False)
     speed_display(b, SPEED_X, cy)
     # under it the power key in its well, at the right, over its name; the badge at the left
     px, py = POWER_KEY[0], h - POWER_KEY[1]
     b.box((px, py, FRONT - 0.0004), (0.04, 0.03, 0.001), "PlasticCase", bevel=0.0004, segs=1)
-    b.box((px, py, FRONT - 0.004), (0.034, 0.024, 0.006), "PlasticBeige", bevel=0.003, segs=3)
-    b.box((px, py, FRONT - 0.0072), (0.016, 0.0016, 0.0006), "PlasticGrey")
+    if MODE == "full":
+        tower_keys(b, h)
     legend(b, "power", px, py - 0.019, FRONT - 0.0003, back=False)
     b.box((-0.045, py, FRONT - 0.0012), (0.036, 0.014, 0.0016), "MetalSteel", bevel=0.0006, segs=1)
     b.quad((-0.045, py, FRONT - 0.0022), (0.032, 0.0128), "Details", decal="pc_badge")
@@ -632,9 +651,19 @@ KEYBOARD_Z = -0.31       # its middle, from the place's
 KEY_UNIT = KEY_SCALE * 0.01905 / 60       # the layout's keys are 60 apart: 19.05 mm, the standard pitch
 KEYS_HIGH = 437 * KEY_UNIT                # the layout's height (world/keyboard.json)
 TRAY_BACK = 0.016        # the tray's rim behind the keys, more than at their other sides: the lamps and their names are on it
-TRAY_LOW, KEYBOARD_SLOPE = 0.008, 0.0     # the tray's underside below its own frame; it lies flat on the table
+TRAY_LOW = 0.008          # the tray's underside below its own frame
+# Its keys turned to the sitter: the tray stands on its front edge and on two legs folded out under its back, as a
+# keyboard's (7 degrees: a desk keyboard's feet give 5 to 12; DIN 2137's home row at most 30 mm over the desk is a guess
+# that this scale, 1.3 times a real one, cannot keep)
+KEYBOARD_SLOPE = 7.0
+TRAY_FRONT = TRAY_BACK / 2 - (KEYS_HIGH + 0.03 + TRAY_BACK) / 2    # the underside's front and back edges, in the tray's frame
+TRAY_REAR = TRAY_BACK / 2 + (KEYS_HIGH + 0.03 + TRAY_BACK) / 2
 TRAY_LID = -0.0084        # where the tray's loft is closed, 2 mm under the well (in its plane it flickered)
-TRAY_AT, TRAY_TURN = (0, TRAY_LOW, KEYBOARD_Z), (90 - KEYBOARD_SLOPE, 0, 0)   # the tray's own frame in the keyboard's: -z of it is up from the keys
+# the tray's own frame in the keyboard's: -z of it is up from the keys, +y away from the sitter; lifted so the
+# underside's front edge lies on the table
+TRAY_AT = (0, -TRAY_FRONT * math.sin(math.radians(KEYBOARD_SLOPE)) + TRAY_LOW * math.cos(math.radians(KEYBOARD_SLOPE)), KEYBOARD_Z)
+TRAY_TURN = (90 - KEYBOARD_SLOPE, 0, 0)
+LEG_X, LEG_IN, LEG = 0.055, 0.014, (0.03, 0.012)   # the legs: in from the tray's ends and its back edge, their width and depth
 CAPS_AT, CAP_HIGH = 0.012, 0.0078         # the caps' feet over the tray's frame, and a cap's height
 KEY_TOPS = CAPS_AT + CAP_HIGH + 0.0012    # where Unity lays the keys' rectangles: a hair over the caps' tops
 LEAD_X = 0.12            # where the lead leaves the tray's back, right of its middle
@@ -642,7 +671,7 @@ LEAD_X = 0.12            # where the lead leaves the tray's back, right of its m
 
 def keyboard(b):
     """The keyboard: world/keyboard.json's layout at KEY_SCALE times a real keyboard's size, caps
-    of the console keyboard's shape (pc_faces.CAP_...), all as high, in a tray that lies flat."""
+    of the console keyboard's shape (pc_faces.CAP_...), all as high, in a tray turned to the sitter on two legs."""
     layout = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "keyboard.json"), encoding="utf-8"))
     wide, tall, s = layout["width"], layout["height"], KEY_UNIT
     vertices, faces, uvs, normals, caps = [], [], [], [], []
@@ -754,6 +783,12 @@ def keyboard(b):
         for i, mat in enumerate(("LampGreen", "PlasticDark", "PlasticDark")):   # (unlit: a lamp that glowed on a machine that was off)
             b.box((kw / 2 - 0.02 - i * 0.012, rim + 0.016, -0.0109), (0.006, 0.002, 0.0008), mat)   # on the flat
         b.quad((kw / 2 - 0.032, rim + 0.0085, -0.0109), (0.04, 0.005), "Details", decal="kb_lamps")   # 0.4 mm over it
+        # the two legs folded out under the back, square to the tray, each down to the table at its front edge
+        y = TRAY_REAR - LEG_IN - LEG[1] / 2
+        tilt = math.radians(KEYBOARD_SLOPE)
+        long = ((y - LEG[1] / 2) * math.sin(tilt) + TRAY_AT[1]) / math.cos(tilt) - TRAY_LOW
+        for side in (-1, 1):
+            b.box((side * (kw / 2 + 0.015 - LEG_X), y, TRAY_LOW + long / 2), (LEG[0], LEG[1], long), "PlasticBeige", bevel=0.001, segs=1)
         # where the lead leaves, behind: a sleeve moulded on the tray's back
         b.box((LEAD_X, kh / 2 + 0.015 + TRAY_BACK + 0.004, 0.001), (0.016, 0.01, 0.01), "PlasticCase", bevel=0.002, segs=1)
 
@@ -1164,6 +1199,11 @@ def station(b, which="all", lie=None, desk=None, seed=0, stuck=0, bare=(), suppl
             tower(b)
     if which == "shell":
         return
+    if MODE == "low":   # the keys, which the bake leaves out (monitor_keys)
+        with b.at((SET_X, 0, 0)):
+            monitor_keys(b, GLASS[3])
+        with b.at((TOWER_X, 0, TOWER_Z)):
+            tower_keys(b, TOWER_HIGH)
     with b.at((SET_X, 0, 0)):
         if MODE != "full":
             tube_glass(b)
@@ -1306,7 +1346,7 @@ def station(b, which="all", lie=None, desk=None, seed=0, stuck=0, bare=(), suppl
     boxes = list(desk) + [((0, floor - 0.05, 0), (4, 0.1, 4), 0),
                           ((TOWER_X, TOWER_HIGH / 2, TOWER_Z + FRONT + TOWER_DEEP / 2), (0.184, TOWER_HIGH, TOWER_DEEP), 0),
                           ((SET_X, LOW + OUT_H / 2, (GLASS[3] - 0.02 + back) / 2), (OUT_W, OUT_H, back - GLASS[3] + 0.02), 0),
-                          ((SET_X + kx, 0.015, KEYBOARD_Z + kz), (0.58, 0.03, 2 * (KEYS_HIGH / 2 + 0.015 + TRAY_BACK) - 0.006), kturn),
+                          ((SET_X + kx, 0.025, KEYBOARD_Z + kz), (0.58, 0.05, 2 * (KEYS_HIGH / 2 + 0.015 + TRAY_BACK) - 0.006), kturn),
                           ((mat_at[0], 0.0015, mat_at[2]), (0.21, 0.003, 0.25), pturn),
                           strip_box(lies)] + ([adapter_box(lies, HUB_SOCKET)] if supply else []) +         ([((0, 0, lan[2] + 0.05), (4, 4, 0.1), 0)] if lan is not None else [])   # (the wall)
     cylinders = [((SET_X, 0.017, 0.1), 0.208, 0.034), ((SET_X, 0.05, 0.1), 0.08, 0.04)]

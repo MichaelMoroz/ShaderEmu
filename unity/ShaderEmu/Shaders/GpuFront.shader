@@ -36,8 +36,12 @@ Shader "ShaderEmu/GpuFront"
             #define GPU_TARGET_H 720.0
             #include "src/gpu_draw.cginc"
 
-            // the rows the list's vertices take and the frame's row (gpu_rows_vertex: the mesh's twelve vertices)
+            // the rows the list's vertices take and the frame's row (gpu_rows_vertex: the mesh's twelve vertices). Only into
+            // its own targets, as the tick and the commit guard theirs (TICK_GEOM_GUARD, RAM_GEOM_GUARD): in a player's camera
+            // (the reference camera saw every layer) its targets' floats, positions far over 1, were drawn over the bottom of
+            // the view as rows grew, and bloomed red when Quake drew its colour flash (6 November 2026).
             float4 vert(uint id : SV_VertexID) : SV_Position {
+                if ((uint)_ScreenParams.x != GPU_DRAW_IDS_W || (uint)_ScreenParams.y != GPU_DRAW_IDS_H + 1) return float4(0, 0, 0, 1);
                 return gpu_rows_vertex(id, gpu_used_rows(), GPU_DRAW_IDS_H + 1);
             }
             gpu_made frag(float4 p : SV_Position) {

@@ -109,17 +109,19 @@ public static partial class ShaderEmuBuilder
     // The pointer's switches on the monitor's bezel, beside the volume: this visitor's own (EmuPointer).
     static void StationSwitches(Transform place, int s, EmuPlace own, StationsPlan plan, List<TextMeshProUGUI> physical, List<TextMeshProUGUI> steady)
     {
-        const float wide = 124, high = 18, volumeHalf = 100, gap = 6;
+        // (the strip, 2 x (90 + 8 + 104) = 404 mm, ends 15 mm short of the loudspeakers' grilles at 217 mm from the middle:
+        // at 460 it lay over both; its two switches have caps that stand out, ShaderEmuRetro.OnCase)
+        const float wide = 104, high = 18, volumeHalf = 90, gap = 8;
         float y = (plan.glass[2] - (plan.glass[1] + 0.024f) / 2f + plan.osd[2] + 0.011f) / 2f, x = (volumeHalf + gap + wide / 2f) * 0.001f;
         string[] events = { "PhysicalButtons", "SteadyPointer" }, texts = { "Physical buttons: OFF", "Steady pointer: ON" };
         for (int i = 0; i < 2; i++)
         {
             string name = "Station " + s + (i == 0 ? " physical" : " steady");
             Gone(place, name);
-            RectTransform panel = Panel(place, name, new Vector3(plan.setX + (i == 0 ? -x : x), y, plan.glass[3] - 0.002f), Vector3.zero,
+            RectTransform panel = Panel(place, name, new Vector3(plan.setX + (i == 0 ? -x : x), y, plan.glass[3] - PanelOff), Vector3.zero,
                                         wide, high, new Color(0.05f, 0.055f, 0.07f));
             TextMeshProUGUI label;
-            OnClick(MakeButton(panel, events[i], texts[i], 3, 2, wide - 6, high - 4, 8, out label), own, events[i]);
+            OnClick(MakeButton(panel, events[i], texts[i], 2, 2, wide - 4, high - 4, 7, out label), own, events[i]);
             (i == 0 ? physical : steady).Add(label);
         }
     }
@@ -129,7 +131,7 @@ public static partial class ShaderEmuBuilder
     {
         string name = "Station " + s + " tower hot";
         Gone(place, name);
-        HotKeys(place, name, new Vector3(plan.tower[0] + 0.012f, plan.tower[3] - plan.speed[1], plan.tower[1] + plan.tower[2] - 0.004f), 34, 30, own,
+        HotKeys(place, name, new Vector3(plan.tower[0] + 0.012f, plan.tower[3] - plan.speed[1], plan.tower[1] + plan.tower[2] - 0.008f), 34, 30, own,
                 new float[] { 18, 2, 15, 26 }, new[] { "ResetKey" });
     }
 
@@ -306,11 +308,16 @@ public static partial class ShaderEmuBuilder
     }
 
     // The speed's slider on a tower, where its floppy drive was (under the place's key): its
-    // owner's machine's ticks a frame, Snail to Turbo, 1 to 16 (EmuMachine's speed steps), a few of them named.
+    // owner's machine's ticks a frame, Snail to Turbo, 1 to 16 (EmuMachine's speed steps, 4 by default), a few between named,
+    // and over it what they make (the ends' numbers are said there).
     const float TowerSpeedBay = 0.36f - 0.131f;
     static readonly int[] SpeedNamed = { 1, 4, 8, 12, 16 };
 
     // A slider of a place's panel, in the panel's millimetres from its top-left corner.
+    // How far a panel on a case lies off the face under it: 1 mm, its baked plate 0.4 mm (0.6 behind the canvas), and its
+    // keys' caps run back to the face (ShaderEmuRetro.KeyCap's `back`). At 3 mm a cap stood off the tower in the air,
+    // and the plate with it. The blank bay's face is 1.4 mm proud (world/pc.py, tower).
+    internal const float PanelOff = 0.001f;
     static Slider PlaceSlider(RectTransform panel, string name, float x, float y, float wide, float high, int min, int max, int value)
     {
         GameObject sliderObject = DefaultControls.CreateSlider(new DefaultControls.Resources());
@@ -332,42 +339,115 @@ public static partial class ShaderEmuBuilder
             part.color = part.name == "Handle" ? Color.white : part.name == "Fill" ? new Color(0.3f, 0.65f, 1f) : new Color(0.2f, 0.21f, 0.25f);
         }
         slider.handleRect.sizeDelta = new Vector2(9, 0);
+        // the handle's middle runs from end to end of the track less half a handle (DefaultControls' 10 at either end put
+        // the scale's first and last numbers inside the track's ends), and the fill to the handle, under it
+        RectTransform slide = (RectTransform)slider.handleRect.parent, fill = (RectTransform)slider.fillRect.parent;
+        slide.offsetMin = new Vector2(4.5f, slide.offsetMin.y);
+        slide.offsetMax = new Vector2(-4.5f, slide.offsetMax.y);
+        fill.offsetMin = new Vector2(4.5f, fill.offsetMin.y);
+        fill.offsetMax = new Vector2(-4.5f, fill.offsetMax.y);
+        slider.fillRect.sizeDelta = new Vector2(9, slider.fillRect.sizeDelta.y);
         DeafToWalking(slider);
         return slider;
     }
-    static Slider StationSpeed(Transform place, int s, EmuPlace own, StationsPlan plan)
+    // Where a slider of PlaceSlider's at x, `wide` long, has its handle's middle at `value`: from half a handle in at either end.
+    // A slider's scale under it: each value's name under the handle's place there, but the first starts at the track's
+    // start and the last ends at its end, so the scale is as wide as the track and the panel's other rows.
+    static void Scale(RectTransform panel, string prefix, int[] values, string unit, float x, float wide, int min, int max, float y, Color colour)
     {
-        const float wide = 146, high = 40, left = 8, right = 8, top = 12, row = 14;
+        for (int i = 0; i < values.Length; i++)
+        {
+            float at = SliderStep(x, wide, values[i], min, max);
+            bool first = values[i] == min, last = values[i] == max;
+            Label(panel, prefix + values[i], values[i] + unit, first ? x : last ? x + wide - 24 : at - 12, y, 24, 7, 6,
+                  first ? TextAnchor.MiddleLeft : last ? TextAnchor.MiddleRight : TextAnchor.MiddleCenter, colour);
+        }
+    }
+    static float SliderStep(float x, float wide, int value, int min, int max)
+    {
+        return x + 4.5f + (wide - 9f) * (value - min) / (max - min);
+    }
+    static Slider StationSpeed(Transform place, int s, EmuPlace own, StationsPlan plan, EmuStations stations)
+    {
+        // (the bay between the blank drive's face and the front panel, 44 mm: 40 of it, as wide as the drives' faces)
+        const float wide = 146, high = 40, left = 9, right = 9;
         string name = "Station " + s + " speed";
         Gone(place, name);
-        RectTransform panel = Panel(place, name, new Vector3(plan.tower[0], TowerSpeedBay, plan.tower[1] + plan.tower[2] - 0.003f), Vector3.zero,
+        RectTransform panel = Panel(place, name, new Vector3(plan.tower[0], TowerSpeedBay, plan.tower[1] + plan.tower[2] - PanelOff), Vector3.zero,
                                     wide, high, new Color(0.05f, 0.055f, 0.07f));
         Color dim = new Color(0.62f, 0.68f, 0.76f);
-        TextMeshProUGUI snail = Label(panel, "Snail", "Snail", left, 1, 50, 11, 8, TextAnchor.MiddleLeft, dim);
-        TextMeshProUGUI turbo = Label(panel, "Turbo", "Turbo", wide - right - 50, 1, 50, 11, 8, TextAnchor.MiddleLeft, dim);
-        turbo.alignment = TextAlignmentOptions.Right;
-        Slider slider = PlaceSlider(panel, "Speed slider", left, top, wide - left - right, row, 1, 16, 3);
-        // a few steps' numbers under the handle's places (its travel is the slider less a handle)
-        float travel = wide - left - right - 9;
-        foreach (int n in SpeedNamed)
-            Label(panel, "Step " + n, n.ToString(), left + 4.5f + travel * (n - 1) / 15f - 12, top + row + 1, 24, 11, 7, TextAnchor.MiddleCenter, dim);
+        // what the slider sets, and the instructions a frame it makes with the tick (EmuStations.Tower writes it)
+        // one grid for the panel: 9 mm in at either side, rows 5 mm in from the top and the bottom, 3 mm apart; the ends
+        // named beside the track, every fourth step's number (1 and 16 too) under the handle's place there (Scale)
+        stations.speedInfos[s] = OneLine(Label(panel, "Speed info", "4 ticks a frame = 49,152 IPF", left, 5, wide - left - right, 9, 7, TextAnchor.MiddleLeft, Color.white));
+        const float word = 16, gap = 3;
+        float track = wide - left - right - 2 * (word + gap), x0 = left + word + gap;
+        Slider slider = PlaceSlider(panel, "Speed slider", x0, 17, track, 8, 1, 16, 4);
+        Label(panel, "Snail", "Snail", left, 17, word, 8, 6, TextAnchor.MiddleLeft, dim);
+        Label(panel, "Turbo", "Turbo", wide - right - word, 17, word, 8, 6, TextAnchor.MiddleRight, dim);
+        Scale(panel, "Step ", SpeedNamed, "", x0, track, 1, 16, 28, dim);
         own.speed = slider;
         UnityEventTools.AddStringPersistentListener(slider.onValueChanged, UdonSharpEditorUtility.GetBackingUdonBehaviour(own).SendCustomEvent, "SpeedMoved");
         return slider;
+    }
+
+    // Instructions a tick on a tower, over its grille (world/pc.py: two rows of slots, 26 to 92 mm up): the den's control
+    // panel's tick slider at each place (1 to 32 steps of 1,024), how much of a tick core 0 reaches, and Pause (EmuStations.Tower).
+    const float TowerTickBay = 0.060f;
+
+    // A line EmuStations.Tower rewrites, one line always: its type shrinks to fit rather than the end being cut
+    // ("12,288 instructions a tick, 100% reached" is four letters past the panel at its size).
+    static TextMeshProUGUI OneLine(TextMeshProUGUI label)
+    {
+        label.enableWordWrapping = false;
+        label.fontSizeMax = label.fontSize;
+        label.fontSizeMin = label.fontSize * 0.6f;
+        label.enableAutoSizing = true;
+        return label;
+    }
+    static readonly int[] TickNamed = { 1, 8, 16, 24, 32 };
+    static void StationTick(Transform place, int s, EmuPlace own, StationsPlan plan, EmuStations stations)
+    {
+        // (over the whole grille, 26 to 92 mm up, and 12 mm under the power key's name: before, 58 mm high, the grille's
+        // upper row showed over it; its keys have caps that stand out, ShaderEmuRetro.OnCase)
+        const float wide = 146, high = 80, left = 9, right = 9;
+        string name = "Station " + s + " tick";
+        Gone(place, name);
+        RectTransform panel = Panel(place, name, new Vector3(plan.tower[0], TowerTickBay, plan.tower[1] + plan.tower[2] - PanelOff), Vector3.zero,
+                                    wide, high, new Color(0.05f, 0.055f, 0.07f));
+        Color dim = new Color(0.62f, 0.68f, 0.76f);
+        // the speed's grid (9 mm at the sides, rows 3 mm apart), the keys as wide as the track together
+        stations.tickInfos[s] = OneLine(Label(panel, "Tick info", "12,288 instructions a tick", left, 8, wide - left - right, 9, 7, TextAnchor.MiddleLeft, Color.white));
+        Slider slider = PlaceSlider(panel, "Tick slider", left, 20, wide - left - right, 8, 1, 32, 12);
+        Scale(panel, "Tick step ", TickNamed, "K", left, wide - left - right, 1, 32, 31, dim);
+        own.tick = slider;
+        stations.tickSliders[s] = slider;
+        UnityEventTools.AddStringPersistentListener(slider.onValueChanged, UdonSharpEditorUtility.GetBackingUdonBehaviour(own).SendCustomEvent, "TickMoved");
+        // two keys as RESET is, their names printed under them: Pause (Resume while paused) and Save, the den's storage
+        // sign's (/persistence into this player's data; the read-out says how it goes)
+        const float gap = 8;
+        float key = (wide - left - right - gap) / 2, keysAt = left;
+        Button pause = MakeButton(panel, "Pause", "Pause", keysAt, 44, key, 16, 8, out stations.pauseLabels[s]);
+        UnityEventTools.AddStringPersistentListener(pause.onClick, UdonSharpEditorUtility.GetBackingUdonBehaviour(own).SendCustomEvent, "PauseKey");
+        TextMeshProUGUI saveLabel;
+        Button save = MakeButton(panel, "Save", "Save", keysAt + key + gap, 44, key, 16, 8, out saveLabel);
+        UnityEventTools.AddStringPersistentListener(save.onClick, UdonSharpEditorUtility.GetBackingUdonBehaviour(own).SendCustomEvent, "SaveKey");
+        Label(panel, "Pause says", "the machine", keysAt, 63, key, 8, 6, TextAnchor.MiddleCenter, dim);
+        Label(panel, "Save says", "/persistence", keysAt + key + gap, 63, key, 8, 6, TextAnchor.MiddleCenter, dim);
     }
 
     // The sound's volume on a monitor, on the bezel between its row of keys and the glass: its
     // owner's machine's, as the control panel's Volume (EmuSound.volumeSlider, 0 to 100).
     static Slider StationVolume(Transform place, int s, EmuPlace own, StationsPlan plan)
     {
-        const float wide = 200, high = 18, left = 4, label = 34;
+        const float wide = 180, high = 18, left = 4, label = 32;   // (StationSwitches: the strip between the loudspeakers)
         string name = "Station " + s + " volume";
         Gone(place, name);
         float glassBottom = plan.glass[2] - (plan.glass[1] + 0.024f) / 2f, keysTop = plan.osd[2] + 0.011f;
-        RectTransform panel = Panel(place, name, new Vector3(plan.setX, (glassBottom + keysTop) / 2f, plan.glass[3] - 0.002f), Vector3.zero,
+        RectTransform panel = Panel(place, name, new Vector3(plan.setX, (glassBottom + keysTop) / 2f, plan.glass[3] - PanelOff), Vector3.zero,
                                     wide, high, new Color(0.05f, 0.055f, 0.07f));
-        Label(panel, "Volume", "VOLUME", left, 3, label, 12, 8, TextAnchor.MiddleLeft, new Color(0.62f, 0.68f, 0.76f));
-        Slider slider = PlaceSlider(panel, "Volume slider", left + label, 3, wide - left * 2 - label, 12, 0, 100, 10);
+        Label(panel, "Volume", "VOLUME", left, 3, label, 12, 7, TextAnchor.MiddleLeft, new Color(0.62f, 0.68f, 0.76f));
+        Slider slider = PlaceSlider(panel, "Volume slider", left + label, 5, wide - left * 2 - label, 8, 0, 100, 10);
         own.volume = slider;
         UnityEventTools.AddStringPersistentListener(slider.onValueChanged, UdonSharpEditorUtility.GetBackingUdonBehaviour(own).SendCustomEvent, "VolumeMoved");
         return slider;
@@ -399,11 +479,16 @@ public static partial class ShaderEmuBuilder
         stations.beacons = new Material[count];
         stations.fieldSpots = new Transform[count];
         stations.speedSliders = new Slider[count];
+        stations.tickSliders = new Slider[count];
+        stations.speedInfos = new TextMeshProUGUI[count];
+        stations.tickInfos = new TextMeshProUGUI[count];
+        stations.pauseLabels = new TextMeshProUGUI[count];
         stations.volumeSliders = new Slider[count];
         List<TextMeshProUGUI> physicalLabels = new List<TextMeshProUGUI>(), steadyLabels = new List<TextMeshProUGUI>();
         Color red = new Color(1f, 0.08f, 0.04f), green = new Color(0.1f, 1f, 0.3f), amber = new Color(1f, 0.6f, 0.1f);
         TMP_FontAsset signFont = RetroFont("IBMPlexSansCondensed-Bold");
         foreach (EmuTerminal terminal in world.GetComponentsInChildren<EmuTerminal>(true)) stations.terminal = terminal;
+        foreach (EmuPersist persist in world.GetComponentsInChildren<EmuPersist>(true)) stations.persist = persist;   // (the towers' Save)
         stations.ownConsole = PictureTexture("StationOwnConsole", 640, 480);
         Button[] take = new Button[count], leave = new Button[count];
         TextMeshProUGUI unused;
@@ -456,13 +541,14 @@ public static partial class ShaderEmuBuilder
             own.stations = stations;
             own.place = s;
             placed.Add(own);
-            stations.speedSliders[s] = StationSpeed(place, s, own, plan);
+            stations.speedSliders[s] = StationSpeed(place, s, own, plan, stations);
+            StationTick(place, s, own, plan, stations);
             stations.volumeSliders[s] = StationVolume(place, s, own, plan);
             StationSwitches(place, s, own, plan, physicalLabels, steadyLabels);
 
             // whose it is, on a key in the tower's spare bay
-            RectTransform panel = Panel(place, "Station " + s + " panel", new Vector3(towerX, TowerBlankBay, towerFront - 0.003f), Vector3.zero,
-                                        144, 38, new Color(0.05f, 0.055f, 0.07f));
+            RectTransform panel = Panel(place, "Station " + s + " panel", new Vector3(towerX, TowerBlankBay, towerFront - 0.0014f - PanelOff), Vector3.zero,
+                                        144, 38, new Color(0.05f, 0.055f, 0.07f));   // (its keys have caps that stand out: ShaderEmuRetro.OnCase)
             take[s] = MakeButton(panel, "Take", "FREE", 2, 2, 96, 34, 18, out stations.labels[s]);
             leave[s] = MakeButton(panel, "Leave", "EXIT", 100, 2, 42, 34, 11, out unused);
             // the name above, what a press does below it, both the key's own lettering
@@ -475,7 +561,7 @@ public static partial class ShaderEmuBuilder
             // the tower's own keys (reset; power under it), larger to a beam than their caps
             float panelY = towerHigh - plan.speed[1], powerY = towerHigh - plan.power[1];
             TowerHotKeys(place, s, own, plan);
-            HotKeys(place, "Station " + s + " power hot", new Vector3(towerX + plan.power[0], powerY, towerFront - 0.008f), 64, 48, own,
+            HotKeys(place, "Station " + s + " power hot", new Vector3(towerX + plan.power[0], powerY, towerFront - 0.0125f), 64, 48, own,
                     new float[] { 1, 1, 62, 46 }, new[] { "Power" });
             // what that key is, in lit letters over it, and a bar under it that beckons while the place is free
             TextMeshPro sign = new GameObject("Power sign").AddComponent<TextMeshPro>();
@@ -496,7 +582,7 @@ public static partial class ShaderEmuBuilder
             float pitch = plan.osd[1] * 1000f;
             float[] six = new float[24];
             for (int i = 0; i < 6; i++) { six[i * 4] = i * pitch + 1; six[i * 4 + 1] = 1; six[i * 4 + 2] = pitch - 2; six[i * 4 + 3] = 28; }
-            HotKeys(place, "Station " + s + " monitor hot", new Vector3(plan.setX + plan.osd[0] + 2.5f * plan.osd[1], plan.osd[2], glassZ - 0.006f), 6 * pitch, 30, own,
+            HotKeys(place, "Station " + s + " monitor hot", new Vector3(plan.setX + plan.osd[0] + 2.5f * plan.osd[1], plan.osd[2], glassZ - 0.0085f), 6 * pitch, 30, own,
                     six, new[] { "NextTerminal", "LastTerminal", "ShowConsole", "ShowDisplay", "CloseLinks", "OpenLinks" });
             // a lamp over the last of them, lit while the browser wants addresses pasted
             GameObject links = GameObject.CreatePrimitive(PrimitiveType.Quad);
