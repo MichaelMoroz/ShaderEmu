@@ -64,13 +64,8 @@ ram_op ram_op_of(uint core) {
     op.kind = RAM_OP_NONE;
     uint stalled = tick_state(core, 28).r;
     uint4 t37 = tick_state(core, 37), t38 = tick_state(core, 38);
-#ifdef CSR_FIELDS
     op.src = t37.b;
     op.dst = t37.a & 0x7fffffff;
-#else
-    op.src = stalled == STALL_MEMOP_FILL ? t37.b : t38.r;
-    op.dst = t38.g & 0x7fffffff;
-#endif
     op.n = t38.b;
     if ((stalled == STALL_MEMOP_COPY || stalled == STALL_MEMOP_FILL) && op.n != 0)
         op.kind = stalled == STALL_MEMOP_FILL ? RAM_OP_FILL : (op.src & 0x80000000) != 0 ? RAM_OP_STAGED : RAM_OP_ROM;
@@ -417,12 +412,8 @@ uint4 ram_progress(uint core, uint x, uint4 result) {
         return result;
     }
     if (!served || done) return result;
-#ifdef CSR_FIELDS
     if (x == 37) result = uint4(result.r, result.g, rest.src, (result.a & 0x80000000) | rest.dst);
     if (x == 38) result.b = rest.n;
-#else
-    if (x == 38) result = uint4(rest.src, (result.g & 0x80000000) | rest.dst, rest.n, result.a);
-#endif
     return result;
 }
 uint4 ram_state_texel(uint2 pos) {
@@ -443,14 +434,12 @@ uint4 ram_state_texel(uint2 pos) {
     pos = mc_texel_of(uint2(w & 63, w >> 6));
     // (of a worker's state the commit changes five texels: the rest is as it is)
     if (hb != 0 && (pos.y != 0 || (pos.x != 8 && pos.x != 28 && pos.x != 37 && pos.x != 38 && pos.x != 41))) return own;
-    decode_for_commit();
     result = commit(pos, own);
     // A worker's one store that found its cache full is in its state until its next pass
     // rewrites it: gone now, or the commits of a worker asleep would store it again.
     if (hb != 0 && pos.x == 8 && pos.y == 0) result.r = 0xffffffff;
 #else
     uint hb = 0;
-    decode_for_commit();
     result = commit(pos, own);
 #endif
     if (pos.y == 0) result = ram_progress(hb, pos.x, result);

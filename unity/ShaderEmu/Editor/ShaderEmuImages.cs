@@ -134,6 +134,9 @@ public static class ShaderEmuImages
             string text = Regex.Replace(File.ReadAllText(path), "(#include\\s+\"[^\"]+)\\.h\"", "$1.cginc\"");
             WriteIfChanged(to + "/src/" + Path.GetFileNameWithoutExtension(path) + ".cginc", text);
         }
+        // a copy whose header is gone from the repository goes too (fb.h and l1_local.h, 7 November 2026)
+        foreach (string path in Directory.GetFiles(to + "/src", "*.cginc"))
+            if (!File.Exists(from + "/src/" + Path.GetFileNameWithoutExtension(path) + ".h")) AssetDatabase.DeleteAsset(path);
         AssetDatabase.Refresh();
         Debug.Log("[ShaderEmu] shader sources copied from " + from);
     }

@@ -147,15 +147,15 @@ On 31 October 2026 `rootfs.bin` of `build/images/nommu` is 304,336,384 bytes, Ha
 
 With `NO_PAGING` and `SBI_HLE` (the world's machine, and `rvc_harness`'s for this kernel) the
 CSRs Linux uses are fields of core 0's first three texels: mstatus, mie, mip, stvec; sscratch,
-sepc, scause, stval; scounteren and fcsr (`CSR_FIELDS` in `types.h`). There is no CSR
+sepc, scause, stval; scounteren and fcsr (`shader_vm/tick.hlsl`; the commit's `src/types.h` reads the same layout). There is no CSR
 table under the state rows and no CSR cache, so a CSR write never stalls; the machine's own
 CSRs read as 0 and a write to one is dropped. `NO_PAGING` also leaves the TLBs' 409 texels
 out: the float registers follow the write cache, and the tick draws 8 of core 0's 16 rows
 (`CORE0_ROWS`), 500 texels, a worker's layout with a cache of 2^6 (8 x 8 pixels of the tick's
-targets; `docs/machine/multicore.md`). `CSR_TABLE` and `CORE0_TLB_ROWS` compile the other layouts.
+targets; `docs/machine/multicore.md`).
 Unity's commit (`MachineCommit.cginc`) has the tick's defines.
 
-`CSR_FIELDS` also leaves out what only a machine with paging needs:
+The machine also leaves out what only a machine with paging needs:
 
 - A trap or interrupt goes to supervisor mode only: no delegation, no machine-mode entry.
   Interrupts are SEIP, SSIP and STIP.

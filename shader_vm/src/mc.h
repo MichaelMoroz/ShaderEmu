@@ -43,17 +43,14 @@
 #define MC_MBOX (DEV_AT + 0xC00000u)
 #define MC_START 0x5553434du   // "MCSU"
 #define MC_STOP 0x5453434du    // "MCST"
-#define MC_PARKED_STOP 2
-#define MC_PARKED_EBREAK 1
 #define MC_START_TEXEL(core) RAM_ADDR(((MC_MBOX & 0x7fffffff) >> 4) + (core))
 #define MC_BOX_OF(core) (0x4000 + 64 * (core))
 #define MC_JOB_TEXEL(core) RAM_ADDR(((MC_MBOX & 0x7fffffff) >> 4) + (MC_BOX_OF(core) >> 4))
 #define MC_RESUME_TEXEL(core) RAM_ADDR(((MC_MBOX & 0x7fffffff) >> 4) + (MC_BOX_OF(core) >> 4) + 3)
-#define MC_FAULT_WORD(core) ((MC_MBOX & 0x7fffffff) + MC_BOX_OF(core) + 32)
-#define MC_CALL_WORD(core) ((MC_MBOX & 0x7fffffff) + 0x2000 + 32 * (core))
 
 #ifdef PASS_TICK
-// Whether this pixel's core is a worker with nothing to do in this pass.
+// Whether this pixel's core is a worker with nothing to do in this pass (Unity's Unpack pass in
+// Machine.shader, which takes a worker's texels from the tick's targets only when it ran).
 bool mc_idle() {
     if (hart == 0) return false;
     uint start = RAM_TEX(MC_START_TEXEL(hart)).x;
@@ -65,49 +62,7 @@ bool mc_idle() {
     return (word & 2) != 0 && (RAM_TEX(MC_JOB_TEXEL(hart)).x & 0xffffff) == (word >> 8);       // asleep
 }
 
-
-#define MC_PARK(why) if (hart != 0) { mc_word = (why) << 8; cpu.stall = STALL_WFI; }
-#define MC_SLEEP if (hart != 0) { mc_word = 3 | (RAM_TEX(MC_JOB_TEXEL(hart)).x << 8); }
-// A worker's trap: where this is used the write cache is at hand. If the cache has no room
-// for the fault's texel the instruction is simply run again in the next pass, which starts
-// with an empty one.
-#define MC_FAULT(ret) \
-    if (hart != 0 && ret.trap.en) { \
-        uint seen_ = RAM_TEX(MC_RESUME_TEXEL(hart)).x; \
-        bool call_ = ret.trap.type == 8; \
-        bool room_ = cpu.stall == 0; \
-        if (call_) { \
-            mem_set_ram(MC_CALL_WORD(hart), xreg(17), 0xffffffff, false); \
-            mem_set_ram(MC_CALL_WORD(hart) + 4, xreg(10), 0xffffffff, false); \
-            mem_set_ram(MC_CALL_WORD(hart) + 8, xreg(11), 0xffffffff, false); \
-            mem_set_ram(MC_CALL_WORD(hart) + 12, xreg(12), 0xffffffff, false); \
-            mem_set_ram(MC_CALL_WORD(hart) + 16, xreg(13), 0xffffffff, false); \
-            mem_set_ram(MC_CALL_WORD(hart) + 20, xreg(14), 0xffffffff, false); \
-            mem_set_ram(MC_CALL_WORD(hart) + 24, xreg(15), 0xffffffff, false); \
-        } \
-        mem_set_ram(MC_FAULT_WORD(hart) + 4, ret.trap.type, 0xffffffff, false); \
-        mem_set_ram(MC_FAULT_WORD(hart) + 8, ret.trap.value, 0xffffffff, false); \
-        mem_set_ram(MC_FAULT_WORD(hart) + 12, cpu.pc, 0xffffffff, false); \
-        /* the count last: with it the record is whole. A store the cache has no room for is */ \
-        /* still made, by itself, when the pass ends: were that the count, core 0 would read */ \
-        /* a record of zeros with a new count (a worker "stopped, cause 0, at pc 0"). So no */ \
-        /* count unless the rest went in, and no lone word of a record that did not fit. */ \
-        if (cpu.stall == 0) mem_set_ram(MC_FAULT_WORD(hart), seen_ + 1, 0xffffffff, false); \
-        if (cpu.stall == 0) { \
-            mc_word = (call_ ? 9 : 5) | (seen_ << 8); \
-            cpu.stall = STALL_WFI; \
-        } else if (room_) { \
-            cpu.cache.ram_l1_last_addr = 0xffffffff; \
-        } \
-        ret.trap.en = false; \
-        ret.pc_val = cpu.pc; \
-    }
 #endif
-
-#else
-#define MC_PARK(why)
-#define MC_SLEEP
-#define MC_FAULT(ret)
 #endif
 
 #endif

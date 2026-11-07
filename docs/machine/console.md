@@ -5,7 +5,7 @@ is four terminals, with the lines that scrolled off each, and a field to paste t
 
 ## Words in memory
 
-With `NO_PAGING`, `SBI_HLE` and `CSR_FIELDS` (`types.h`) the
+On this machine (`NO_PAGING`, `SBI_HLE`; `docs/system/nommu.md`, "The state") the
 console is memory and nothing else. The kernel reads and writes it with loads and stores, and
 the shader has no part in it. It lies in the network's row, between the window and the ring
 (`docs/system/lan.md`):

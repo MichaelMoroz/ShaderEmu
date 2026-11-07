@@ -1281,7 +1281,7 @@ int qglOpen(unsigned int nano_x_window, const unsigned char* palette) {
     blocks[block_count].at = (uint32_t)(main_part - pool), blocks[block_count].size = main_size, blocks[block_count].owner = -1;
     block_count++;
     // Every page of ours written once here: the device maps them clean, and a worker that first
-    // writes one stops until this core has served it (the written bit, src/mmu.h): 344 in demo1.
+    // writes one stops until this core has served it (the written bit, RVC_ADFAULT in rvc_cpu): 344 in demo1.
     for (uint8_t* at = (uint8_t*)ramp; at < main_part + main_size; at += 4096)
         __asm__ volatile("amoor.w zero, zero, (%0)" : : "r"(at) : "memory");
     for (unsigned int at = 0; spare && at < spare_size; at += 4096)

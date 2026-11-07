@@ -117,7 +117,7 @@ Shader "Nix/shader_vm"
             static uint2 s_dim;
 
             #include "helpers.cginc"
-            #include "src/types.h" // includes fb.h
+            #include "src/types.h"
 
 #ifdef GPU_DEVICE
             // The GPU device's picture, for copying into the RAM framebuffer (docs/machine/gpu.md).

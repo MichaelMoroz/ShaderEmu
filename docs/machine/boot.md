@@ -14,7 +14,7 @@ firmware's part itself.
   `a1`. The tree has to be in RAM, so `make_linux_image.py` and `image.py` put it at `0x83e00000` (`TREE_AT`).
 - An `ecall` from supervisor mode is an SBI call answered in place (`shader_vm/tick.hlsl`): set_timer and the base extension's
   version and probe calls. Anything else returns "not supported". The console is memory the kernel writes itself (`console.md`,
-  "Words in memory"), so no console call is answered (`CSR_FIELDS`, `docs/system/nommu.md`).
+  "Words in memory"), so no console call is answered (`docs/system/nommu.md`, "The state").
 - The timer raises the supervisor's timer interrupt directly, and every trap is the supervisor's: nothing runs in machine mode.
   There is no CLINT: the timer is the host's time against set_timer's compare.
 

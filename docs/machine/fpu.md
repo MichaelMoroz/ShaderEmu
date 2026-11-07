@@ -74,7 +74,7 @@ result goes to one indexed store with the integers': the fast loop carries nothi
 the fast step's rarer float instructions; the fast step does a sum, a difference, a product
 and `fp_light`'s moves, signs and comparisons each by itself (`tick-costs.md`). Between passes the registers are eight texels of the state zone, from
 `FP_STATE_AT`, right after the write cache (`NO_PAGING` has no TLBs' texels before them), and `fcsr` is a
-field of core 0's first three texels (`CSR_FIELDS`).
+field of core 0's first three texels (`docs/system/nommu.md`, "The state").
 
 ## Programs
 

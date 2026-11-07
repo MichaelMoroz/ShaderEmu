@@ -43,7 +43,7 @@ uint4 mc_state_read(uint2 pos) {
 static uint2 s_dim;
 
 #include "helpers.cginc"
-#include "src/types.cginc" // includes fb.h
+#include "src/types.cginc"
 
 // The GPU device's picture, for copying into RAM (docs/machine/gpu.md).
 Texture2D<float4> _GpuTarget;

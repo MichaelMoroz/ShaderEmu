@@ -44,7 +44,7 @@ compiled by `d3dcompiler_47.dll`). Both take the timer value from the host (the 
 
 | | in the shader | under FXC |
 |---|---|---|
-| `inout` arrays worked on in place | `L1_LOCAL`: `l1_cache`, `tlb2_tag`, `tlb2_pg` are locals of `frag` handed down as arguments (`src/l1_local.h`); `--define L1_STATIC` keeps them static under fxc2 too | static arrays, zeroed every pass. FXC fails on the local form: "can't unroll loops marked with loop attribute" |
+| `inout` arrays worked on in place | the old tick's `L1_LOCAL`: `l1_cache`, `tlb2_tag`, `tlb2_pg` locals of `frag` handed down as arguments (`src/l1_local.h`, gone on 7 November 2026: `tick.hlsl` keeps its arrays under `#pragma static_noinit`) | static arrays, zeroed every pass. FXC fails on the local form: "can't unroll loops marked with loop attribute" |
 
 fxc2 also has `mulhi(a, b)`, `umulExtended(a, b, hi, lo)` and `imulExtended` (both halves of the
 product from one instruction), and struct member functions. The shader uses none of them:

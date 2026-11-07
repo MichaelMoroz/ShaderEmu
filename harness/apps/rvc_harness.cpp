@@ -63,7 +63,7 @@ static void cpuConsoleHook(char c) { g_cpuConsole.push_back(c); }
 // --cpu --save-state: a snapshot the shader machine (shader_vm, 256 cores, TICK_MRT) resumes from.
 // `data` is the state texture as drawn, W texels wide: the GPU's memory and the control words are kept as
 // they are there; Linux's RAM (shown four times a second) is the processor's, and every core's state is
-// written where the shader keeps it (src/types.h: decode, encode_l1, mc_geo_read, mc_state_at; src/mc.h),
+// written where the shader keeps it (tick.hlsl's layout, which src/types.h's mc_geo_read and mc_state_at read too; src/mc.h),
 // with empty write caches. Returns how many workers it wrote; -1 when a core is in a state the shader cannot
 // be given (a copy still being made).
 static int cpuSnapshotCores(std::vector<uint8_t>& data, uint32_t W) {
@@ -913,7 +913,7 @@ int main(int argc, char** argv) {
     bo.profile = opt.profile;
     bo.stateLog = !opt.l1Log.empty();
     if (isLean(opt.rvcDir)) {
-        // its tick keeps one rectangle from the top of the state block (STATE_ROWS in src/types.h)
+        // its tick keeps one rectangle from the top of the state block (TICK_H in tick.hlsl)
         // The harness's machine: the shader's own write cache (384 texels), and on D3D11 the
         // tick in eight targets, a pixel for every eight texels of state (docs/machine/multicore.md).
         // With the eight targets the machine has all its cores, and so has the interpreter.
@@ -931,7 +931,7 @@ int main(int argc, char** argv) {
             if (d.rfind("L1_TABLE_BITS=", 0) == 0) tableBits = (unsigned)atoi(d.c_str() + 14);
         }
         bo.tickRows = ways == 3 && tableBits == 6 ? 16 : 32;
-        for (auto& d : opt.defines)   // (a machine with more state says how many rows: STATE_ROWS in src/types.h)
+        for (auto& d : opt.defines)   // (a machine with more state says how many rows: --define STATE_ROWS=N)
             if (d.rfind("STATE_ROWS=", 0) == 0) bo.tickRows = (unsigned)atoi(d.c_str() + 11);
     }
     bo.present = opt.present;
