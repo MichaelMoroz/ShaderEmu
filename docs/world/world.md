@@ -10,9 +10,65 @@ in Blender by scripts in `world/`; furniture, plants and the main surfaces come 
     python world\install_packages.py C:\Development\VRChat\ShaderEmu
     python world\fetch.py
     python world\gameboxes.py
+    & "C:\Program Files\Blender Foundation\Blender 5.2\blender.exe" -b --python world\logos.py
     python world\textures.py
+    python world\posters.py
     python world\sounds.py
     & "C:\Program Files\Blender Foundation\Blender 5.2\blender.exe" -b --python world\build.py
+
+### Every step, from a fresh checkout to the world in play mode
+
+Learnt on 7 November 2026 by doing it on a Unity project from before the VRAM's work. The steps above are
+the world's files; the Unity side and the machine's image are steps of their own, in this order:
+
+1. **The machine's image**, which the world boots from the repository's `build/images/nommu`: `pwsh
+   tools\make_image.ps1` after the programs' build (`docs/system/nommu.md`, "Building it"). In a worktree,
+   `build/images/linux` and `rvc` may be junctions to the main checkout's (both are only read) and
+   `python linux/nommu/image.py nommu ROOT KERNEL` makes the worktree's own image.
+2. **The world's files**, the block above, from the repository's folder. What each needs and leaves:
+   - `fetch.py`: Poly Haven's and ambientCG's downloads (about 140 MB) into `build/polyhaven`, the logos'
+     SVGs into `build/fetched/logos`.
+   - `gameboxes.py`: about 240 MB of scans into `build/gameboxes`, `Textures/Fetched/{GameBoxes,
+     GameBoxes2,Magazines}.png`. A download is renamed into place: an antivirus that holds the new file
+     makes it fail (`PermissionError ... .part`), and running it again goes on from its cache.
+   - `logos.py` (Blender) makes the logos' SVGs pictures, which `textures.py` reads: without them it stops
+     at `build/fetched/logos/Coca-Cola_logo.png`.
+   - `posters.py`: the posters into `build/posters` and `Textures/Fetched/Posters.png`, which "Build world"
+     needs (it stops at "Posters.png is missing" without it). Its downloads are slow: run it again until
+     it ends, each run goes on from its cache.
+   - `textures.py`, `sounds.py`: computed (`sounds.py` fetches its recordings once and needs ffmpeg).
+   - `build.py`: the models. `Models/*.fbx` are in the repository: only after a change to `world/` is it
+     needed, a part at a time when one run would be long (`-- Shell`, `-- Room` took 28 s and 8 s).
+3. **An editor that compiles with fxc2.** Unity's own `D3DCompiler_47.dll` rejects the machine's shaders
+   (`MachineCommitPoints`: "error X4580 ... not written in every execution path"). Make an overlay of the
+   editor (`tools/fxc2/scripts/unity-overlay.ps1 -Editor ... -Dest DIR`), then put `tools/fxc2/bin/unity`'s
+   two files (the stub `D3DCompiler_47.dll` and `fxc2_d3dcompiler.dll`) into `DIR\Data\Tools` over what the
+   script put there: with the bare compiler in the stub's place, `UnityShaderCompiler.exe` dies at its start
+   ("Protocol error - failed to read magic number") and the editor crashes.
+4. **Copy `unity/ShaderEmu` over the project's `Assets/ShaderEmu`** (`robocopy SRC DST /E`: its exit 3 is
+   "copied, and old files left"). Keep a copy of what was there.
+5. **In the editor, in this order** (each a menu of "ShaderEmu", and each a public method for
+   `-batchmode -executeMethod`):
+   - "Sync shader sources from the repository" (`ShaderEmuImages.SyncShaders`): `shader_vm/src` becomes
+     `Shaders/src/*.cginc`. Without it the shaders do not find `src/gpu_draw.cginc`.
+   - "Create Udon program assets" (`ShaderEmuBuilder.CreateProgramAssets`): an UdonSharp script needs its
+     program asset (`Scripts/NAME.asset`), which the repository does not keep: a new script without one
+     fails "Build world" with a `NullReferenceException` in `UdonSharpEditorUtility.RunBehaviourSetup`.
+   - "Import boot images from the repository" (`ShaderEmuImages.ImportImages`): the ROM from the
+     repository's `build/images/nommu`. The repository's folder is asked once and kept in the editor's
+     preferences (`EditorPrefs` `ShaderEmu.Repo`).
+   - "Build world" (`ShaderEmuBuilder.Build`), then "Bake lighting".
+6. **Play mode.** A test a behaviour runs itself in a client (`EmuPersist.persistTest`,
+   `EmuClip.clipTest`: set on the scene's object, `[PersistTest]` and `[ClipTest]` lines in the log) works
+   in the editor's play mode as in "Build & Test".
+
+A run of the editor in batch mode, as a script runs it (each under ten minutes, AGENTS.md's limit):
+
+    DIR\Unity.exe -batchmode -projectPath PROJECT -executeMethod CLASS.METHOD -quit -logFile LOG
+
+`-quit` ends it after the method; a method that throws is exit 1, and the log says where. A project whose
+`Temp\UnityLockfile` is left over from an editor that is gone opens anyway; "Unity.exe serve" in the task
+list is the Hub's service, not an editor.
 
 - `install_packages.py` puts four shader packages into the Unity project (once): LTCGI, VRC
   Light Volumes 2.1.3, Mochie's shaders and Silent's Fake Glass. The builder's code needs them to compile.

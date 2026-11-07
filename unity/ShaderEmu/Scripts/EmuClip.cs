@@ -44,9 +44,108 @@ public class EmuClip : UdonSharpBehaviour
     private Vector3 homeAt, homeSize;
     private Quaternion homeTurn;
 
+    public bool clipTest;                  // a client tests itself and logs [ClipTest] lines (docs/system/clipboard.md, "Checked")
+
     void Start()
     {
         if (panel != null) panel.SetActive(false);
+        if (clipTest) SendCustomEventDelayedSeconds("TestStep", 2f);
+    }
+
+    // The test: the machine started and its desktop up; text shown in the field by nxexport, the clipboard handed over by the
+    // bar and shown by the Clipboard key, a paste given to an import, and the clipboard's field given to the machine. Each
+    // step a line of this client's log; the console's last lines say what the machine made of it.
+    private int testStep;
+    private float testAt;
+    private const string TestPaste = "data:text/plain;name=hello.txt;base64,aGVsbG8gZnJvbSB0aGUgZmllbGQK";   // "hello from the field\n"
+
+    private void TestConsole(string what, int lines)
+    {
+        EmuTerminal terminal = machine.terminal;
+        int row = terminal.CursorRow();
+        for (int r = Mathf.Max(0, row - lines); r <= row; r++) Debug.Log("[ClipTest] " + what + ": " + terminal.LineText(r).TrimEnd());
+    }
+
+    private string Shown()
+    {
+        string f = field.text;
+        return "panel " + (panel.activeSelf ? "shown" : "hidden") + ", mode " + mode + ", " + text.Length + " characters, title '" +
+               (titleLabel != null ? titleLabel.text : "") + "', field begins '" + (f.Length > 60 ? f.Substring(0, 60) : f) + "'";
+    }
+
+    public void TestStep()
+    {
+        if (testStep == 0)
+        {
+            Debug.Log("[ClipTest] powering on");
+            machine.PowerOn();
+            testStep = 1;
+        }
+        else if (testStep == 1 && machine.displayWidth != 0)
+        {
+            testStep = 2;
+            testAt = Time.time + 20f;   // (the desktop's bar starts after the display)
+        }
+        else if (testStep == 2 && Time.time >= testAt)
+        {
+            Debug.Log("[ClipTest] desktop " + machine.displayWidth + " x " + machine.displayHeight);
+            machine.consoleKeyboard.TypeText("echo clip-from-the-machine > /tmp/clipboard; sleep 5; nxexport --text /tmp/t.txt /etc/hostname; cp /tmp/t.txt /tmp/clipboard; nxexport --clipboard\n");
+            testStep = 3;
+            testAt = Time.time + 40f;
+        }
+        else if (testStep == 3 && Time.time >= testAt)
+        {
+            Debug.Log("[ClipTest] after nxexport --clipboard: " + Shown());
+            Debug.Log("[ClipTest] the machine's clipboard as the bar handed it: '" + board + "'");
+            TestConsole("console", 4);
+            Close();
+            ShowBoard();
+            Debug.Log("[ClipTest] the Clipboard key: " + Shown());
+            Close();
+            machine.consoleKeyboard.TypeText("mkdir -p /root/imp; nxexport --import /root/imp &\n");
+            testStep = 4;
+            testAt = Time.time + 15f;
+        }
+        else if (testStep == 4 && Time.time >= testAt)
+        {
+            Debug.Log("[ClipTest] the import asked: " + Shown());
+            field.text = TestPaste;
+            Give();
+            Debug.Log("[ClipTest] given: " + (giveLabel != null ? giveLabel.text : ""));
+            testStep = 5;
+            testAt = Time.time + 20f;
+        }
+        else if (testStep == 5 && Time.time >= testAt)
+        {
+            Debug.Log("[ClipTest] after the import: " + Shown());
+            machine.consoleKeyboard.TypeText("cat /root/imp/hello.txt\n");
+            testStep = 6;
+            testAt = Time.time + 8f;
+        }
+        else if (testStep == 6 && Time.time >= testAt)
+        {
+            TestConsole("import", 2);
+            ShowBoard();
+            field.text = "from-the-world-field";
+            Give();
+            Debug.Log("[ClipTest] the clipboard's To the machine: " + (giveLabel != null ? giveLabel.text : ""));
+            testStep = 7;
+            testAt = Time.time + 20f;
+        }
+        else if (testStep == 7 && Time.time >= testAt)
+        {
+            Close();
+            machine.consoleKeyboard.TypeText("echo; cat /tmp/clipboard; echo\n");
+            testStep = 8;
+            testAt = Time.time + 8f;
+        }
+        else if (testStep == 8 && Time.time >= testAt)
+        {
+            TestConsole("clipboard", 3);
+            Debug.Log("[ClipTest] done");
+            testStep = 9;
+        }
+        if (testStep < 9) SendCustomEventDelayedSeconds("TestStep", 1f);
     }
 
     // The guest left `bytes` in the fetch's memory: read from the state ("show" also shows them).
