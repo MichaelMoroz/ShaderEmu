@@ -99,6 +99,7 @@ menu lists those with a window; the machine's own reader has these docs at `/usr
 | `nxedit` | a tabbed editor, with a reader for Markdown | `docs/system/nanox.md` |
 | `nxweb` | a browser: HTML, CSS, forms, cookies, no scripts; `http` over the machine's own sockets, the rest through the host | `docs/apps/web.md` |
 | `nxpaint`, `nxview` | paint; a photo viewer | `docs/system/nanox.md` |
+| `nxconvert` | pictures, sound and films made into other kinds (JPEG, PNG, GIF, BMP, PPM, TGA; WAV, FLAC; Motion JPEG in AVI), on the workers | `docs/apps/convert.md` |
 | `nxplay` | a music player with a playlist (MP3, FLAC, Ogg, WAV, MOD) | `docs/apps/play.md` |
 | `nxvideo` | a video player (MPEG-1, VQA, Motion JPEG, GIF) | `docs/apps/video.md` |
 | `nxcalc`, `nxclock`, `nxmon` | Windows 7's calculator and clock; Task Manager | `docs/system/nanox.md` |

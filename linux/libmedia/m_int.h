@@ -76,6 +76,14 @@ m_put(const struct media_image *o, uint8_t *to, int r, int g, int b, int a)
 	to[0] = (uint8_t)r, to[1] = (uint8_t)g, to[2] = (uint8_t)b;
 }
 
+/* media_image_fit on this core alone, calling nothing of the workers' (a worker's job may). */
+void m_fit_alone(const struct media_image *in, struct media_image *out, int cover);
+/* A JPEG as media_jpeg_encode makes it, the same bytes, on this core alone into out[0..room) with working memory of
+ * m_jpeg_encode_room() bytes (16-aligned): no memory mapped, nothing of the workers' (a worker's job may). Its bytes, or 0
+ * when it did not fit. */
+uint32_t m_jpeg_encode_room(void);
+uint32_t m_jpeg_encode_alone(const struct media_image *image, int quality, void *work, uint8_t *out, uint32_t room);
+
 /* The decoders. Each fills `out` (pixels there, of out->width x out->height). */
 const char *m_png_probe(const uint8_t *f, uint32_t size, struct media_info *info);
 const char *m_png_decode(const uint8_t *f, uint32_t size, struct media_image *out, int workers);

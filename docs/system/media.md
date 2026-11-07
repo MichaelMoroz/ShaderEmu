@@ -2,7 +2,8 @@
 
 `linux/libmedia` is the one library every program of the machine decodes and encodes media with:
 pictures (PNG, JPEG, GIF and its animations, BMP, TGA, PNM), sound (WAV, FLAC, MP3, Ogg Vorbis,
-MOD) and films (MPEG-1, GIF, Westwood's VQA, Motion JPEG in AVI). Every format that can be cut into parts that
+MOD) and films (MPEG-1, GIF, Westwood's VQA, Motion JPEG in AVI), and writes PNG, JPEG, GIF, BMP, PPM, TGA, WAV, FLAC
+and Motion JPEG in AVI. Every format that can be cut into parts that
 stand by themselves is decoded on the worker cores (`multicore.md`); what cannot, is pipelined
 with them. A program links `/usr/lib/libmedia.a` with `mcw.c` and `mcwx.c` and includes
 `media.h`.
@@ -25,6 +26,7 @@ image's `/usr/lib` and `/usr/include` anew, keeps the library and `media.h` ther
 | the video player (`nxvideo`, `video.md`) | MPEG-1, Westwood VQA (Red Alert's movies), MJPEG in AVI, GIF animations |
 | Red Alert (`ralert.md`) | its movies' block rows and pointers (`media_vq4_rows`, `media_lcw`) |
 | ClassiCube (`classicube.md`) | its texture pack, PNGs again |
+| the converter (`nxconvert`, `convert.md`) | every kind it reads, into every kind it writes: pictures at a size, sound, films as MJPEG in AVI, GIF or pictures |
 | the browser (`nxweb`, `web.md`, "Pictures") | the image's JPEGs and PNGs of the web and the host's pictures, decoded to the size drawn into the GPU's memory |
 
 `workers` in every call is the most worker cores it may use. A program with no workers open has
@@ -45,7 +47,7 @@ has item 0, the reading. `MT_BUSY=20` holds 20 of 63 workers by calls of the pro
     out.channels = 4, out.bgr = 1;                  /* 0x00RRGGBB words, the window system's */
     why = media_image_decode(data, size, &out, mcw_most());    /* pixels mapped for it */
     why = media_image_decode_fit(data, size, &dst, cover, workers);   /* to dst's size */
-    file = media_jpeg_encode(&image, 90, &bytes, workers);        /* or png, bmp, ppm */
+    file = media_jpeg_encode(&image, 90, &bytes, workers);        /* or png, gif, bmp, ppm, tga */
 
 Pixels are 3 bytes (a PPM's: what the GPU draws in fragment mode 4) or 4 (red first, or blue
 first with `bgr`), rows `stride` apart. `opaque` lays see-through pixels over `background` in 4
@@ -78,6 +80,8 @@ What is parallel in each:
 | PNG encoding | segments of 16 rows or more, each filtered and deflated by a core of its own; the checks put together here (`crc32_combine`, `adler32_combine`) | |
 | JPEG encoding | some 512 restart intervals, each encoded by a core into memory of its own | |
 | GIF encoding | the colours gathered by every core from rows of its own, or the fixed ones dithered by rows; LZW in pieces of rows, a piece a core; the sub-blocks written by every core, a page each | a clear code starts the codes anew |
+| FLAC encoding | blocks of 4,096 frames, a block a core, in rounds of 256 (below, "Sound encoded") | a block stands by itself |
+| MJPEG in AVI written | a film's pictures side by side, each made pixels, fitted and encoded on a core of its own (`media_avi_film`); or one at a time, its intervals over every core (`media_avi_picture`) | a picture stands by itself |
 
 A core writes only its own memory: 16 rows of pixels are whole 16 bytes whatever the width, an
 MCU is whole 16 bytes of every row it covers when the output's rows are (then intervals are the
@@ -102,6 +106,9 @@ reader's files, and this library decodes them wholly in parallel:
   is the number of segments and each one's first row, big-endian words. This library's encoder
   and `linux/libmedia/png_segments.py` (for the build's tools) write them.
 
+**TGA** (`media_tga_encode`, `media_image_save` by `.tga`): uncompressed, 24 bits, or 32 for 4 channels not laid over
+the background, its rows from the top. Pillow reads the fox's as the PPM's pixels.
+
 **GIF encoding** (`media_gif_encode`, `m_gif_enc.c`; `media_image_save` and Paint by `.gif`): a
 picture of 256 colours or fewer keeps them, in the colours' order, and see-through pixels (4
 channels, red first, alpha under 128) take one more; one of more takes 252 fixed colours, 6 red
@@ -111,7 +118,8 @@ picture's colours on one core, which a median cut would want. The codes are piec
 piece ends with a clear code at the width it has got to, then clears at the first width until
 it ends on a byte; the minimum code size is made even, so that first width is odd and some
 number of clears under 8 always comes to a byte. The pieces are then bytes put one after
-another (in sub-blocks of 255, written by every core a page each), and a decoder sees one
+another (in sub-blocks of 255, written by every core a page each, the trailer by the last page's core: the first
+core storing it after shared that core's texel, `RVC_RACES_NEAR`), and a decoder sees one
 stream that clears now and then. The pieces are by the picture's size, not the workers': the
 same file from any number of them. They cost a little of the file.
 
@@ -268,6 +276,31 @@ Thousands of instructions for a second of 44.1 kHz stereo (`nxplay`'s `playstat`
 in order and in pieces: Vorbis 15,560 and 18,103; FLAC 11,579 and 12,853; MP3 12,640 and 14,009, at
 half rate 9,573 in pieces; MOD 1,124; WAV 99.
 
+### Sound encoded
+
+    file = media_wav_encode(pcm, frames, rate, channels, &bytes);
+    file = media_flac_encode(pcm, frames, rate, channels, &bytes, workers);
+
+16-bit frames of one or two channels, in memory, into a file the library maps (`m_audio_enc.c`). A WAV is the samples
+after a 44-byte header. A FLAC (`media_flac_encode`) is blocks of 4,096 frames, the last one shorter, numbered and all
+as long, so that this library decodes it in pieces on every core (above): a block a core, into a room of its own of
+17,440 bytes (a block verbatim, a side channel 17 bits a sample), in rounds of 256 blocks put one after another by
+the first core. For each channel the encoder takes the fixed predictor of order 0 to 4 whose residual is least in
+magnitude (libFLAC's way), then the partition order (up to 8: partitions of 16 samples) and each partition's Rice
+parameter by the bits they cost at most (n (k + 1) plus the sum shifted by k: the sum of floors is no more than the
+floor of the sum), a constant subframe when every sample is one, verbatim when that is no more. A stereo block is the
+cheapest of left and right, left and side, side and right, mid and side. The header gives the rate and sample size of
+STREAMINFO's (codes 0), and STREAMINFO no MD5 (zeros: "not computed"). No LPC, no escape codes: about what `flac -1`
+makes.
+
+Checked on the build computer (`media_test-host soundenc FILE OUT.flac WORKERS`, 7 November 2026): `play-test.flac`,
+`play-test.mp3` and `play-test.wav` encoded with 0, 4 and 16 workers (the same bytes each time), decoded again by this
+library in order and in pieces, and by ffmpeg (`-f s16le`): every sample the same. The files: 128,921 bytes of
+`play-test.flac`'s 278,803 (2 s of a sweep with noise), 2,079,890 of the MP3's 18 s (WAV 3,188,780), 144,447 of
+`play-test.wav`'s 282,284; the AVI sample's 22,050 Hz mono sound 70,344 bytes, decoded to its own sum. The guest's
+files are the host's to the byte (`tools/test_all.py convert-sound`). Calibrated, 63 workers: the MP3's 18 s encoded in
+2.1 s (`docs/apps/convert.md`); `RVC_RACES` 0 undone.
+
 ## Films
 
 `media_video_open` takes an MPEG-1 file (closed groups of pictures, no B pictures, layer II
@@ -386,6 +419,35 @@ Huffman tables (a camera's, `AVI1`) is given the standard ones before its scan.
 The sample (320 x 176, 96 pictures, `MEDIA_TEST_NOSUM=1 media_test video FILE 63`): 354 million
 instructions on all cores, 2.3 s (calibrated, 31 October 2026; the workers term rests on one game).
 `RVC_RACES` must say 0 undone, with 20 of 63 workers busy too (`MT_BUSY=20`).
+
+### Films written
+
+    avi = media_avi_begin(width, height, fps_milli, rate, channels);   /* rate 0: no sound */
+    why = media_avi_picture(avi, &pixels, quality, workers);           /* a picture, its intervals over every core */
+    why = media_avi_film(avi, &info, frames, stride, palettes, count, quality, sound, counts, workers);
+    why = media_avi_sound(avi, pcm, frames);
+    file = media_avi_end(avi, &bytes);
+    why = media_video_picture(&info, frame, palette, &pixels, workers); /* a film's picture as pixels */
+
+`m_avi_enc.c` writes RIFF `AVI `: `hdrl` (`avih`, a `vids` stream of `MJPG` at `fps_milli` / 1000 and, with sound,
+an `auds` stream of 16-bit PCM), `LIST movi` with the chunks in the order given (`00dc` a picture, `01wb` sound), and
+`idx1`, every picture a key frame. Each picture is this library's JPEG (restart intervals: m_avi.c decodes it on every
+core, and so does any player). The chunks are kept in memory and the file is made whole by `media_avi_end`.
+
+`media_avi_film` takes pictures as a film gave them (`media_video_frame`, of the film's format) and makes each on a
+core of its own: its colours (`media_video_picture`'s rows: YUV420 by BT.601's studio range, the GPU's
+`FRAGMENT_YUV`; PAL8 by its palette; the GPU's words; a GIF's canvas over white), fitted to the AVI's size
+(`m_fit_alone`) and encoded (`m_jpeg_encode_alone`: the same bytes as `media_jpeg_encode`, on one core into memory
+given, so that a worker's job can), into a room of a byte a pixel; then the first core puts the chunks in order, each
+picture's sound after it. A picture larger than its room is encoded again on the first core over every core. The
+pieces' pixels are 32 MB at most. 480 pictures of the MPEG-1 sample at 320 x 176 took 27.4 s side by side and 34.0 s
+one at a time over every core (calibrated, `docs/apps/convert.md`), the same bytes.
+
+Checked: `media_test-host filmenc FILE OUT.avi QUALITY WORKERS` (each picture one at a time) gives the same bytes with
+0 and 8 workers, and the guest's `nxconvert` (side by side) the host's; `media_test video` plays the AVI back with the
+source's sound sums (`6dd01fde`, `96a296a2`); ffmpeg reads it as `mjpeg` and `pcm_s16le` and decodes every picture,
+the MPEG-1's AVI at quality 75 at 43.1 dB PSNR against ffmpeg's own decoding of the MPEG-1 (the colours' planes in the
+right order: U 41.9 dB, V 41.0). `RVC_RACES` over the AVI and MPEG-1 films at full size and at half: 0 undone.
 
 ### The player
 
@@ -530,6 +592,84 @@ are the two worth looking at there.
 | Quake III's pictures (`quake3.md`) | JPEG and PNG sheets |
 | the sample music | MP3, FLAC, MOD and Ogg Vorbis |
 
+## Other kinds of film: what they would cost
+
+A study of 7 November 2026, written for the converter (`docs/apps/convert.md`) and the player: which other video
+formats and containers the machine could take, at its speed. Nothing of it is built yet.
+
+**What the machine has.** A core runs 2 to 3 million instructions a second (the card's pass, calibrated), with no SIMD
+and doubles in software; a program has up to 63 workers in practice (255 cores, but a film's jobs are not that many),
+so some 150 million instructions a second at best, and 256 MB of RAM for everything. Measured here (31 October 2026,
+"Films"): MPEG-1 through pl_mpeg is 747 million instructions for the sample's 480 pictures of 320 x 176 and its 20 s of
+sound, about 1.5 million a picture, some 27 an output pixel; MJPEG is 354 million for 96 pictures, 3.7 million a
+picture, some 65 a pixel. A film plays when its pictures can be made in parallel: our MPEG-1 decodes a closed group a
+worker, MJPEG and VQA a picture's parts over every core.
+
+**The estimates** below are not measured here: instructions an output pixel for a plain C decoder without SIMD, from
+MPEG-1's measured 27 scaled by how much more each format does (the transforms, the sub-pixel filters, the entropy
+coder, the loop filter). Take them to within a factor of two. A picture of 320 x 176 is 56,320 pixels, one of 640 x 480
+307,200.
+
+| Format | A decoder, its licence | Patents | Instructions a pixel (estimate) | A picture, 320 x 176 / 640 x 480 (estimate) | How it shares out |
+|---|---|---|---|---|---|
+| MPEG-1 (have) | pl_mpeg, MIT | expired | 27 (measured) | 1.5 M (measured) / 8 M | closed groups, a worker each; B pictures not yet |
+| MPEG-2 (DVD, broadcast) | libmpeg2 GPL-2; ffmpeg LGPL-2.1 (pl_mpeg reads MPEG-1 only) | expired (MPEG LA's pool ended in 2018 in the US) | 30 to 35 | 1.8 M / 10 M | every row of macroblocks is a slice in Main profile: a picture's rows over every core once its references are made; B pictures and open groups (the last two pictures of the group before) are the work |
+| MPEG-4 Part 2 (Xvid, DivX) | Xvid GPL-2; ffmpeg LGPL | MPEG LA's MPEG-4 Visual pool: the listed patents have run out or are running out (the last around 2024 in the US): to be checked before shipping | 50 to 60 | 3 M / 17 M | one picture after another; a key picture every 250 or 300 by default and resync markers seldom: a group a worker only, which plays late (below) |
+| H.264 / AVC (MP4, MKV, phones, the web) | openh264 BSD-2 (Constrained Baseline: not the High profile most files are); h264bsd BSD (Baseline); ffmpeg LGPL (large) | active: Via LA's pool, the last patents about 2027 to 2030; Cisco's licence covers its own binaries only | 120 to 200 with CABAC (80 to 120 Baseline) | 7 to 11 M / 37 to 60 M | CABAC is serial over a slice and encoders make one slice a picture; groups of 2 to 10 s; the in-picture wavefront needs the entropy decoding done first |
+| VP8 (WebM) | libvpx BSD-3 with Google's patent grant | royalty-free grant | 90 to 130 | 5 to 7 M / 28 to 40 M | up to 8 token partitions (rows of macroblocks in turn) when the encoder made them (WebRTC does; `vpxenc`'s default is one); otherwise serial |
+| VP9 (WebM, YouTube) | libvpx BSD-3 | Google's grant; Sisvel's pool claims patents on it | 150 to 250 | 8 to 14 M / 45 to 75 M | tiles of at least 256 pixels' width: one at 320, two at 640 |
+| Theora (Ogg) | libtheora BSD-3 | On2's irrevocable royalty-free grant | 45 to 60 | 2.5 to 3.4 M / 14 to 18 M | the tokens of a picture are in coefficient order over the whole picture: its entropy decoding is serial; the reconstruction and the loop filter by rows over every core; libtheora's key picture every 64 |
+| Cinepak (AVI, QuickTime, 1990s CD-ROM games) | ffmpeg's `cinepak.c` LGPL, or written anew from the format's description (some 500 lines) | none (1991; nothing left) | 5 to 10 | 0.3 to 0.6 M / 1.5 to 3 M | vector quantisation like VQA: a picture's strips stand by themselves but for their code books; its 4 x 4 blocks over every core as `media_vq4_rows` does |
+
+**Playing and converting are not the same.** A converter only needs throughput: any format whose key pictures start
+groups (all of the above) can be decoded a group a worker, 63 groups at a time. A player needs the first picture of
+every group in time: a group of 250 MPEG-4 pictures at 320 x 176 is some 750 million instructions on its one worker,
+five minutes at 2.5 MIPS before its first picture is made (estimate), however many workers decode the other groups. So
+a format plays only if a picture itself shares out (MPEG-2's rows, VQA's and MJPEG's parts, Cinepak's blocks) or its
+groups are short (our MPEG-1 files, made with a group a second).
+
+| Format | To play, 320 x 176 at 24 a second | To convert a 20 s clip of 320 x 176 on 63 workers |
+|---|---|---|
+| Cinepak | 7 to 14 M a second: one core and a few workers | seconds |
+| MPEG-2 | 43 M a second, over rows: viable on some 20 workers | as MPEG-1 |
+| MPEG-4 Part 2 | not from the start of a long group (above) | 480 pictures x 3 M = 1.4 G: about 10 s if the groups are 63 or more, about 5 minutes for 2 groups |
+| Theora | from short groups only | 1.6 G; groups of 64: 8 groups, about 90 s each on its worker |
+| H.264 | 170 to 260 M a second, serial within a picture: no | 3.4 to 5.3 G; two groups of 10 s: 12 to 18 minutes on two workers |
+| VP8, VP9 | no | as H.264 or worse |
+
+**Containers.**
+
+- **MP4 / MOV**: boxes and tables (`stsz`, `stco`, `stts`, `stss`): reading them is nothing to speak of next to a
+  picture. minimp4 (one header, CC0) reads and writes them. What it opens is mostly H.264 with AAC, which the machine
+  cannot play; but cameras' Motion JPEG in QuickTime (`jpeg`, `mjpa`, `AVDJ`) with PCM would play through the
+  library's MJPEG decoder as it is. AAC-LC would cost about what MP3 does (a transform of the same size); its decoders
+  are faad2 (GPL-2) or fdk-aac (a licence of its own, not free for every use), and Via LA's AAC pool still lists
+  patents.
+- **MKV / WebM**: EBML elements, libwebm's parser (BSD-3) or nestegg (ISC): cheap, but what they hold is VP8, VP9 and
+  H.264 (Motion JPEG in Matroska, `V_MJPEG`, is rare).
+- **Ogg**: pages and packets, which `stb_vorbis` already reads for Vorbis; Theora with Vorbis is two logical streams
+  told apart by their serial numbers, libogg BSD-3: a small piece, for a format with few files.
+
+**What would pay, in order.**
+
+1. **Cinepak decoding** in AVI (and MOV): the cheapest of all, a picture's blocks over every core as VQA's are, no
+   licence or patent to mind, and it is what the films of a great many 1990s CD-ROM games are (the ports' films among
+   them). A few days.
+2. **MPEG-1 written** by the converter (I and P pictures, closed groups of a second, no B pictures: what `nxvideo`
+   decodes a group a worker): pictures that cost the player some 1.5 million instructions each against MJPEG's 3.7,
+   files several times smaller than MJPEG's at the same look (an estimate), every player reading them, patents long
+   gone. Encoding is the motion search (a small diamond search, some 50 to 100 instructions a pixel, an estimate), a
+   group a worker, so the converter would make MPEG-1 about as fast as it makes MJPEG now. jo_mpeg (public domain)
+   writes intra-only MPEG-1 to start from; pl_mpeg has no encoder.
+3. **MOV and MP4 read** with minimp4, for Motion JPEG and PCM in QuickTime, and MP4 as a place to write the MPEG-1 or
+   MJPEG pictures (a `.mov`); then **MPEG-2**, whose rows are slices, if DVD-like files are wanted.
+4. MPEG-4 Part 2 (the old AVIs' Xvid and DivX) and Theora: for conversion only, through a decoder of others (Xvid's
+   GPL, libtheora's BSD); not worth playing.
+5. **Not viable**: H.264, VP8 and VP9 at 2 to 3 million instructions a core: their entropy decoding is serial within a
+   picture, an estimated 5 to 14 million instructions a picture even at 320 x 176, and H.264 is still under patents.
+   A host that decodes them and hands the machine pictures (as the browser's host decodes pictures, `fetch.md`) is
+   the way to show them.
+
 ## Not done
 
 - JPEG: arithmetic coding, 12-bit samples, lossless. A JPEG without markers takes longer than one in
@@ -537,6 +677,8 @@ are the two worth looking at there.
   through its scans. A colour sample at half size is the nearest one's, not smoothed (the browser
   keeps its JPEGs at 4:4:4 for that).
 - PNG: APNG; encoding is slow (above).
+- FLAC encoding: no LPC (fixed predictors only), no MD5 in STREAMINFO. AVI writing: MJPEG and PCM only, the file made
+  in memory (a film's AVI must fit beside its pictures).
 - WebP; AVIF. GIF encoding: above 256 colours the fixed ones dithered, not a palette of the
   picture's own; an animation's frames one after another (each over every core), not side by
   side, and each the whole canvas (no rectangle of what changed).

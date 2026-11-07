@@ -47,6 +47,7 @@ One file per subject. A doc names another by its file name, which is unique acro
 - [imgui.md](apps/imgui.md) – Dear ImGui
 - [play.md](apps/play.md) – An audio player: `nxplay`
 - [video.md](apps/video.md) – The video player
+- [convert.md](apps/convert.md) – The converter: `nxconvert`
 - [web.md](apps/web.md) – The browser
 - [physics.md](apps/physics.md) – Rigid boxes on every core
 - [pinball.md](apps/pinball.md) – Pinball

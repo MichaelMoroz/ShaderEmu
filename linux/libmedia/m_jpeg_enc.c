@@ -211,68 +211,74 @@ pixel_at(const struct media_image *in, int x, int y, int *r, int *g, int *b)
 		*r = p[0], *g = p[1], *b = p[2];
 }
 
+/* Interval i's MCUs into b (its last byte filled with ones). */
+static void
+one_interval(const struct jenc *e, uint32_t i, struct bitw *b)
+{
+	uint32_t m, mcus = (uint32_t)(e->mcus_x * e->mcus_y);
+	int pred[3] = {0, 0, 0};
+	uint32_t end = (i + 1) * e->restart < mcus ? (i + 1) * e->restart : mcus;
+
+	for (m = i * e->restart; m < end; m++) {
+		int Y[4][64], cb[64], cr[64], x, y, k, mx = (int)(m % (uint32_t)e->mcus_x), my = (int)(m / (uint32_t)e->mcus_x);
+
+		memset(cb, 0, sizeof cb);
+		memset(cr, 0, sizeof cr);
+		for (y = 0; y < e->mcu; y++)
+			for (x = 0; x < e->mcu; x++) {
+				int r, g, bl, py = my * e->mcu + y, px = mx * e->mcu + x, lum, u, v;
+
+				pixel_at(e->in, px, py, &r, &g, &bl);
+				lum = (19595 * r + 38470 * g + 7471 * bl + 32768) >> 16;
+				u = (-11059 * r - 21709 * g + 32768 * bl + (128 << 16) + 32767) >> 16;
+				v = (32768 * r - 27439 * g - 5329 * bl + (128 << 16) + 32767) >> 16;
+				Y[(y >> 3) * 2 + (x >> 3)][(y & 7) * 8 + (x & 7)] = lum - 128;
+				if (e->sub) {
+					cb[(y >> 1) * 8 + (x >> 1)] += u, cr[(y >> 1) * 8 + (x >> 1)] += v;
+				} else {
+					cb[y * 8 + x] = u - 128, cr[y * 8 + x] = v - 128;
+				}
+			}
+		if (e->sub)
+			for (k = 0; k < 64; k++)
+				cb[k] = ((cb[k] + 2) >> 2) - 128, cr[k] = ((cr[k] + 2) >> 2) - 128;
+		for (k = 0; k < (e->sub ? 4 : 1); k++)
+			block_put(e, b, Y[k], 0, &pred[0]);
+		block_put(e, b, cb, 1, &pred[1]);
+		block_put(e, b, cr, 1, &pred[2]);
+	}
+	/* the interval's last byte filled with ones */
+	if (b->count > 0)
+		bits_put(b, 0x7f, 8 - b->count);
+}
+
 /* Intervals from..to-1, each into its own room. */
 static void
 intervals_job(void *ctx, uint32_t from, uint32_t to)
 {
 	struct jenc *e = ctx;
-	uint32_t i, m, mcus = (uint32_t)(e->mcus_x * e->mcus_y);
+	uint32_t i;
 
 	for (i = from; i < to; i++) {
 		struct bitw b = { e->rows + i * e->room, e->rows + (i + 1) * e->room, 0, 0 };
-		int pred[3] = {0, 0, 0};
-		uint32_t end = (i + 1) * e->restart < mcus ? (i + 1) * e->restart : mcus;
 
-		for (m = i * e->restart; m < end; m++) {
-			int Y[4][64], cb[64], cr[64], x, y, k, mx = (int)(m % (uint32_t)e->mcus_x), my = (int)(m / (uint32_t)e->mcus_x);
-
-			memset(cb, 0, sizeof cb);
-			memset(cr, 0, sizeof cr);
-			for (y = 0; y < e->mcu; y++)
-				for (x = 0; x < e->mcu; x++) {
-					int r, g, bl, py = my * e->mcu + y, px = mx * e->mcu + x, lum, u, v;
-
-					pixel_at(e->in, px, py, &r, &g, &bl);
-					lum = (19595 * r + 38470 * g + 7471 * bl + 32768) >> 16;
-					u = (-11059 * r - 21709 * g + 32768 * bl + (128 << 16) + 32767) >> 16;
-					v = (32768 * r - 27439 * g - 5329 * bl + (128 << 16) + 32767) >> 16;
-					Y[(y >> 3) * 2 + (x >> 3)][(y & 7) * 8 + (x & 7)] = lum - 128;
-					if (e->sub) {
-						cb[(y >> 1) * 8 + (x >> 1)] += u, cr[(y >> 1) * 8 + (x >> 1)] += v;
-					} else {
-						cb[y * 8 + x] = u - 128, cr[y * 8 + x] = v - 128;
-					}
-				}
-			if (e->sub)
-				for (k = 0; k < 64; k++)
-					cb[k] = ((cb[k] + 2) >> 2) - 128, cr[k] = ((cr[k] + 2) >> 2) - 128;
-			for (k = 0; k < (e->sub ? 4 : 1); k++)
-				block_put(e, &b, Y[k], 0, &pred[0]);
-			block_put(e, &b, cb, 1, &pred[1]);
-			block_put(e, &b, cr, 1, &pred[2]);
-		}
-		/* the interval's last byte filled with ones */
-		if (b.count > 0)
-			bits_put(&b, 0x7f, 8 - b.count);
+		one_interval(e, i, &b);
 		if (!b.p)
 			*e->failed = 1;
 		e->row_bytes[i * 4] = b.p ? (uint32_t)(b.p - (e->rows + i * e->room)) : 0;	/* (a count in 16 bytes of its own) */
 	}
 }
 
-uint8_t *
-media_jpeg_encode(const struct media_image *image, int quality, uint32_t *size, int workers)
+/* The tables for a picture and a quality, and its intervals; false for a size a JPEG cannot have. */
+static int
+setup(struct jenc *e, const struct media_image *image, int quality)
 {
-	static struct jenc job;
-	struct jenc *e = &job;
-	uint32_t at, total, i, rows_bytes, per;
-	uint8_t *f = NULL, *p;
-	int k, t, got, scale;
+	int k, t, scale;
 
 	memset(e, 0, sizeof *e);
 	e->in = image, e->w = image->width, e->h = image->height;
 	if (e->w < 1 || e->h < 1 || e->w > 65535 || e->h > 65535)
-		return NULL;
+		return 0;
 	if (quality < 1) quality = 1;
 	if (quality > 100) quality = 100;
 	e->sub = quality < 90;
@@ -295,42 +301,17 @@ media_jpeg_encode(const struct media_image *image, int quality, uint32_t *size, 
 	/* some 512 intervals: a decoder's cores take them one by one */
 	e->restart = ((uint32_t)(e->mcus_x * e->mcus_y) + 511) / 512;
 	e->intervals = ((uint32_t)(e->mcus_x * e->mcus_y) + e->restart - 1) / e->restart;
-	/* room for an interval: 105 bytes a block first, and where an interval needs more, 420, far more than any but noise
-	 * needs (a machine without an MMU maps all of it, in one piece: 5 MB for 800 x 600, which a full memory had not) */
-	if (!(e->failed = mcw_alloc(16)))
-		return NULL;
-	for (per = 105;; per = 420) {
-		e->room = (e->restart * (uint32_t)e->blocks * per + 64u + 15u) & ~15u;
-		rows_bytes = e->room * e->intervals;
-		e->rows = mmap(NULL, (rows_bytes + 4095) & ~4095u, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-		e->row_bytes = m_map(e->intervals * 16);
-		if (e->rows == MAP_FAILED || !e->row_bytes) {
-			if (e->rows != MAP_FAILED)
-				munmap(e->rows, (rows_bytes + 4095) & ~4095u);
-			m_unmap(e->row_bytes, e->intervals * 16);
-			return NULL;
-		}
-		*e->failed = 0;
-		/* (the first part of each interval's room there before any core writes it: what most take) */
-		for (i = 0; i < e->intervals; i++)
-			mcw_touch(e->rows + i * e->room, e->room / 8);
-		got = m_workers_begin(workers);
-		m_for(e->intervals, intervals_job, e, 0, got);
-		m_workers_end();
-		if (!*e->failed)
-			break;
-		if (per == 420)
-			goto done;
-		munmap(e->rows, (rows_bytes + 4095) & ~4095u);
-		m_unmap(e->row_bytes, e->intervals * 16);
-	}
-	total = 2 + 18 + 2 * 69 + 19 + 4 * 2 + 33 + 179 + 33 + 179 + 6 + 14 + 2;
-	for (i = 0; i < e->intervals; i++)
-		total += e->row_bytes[i * 4] + 2;
-	*size = total;
-	if (!(f = m_map(total)))
-		goto done;
-	p = f;
+	return 1;
+}
+
+#define HEADERS (2 + 18 + 2 * 69 + 19 + 4 * 2 + 33 + 179 + 33 + 179 + 6 + 14)
+
+/* Everything before the scan's codes: HEADERS bytes. */
+static uint8_t *
+headers_put(const struct jenc *e, uint8_t *p)
+{
+	int t, k;
+
 #define B(v) (*p++ = (uint8_t)(v))
 #define W(v) (B((v) >> 8), B(v))
 	W(0xffd8);
@@ -361,20 +342,98 @@ media_jpeg_encode(const struct media_image *image, int quality, uint32_t *size, 
 	}
 	W(0xffdd), W(4), W(e->restart);
 	W(0xffda), W(12), B(3), B(1), B(0x00), B(2), B(0x11), B(3), B(0x11), B(0), B(63), B(0);
+#undef B
+#undef W
+	return p;
+}
+
+uint8_t *
+media_jpeg_encode(const struct media_image *image, int quality, uint32_t *size, int workers)
+{
+	static struct jenc job;
+	struct jenc *e = &job;
+	uint32_t total, i, rows_bytes = 0, per;
+	uint8_t *f = NULL, *p;
+	int got;
+
+	if (!setup(e, image, quality))
+		return NULL;
+	/* room for an interval: 105 bytes a block first, and where an interval needs more, 420, far more than any but noise
+	 * needs (a machine without an MMU maps all of it, in one piece: 5 MB for 800 x 600, which a full memory had not) */
+	if (!(e->failed = mcw_alloc(16)))
+		return NULL;
+	for (per = 105;; per = 420) {
+		e->room = (e->restart * (uint32_t)e->blocks * per + 64u + 15u) & ~15u;
+		rows_bytes = e->room * e->intervals;
+		e->rows = mmap(NULL, (rows_bytes + 4095) & ~4095u, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+		e->row_bytes = m_map(e->intervals * 16);
+		if (e->rows == MAP_FAILED || !e->row_bytes) {
+			if (e->rows != MAP_FAILED)
+				munmap(e->rows, (rows_bytes + 4095) & ~4095u);
+			m_unmap(e->row_bytes, e->intervals * 16);
+			return NULL;
+		}
+		*e->failed = 0;
+		/* (the first part of each interval's room there before any core writes it: what most take) */
+		for (i = 0; i < e->intervals; i++)
+			mcw_touch(e->rows + i * e->room, e->room / 8);
+		got = m_workers_begin(workers);
+		m_for(e->intervals, intervals_job, e, 0, got);
+		m_workers_end();
+		if (!*e->failed)
+			break;
+		if (per == 420)
+			goto done;
+		munmap(e->rows, (rows_bytes + 4095) & ~4095u);
+		m_unmap(e->row_bytes, e->intervals * 16);
+	}
+	total = HEADERS + 2;
+	for (i = 0; i < e->intervals; i++)
+		total += e->row_bytes[i * 4] + 2;
+	*size = total;
+	if (!(f = m_map(total)))
+		goto done;
+	p = headers_put(e, f);
 	for (i = 0; i < e->intervals; i++) {
 		memcpy(p, e->rows + i * e->room, e->row_bytes[i * 4]);
 		p += e->row_bytes[i * 4];
 		if (i + 1 < e->intervals)
-			W(0xffd0 + (i & 7));
+			*p++ = 0xff, *p++ = (uint8_t)(0xd0 + (i & 7));
 	}
-	W(0xffd9);
-#undef B
-#undef W
+	*p++ = 0xff, *p++ = 0xd9;
 	*size = (uint32_t)(p - f);
-	at = *size;
-	(void)at;
 done:
 	munmap(e->rows, (rows_bytes + 4095) & ~4095u);
 	m_unmap(e->row_bytes, e->intervals * 16);
 	return f;
+}
+
+uint32_t
+m_jpeg_encode_room(void)
+{
+	return (sizeof(struct jenc) + 15) & ~15u;
+}
+
+uint32_t
+m_jpeg_encode_alone(const struct media_image *image, int quality, void *work, uint8_t *out, uint32_t room)
+{
+	struct jenc *e = work;
+	uint8_t *p, *end = out + room;
+	uint32_t i;
+
+	if (room < HEADERS + 4 || !setup(e, image, quality))
+		return 0;
+	p = headers_put(e, out);
+	for (i = 0; i < e->intervals; i++) {
+		struct bitw b = { p, end - 2, 0, 0 };	/* (room for the marker after it) */
+
+		one_interval(e, i, &b);
+		if (!b.p)
+			return 0;
+		p = b.p;
+		if (i + 1 < e->intervals)
+			*p++ = 0xff, *p++ = (uint8_t)(0xd0 + (i & 7));
+	}
+	*p++ = 0xff, *p++ = 0xd9;
+	return (uint32_t)(p - out);
 }

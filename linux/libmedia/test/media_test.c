@@ -7,6 +7,8 @@
  *   media_test audio FILE OUT.raw [WORKERS [PIECE]]       16-bit sound, its sum (WORKERS -1: in order, -2/-3: pieces backwards)
  *   media_test video FILE [WORKERS]                       a film's pictures' sums (MEDIA_TEST_FRAMES=FILE: the pictures)
  *   media_test gunzip FILE [WORKERS [OUT]]                one gzip member on the workers, checked by its CRC
+ *   media_test soundenc FILE OUT.(wav|flac) [WORKERS]      a sound decoded and encoded again, the file's sum
+ *   media_test filmenc FILE OUT.avi [QUALITY [WORKERS]]    a film's pictures and sound as MJPEG in AVI, the file's sum
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -455,6 +457,97 @@ main(int argc, char **argv)
 				mcw_join(busy_h[--busy_n]);
 		}
 		return 0;
+	}
+	if (!strcmp(argv[1], "soundenc") && argc >= 4) {
+		const char *why, *dot = strrchr(argv[3], '.');
+		struct media_audio *a = media_audio_open(f, size, &why);
+		struct media_audio_info info;
+		int workers = argc > 4 ? atoi(argv[4]) : 0;
+		uint32_t frames, bytes;
+		int16_t *pcm;
+		uint8_t *out;
+		FILE *o;
+
+		if (!a) {
+			printf("soundenc %s: %s\n", argv[2], why);
+			return 1;
+		}
+		media_audio_get_info(a, &info);
+		pcm = aligned_alloc(16, ((size_t)(info.frames ? info.frames : 1) * info.channels * 2 + 15) & ~(size_t)15);
+		frames = media_audio_decode_all(a, pcm, info.frames, workers);
+		t0 = now();
+		out = dot && !strcmp(dot, ".flac") ? media_flac_encode(pcm, frames, info.rate, info.channels, &bytes, workers)
+						    : media_wav_encode(pcm, frames, info.rate, info.channels, &bytes);
+		if (!out) {
+			printf("soundenc: not encoded\n");
+			return 1;
+		}
+		printf("soundenc %s: %u frames %d Hz %d ch, samples' sum %08x, %u bytes, sum %08x, %.1f ms\n", argv[3], frames, info.rate,
+		       info.channels, media_sum(pcm, frames * info.channels * 2, 2166136261u), bytes, media_sum(out, bytes, 2166136261u),
+		       (now() - t0) * 1000);
+		if ((o = fopen(argv[3], "wb")))
+			fwrite(out, 1, bytes, o), fclose(o);
+		return 0;
+	}
+	if (!strcmp(argv[1], "filmenc") && argc >= 4) {
+		const char *why;
+		struct media_video *v;
+		struct media_video_info info;
+		struct media_avi_out *avi;
+		struct media_image im;
+		const uint32_t *pal;
+		int quality = argc > 4 ? atoi(argv[4]) : 80, workers = argc > 5 ? atoi(argv[5]) : 0, n;
+		uint32_t got = 0, given = 0, bytes, stuck = 0;
+		int16_t *pcm = NULL;
+		uint8_t *out;
+		FILE *o;
+
+		/* the sound first, whole (a film decodes it ahead by itself), then the pictures, each one's sound after it */
+		if (!(v = media_video_open(f, size, 0, &why))) {
+			printf("filmenc %s: %s\n", argv[2], why);
+			return 1;
+		}
+		media_video_get_info(v, &info);
+		if (info.rate) {
+			pcm = malloc((size_t)info.sound_frames * info.channels * 2 + 16);
+			while (got < info.sound_frames && stuck < 100000) {
+				uint32_t more = media_video_sound(v, got, pcm + got * info.channels, info.sound_frames - got);
+
+				if (!more)
+					media_video_pump(v), stuck++;
+				got += more;
+			}
+			media_video_close(v);
+			v = media_video_open(f, size, 0, &why);
+		}
+		t0 = now();
+		avi = media_avi_begin(info.width, info.height, info.fps_milli, got ? info.rate : 0, info.channels);
+		memset(&im, 0, sizeof im);
+		im.width = info.width, im.height = info.height, im.channels = 3, im.stride = (info.width * 3 + 15) & ~15;
+		im.pixels = aligned_alloc(16, (size_t)im.stride * im.height);
+		for (n = 0; n < info.frames; n++) {
+			const uint8_t *frame;
+			uint32_t due = got ? (uint32_t)((uint64_t)(n + 1) * 1000u * (uint32_t)info.rate / (uint32_t)info.fps_milli) : 0;
+
+			while (!(frame = media_video_frame(v, n, &pal)))
+				media_video_pump(v);
+			media_video_picture(&info, frame, pal, &im, workers);
+			if ((why = media_avi_picture(avi, &im, quality, workers)) != NULL) {
+				printf("filmenc: %s\n", why);
+				return 1;
+			}
+			if (n + 1 == info.frames || due > got)
+				due = got;
+			if (due > given)
+				media_avi_sound(avi, pcm + given * info.channels, due - given), given = due;
+		}
+		media_video_close(v);
+		out = media_avi_end(avi, &bytes);
+		printf("filmenc %s: %d pictures %dx%d, %u sound frames, %u bytes, sum %08x, %.1f ms\n", argv[3], info.frames, info.width,
+		       info.height, given, bytes, out ? media_sum(out, bytes, 2166136261u) : 0, (now() - t0) * 1000);
+		if (out && (o = fopen(argv[3], "wb")))
+			fwrite(out, 1, bytes, o), fclose(o);
+		return out ? 0 : 1;
 	}
 	fprintf(stderr, "media_test: what is %s?\n", argv[1]);
 	return 2;
