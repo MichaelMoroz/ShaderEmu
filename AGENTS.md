@@ -289,6 +289,15 @@
   `rvc_cpu` and `rvc_harness`. The `nx` script runs `nxpersist load` before the desktop: a
   desktop's start has that program's start in it. A program that should keep a file writes it
   under that folder (its starter's `cd`, `HOME` or a link), and 96,000 packed bytes are all.
+- What a game saves into `/persistence` is stored as it is (7 November 2026; `docs/system/persist.md`): `nxpersist` packs the
+  folder in LZMA blocks on the worker cores (version 3), and a game's own compression or cipher leaves it nothing to pack (Age of
+  Empires' deflate made a save 175,663 bytes, stored it packs to 69,211; Red Alert's enciphered one 182,468 packed to 178,900,
+  stored 28,720). A port writes its saves plain (`AOEU`, Red Alert's version bit, OpenTTD's `none`), still reads the old ones, and
+  sends autosaves, logs and pictures of the screen to `/tmp`. After a change to nxpersist's bytes `test_all.py apps-persist-blocks
+  apps-persist-host` must pass (with `--races` too) and versions 1 to 3 still load.
+- The text field in front of the screen is the guest's `clip:` addresses (`docs/system/clipboard.md`): a host answers show, set,
+  ask, take and hide (the world's `EmuClip`, the harnesses' `RVC_CLIP`), or 404 to all; `nxexport` makes and takes its text (a
+  data: address), and the bar hands the clipboard over when it changes.
 - A setting a program wants kept is a key of the registry all programs share (`registry.h`,
   `nxreg`; `/persistence/registry`, `docs/system/persist.md`), not a file of its own: `program.name`,
   set at once, read at start. A test that must have the defaults does not read it (`RAY_FRAMES`).

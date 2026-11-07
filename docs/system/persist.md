@@ -26,7 +26,9 @@ the folder and not saved is lost with the rest.
 | `classicube/` | `options.txt` | a link from the game's folder |
 | `nxsolitaire/` | `game`, the game in play when the window closed; `stats`, the statistics | `nxsolitaire` itself (`docs/apps/solitaire.md`) |
 | `micropolis/` | saved cities, `*.cty` | Micropolis's Save and Save as (`docs/games/micropolis.md`) |
-| `openttd/` | `openttd.cfg` (some 10 KB), `save/*.sav`, not compressed (92 KB a new 64 by 64 map, 30 KB packed with its folder; 246 KB and 49 KB at 128 by 128; 1.2 MB and 226 KB, too much, for `busy.sav`) | the starter's `XDG_CONFIG_HOME` and `XDG_DATA_HOME` (`docs/games/openttd.md`) |
+| `openttd/` | `openttd.cfg` (some 10 KB), `save/*.sav`, not compressed (92 KB a new 64 by 64 map, 30 KB packed with its folder; 246 KB and 49 KB at 128 by 128; 1.2 MB and 226 KB, too much, for `busy.sav`). `save/autosave` and `screenshot` are links to `/tmp` (7 November 2026: one autosave of a busy map, 1.2 MB, left the folder too large to save) | the starter's `XDG_CONFIG_HOME` and `XDG_DATA_HOME` (`docs/games/openttd.md`) |
+| `aoe/` | `savegame/*.gam`, stored as they are since 7 November 2026 (an early game 1,751,130 bytes, packed to 69,211; the game's own deflate made 175,663, which nothing packs further and which is over the limit alone), the AI's learning (`learn/`); its logs and pictures of the screen are `/tmp/aoe-scratch`'s | the starter's `AOE_HOME` (`docs/games/aoe.md`, "Saved games") |
+| `vanilla-conquer/` (Red Alert) | `SAVEGAME.NNN`, stored as they are since 7 November 2026 (the game compressed and enciphered them, which left nothing to pack) | `docs/games/ralert.md`, "Saved games" |
 
 The desktop has an icon for the folder, and anything else put there is kept as well: Files'
 and the desktop's menu has Save to persistence for an entry, which copies it there and refuses
@@ -74,13 +76,42 @@ where the desktop's icons stand (a file of lines), and whether the folder is loa
 ## The bytes
 
 `tar` of the folder, after 16 bytes: `SEPD`, a version, the count of the bytes that follow, their
-CRC-32. Version 1 is a gzip file made by zlib inside `nxpersist` at level 1, which is the default and
-fast. A folder that does not fit so is packed with LZMA: version 2, an xz file with no sum of its own
-and then a word, what it unpacks to. Its dictionary is the folder's size, 2 MB at most (and so what a
-load wants in one piece), halved down to 256 KB when the encoder finds no memory, and with no memory
-at all the folder is deflated at level 9 instead. A folder that does not fit even then is refused, and one that level 1 left at twice the limit is refused
-at once, as LZMA takes minutes there and does not halve it.
-Both versions load.
+CRC-32. A save makes version 3 (7 November 2026); versions 1 and 2, which saves made before, load as ever.
+
+**Version 3: LZMA in blocks on the worker cores.** The archive is cut into blocks of 256 KB, and each
+block is raw LZMA2 by itself, with the 256 KB before it (or all there is) as its preset dictionary: what
+it would find in one stream of the whole is found, but every block is a job of its own, on up to 16
+workers (memory, not cores, limits them: each has an arena of some MB for its encoder, made and touched
+by the first core). An archive of one block is packed on the first core, a piece at a time for the
+window's bar. After the header: the archive's size, the block's, the dictionary's before a block, the
+count, a word a block (its packed length, the top bit set when it was packed as text), then the blocks.
+A load unpacks them in order on the first core, each with the bytes before it as its dictionary.
+
+- The encoder is hash chains (`hc4`, nice length 64, depth 24), not the binary tree: a worker's stores go
+  through its write cache (`docs/machine/multicore.md`), and the tree's took a worker three times as
+  long. Literals go by the byte before (`lc` 3) in a block that is mostly text, by none (`lc` 0) in one
+  that is not (zeros, an archive's headers and padding, are not counted).
+- `NXPERSIST_FORMAT=1` or `2` saves as before, `NXPERSIST_BLOCK`, `_PRIME`, `_WORKERS`, `_MF` (`bt4`),
+  `_NICE` and `_DEPTH` change version 3's choices, and `nxpersist test FILE` packs a file as a save
+  packs the archive and unpacks it again: the sizes, the seconds and whether it came back the same.
+- Without the memory for the blocks, a save is made as before: version 1, a gzip file at level 1, and
+  for a folder that does not fit so version 2, an xz file of one stream with no sum of its own and
+  then a word, what it unpacks to (its dictionary the folder's size, 2 MB at most, halved down to
+  256 KB when the encoder finds no memory; with none at all deflate at level 9). A folder that does
+  not fit even then is refused, and one that level 1 left at twice the limit is refused at once.
+
+Measured on `rvc_cpu` with the card's clock (`--pass-model`, `RVC_WCACHE=1`, `RVC_ADFAULT=1`), 7 November 2026:
+
+| What | Bytes | Deflate level 1 | Version 2 (one stream) | Version 3 |
+|---|---|---|---|---|
+| a tar of `/etc`, the Start menu's and `open`'s lists (mostly text) | 227,840 | 49,285 in 1.7 s | 38,768 in 20.0 s | 38,890 in 24.5 s (one block); 39,553 in 9.6 s in blocks of 64 KB |
+| an Age of Empires save, stored as it is | 1,751,130 | | 69,504 in 150.4 s | 69,211 in 57.7 s |
+| two of them | 3,511,808 | 406,634 in 22.6 s | 72,248 in 238.5 s | |
+
+Blocks with no dictionary before them lost too much (the save 88,628 in blocks of 256 KB) and the
+binary tree on the workers too much time (67,133 in 143.5 s); blocks of 128 KB with 384 KB before them
+were slower still (256.7 s). The 1.2 MB of OpenTTD's `busy.sav` is 137 KB at best (LZMA preset 6, `lc`
+0) and fits in no setting: filters of its map's rows and columns of its records made it larger.
 
 `nxpersist` hands over 96,000 bytes at most. A folder that packs to more is not saved: the
 window says by how much and names the three largest files, and what the host kept before
@@ -101,7 +132,7 @@ host answers these itself, with a fetch's status.
 | `persist:state` | answers with the text `stored N`, `limit N`, `auto 0|1`, a line each | 200 |
 
 For a save the guest stores its bytes at `0x816c0000` first, which until now only the host
-wrote. The host's SAVE button reaches the guest as an address to open (`docs/system/open.md`):
+wrote. The text field in front of the screen is asked for the same way (`clip:`, `docs/system/clipboard.md`). The host's SAVE button reaches the guest as an address to open (`docs/system/open.md`):
 `open persist:save` runs `nxpersist save`, so it needs the desktop's bar.
 
 The `nx` script runs `nxpersist load` after the window system and before the desktop and the
@@ -140,6 +171,13 @@ restores "from 0 buckets", and writes nothing when it is closed): that the folde
 a session can only be seen in an uploaded world.
 
 ## Checked, and not
+
+`tools/test_all.py apps-persist-harder apps-persist-big apps-persist-blocks apps-persist-host`: a
+folder deflate leaves over the limit fits, one of 9 MB is refused, 700,000 bytes in blocks on the
+workers (and as one stream) come back the same (`--races`: 0 undone), and a folder saved to the host
+(`rvc_cpu --persist`), taken away and loaded again has the same sums. `tools/persist_blob.py make FOLDER
+BLOB` makes a blob of version 1 that a run's `nxpersist load!` unpacks (a way to bring files into a run
+without making an image), `read` and `info` say what a blob holds.
 
 On `rvc_cpu`, a private image: a folder saved in one run is there with the same sums after
 the next start; the file's header, sum and archive read by Python on the host; a flipped byte

@@ -247,6 +247,22 @@ From the command to the menu and to a mission's first frame is most of the wait:
 - Sound: `--fixed-dt 0.004 --sound-capture` and `tools\sound_reference.py ... --rom`: a mission's sound is the model's in every sample. `TDAWN_SOUND_LOG=1` says what the game asked for.
 - Palette cycling goes by the clock (Tiberian Dawn's goes by frames in a run with no delay): a few dozen pixels of lamps differ between two runs of one build.
 
+## Saved games
+
+The game compressed a saved game (LCW) and enciphered it (Blowfish) before writing it: what it wrote is as good as
+noise, and the kept folder's LZMA (`docs/system/persist.md`) could do nothing with it. Since 7 November 2026 it
+stores the game as it is (`Save_Game` in `redalert/saveload.cpp`, the patch): the version word's top bit says so,
+the message digest is of the bytes as they lie, and `Load_Game` reads such a file through a plain straw where the
+other has the deciphering and the decompressing ones; the save list takes the bit off before it compares the
+version. A save of before loads as ever, and `RALERT_SAVE=crypt` saves as before.
+
+The Soviet mission (seed 7) saved at frame 200: 1,496,613 bytes stored as they are, which `nxpersist test` packs
+to 28,720 (69.8 s with the card's clock); the game's own file was 182,468 bytes and packed to 178,900, over what a
+player may keep. `RALERT_SAVE_AT=N:FILE` saves at frame N as the Save window does and loads the file again, and the
+state is said before and after: the load changes the sum (`b342ae85` saved, `09f4af8d` loaded, `7c5efad0` at frame
+300 against `01e0dd60` unsaved), the same both ways, so it is the game's load and not the way it is stored.
+`tools/test_all.py ralert-save ralert-save-crypt`.
+
 ## Not done
 
 - Playing it by hand: the pointer and keys are Tiberian Dawn's code. So is the map's drag by the right button, which is the only way the map moves (`docs/games/tdawn.md`, "The map is dragged"), tested here as there.

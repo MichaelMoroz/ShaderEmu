@@ -606,6 +606,25 @@ The sums and the menu's picture stayed the same. A rest when nothing was drawn (
 
 The window manager gives a new window its frame after the program has mapped it, and the window then has other memory (800 x 600 at 20, 20 became 806 x 629 at -3, -26). A game at its menu draws nothing more, so the window stayed black in the world with the program resting. A capture taken before the manager has done this shows the menu, so it says nothing. The port now shows its page again on any update of the window but an unmap, and on an exposure: the page is still the picture.
 
+## Saved games
+
+What the game writes through `rge_write` (saved games, scenarios, campaigns, the players' file, the AI's learning)
+it deflated, and a folder the host keeps is packed whole by `nxpersist`'s LZMA (`docs/system/persist.md`), which
+can do nothing more with deflate's bytes: an early Random Map game was 175,663 bytes, over the 96,000 a player may
+keep by itself. Since 7 November 2026 the port writes `AOEU` and the bytes as they are (`port/aoe_save.c`, which
+is `deflate_init` and the rest to the game), and `Inf32Decode` (`port/aoe_asm.cpp`) takes a file that begins so as
+it is; a deflated one, the trial's own files and a save of before, is inflated as ever. `AOE_SAVE=deflate` is the
+way before: upstream's `Deflate.c`, compiled with its four functions renamed (`build.sh`, `Deflate-up.o`).
+
+The same game: 1,751,130 bytes stored, packed by `nxpersist` to 69,211 in 57.7 s with the card's clock (two such
+saves together 72,248). A load reads it with no inflating. What the game writes and never reads back, every `.txt`
+(its logs) and `.bmp` (pictures of the screen), goes to `/tmp/aoe-scratch` (`AOE_SCRATCH`), not the folder the
+host keeps, and the starter deletes it when the game ends.
+
+The script's `save NAME` and `load NAME` save the game as the Save window does into `savegame/NAME.gam` and load it
+(`aoe_script_save`, `aoe_script_load` in `port/aoe_world.cpp`): a save, its load and a save again were each 1.75 MB
+and stored, and the game went on from the load.
+
 ## A bug to remember
 
 `Visible_Unit_Manager::Update_Unit_Info` took the place of `VUR_Ptrs` in an object as `0x194`, the Windows build's. Here it is `0x190`, so a list that grew left stale pointers, and `RGE_Combat_Object::teleport` wrote tile coordinates through them into freed memory. It showed after about 700 updates as a `TDrawArea::CheckSurface` crash on a surface like `0x707359c0`. Found by a write-protected page under qemu, as qemu's gdb stub in user mode has no watchpoints. `obj + 0x0C` in `taiinfmd.cpp` went the same way. `(char*) this + 0xFF90` and the map's sizes there are by name now, and the sums did not move: they had been right.

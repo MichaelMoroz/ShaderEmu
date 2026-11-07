@@ -890,10 +890,10 @@ index a29eb2b..a3a94a5 100644
  #endif
 \ No newline at end of file
 diff --git a/redalert/conquer.cpp b/redalert/conquer.cpp
-index 4825ba4..0e27754 100644
+index 4825ba4..6d216b9 100644
 --- a/redalert/conquer.cpp
 +++ b/redalert/conquer.cpp
-@@ -125,6 +125,569 @@ bool Map_Edit_Loop(void);
+@@ -125,6 +125,588 @@ bool Map_Edit_Loop(void);
  
  bool UseOldShapeDraw = false;
  
@@ -1369,6 +1369,25 @@ index 4825ba4..0e27754 100644
 +        }
 +    }
 +    {
++        /* RALERT_SAVE_AT=N:FILE: at frame N the game saved to FILE as the Save window saves it, and loaded from it again; the
++        ** state said before and after (docs/games/ralert.md, "Saved games") */
++        static int save_at = -1;
++        static char save_file[128];
++        if (save_at < 0) {
++            save_at = 0;
++            if (getenv("RALERT_SAVE_AT")) {
++                sscanf(getenv("RALERT_SAVE_AT"), "%d:%127s", &save_at, save_file);
++            }
++        }
++        if (save_at && (int)Frame == save_at) {
++            ShaderEmu_State("saving");
++            bool saved = Save_Game(save_file, "ShaderEmu");
++            bool loaded = saved && Load_Game(save_file);
++            printf("rasave: %s %s, %s\n", save_file, saved ? "saved" : "NOT saved", loaded ? "loaded" : "NOT loaded");
++            ShaderEmu_State("loaded");
++        }
++    }
++    {
 +        /* RALERT_MARK=A,B: a line as frame A begins and as frame B does (rvc_cpu --pc-from, --until) */
 +        static int mark_a = -1, mark_b;
 +        if (mark_a < 0) {
@@ -1463,7 +1482,7 @@ index 4825ba4..0e27754 100644
  #ifdef CHEAT_KEYS
  void Dump_Heap_Pointers(void);
  void Error_In_Heap_Pointers(char* string);
-@@ -1705,6 +2268,68 @@ static void Sync_Delay(void)
+@@ -1705,6 +2287,68 @@ static void Sync_Delay(void)
  extern void Check_For_Focus_Loss(void);
  void Reallocate_Big_Shape_Buffer(void);
  
@@ -1532,7 +1551,7 @@ index 4825ba4..0e27754 100644
  bool Main_Loop()
  {
      KeyNumType input; // Player input.
-@@ -1712,6 +2337,22 @@ bool Main_Loop()
+@@ -1712,6 +2356,22 @@ bool Main_Loop()
      int y;
      int framedelay;
  
@@ -1555,7 +1574,7 @@ index 4825ba4..0e27754 100644
      Mono_Set_Cursor(0, 0);
  
      if (!GameActive)
-@@ -1759,7 +2400,12 @@ bool Main_Loop()
+@@ -1759,7 +2419,12 @@ bool Main_Loop()
      **	If there is no theme playing, but it looks like one is required, then start one
      **	playing. This is usually the symptom of there being no transition score.
      */
@@ -1568,7 +1587,7 @@ index 4825ba4..0e27754 100644
          Theme.Queue_Song(THEME_PICK_ANOTHER);
      }
  
-@@ -1790,18 +2436,42 @@ bool Main_Loop()
+@@ -1790,18 +2455,42 @@ bool Main_Loop()
              FrameTimer = Options.GameSpeed + (PlayerPtr->Difficulty == DIFF_EASY ? 1 : 0);
          }
      }
@@ -1612,7 +1631,7 @@ index 4825ba4..0e27754 100644
          }
      }
  
-@@ -1826,7 +2496,19 @@ bool Main_Loop()
+@@ -1826,7 +2515,19 @@ bool Main_Loop()
      /*
      **	AI logic operations are performed here.
      */
@@ -1633,7 +1652,7 @@ index 4825ba4..0e27754 100644
      TimeQuake = false;
  #ifdef FIXIT_CSII //	checked - ajw 9/28/98
      if (!PendingTimeQuake) {
-@@ -1839,8 +2521,24 @@ bool Main_Loop()
+@@ -1839,8 +2540,24 @@ bool Main_Loop()
      **	a message has expired & been removed, and the entire map must be updated.
      */
      if (Session.Messages.Manage()) {
@@ -1660,7 +1679,7 @@ index 4825ba4..0e27754 100644
      }
  
      //
-@@ -1893,6 +2591,9 @@ bool Main_Loop()
+@@ -1893,6 +2610,9 @@ bool Main_Loop()
          PlayerRestarts = false;
          Map.Help_Text(TXT_NONE);
          Set_Video_Cursor_Clip(false);
@@ -1670,7 +1689,7 @@ index 4825ba4..0e27754 100644
          Do_Restart();
          Set_Video_Cursor_Clip(true);
          return (!GameActive);
-@@ -2389,6 +3090,10 @@ void Play_Movie(char const* name, ThemeType theme, bool clrscrn, bool immediate)
+@@ -2389,6 +3109,10 @@ void Play_Movie(char const* name, ThemeType theme, bool clrscrn, bool immediate)
  #ifdef CHEAT_KEYS
  // Mono_Printf("b\n");
  #endif // CHEAT_KEYS
@@ -1681,7 +1700,7 @@ index 4825ba4..0e27754 100644
  
      if (name) {
          char fullname[_MAX_FNAME + _MAX_EXT];
-@@ -2442,6 +3147,25 @@ void Play_Movie(char const* name, ThemeType theme, bool clrscrn, bool immediate)
+@@ -2442,6 +3166,25 @@ void Play_Movie(char const* name, ThemeType theme, bool clrscrn, bool immediate)
              AnimControl.ImageBuf = (unsigned char*)SysMemPage.Get_Offset();
          }
  #endif
@@ -1707,7 +1726,7 @@ index 4825ba4..0e27754 100644
  
          if (!Debug_Quiet && Get_Digi_Handle() != -1) {
              AnimControl.OptionFlags |= VQAOPTF_AUDIO;
-@@ -2465,8 +3189,30 @@ void Play_Movie(char const* name, ThemeType theme, bool clrscrn, bool immediate)
+@@ -2465,8 +3208,30 @@ void Play_Movie(char const* name, ThemeType theme, bool clrscrn, bool immediate)
                  // Set_Palette(BlackPalette);
                  SysMemPage.Clear();
                  InMovie = true;
@@ -1738,7 +1757,7 @@ index 4825ba4..0e27754 100644
                  // Resume_Audio_Thread();
                  InMovie = false;
  #ifdef MOVIE640
-@@ -2863,6 +3609,70 @@ void CC_Draw_Pip(const ObjectClass* object,
+@@ -2863,6 +3628,70 @@ void CC_Draw_Pip(const ObjectClass* object,
   * HISTORY:                                                                                    *
   *   02/21/1995 JLB : Created.                                                                 *
   *=============================================================================================*/
@@ -1809,7 +1828,7 @@ index 4825ba4..0e27754 100644
  void CC_Draw_Shape(void const* shapefile,
                     int shapenum,
                     int x,
-@@ -2885,6 +3695,22 @@ void CC_Draw_Shape(void const* shapefile,
+@@ -2885,6 +3714,22 @@ void CC_Draw_Shape(void const* shapefile,
      if ((flags & SHAPE_FADING) && (!fadingdata)) {
          fadingdata = DisplayClass::FadingShade;
      }
@@ -1832,7 +1851,7 @@ index 4825ba4..0e27754 100644
  
      static unsigned char* _xbuffer = 0;
  
-@@ -3044,6 +3870,38 @@ Rect const Shape_Dimensions(void const* shapedata, int shapenum)
+@@ -3044,6 +3889,38 @@ Rect const Shape_Dimensions(void const* shapedata, int shapenum)
      int width = Get_Build_Frame_Width(shapedata);
      int height = Get_Build_Frame_Height(shapedata);
  
@@ -1871,7 +1890,7 @@ index 4825ba4..0e27754 100644
      rect.X = 0;
      rect.Y = 0;
      int xlimit = width - 1;
-@@ -3185,6 +4043,9 @@ extern GraphicBufferClass VQ640;
+@@ -3185,6 +4062,9 @@ extern GraphicBufferClass VQ640;
  extern bool IsVQ640;
  int VQ_Call_Back(unsigned char*, int)
  {
@@ -1881,7 +1900,7 @@ index 4825ba4..0e27754 100644
  #ifdef REMASTER_BUILD
      return 0;
  #else
-@@ -3194,6 +4055,11 @@ int VQ_Call_Back(unsigned char*, int)
+@@ -3194,6 +4074,11 @@ int VQ_Call_Back(unsigned char*, int)
          Keyboard->Clear();
      }
      Check_VQ_Palette_Set();
@@ -1893,7 +1912,7 @@ index 4825ba4..0e27754 100644
  #ifdef MOVIE640
      if (IsVQ640) {
          VQ640.Blit(SeenBuff);
-@@ -3204,6 +4070,9 @@ int VQ_Call_Back(unsigned char*, int)
+@@ -3204,6 +4089,9 @@ int VQ_Call_Back(unsigned char*, int)
      Interpolate_2X_Scale(&SysMemPage, &SeenBuff, NULL);
  #endif
      Frame_Limiter();
@@ -1903,7 +1922,7 @@ index 4825ba4..0e27754 100644
  
      if ((BreakoutAllowed || Debug_Flag) && key == KN_ESC) {
          Keyboard->Clear();
-@@ -4501,6 +5370,21 @@ void Shake_The_Screen(int shakes, HousesType house)
+@@ -4501,6 +5389,21 @@ void Shake_The_Screen(int shakes, HousesType house)
      }
  #else
      shakes += shakes;
@@ -4564,10 +4583,83 @@ index 6211ff4..892472c 100644
 +}
 +#endif
 diff --git a/redalert/saveload.cpp b/redalert/saveload.cpp
-index 36a2e3c..962ee56 100644
+index 36a2e3c..02a1b71 100644
 --- a/redalert/saveload.cpp
 +++ b/redalert/saveload.cpp
-@@ -1322,6 +1322,10 @@ void Code_All_Pointers(void)
+@@ -403,6 +403,14 @@ bool Save_Game(const char* file_name, const char* descr)
+     unsigned int version = SAVEGAME_VERSION;
+ #ifdef FIXIT_CSII //	checked - ajw 9/28/98
+     version++;
++#endif
++#ifdef SHADEREMU
++    /* stored as it is, not compressed and enciphered: the folder the host keeps is packed whole by nxpersist's LZMA
++    ** (docs/games/ralert.md, "Saved games"); RALERT_SAVE=crypt is the way before. The version's top bit says so. */
++    bool plain = !getenv("RALERT_SAVE") || strcmp(getenv("RALERT_SAVE"), "crypt") != 0;
++    if (plain) {
++        version |= 0x80000000u;
++    }
+ #endif
+     fpipe.Put(&version, sizeof(version));
+ 
+@@ -425,6 +433,19 @@ bool Save_Game(const char* file_name, const char* descr)
+     bpipe.Key(&FastKey, BlowfishEngine::MAX_KEY_LENGTH);
+ 
+     sha.Put_To(fpipe);
++#ifdef SHADEREMU
++    if (plain) {
++        Put_All(sha, save_net);
++        sha.Flush();
++        file.Seek(pos, SEEK_SET);
++        sha.Result(digest);
++        fpipe.Put(digest, sizeof(digest));
++        sha.End();
++        Decode_All_Pointers();
++        NowSavingGame = false;
++        return (true);
++    }
++#endif
+     bpipe.Put_To(sha);
+     pipe.Put_To(bpipe);
+     Put_All(pipe, save_net);
+@@ -556,6 +577,10 @@ bool Load_Game(const char* file_name)
+     if (fstraw.Get(&version, sizeof(version)) != sizeof(version)) {
+         return (false);
+     }
++#ifdef SHADEREMU
++    bool plain = (version & 0x80000000u) != 0; /* (stored as it is: Save_Game) */
++    version &= 0x7fffffffu;
++#endif
+     GameVersion = version;
+ #ifdef FIXIT_CSII //	checked - ajw 9/28/98
+     if (version != SAVEGAME_VERSION && ((version - 1) != SAVEGAME_VERSION)) {
+@@ -607,11 +632,21 @@ bool Load_Game(const char* file_name)
+     */
+     file.Seek(pos, SEEK_SET);
+     BlowStraw bstraw(BlowStraw::DECRYPT);
+-    LCWStraw straw(LCWStraw::DECOMPRESS, SAVE_BLOCK_SIZE);
+-
+-    bstraw.Key(&FastKey, BlowfishEngine::MAX_KEY_LENGTH);
+-    bstraw.Get_From(fstraw);
+-    straw.Get_From(bstraw);
++    LCWStraw lcwstraw(LCWStraw::DECOMPRESS, SAVE_BLOCK_SIZE);
++#ifdef SHADEREMU
++    Straw plainstraw; /* (a save stored as it is is read as it lies) */
++    Straw& straw = plain ? plainstraw : (Straw&)lcwstraw;
++    if (plain) {
++        plainstraw.Get_From(fstraw);
++    } else {
++#else
++    LCWStraw& straw = lcwstraw;
++    {
++#endif
++        bstraw.Key(&FastKey, BlowfishEngine::MAX_KEY_LENGTH);
++        bstraw.Get_From(fstraw);
++        lcwstraw.Get_From(bstraw);
++    }
+ 
+     /*
+     **	Clear the scenario so we start fresh; this calls the Init_Clear() routine
+@@ -1322,6 +1357,10 @@ void Code_All_Pointers(void)
   *=============================================================================================*/
  void Decode_All_Pointers(void)
  {
@@ -4578,6 +4670,16 @@ index 36a2e3c..962ee56 100644
      /*
      **	The Map.
      */
+@@ -1466,6 +1505,9 @@ bool Get_Savefile_Info(int id, char* buf, unsigned* scenp, HousesType* housep)
+     if (straw.Get(&version, sizeof(version)) != sizeof(version)) {
+         return (false);
+     }
++#ifdef SHADEREMU
++    version &= 0x7fffffffu; /* (stored as it is: Save_Game) */
++#endif
+ #ifdef FIXIT_CSII //	checked - ajw 9/28/98
+     if (version != SAVEGAME_VERSION && ((version - 1 != SAVEGAME_VERSION))) {
+ #else
 diff --git a/redalert/scenario.cpp b/redalert/scenario.cpp
 index 3738c61..b4442d0 100644
 --- a/redalert/scenario.cpp

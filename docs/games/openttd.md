@@ -587,6 +587,13 @@ A tick is 92 to 103 ms, a wait 12% to 18%, building 23%, zoomed out 28%: the cop
 
 A save's default format is `none` (1 November 2026, `GetSavegameFormat`): what is kept between sessions is packed by `nxpersist`, and LZMA at preset 2 asks 16.9 MB, in pieces of several MB that the no-MMU kernel must find whole, and is most of the time the tick waits. A config that names a format whose encoder cannot start saves in `none` and says so (`LZMA at preset 2 does not start, lzma_ret 5, 16879783 bytes asked`; `OPENTTD_SAVE_NOENCODER=1` makes it so). Old saves and `busy.sav` load as ever; a load of LZMA still wants its dictionary (1 MB at preset 2) and the ring in one piece each, and if memory has none it fails: a load has no other way.
 
+The autosaves are not kept (7 November 2026): the starter makes `save/autosave` and `screenshot` of the kept folder links to
+`/tmp/openttd-autosave` and `/tmp/openttd-screenshot`, and moves what an older start left in them there. Autosaves come every 10
+minutes by default, 16 of them, and one of `busy.sav`'s map is 1.2 MB: in the folder, the first left it too large for any save.
+A save of the session's autosaves the player wants kept is a save of their own (the Save window, into `save/`). The map arrays
+are most of a save (786 KB of `busy.sav`'s 1.2 MB, 80 KB of its 137 KB packed by LZMA at preset 6): taking each tile from the one
+above or beside it, or laying the records' fields in columns, made LZMA's output larger, not smaller (`docs/system/persist.md`).
+
 Measured on `rvc_cpu` at 2 MIPS, a save and the load of what it wrote, the sum as saved each time:
 
 | Game | Format | File | Save | Load | `nxpersist` |

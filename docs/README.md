@@ -35,12 +35,14 @@ One file per subject. A doc names another by its file name, which is unique acro
 - [lan.md](system/lan.md) – The network: TCP/IP between machines
 - [fetch.md](system/fetch.md) – Fetch: pages from the host
 - [persist.md](system/persist.md) – Persist: a folder the host keeps between sessions
+- [clipboard.md](system/clipboard.md) – The text field in front of the screen: the machine's clipboard, text out and in (`clip:`)
 - [open.md](system/open.md) – Open: a link or a file, with the program for its kind
 - [fuzz.md](system/fuzz.md) – The desktop's fuzzer: plans of opening, using and closing programs that replay
 
 ## apps
 
 - [bench.md](apps/bench.md) – The benchmark: `nxperf`
+- [export.md](apps/export.md) – Export and import: a file or folder out as text or QR codes, pasted text in (`nxexport`)
 - [ide.md](apps/ide.md) – The IDE
 - [imgui.md](apps/imgui.md) – Dear ImGui
 - [play.md](apps/play.md) – An audio player: `nxplay`

@@ -226,6 +226,11 @@ CASES = [
     *[case(f'ralert-{side}-{f}', 'games ralert', X + f'TDAWN_AUTO=1 RALERT_SIDE={side} RALERT_SEED=7 RALERT_FRAMES={f} ralert', True,
            has=[rf'done at frame {f}: .* state {s}']) for side, f, s in (('soviet', 300, '01e0dd60'), ('allies', 300, 'ea72a5d1'),
                                                                         ('soviet', 1300, 'eb6c2265'), ('allies', 1300, 'dadd663d'))],
+    # a saved game stored as it is (docs/games/ralert.md, "Saved games"), saved at frame 200 and loaded again, and the game's own enciphered
+    # one: the same states after the load (the load itself changes the sum: both ways alike)
+    *[case(f'ralert-save{tag}', 'games ralert', X + f'{env}TDAWN_AUTO=1 RALERT_SIDE=soviet RALERT_SEED=7 RALERT_FRAMES=300 RALERT_SAVE_AT=200:/tmp/ra.sav ralert',
+           True, wall=400, has=[r'rasave: /tmp/ra\.sav saved, loaded', r'loaded at frame 200: .* state 09f4af8d', r'done at frame 300: .* state 7c5efad0'])
+      for tag, env in (('', ''), ('-crypt', 'RALERT_SAVE=crypt '))],
     case('ralert-scans', 'games ralert', X + 'TDAWN_AUTO=1 RALERT_SIDE=allies RALERT_SEED=7 RALERT_CHECK_SCANS=1 RALERT_FRAMES=1300 ralert', True,
          has=[r'scan bits kept in \d+ frames of 1280, 0 of them wrongly'], never=[r'[1-9]\d* of them wrongly']),
     case('ralert-movie', 'games ralert', X + 'RALERT_MOVIE_CHECK=1 TDAWN_AUTO=1 RALERT_SIDE=soviet RALERT_SEED=7 RALERT_FRAMES=20 ralert', True,
