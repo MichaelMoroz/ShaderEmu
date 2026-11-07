@@ -146,6 +146,10 @@ public static partial class ShaderEmuBuilder
                 return;
             }
             Debug.Log("[ShaderEmu] Bakery lit " + lit + " renderers");
+            // the window's pictures again, now that the room is lit as it will be: Build world made them before the bake, and
+            // the room the raindrops reflect ("... window room.cubemap") was the room before its lightmaps (7 November 2026)
+            GlassAgain();
+            Debug.Log("[ShaderEmu] the window's pictures made again in the baked room");
             Baked();
         });
     }

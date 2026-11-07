@@ -363,7 +363,7 @@ lightmap, which shows a line wherever two pieces of a wall meet and at every cor
   Measured against an 8 x 8 supersampled picture (`_Footprint`, `_Widen`, `_Layers`, `_Test` are that
   test's; 4 November 2026): the shimmer under half-pixel moves 0.78 to 1.11 of the reference's, the
   reflection 0.81 to 0.94 of it, what goes through 7 to 14% too bright; 0.40 ms a pane at 1080p. What a drop's surface reflects goes back into the room and shows the room, a picture of its own (`_Room`,
-  `Reflection probe window room.cubemap`, the panes put away while it is taken). The dry glass has Heartfelt's
+  `Reflection probe window room.cubemap`, the panes put away while it is taken; Bake lighting takes the window's pictures again once the room is lit (`GlassAgain` in `BakeryDone`): Build world takes them before the bake, of a room with no lightmaps). The dry glass has Heartfelt's
   fog (`_Mist`, `_MistBlur`): the city behind it blurred, cleared by a drop and by his trail value, so a drop
   stands out of it; the room's reflection alone hardly showed (a shallow drop reflects 2% but at its rim), and
   drops 2.7 mm high (a puddle's height) blurred into the city from afar. Lightning reaches the drops as a second picture of the city lit by a flash of 1 (`_SkyFlash`),

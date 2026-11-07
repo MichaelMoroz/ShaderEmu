@@ -144,7 +144,9 @@ public class EmuPointer : UdonSharpBehaviour
     private int lastUseHand = 1;                   // the hand whose trigger moved last: the one that clicked
     private bool laserLoaded;
     private string[] LaserKeys = { "beam.left", "beam.right" };
-    private const string PhysicalKey = "buttons.physical", SteadyKey = "pointer.steady";
+    // (the steady pointer's key is new on 7 November 2026: "pointer.steady" kept an off from a stray press of any of the
+    // classroom monitors' switches, and the pointer stayed unsteady for good; on is the default, a choice made since is kept)
+    private const string PhysicalKey = "buttons.physical", SteadyKey = "pointer.steady.2";
     private bool steadyFrom;                // the filter has a place to go on from
     private float steadyX, steadyY, steadyVX, steadyVY;
     private int steadyButtons, steadyOwner = -1;
