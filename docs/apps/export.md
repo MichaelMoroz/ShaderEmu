@@ -23,7 +23,8 @@ The window's choices:
 
 The developer's idea: VRChat's camera, put into a cube before the screen, gets a picture that is the file.
 
-- **What the visitor does.** Show the photo; a glowing cube pulses before the panel in front of the screen (everyone
+- **What the visitor does.** Show the photo; a glowing cube pulses before the panel (45 cm at the wall's display; at a visitor's classroom place, where the panel stands before
+  the place's screen at 0.32 of its size, the cube stays 30 cm: `EmuClip.CubeSize`) in front of the screen (everyone
   sees it, `PhotoCube.shader`). Open VRChat's camera, hold it inside the cube and take a picture: it shows coloured
   noise, which is the file. On the PC the picture is in `Pictures\VRChat` as a PNG: open it in Paint, Save as, BMP
   picture (a 24-bit bitmap), rename the `.bmp` to `.zip` and open it. The panel says this (`EmuClip.ShowPhoto`), and the

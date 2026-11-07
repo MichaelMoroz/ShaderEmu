@@ -48,6 +48,11 @@ public class EmuClip : UdonSharpBehaviour
     private bool home;
     private Vector3 homeAt, homeSize;
     private Quaternion homeTurn;
+    private bool cubeHome;
+    private Vector3 cubeAt, cubeSize;
+    // At a classroom place the panel is 0.32 of its size, and the photo's cube with it would be 14 cm, smaller than VRChat's
+    // camera: it is kept at 30 cm there (two thirds of the wall's 45), just before the smaller panel.
+    public const float PlaceShrink = 0.32f, PlaceCubeShare = 0.67f;
 
     public bool clipTest;                  // a client tests itself and logs [ClipTest] lines (docs/system/clipboard.md, "Checked")
 
@@ -212,6 +217,21 @@ public class EmuClip : UdonSharpBehaviour
     }
 
     // The field where the visitor works: before their classroom tube, else before the wall's display.
+    // The photo's cube `k` times its size on the panel, its place before the panel's face with it.
+    private void CubeSize(float k)
+    {
+        if (photo == null) return;
+        Transform c = photo.transform;
+        if (!cubeHome)
+        {
+            cubeHome = true;
+            cubeAt = c.localPosition;
+            cubeSize = c.localScale;
+        }
+        c.localScale = cubeSize * k;
+        c.localPosition = cubeAt * k;
+    }
+
     private void Place()
     {
         Transform p = panel.transform;
@@ -226,12 +246,14 @@ public class EmuClip : UdonSharpBehaviour
         if (own >= 0 && stations.linkSpots != null && own < stations.linkSpots.Length && stations.linkSpots[own] != null)
         {
             p.SetPositionAndRotation(stations.linkSpots[own].position, stations.linkSpots[own].rotation);
-            p.localScale = homeSize * 0.32f;
+            p.localScale = homeSize * PlaceShrink;
+            CubeSize(PlaceCubeShare / PlaceShrink);
         }
         else
         {
             p.SetPositionAndRotation(homeAt, homeTurn);
             p.localScale = homeSize;
+            CubeSize(1);
         }
     }
 
