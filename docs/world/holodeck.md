@@ -15,7 +15,8 @@ doorway (1.2 by 2.4 m) cut out, its floor and its ceiling, every face a whole pa
 is the strip unrolled from the door wall's corner at +x, so three of its four upright corners are
 inside a chart, and the floor and the ceiling are charts under it (`check_shell.py` checks it). The
 doorway's reveal is the corridor's plaster. The lines between the panels are lit bars
-(`grid_bars` in `world/annex.py`, `HoloLine`): 8 mm proud on the walls (7 across them), 3 and 2 on
+(`grid_bars` in `world/annex.py`, `HoloLine`; blue and at half the glow since 7 November 2026, amber
+before): 8 mm proud on the walls (7 across them), 3 and 2 on
 the floor, 8 and 7 on the ceiling, and a bar 15 mm square in each of the room's twelve edges, lying
 in the corner against both faces. No two bars go into each other or share a face's plane where they
 meet (the corners had flickered where three edge bars and the lines' ends met in one plane): the
@@ -583,5 +584,5 @@ seat's exit and empties the box.
 Behind the den's back wall, through its door (which stands open): 10.5 m from the lift, where a
 visitor arrives, to a window at the building's outer wall. `world/annex.py` models it; its
 furniture is Poly Haven's (bench, boots, payphone, extinguisher, lamps, frames, mirror).
-`Annex()` in `ShaderEmuHolodeck.cs` gives every room colliders, lamps, light volumes and probes,
+`Annex()` in `ShaderEmuHolodeck.cs` gives every room colliders, lamps, light volume boxes (made one by `OneLightVolume`) and probes,
 and moves the spawn to the lift.

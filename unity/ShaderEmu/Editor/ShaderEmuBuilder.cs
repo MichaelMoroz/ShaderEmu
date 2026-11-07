@@ -856,6 +856,7 @@ public static partial class ShaderEmuBuilder
         Material keep = Mat("GpuKeep", "ShaderEmu/GpuKeep");
         keep.SetTexture("_State", machine.state);
         machine.keepMaterial = keep;
+        machine.vramZapMaterial = Mat("VramZap", "ShaderEmu/VramZap");   // the radiation in the VRAM (EmuMachine.ZapVram)
         machine.holoMade = Made("Holo");
         machine.holoDrawIds = DrawIds("Holo");
         machine.gpuShown = GpuShown();
@@ -1373,6 +1374,8 @@ public static partial class ShaderEmuBuilder
         AddHoloKeyboard();    // their keyboard: a copy of the den's as Retro left it
         TouchPanels(world, pointer);   // again, for the keys those two made
         Apply(pointer);
+        OneLightVolume(world);   // the rooms' light volumes made one (ShaderEmuHolodeck.cs)
+        Grabbables(world);       // some of what lies about, to pick up (ShaderEmuGrabBuild.cs)
         Gate(root);   // last: it gates the parts there are now (ShaderEmuGate.cs)
         // the network ids of what is synced, as play mode and an upload give them: a scene saved without
         // them (the seat, the stations' fields, the streams, the weather) was marked changed by every play

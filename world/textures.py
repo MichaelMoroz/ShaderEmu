@@ -126,7 +126,7 @@ def plastic():
     n = 1024
     h = unit(noise(n, 0.9, 30, cut=260)) * 0.7 + unit(noise(n, 0.0, 33, cut=420)) * 0.3
     save("Plastic", tint(0.975 + 0.012 * unit(h), (1, 1, 1)), 0.56 + 0.05 * unit(h))
-    save("Plastic_n", normal_map(h, 0.0005))
+    save("Plastic_n", normal_map(h, 0.00012))   # (0.0005 until 7 November 2026: the scan's grain is the plastic's now, fetch.py)
 
 
 def metal():
@@ -940,9 +940,10 @@ def holo_grid():
     line = np.clip(1.5 - edge / 2.0, 0, 1)
     rim = np.clip((edge - 3.0) / 3.0, 0, 1) * np.clip((16.0 - edge) / 3.0, 0, 1)
     base = (0.34 + 0.03 * unit(noise(n, 1.5, 81))) * (1 - 0.35 * rim)
-    rgb = base[..., None] * np.array([0.88, 0.94, 1.05]) * (1 - line[..., None]) + line[..., None] * np.array([0.95, 0.72, 0.12])
+    # the lines blue (7 November 2026, the developer's: they were amber, 1.0 0.72 0.10), and the glow half (ShaderEmuModels.cs)
+    rgb = base[..., None] * np.array([0.88, 0.94, 1.05]) * (1 - line[..., None]) + line[..., None] * np.array([0.25, 0.58, 1.0])
     save("HoloGrid", rgb, 0.55 - 0.25 * line)
-    save("HoloGrid_e", line[..., None] * np.array([1.0, 0.72, 0.10]))
+    save("HoloGrid_e", line[..., None] * np.array([0.22, 0.55, 1.0]))
 
 
 def holo_panel():

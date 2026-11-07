@@ -254,6 +254,8 @@ def leaning_box(b, x, y, wall, turn, lean, game):
 
 
 # a place: the boxes and magazines lying on its tower, the lowest first, and their turns (the hubs' towers, 1 and 9, have none)
+# the places with a rubber duck on the monitor (7 November 2026, the developer's): how far right of the set's middle, its turn
+DUCKS = {2: (0.17, 195), 7: (-0.19, 160), 9: (0.04, 210)}
 ON_TOWERS = {0: (["doom2"], (3,)), 2: (["computer_gaming_world_issue_132", "computer_gaming_world_issue_101"], (-4, 6)),
              4: (["msdos6", "windows31"], (2, -5)), 6: (["bytevolume22number01"], (-7,)), 7: (["warcraft2"], (5,)),
              10: (["pc_computing_magazine_v7i9", "simcity2000"], (4, -3)), 11: (["computer_gaming_world_issue_180"], (8,))}
@@ -520,6 +522,10 @@ def classroom(b):
                 # (a hub stands on some towers, and its leads hang down their right sides)
                 pc.station(b, "rest", lie, desk=desk, seed=index, stuck=random.Random(300 + index).randint(2, 4),
                            bare=("tower top", "tower right") if index in HUB_HOSTS.values() else (), supply=index in HUB_SUPPLY.values())
+                if index in DUCKS:   # a rubber duck on the monitor's top, over its bezel (Poly Haven's; one to pick up)
+                    across, facing = DUCKS[index]
+                    b.asset("rubber_duck_toy", (pc.SET_X + across, pc.LOW + pc.OUT_H + 0.004, pc.GLASS[3] + 0.056), rot=(0, facing, 0),
+                            size=(None, 0.085, None), loose=True)
                 if index in ON_TOWERS:   # what was left on the tower's top (not where a hub stands)
                     b.obj("Classroom things")
                     things, turns = ON_TOWERS[index]
@@ -724,7 +730,7 @@ def scattered(b):
     pile(b, ["computer_gaming_world_issue_101", "bytevolume22number01", "pc_computing_magazine_v7i9"], (-1.95, 0.006, -4.35), [12, 75, 140], drift=0.05)
     lying(b, "doom2", (-1.75, 0.006, -3.35), 205)
     toys.yoyo(b, (0.95, 0.006, -3.15), turn=40)
-    toys.cassette(b, (-1.45, 0.006, -3.15), turn=-20, label="GamepadRed")
+    b.asset("portable_cassette_player", (-1.45, 0.012, -3.15), rot=(-90, -20, 0), parts=TAPE, loose=True)   # a tape: the player's own (7 November 2026: one modelled by hand)
     # by the boxes in the corner: a ball, and a game leaning on the lower box
     b.asset("football", (-2.72, 0, -5.05), rot=(0, 75, 0), size=(0.22, None, None), parts=("football_inflated",), loose=True)
     b.obj("Floor things")

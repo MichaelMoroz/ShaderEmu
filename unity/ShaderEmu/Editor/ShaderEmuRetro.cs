@@ -37,7 +37,9 @@ public static partial class ShaderEmuBuilder
                                             || n.EndsWith(" steady") || n.EndsWith(" panel"));
     }
 
-    // A key on the case is a key: a cap of the case's plastic standing `depth` out of the panel, its edges bevelled, its
+    internal const float CapDepth = 2f;   // how far a cap stands out, in mm (4 until 7 November 2026: too thick)
+
+    // A key on the case is a key: a cap of the case's plastic standing `depth` out of the panel, a plain block, its
     // legend on its face (before, a picture of a cap on the plate: from a seat nothing told it from print). The button
     // itself, unseen but for the beam's tint, lies on the cap's face, so a press is still the canvas's.
     static GameObject KeyCap(RectTransform button, float depth, Vector2 size = default, string plastic = "PlasticBeige", float back = 0f)
@@ -67,16 +69,17 @@ public static partial class ShaderEmuBuilder
         return cap;
     }
 
-    // A cap of w x h canvas units (millimetres on the panels), `depth` towards the viewer (-z), its top bevelled in by a
-    // fifth of its smaller side at most 2: one mesh a size, kept with the generated assets.
+    // A cap of w x h canvas units (millimetres on the panels), `depth` towards the viewer (-z): a plain block, its sides
+    // straight (a key comes out of a hole in the case: bevelled at its foot, and at a few mm deep at all, it was not one;
+    // 7 November 2026). One mesh a size, kept with the generated assets.
     static Mesh CapMesh(float w, float h, float depth)
     {
         string folder = Generated + "/Keycaps";
         if (!AssetDatabase.IsValidFolder(folder)) AssetDatabase.CreateFolder(Generated, "Keycaps");
-        string path = folder + "/cap " + Mathf.RoundToInt(w * 10) + "x" + Mathf.RoundToInt(h * 10) + "x" + Mathf.RoundToInt(depth * 10) + ".asset";
+        string path = folder + "/block " + Mathf.RoundToInt(w * 10) + "x" + Mathf.RoundToInt(h * 10) + "x" + Mathf.RoundToInt(depth * 10) + ".asset";
         Mesh mesh = AssetDatabase.LoadAssetAtPath<Mesh>(path);
         if (mesh != null) return mesh;
-        float b = Mathf.Min(2f, Mathf.Min(w, h) * 0.2f), x0 = -w / 2, x1 = w / 2, y0 = -h / 2, y1 = h / 2;
+        float b = 0f, x0 = -w / 2, x1 = w / 2, y0 = -h / 2, y1 = h / 2;
         Vector3[] back = { new Vector3(x0, y0, 0), new Vector3(x1, y0, 0), new Vector3(x1, y1, 0), new Vector3(x0, y1, 0) };
         // the sides stand straight for most of the depth, then the bevel leans in to the top
         float side = -depth * 0.55f;
@@ -583,7 +586,10 @@ public static partial class ShaderEmuBuilder
         List<Graphic> print = new List<Graphic>();     // lettering: the plate's own
         Transform backTransform = canvas.transform.Find("Back");
         bool onCase = OnCase(canvas);
-        if (backTransform != null) { Image back = backTransform.GetComponent<Image>(); Picture(back, raised, Faceplate); still.Add(back); }
+        // a panel of keys alone on the case (FREE and EXIT, the two switches) has no plate of its own round them: its raised
+        // frame showed behind the caps as an outline of the flat keys of before (7 November 2026); its plate is a hole there
+        bool keysAlone = onCase && canvas.GetComponentInChildren<Slider>(true) == null;
+        if (backTransform != null) { Image back = backTransform.GetComponent<Image>(); Picture(back, keysAlone ? null : raised, keysAlone ? Color.clear : Faceplate); still.Add(back); }
         HashSet<Object> done = new HashSet<Object>();
         foreach (Button button in canvas.GetComponentsInChildren<Button>(true))
         {
@@ -593,7 +599,7 @@ public static partial class ShaderEmuBuilder
             bool row = image != null && canvas.name == "Players panel" && painted.Contains(image);
             if (onCase && image != null && !painted.Contains(image) && !apart.Contains(button.gameObject))
             {
-                KeyCap(button.GetComponent<RectTransform>(), 4f, default, "PlasticBeige", ShaderEmuBuilder.PanelOff * 1000f);
+                KeyCap(button.GetComponent<RectTransform>(), CapDepth, default, "PlasticBeige", ShaderEmuBuilder.PanelOff * 1000f);
                 // (unseen on the cap's face but for a beam's tint: clear, Over and Held below, as a plate's keys are; kept
                 // off the plate's picture with what changes)
                 Picture(image, null, Color.white);

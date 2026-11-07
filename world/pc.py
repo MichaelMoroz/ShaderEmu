@@ -162,31 +162,92 @@ def at_z(outline, z):
     return [(x, y, z) for x, y in outline]
 
 
-def round_button(b, x, y, z, radius, mat, proud=0.003):
-    """A round button in a ring, on a face that looks towards -z."""
+def conformal_uv(vertices, quads):
+    """A surface of quads with no hole in it laid flat in one piece by its angles (least squares conformal maps,
+    Levy et al. 2002): each triangle kept as like itself as can be, two points pinned, then scaled so that a metre of
+    the picture is a metre of the surface where half of it is. Gives (u, v) a vertex, in metres; vertices of no quad 0."""
+    import numpy as np
+    tris = [t for q in quads for t in ((q[0], q[1], q[2]), (q[0], q[2], q[3]))]
+    used = sorted({v for t in tris for v in t})
+    index = {v: i for i, v in enumerate(used)}
+    m, P = len(used), np.array(vertices, dtype=np.float64)
+    rows = []
+    for i, j, k in tris:
+        e, f = P[j] - P[i], P[k] - P[i]
+        length, normal = np.linalg.norm(e), np.cross(e, f)
+        twice = np.linalg.norm(normal)
+        if length < 1e-12 or twice < 1e-14:
+            continue
+        ex = e / length
+        ey = np.cross(normal / twice, ex)
+        q = ((0.0, 0.0), (length, 0.0), (float(f @ ex), float(f @ ey)))
+        rows.append(([index[i], index[j], index[k]],
+                     [complex(q[(c + 2) % 3][0] - q[(c + 1) % 3][0], q[(c + 2) % 3][1] - q[(c + 1) % 3][1]) / math.sqrt(twice) for c in range(3)]))
+    M = np.zeros((2 * len(rows), 2 * m))
+    for r, (cols, weights) in enumerate(rows):
+        for c, w in zip(cols, weights):   # (w)(u + i v), its real and imaginary parts
+            M[2 * r, c] += w.real
+            M[2 * r, m + c] -= w.imag
+            M[2 * r + 1, c] += w.imag
+            M[2 * r + 1, m + c] += w.real
+    far = max(((a, b) for a in used[::7] for b in used[::7]), key=lambda ab: np.linalg.norm(P[ab[0]] - P[ab[1]]))
+    pinned = {index[far[0]]: (0.0, 0.0), index[far[1]]: (0.0, float(np.linalg.norm(P[far[0]] - P[far[1]])))}
+    free = [c for c in range(m) if c not in pinned]
+    rhs = np.zeros(2 * len(rows))
+    for c, (u, v) in pinned.items():
+        rhs -= M[:, c] * u + M[:, m + c] * v
+    solved = np.linalg.lstsq(M[:, free + [m + c for c in free]], rhs, rcond=None)[0]
+    uv = np.zeros((len(vertices), 2))
+    for c, (u, v) in pinned.items():
+        uv[used[c]] = (u, v)
+    for x, c in enumerate(free):
+        uv[used[c]] = (solved[x], solved[len(free) + x])
+    # to metres: the median of the surface's area over the picture's, weighed by area
+    ratios = []
+    for i, j, k in tris:
+        a = np.linalg.norm(np.cross(P[j] - P[i], P[k] - P[i]))
+        t = abs((uv[j][0] - uv[i][0]) * (uv[k][1] - uv[i][1]) - (uv[k][0] - uv[i][0]) * (uv[j][1] - uv[i][1]))
+        if a > 0 and t > 0:
+            ratios.append((a / t, a))
+    ratios.sort()
+    half, run, scale = sum(a for _, a in ratios) / 2, 0.0, 1.0
+    for r, a in ratios:
+        run += a
+        if run >= half:
+            scale = math.sqrt(r)
+            break
+    return [tuple(float(c) * scale for c in p) for p in uv]
+
+
+def round_button(b, x, y, z, radius, mat, proud=0.003, flat=False):
+    """A round button in a ring, on a face that looks towards -z; `flat`: a plain disc, its face flat."""
     b.lathe((x, y, z), [(radius * 1.35, 0), (radius * 1.35, 0.0012), (radius * 1.12, 0.0018), (radius * 1.08, 0.0002)], "PlasticCase", segs=20, rot=(-90, 0, 0))
-    b.lathe((x, y, z), [(radius, 0), (radius, proud * 0.7), (radius * 0.8, proud), (0, proud * 1.05)], mat, segs=20, rot=(-90, 0, 0))
+    profile = [(radius, 0), (radius, proud), (0, proud)] if flat else [(radius, 0), (radius, proud * 0.7), (radius * 0.8, proud), (0, proud * 1.05)]
+    b.lathe((x, y, z), profile, mat, segs=20, rot=(-90, 0, 0))
 
 
 def monitor_keys(b, front):
     """The monitor's keys a visitor presses: its power knob and the six under the glass. They are the
     station's own parts ("rest", with their own plastics), not the bake's: baked into the shell's
-    pictures they were print, grey patches and a ring on a flat chin (6 November 2026). 7 and 8 mm
-    proud with crisp edges, their backs on the bezel's face."""
-    round_button(b, 0.18, CHIN, front, 0.011, "PlasticBeige", proud=0.008)
+    pictures they were print, grey patches and a ring on a flat chin (6 November 2026). Plain blocks
+    4 mm proud, the knob a flat disc 5 mm, their backs on the bezel's face: a key comes out of a hole
+    in the case, so nothing bevels its foot, and at this size its face needs none (7 November 2026:
+    7.6 and 8 mm, bevelled both ends). Unity's hot keys lie just before their faces (ShaderEmuStations.cs)."""
+    round_button(b, 0.18, CHIN, front, 0.011, "PlasticBeige", proud=0.005, flat=True)
     for i in range(6):
-        b.box((OSD_X + i * OSD_PITCH, CHIN, front - 0.0038), (0.017, 0.009, 0.0076), "PlasticGrey", bevel=0.0008, segs=2)
+        b.box((OSD_X + i * OSD_PITCH, CHIN, front - 0.002), (0.017, 0.009, 0.004), "PlasticGrey")
 
 
 def tower_keys(b, h):
     """The tower's keys a visitor presses, reset and power: the station's own parts, as the monitor's
     (monitor_keys). Their backs on the front's face: the panel and the power key's well under them
-    are the bake's, flat. Reset 7 mm proud, power 11.5 (6 mm, half of it a rounded bevel, read as print)."""
+    are the bake's, flat. Plain blocks, reset 4 mm proud and power 6 with its bar on its face
+    (7 November 2026: 7 and 11.5 mm, bevelled)."""
     cy = h - SPEED_DOWN
-    b.box((RESET_X, cy + 0.004, FRONT - 0.0035), (0.013, 0.008, 0.007), "PlasticBeige", bevel=0.001, segs=2)
+    b.box((RESET_X, cy + 0.004, FRONT - 0.002), (0.013, 0.008, 0.004), "PlasticBeige")
     px, py = POWER_KEY[0], h - POWER_KEY[1]
-    b.box((px, py, FRONT - 0.00575), (0.034, 0.024, 0.0115), "PlasticBeige", bevel=0.0012, segs=2)
-    b.box((px, py, FRONT - 0.0117), (0.016, 0.0016, 0.0006), "PlasticGrey")
+    b.box((px, py, FRONT - 0.003), (0.034, 0.024, 0.006), "PlasticBeige")
+    b.box((px, py, FRONT - 0.0063), (0.016, 0.0016, 0.0006), "PlasticGrey")
 
 
 def monitor(b):
@@ -838,8 +899,33 @@ def mouse_body(b):
         return (place.z, round_it if near > top else -round_it)
     with b.at((0.0, 0, 0.0), (0, MOUSE_TURN, 0)):
         steps = (0.0, 0.012, 0.035, 0.07, 0.12, 0.19, 0.27, 0.36, 0.45, 0.54, 0.63, 0.72, 0.80, 0.87, 0.93, 0.965, 0.988, 1.0)
-        with b.chart("mouse", unrolled):
-            loft(b, [section(t) for t in steps], "PlasticBeige", first=True, last=True, tile=0.2)
+        # its picture: the shell one piece, laid flat by angles (conformal_uv), and the flat underside a second
+        # (7 November 2026: laid in regions by loft, it was some twenty patches of the plastic's grain; laid round
+        # and along its rings, it was stretched 70 times where it narrows to its ends)
+        rings = [section(t) for t in steps]
+        n = len(rings[0])
+        vertices = [p for ring in rings for p in ring]
+        shell = [(i * n + k, i * n + k + 1, (i + 1) * n + k + 1, (i + 1) * n + k) for i in range(len(rings) - 1) for k in range(n - 1)]
+        under = [(i * n + n - 1, i * n, (i + 1) * n, (i + 1) * n + n - 1) for i in range(len(rings) - 1)]
+        ends = [tuple(range(n)), tuple(len(vertices) - n + k for k in range(n))]
+        laid = conformal_uv(vertices, shell)
+        tile = 0.2
+        uvs = [[(laid[q][0] / tile, laid[q][1] / tile) for q in f] for f in shell]
+        # (its two tips, slivers a millimetre wide cut into fans, each a speck of its own laid flat: in the shell's
+        # layout they were squeezed nine times, and the lightmap's unwrap cut the whole shell up for them)
+        uvs += [[(vertices[q][0] / tile, vertices[q][1] / tile) for q in f] for f in ends]
+        uvs += [[(vertices[q][0] / tile, vertices[q][2] / tile) for q in f] for f in under]
+        # and its lightmap the same: the shell one chart as laid, the underside a small one of its own (no light
+        # reaches it). Unrolled round its rings, the shell was 8 charts, each lit apart: patches on a smooth body.
+        at_point = {tuple(round(c, 7) for c in p): laid[q] for q, p in enumerate(vertices)}
+        def lightmapped(place, normal):
+            if normal.y < -0.7 and place.y < 0.0047:
+                return ("under", place.x * 0.05, place.z * 0.05)
+            return at_point.get(tuple(round(c, 7) for c in place)) or min(
+                ((laid[q], (vertices[q][0] - place.x) ** 2 + (vertices[q][1] - place.y) ** 2 + (vertices[q][2] - place.z) ** 2) for q in range(len(vertices))),
+                key=lambda pair: pair[1])[0]
+        with b.chart("mouse", lightmapped):
+            b.mesh(vertices, shell + ends + under, uvs, "PlasticBeige")
         # the seams are ribbons a hair over the skin: across behind the buttons, and between them
         near, far = section(0.535, 0.0004), section(0.548, 0.0004)
         n = len(near)
@@ -1172,7 +1258,7 @@ def schuko_plug(b):
 HUB_SOCKET = 4      # the strip's socket a hub's supply is plugged into, at a place that has one
 
 
-def station(b, which="all", lie=None, desk=None, seed=0, stuck=0, bare=(), supply=False, lan=None, mains=None):
+def station(b, which="all", lie=None, desk=None, seed=0, stuck=0, bare=(), supply=False, lan=None, mains=None, joystick=None):
     """A whole place on the table at the frame's origin: the monitor and keyboard, the tower
     beside them, the mouse before the tower, and their leads. which: "shell" is the monitor and
     the tower alone, "rest" all but them (with the tube's glass, which no mode but "full" gives).
@@ -1185,7 +1271,9 @@ def station(b, which="all", lie=None, desk=None, seed=0, stuck=0, bare=(), suppl
     -z): a lead from the card falls into it with the others, and the wall is what they fall on too.
     mains: where a wall socket would be for a place x in this frame, mains(x) giving its middle and
     turn (its room towards its -z): the strip's own lead goes into a plug in it, MAINS_AT[0] says
-    where (the caller puts the socket there); without it the lead goes into a socket in the floor."""
+    where (the caller puts the socket there); without it the lead goes into a socket in the floor.
+    joystick: (x, z, turn) of a joystick on the table (toys.joystick), its lead into the sound card's
+    15 pins, falling with the others."""
     lie = lie or {"keyboard": (0, 0, 0), "mouse": (0, 0, 0), "mat": (0, 0, 0)}
     kx, kz, kturn = lie["keyboard"]
     mx, mz, mturn = lie["mouse"]
@@ -1219,6 +1307,10 @@ def station(b, which="all", lie=None, desk=None, seed=0, stuck=0, bare=(), suppl
         stickers(b, random.Random(7000 + seed), stuck, bare)
     with b.at(mouse_at, (0, mturn, 0)):
         mouse_body(b)
+    if joystick is not None:
+        import toys
+        with b.at((joystick[0], 0, joystick[1]), (0, joystick[2], 0)):
+            toys.joystick(b)
     behind = TOWER_Z + FRONT + TOWER_DEEP   # the tower's back
     floor = -TABLE_HIGH
     desk = desk or [((0, -0.022, 0), (2.4, 0.044, 0.9), 0)]
@@ -1307,6 +1399,18 @@ def station(b, which="all", lie=None, desk=None, seed=0, stuck=0, bare=(), suppl
     lead(b, "mouse", [tuple(m0), tuple(m1), (side, 0.0065, TOWER_Z + FRONT - 0.03), (side, r + 0.0005, TOWER_Z + FRONT + 0.06), (side, r + 0.0005, lane_mouse),
                       (cx, r + 0.0005, lane_mouse), (cx, cy, lane_mouse), (cx, cy, behind + PLUG_LONG - 0.01)], r, "PlasticCase", segs=6, rng=rng, up=0.025)
     dsub_plug(b, cx, cy, behind, 0.031, sleeve=0.004)
+    if joystick is not None:
+        # the joystick's: from its foot's back before the monitor's foot, as the keyboard's, round the tower's left
+        # side behind the keyboard's and up into the sound card's 15 pins (DA-15, 39 mm over its flange)
+        import toys
+        gx, gy = TOWER_X - 0.03, at["first"] - 3 * SLOT_PITCH
+        stick = lib.place((joystick[0], 0, joystick[1]), (0, joystick[2], 0))
+        j0, j1 = stick @ Vector(toys.JOYSTICK_LEAD), stick @ Vector((0, 0.004, toys.JOYSTICK_LEAD[2] + 0.03))
+        r, side = 0.0025, TOWER_X - 0.124 - 0.014
+        lane = min(lane_keys + 0.014, most)
+        lead(b, "joystick", [tuple(j0), tuple(j1), (j1.x, r + 0.0005, before - 0.014), (side, r + 0.0005, before - 0.014), (side, r + 0.0005, lane),
+                             (gx, r + 0.0005, lane), (gx, gy, lane), (gx, gy, behind + PLUG_LONG - 0.01)], r, "PlasticDark", segs=6, rng=rng, up=0.025)
+        dsub_plug(b, gx, gy, behind, 0.039, sleeve=0.004)
     # the sound: from the card's line out (the jack by its joystick socket) to the monitor's two phono
     # sockets, parting behind the monitor in a moulded Y that hangs from a white tail and a red one
     face, sy = back + 0.0004, plug_y - BOARD_DOWN + ROW_LOW
@@ -1348,7 +1452,7 @@ def station(b, which="all", lie=None, desk=None, seed=0, stuck=0, bare=(), suppl
                           ((SET_X, LOW + OUT_H / 2, (GLASS[3] - 0.02 + back) / 2), (OUT_W, OUT_H, back - GLASS[3] + 0.02), 0),
                           ((SET_X + kx, 0.025, KEYBOARD_Z + kz), (0.58, 0.05, 2 * (KEYS_HIGH / 2 + 0.015 + TRAY_BACK) - 0.006), kturn),
                           ((mat_at[0], 0.0015, mat_at[2]), (0.21, 0.003, 0.25), pturn),
-                          strip_box(lies)] + ([adapter_box(lies, HUB_SOCKET)] if supply else []) +         ([((0, 0, lan[2] + 0.05), (4, 4, 0.1), 0)] if lan is not None else [])   # (the wall)
+                          strip_box(lies)] + ([((joystick[0], 0.02, joystick[1]), (0.15, 0.04, 0.13), joystick[2])] if joystick is not None else []) + ([adapter_box(lies, HUB_SOCKET)] if supply else []) +         ([((0, 0, lan[2] + 0.05), (4, 4, 0.1), 0)] if lan is not None else [])   # (the wall)
     cylinders = [((SET_X, 0.017, 0.1), 0.208, 0.034), ((SET_X, 0.05, 0.1), 0.08, 0.04)]
     fallen = drape.settle([(name, path, radius) for name, path, radius, _, _ in LEADS], boxes, cylinders)
     for one, path in zip(LEADS, fallen):

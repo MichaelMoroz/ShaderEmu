@@ -80,6 +80,18 @@ goes through `EmuMachine.Small`. To check: in play mode queue zaps over them (`z
 nine numbers each: 2, a column under 64, row 512, reach 8, 0, 0xffff, 0xffff, a seed,
 0x3c; then `zapTail`), and the machine must go on counting with texel 64 of `row` scrambled.
 
+## The VRAM
+
+Since the GPU draws its textures from a texture of the host's, the VRAM (`docs/machine/gpu.md`, "VRAM"), and not
+from RAM, a flip in a 3D program's RAM no longer showed in a texture; geometry, which the front end still reads
+from RAM, did. With the "3D program" key lit, radiation lands in the VRAM too, as if it were 16 more
+megabytes (`VramShare` in `EmuDanger.cs`): a hit is a run of one to four texels at a random place of its level
+0 with every bit of one channel flipped (red, green or blue; alpha one time in seven, which opens holes in a keyed
+texture). `EmuMachine.ZapVram` draws it at once with `VramZap.shader`: the blend `OneMinusDstColor
+OneMinusSrcColor` with a source of 1 is 1 - dst, every bit of an 8-bit channel, and of 0 the texel as it was. The
+VRAM's levels are made again at most twice a second while it is hit. A texture uploaded again is whole again,
+and the laser does not reach the VRAM (the memory screen shows RAM).
+
 ## Limits
 
 - A zap of a texel a core stores to in the same pass is lost.

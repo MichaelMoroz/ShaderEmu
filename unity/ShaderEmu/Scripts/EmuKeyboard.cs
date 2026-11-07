@@ -420,7 +420,9 @@ public class EmuKeyboard : UdonSharpBehaviour
             hostDown[i] = false;
         }
         VRCPlayerApi player = Networking.LocalPlayer;
-        if (player != null) player.Immobilize(on);   // or typing WASD walks away
+        // or a desktop's typing of WASD walks away; a player in a headset is never held (7 November 2026: held at a
+        // keyboard, they could not walk and did not know why), and their typing is beams on keys, not WASD
+        if (player != null && !player.IsUserInVR()) player.Immobilize(on);
         string words = on ? "Typing here (Insert: stop)" : "Use my keyboard";
         if (captureLabel != null) captureLabel.text = words;
         if (captureSign != null) captureSign.text = words;

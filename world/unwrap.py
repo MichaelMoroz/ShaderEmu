@@ -108,19 +108,23 @@ def _bad(bm, uv2):
     """The faces of pieces that the unwrap folded (faces turned over) or stretched."""
     bad = []
     for group in _islands(bm):
-        shares = [(f, _uv_area(f, uv2), f.calc_area()) for f in group]
-        live = [(a, s) for _, a, s in shares if s > 1e-12]
-        back = sum(1 for a, _ in live if a < 0)
-        turned = min(back, len(live) - back)   # (a piece mirrored whole is no harm: one with both windings is folded)
-        sign = -1.0 if back * 2 > len(live) else 1.0
-        ratios = sorted(sign * a / s for a, s in live if sign * a > 0)
-        if not ratios:
-            bad.extend(group)
-            continue
-        middle = ratios[len(ratios) // 2]
-        if turned or ratios[0] < middle / FOLD or ratios[-1] > middle * FOLD:
+        if _bad_group(group, uv2):
             bad.extend(group)
     return bad
+
+
+def _bad_group(group, uv2):
+    """Whether one piece is folded (faces turned over) or stretched in uv2."""
+    shares = [(f, _uv_area(f, uv2), f.calc_area()) for f in group]
+    live = [(a, s) for _, a, s in shares if s > 1e-12]
+    back = sum(1 for a, _ in live if a < 0)
+    turned = min(back, len(live) - back)   # (a piece mirrored whole is no harm: one with both windings is folded)
+    sign = -1.0 if back * 2 > len(live) else 1.0
+    ratios = sorted(sign * a / s for a, s in live if sign * a > 0)
+    if not ratios:
+        return True
+    middle = ratios[len(ratios) // 2]
+    return bool(turned or ratios[0] < middle / FOLD or ratios[-1] > middle * FOLD)
 
 
 def unwrap(objects):
@@ -158,7 +162,7 @@ def unwrap(objects):
 
 def _key(me):
     """What a mesh's layout depends on: its points, its faces' corners and its picture's coordinates."""
-    h = hashlib.sha1(b"unwrap 3 %r %r %r %r %r %r" % (SHARP, FOLD, MARGIN_TEXELS, BAKE_TEXELS, lightmap_scale(me.name), bpy.app.version))
+    h = hashlib.sha1(b"unwrap 5 %r %r %r %r %r %r" % (SHARP, FOLD, MARGIN_TEXELS, BAKE_TEXELS, lightmap_scale(me.name), bpy.app.version))
     co = np.empty(len(me.vertices) * 3, dtype=np.float32)
     me.vertices.foreach_get("co", co)
     corners = np.empty(len(me.loops), dtype=np.int32)
@@ -216,6 +220,13 @@ def _unwrap(meshes, counts):
         bm.faces.ensure_lookup_table()
         bad = {f.index for f in _bad(bm, bm.loops.layers.uv["UV2"])}
         bm.free()
+        # (the faces alone, by faces: the first edit's select_all left every vertex selected in the mesh, and in
+        # vertex mode those made every face selected again, so Smart UV Project laid out the whole mesh anew in
+        # pieces, not its bad faces: until 7 November 2026 the mouse's smooth shell was 13 charts by that alone)
+        for v in ob.data.vertices:
+            v.select = False
+        for e in ob.data.edges:
+            e.select = False
         for p in ob.data.polygons:
             p.select = p.index in bad
         counts[0] += len(ob.data.polygons)
@@ -227,6 +238,7 @@ def _unwrap(meshes, counts):
         for ob in again:
             ob.select_set(True)
         bpy.context.view_layer.objects.active = again[0]
+        bpy.context.tool_settings.mesh_select_mode = (False, False, True)
         bpy.ops.object.mode_set(mode='EDIT')
         bpy.ops.uv.smart_project(angle_limit=math.radians(66), island_margin=0.0, area_weight=0.0, correct_aspect=True, scale_to_bounds=False)
         bpy.ops.object.mode_set(mode='OBJECT')

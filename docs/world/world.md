@@ -32,8 +32,8 @@ in Blender by scripts in `world/`; furniture, plants and the main surfaces come 
 - `textures.py` computes the rest (plastic, metal, rugs, book spines, the atlas of small printed
   things, the city's windows and streets, the sky, clouds, rain) and `world/atlas.json`.
 - **Plastic close to** (`plastic_detail` in `fetch.py`, `PlasticDetail` in `ShaderEmuModels.cs`):
-  ambientCG's scan "Plastic 004" (CC0; fetched into `build/ambientcg`), a pebbled case grain with
-  worn streaks, laid over every plastic's own maps as Mochie's detail maps: its normal map, and
+  ambientCG's scan "Plastic 013 A" (CC0; fetched into `build/ambientcg`), an even fine moulded grain
+  with no wear ("Plastic 004" until 7 November 2026: its worn streaks read as dirt), laid over every plastic's own maps as Mochie's detail maps: its normal map, and
   its roughness and colour as overlays about 0.5, which changes nothing. It is laid by where a
   place is in the room (triplanar, 20 cm a repeat), not by a model's own picture: through the
   baked shells' picture the grain would be a different size on every face and break at each seam.
@@ -340,8 +340,22 @@ lightmap, which shows a line wherever two pieces of a wall meet and at every cor
   an area light with `DisplayPicture` on it. LTCGI's Udon adapter gives each renderer its
   screens at start, so this only shows in play mode. To check it, fill `DisplayPicture` white,
   then black, and compare a view of the desk: white is the brighter.
-- A light volume the size of the room is baked with the lightmaps, for avatars and whatever
-  else moves and has a shader that reads one.
+- One light volume over all the rooms (the classroom, the corridors, the side rooms and the
+  holodecks; not the city) is baked with the lightmaps, for avatars and whatever else moves and has
+  a shader that reads one. Each room's box is made as before and `OneLightVolume`
+  (`ShaderEmuHolodeck.cs`, near the end of `Build()`) makes their union one volume: until 7 November
+  2026 there was one a room, and what stood where two met was lit wrong.
+
+## Things to pick up
+
+Some of what lies about can be picked up, thrown and put down, and everybody sees it where it was left
+(`ShaderEmuGrabBuild.cs`, run by "Build world" after the models are in place): the rubber ducks, the
+footballs, the baseball and its bat, the wooden elephants, the two kinds of camera, the portable cassette
+players and their tapes. Each is a Poly Haven model, a renderer of its own (a model the world's scripts make
+is joined into its part's mesh and cannot be one). The build step gives each VRChat's own components, no
+script of ours: a `Rigidbody` of the real thing's mass, a convex `MeshCollider`, `VRCPickup` and
+`VRCObjectSync`; it takes it off the static flags, so it is lit by the light volume and the probes and not
+baked into the lightmaps, and puts it on the Pickup layer. One that falls out of the world goes back where it lay.
 
 ## The storm
 

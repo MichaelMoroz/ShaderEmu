@@ -131,7 +131,7 @@ public static partial class ShaderEmuBuilder
     {
         string name = "Station " + s + " tower hot";
         Gone(place, name);
-        HotKeys(place, name, new Vector3(plan.tower[0] + 0.012f, plan.tower[3] - plan.speed[1], plan.tower[1] + plan.tower[2] - 0.008f), 34, 30, own,
+        HotKeys(place, name, new Vector3(plan.tower[0] + 0.012f, plan.tower[3] - plan.speed[1], plan.tower[1] + plan.tower[2] - 0.005f), 34, 30, own,
                 new float[] { 18, 2, 15, 26 }, new[] { "ResetKey" });
     }
 
@@ -561,7 +561,7 @@ public static partial class ShaderEmuBuilder
             // the tower's own keys (reset; power under it), larger to a beam than their caps
             float panelY = towerHigh - plan.speed[1], powerY = towerHigh - plan.power[1];
             TowerHotKeys(place, s, own, plan);
-            HotKeys(place, "Station " + s + " power hot", new Vector3(towerX + plan.power[0], powerY, towerFront - 0.0125f), 64, 48, own,
+            HotKeys(place, "Station " + s + " power hot", new Vector3(towerX + plan.power[0], powerY, towerFront - 0.007f), 64, 48, own,
                     new float[] { 1, 1, 62, 46 }, new[] { "Power" });
             // what that key is, in lit letters over it, and a bar under it that beckons while the place is free
             TextMeshPro sign = new GameObject("Power sign").AddComponent<TextMeshPro>();
@@ -582,7 +582,7 @@ public static partial class ShaderEmuBuilder
             float pitch = plan.osd[1] * 1000f;
             float[] six = new float[24];
             for (int i = 0; i < 6; i++) { six[i * 4] = i * pitch + 1; six[i * 4 + 1] = 1; six[i * 4 + 2] = pitch - 2; six[i * 4 + 3] = 28; }
-            HotKeys(place, "Station " + s + " monitor hot", new Vector3(plan.setX + plan.osd[0] + 2.5f * plan.osd[1], plan.osd[2], glassZ - 0.0085f), 6 * pitch, 30, own,
+            HotKeys(place, "Station " + s + " monitor hot", new Vector3(plan.setX + plan.osd[0] + 2.5f * plan.osd[1], plan.osd[2], glassZ - 0.0055f), 6 * pitch, 30, own,
                     six, new[] { "NextTerminal", "LastTerminal", "ShowConsole", "ShowDisplay", "CloseLinks", "OpenLinks" });
             // a lamp over the last of them, lit while the browser wants addresses pasted
             GameObject links = GameObject.CreatePrimitive(PrimitiveType.Quad);

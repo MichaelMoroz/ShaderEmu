@@ -302,8 +302,9 @@
   before a screen both hands' beams are on the display, so whatever the world gives a beam on the display (a wheel, a
   key, an `Immobilize`) is had wherever the player stands there. The left stick as a second wheel while its beam was on
   the display (`c89ebec4`) held every VR player before a screen in place, and play mode on a desktop never showed it. A new
-  use of a hand's stick, or a new `Immobilize`, takes nothing from walking but while the player asks for it (a button
-  held, a key captured), and is tried in a headset before it is called done. Seated, the station holds the player: the
+  use of a hand's stick takes nothing from walking, and a player in a headset is never held by `Immobilize` (7 November
+  2026, the developer's rule: "Use my keyboard" held them, and they could not walk): only a desktop player is, while a
+  keyboard captures their keys; a change there is tried in a headset before it is called done. Seated, the station holds the player: the
   pointer's `Still` never calls `Immobilize` while `away`, as an `Immobilize(false)` there let the left stick move the avatar.
 - What is meant to be seen from a seat is seen whole (6 November 2026, the developer's rule; `docs/world/holodeck.md`, "What the
   sitter must see"): from the eye point every panel, key, screen and keyboard meant for the sitter has a free line of sight, no
@@ -313,6 +314,10 @@
   goes into `Build()` in the order its references need, never into an "Add ... to the open scene" menu of its own, and a
   change to a part is a rebuild and a bake. Forty-six such menus had grown, and five parts made only by them were lost
   by a rebuild (`/persistence` among them).
+- A file of code that builds part of the world, run in the editor and never in it (Unity's `Editor/` code a menu or
+  "Build world" runs, a script of `world/` that makes models), has "Build" in its name (7 November 2026, the developer's
+  rule: `ShaderEmuGrabBuild.cs`, not `ShaderEmuGrab.cs`, which read as a script of the world's own). What runs in the
+  world is named for what it does (`EmuPointer.cs`). The files from before the rule keep their names until renamed.
 - The world's camera (the scene descriptor's reference camera, `ShaderEmuModels.cs`) has a near clip of 0.01 m, always
   (6 November 2026, the developer's rule): the least VRChat takes, so a hand, a keyboard or a HUD near the eye is never cut.
   A builder or a change that makes or touches that camera keeps it.

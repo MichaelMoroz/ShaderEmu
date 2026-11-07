@@ -133,9 +133,11 @@ to 32K, and how much of a tick core 0 reaches, then two keys, Pause (Resume whil
 Both panels are one grid: 9 mm in at the sides, a scale's first and last numbers at the track's ends
 (`Scale`, `SliderStep`: the handle's middle runs from half a handle in at either end), the keys as wide
 as the track. Every panel on a case lies 1 mm off its face (`PanelOff`) and its keys' caps run back to
-the face (`ShaderEmuRetro.KeyCap`'s `back`): at 3 mm they stood in the air. The model's own keys (the
-tower's power key, 10.5 mm proud; the monitor's six keys, 7 mm, and its power knob, 8 mm) are the
-model's, with crisp edges: shallower and mostly bevel they read as print from a seat. It shows its owner's machine's step to everybody: the step travels in their `EmuShare` as
+the face (`ShaderEmuRetro.KeyCap`'s `back`): at 3 mm they stood in the air. A cap is a plain block
+2 mm proud (`CapDepth`), and a panel of keys alone (FREE and EXIT, the two switches) has no plate round
+them: its raised frame showed behind the caps as the outline of the flat keys of before. The model's own
+keys (the tower's power key, 6 mm proud, and reset, 4; the monitor's six keys, 4 mm, and its power knob, a
+flat disc of 5) are plain blocks with no bevel (7 November 2026): a key comes out of a hole in the case. It shows its owner's machine's step to everybody: the step travels in their `EmuShare` as
 `speed`, which `EmuStations.Assign` keeps equal to their slider. Only the owner can move it: on
 anybody else's client it is not interactable, and a move that gets through is put back
 (`EmuStations.SpeedMoved`). A free place's shows step 4. Step 0 set on the

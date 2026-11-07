@@ -328,9 +328,9 @@ public static partial class ShaderEmuBuilder
 
         // the holodeck's grid: its lines are lamps; and what marks where a program's world shows
         made["HoloGrid"] = Surfaced("HoloGrid", Color.white, WorldTexture("HoloGrid"), null, WorldTexture("HoloGrid_p", false, false), 0f, 0.5f, false,
-                               false, false, WorldTexture("HoloGrid_e"), 2.5f);
+                               false, false, WorldTexture("HoloGrid_e"), 1.25f);   // (2.5 until 7 November 2026: half the glow)
         made["HoloMask"] = Mat("VolumeMask", "ShaderEmu/VolumeMask");
-        made["HoloLine"] = Emitter("HoloLine", new Color(1f, 0.72f, 0.10f), 2.5f, true);   // the holodecks' grid: lit bars, which light the panels in the bake
+        made["HoloLine"] = Emitter("HoloLine", new Color(0.22f, 0.55f, 1f), 1.25f, true);   // (amber at 2.5 until 7 November 2026)   // the holodecks' grid: lit bars, which light the panels in the bake
         Material tube = Mat("TubeGlass", "ShaderEmu/CRT");   // a station's glass until Stations() gives each its own
         tube.SetVector("_Size", Vector4.zero);
         made["TubeGlass"] = tube;

@@ -1,5 +1,5 @@
 # Small things of the decade that lie about, modelled here: a cube puzzle, dice, a yo-yo, floppy
-# disks, a joystick, a cassette, a mug, a can, a pencil. No plain boxes: every body is a loft of
+# disks, a joystick, a mug, a can, a pencil. No plain boxes: every body is a loft of
 # its own outline with its edges rounded over (soft()), or turned on a lathe. Each stands on the
 # frame's origin, its front towards -z.
 import functools
@@ -204,12 +204,16 @@ def floppies(b, at, turn, count, rng, labels=("Paper", "LabelYellow", "Paper", "
 
 
 # ---- a joystick
-@loose
-def joystick(b, at, turn=0.0):
-    """An analogue joystick of the decade: a domed base on a wide foot with two trim wheels and a
-    button, a rubber boot, a moulded grip leaning a little with a trigger and a thumb button, its
-    lead leaving the back."""
-    with b.at(at, (0, turn, 0)):
+JOYSTICK_LEAD = (0, 0.011, 0.066)   # where its lead leaves the foot's back, in its own frame (a sleeve round it)
+
+
+def joystick(b):
+    """An analogue joystick of the decade at the frame's origin: a domed base on a wide foot with two trim
+    wheels and a button, a rubber boot, a moulded grip leaning a little with a trigger and a thumb button, a
+    sleeve at the back for its lead. It is plugged into a computer, so it is a station's (pc.station's
+    `joystick`), whose leads fall together: its lead is one of them (7 November 2026; before, a stub of
+    tube made with it, which lay in the air and ended on the desk)."""
+    if True:
         soft(b, rounded(0.15, 0.13, 0.03, n=6), 0.016, 0.006, "PlasticDark", under=0.002)
         soft(b, rounded(0.12, 0.10, 0.03, n=6), 0.03, 0.012, "PlasticDark", at=(0, 0.0, 0.006))
         for x in (-0.062, 0.062):   # the trim wheels, in the foot's front corners
@@ -223,36 +227,10 @@ def joystick(b, at, turn=0.0):
                                     (0, 0.1015)], "PlasticDark", segs=20)
             b.lathe((0, 0.105, -0.015), [(0, 0), (0.007, 0), (0.0068, 0.003), (0.004, 0.006), (0, 0.0062)], "GamepadRed", segs=10, rot=(-90, 0, 0))
             b.lathe((0, 0.13, -0.0005), [(0, 0.004), (0.006, 0.0035), (0.0068, 0.0015), (0.007, 0)], "GamepadRed", segs=14, cap=False, rot=(-20, 0, 0))
-        b.tube([(0, 0.012, 0.07), (0, 0.006, 0.09), (0.03, 0.003, 0.14), (0.02, 0.003, 0.2), (-0.03, 0.003, 0.26)], 0.0025, "Rubber", segs=6, smooth=4)
+        b.cyl((JOYSTICK_LEAD[0], JOYSTICK_LEAD[1], JOYSTICK_LEAD[2] - 0.002), 0.0045, 0.012, "PlasticDark", segs=10, rot=(90, 0, 0))   # the sleeve
 
 
-# ---- a compact cassette
-def cassette_outline():
-    """A cassette's plan: 100.4 x 63.8 mm (Philips' compact cassette, IEC 60094-7; its figures are not
-    public, these are the ones every account of it quotes, its hubs 42.5 mm apart), rounded corners,
-    the head area's corners cut towards the near side (their 12 and 8 mm, a guess from photographs)."""
-    w, d, r = 0.1004, 0.0638, 0.003
-    pts = []
-    for cx, cy, a0 in ((w / 2 - r, d / 2 - r, 0), (-w / 2 + r, d / 2 - r, 90)):
-        pts += [(cx + r * math.cos(math.radians(a0 + 30 * k)), cy + r * math.sin(math.radians(a0 + 30 * k))) for k in range(4)]
-    pts += [(-w / 2, -d / 2 + 0.008), (-w / 2 + 0.012, -d / 2), (w / 2 - 0.012, -d / 2), (w / 2, -d / 2 + 0.008)]
-    return pts
-
-
-@loose
-def cassette(b, at, turn=0.0, label="Paper"):
-    """A compact cassette lying face up: its two shells, the label, the window over the reels and
-    their hubs, five screws."""
-    with b.at(at, (0, turn, 0)):
-        soft(b, cassette_outline(), 0.0062, 0.0008, "PlasticGrey", steps=2)   # (12 mm in all: two shells of 6)
-        soft(b, cassette_outline(), 0.0062, 0.0008, "PlasticDark", at=(0, 0.006, 0), steps=2, under=0.0002)
-        # (the label half a millimetre over the shell, the window as much over the label: 0.2 mm flickered)
-        soft(b, rounded(0.088, 0.04, 0.003), 0.0006, 0.00015, label, at=(0, 0.0121, -0.006), steps=1)
-        soft(b, rounded(0.05, 0.013, 0.0055), 0.0006, 0.0001, "Glass", at=(0, 0.0126, -0.006), steps=1)
-        for x in (-0.02125, 0.02125):   # the hubs, 42.5 mm apart
-            b.lathe((x, 0.0132, -0.006), [(0.0052, 0), (0.004, 0.0002), (0.0022, 0.0003), (0, 0.0003)], "Ceramic", segs=12, cap=False)
-        for x, z in ((-0.044, -0.026), (0.044, -0.026), (-0.044, 0.026), (0.044, 0.026), (0, 0.025)):
-            b.lathe((x, 0.0121, z), [(0.0016, 0), (0.0012, 0.0003), (0, 0.00035)], "MetalSteel", segs=8, cap=False)
+# (the compact cassettes lying about are the portable cassette player's own tape, Poly Haven's: furniture.TAPE)
 
 
 # ---- things turned on a lathe

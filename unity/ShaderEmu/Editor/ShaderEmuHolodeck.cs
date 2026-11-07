@@ -932,6 +932,35 @@ public static partial class ShaderEmuBuilder
         volume.Recalculate();
     }
 
+    // One light volume over all the rooms (7 November 2026, the developer's): where two volumes met, the classroom's and
+    // the corridor's, the holodecks' and the side rooms', a thing between them was lit from neither, or from both at
+    // once. The rooms' own boxes are made as before (the classroom's in ShaderEmuWeather.cs, the rest above) and then
+    // put together here, their union one box; the city outside has none.
+    static void OneLightVolume(Transform world)
+    {
+        Bounds all = new Bounds();
+        bool any = false;
+        foreach (VRCLightVolumes.LightVolume volume in world.GetComponentsInChildren<VRCLightVolumes.LightVolume>(true))
+        {
+            Transform t = volume.transform;
+            Bounds box = new Bounds(t.position, Vector3.Scale(t.lossyScale, Vector3.one));
+            if (any) all.Encapsulate(box); else all = box;
+            any = true;
+            Object.DestroyImmediate(volume.gameObject);
+        }
+        if (!any) { Debug.LogError("[ShaderEmu] no room's light volume to make one of"); return; }
+        GameObject holder = new GameObject("Light volume");
+        holder.transform.SetParent(world, false);
+        holder.transform.position = all.center;
+        holder.transform.localScale = all.size;
+        VRCLightVolumes.LightVolume one = holder.AddComponent<VRCLightVolumes.LightVolume>();
+        one.Bake = true;
+        one.AdaptiveResolution = false;
+        one.VoxelsPerUnit = 2f;   // as each room's was
+        one.Recalculate();
+        Debug.Log("[ShaderEmu] one light volume, " + all.size.x.ToString("F1") + " x " + all.size.y.ToString("F1") + " x " + all.size.z.ToString("F1") + " m");
+    }
+
     static void ProbeIn(Transform decor, string name, Vector3 centre, Vector3 size)
     {
         ReflectionProbe probe = new GameObject(name).AddComponent<ReflectionProbe>();

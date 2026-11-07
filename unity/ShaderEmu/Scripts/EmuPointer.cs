@@ -782,6 +782,8 @@ public class EmuPointer : UdonSharpBehaviour
         // (a sitter's seat holds them, a station of Immobilize: an Immobilize(false) of ours there let the left stick move
         // the avatar as well as the game; standing up, the keyboard's SetCapture(false) frees them)
         if (away) { stilled = false; return; }
+        // a player in a headset is never held, by a keyboard or a scrolling stick (7 November 2026, the developer's rule)
+        if (player.IsUserInVR()) { if (stilled) player.Immobilize(false); stilled = false; typedBefore = false; return; }
         // (a keyboard typing for them holds them still too, and each lets go only what it alone holds: a right stick's scroll
         // let them walk away from a keyboard, and a keyboard that stopped typing let them walk while the stick scrolled)
         bool typing = false;

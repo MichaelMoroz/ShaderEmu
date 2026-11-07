@@ -459,12 +459,12 @@ def clutter(b, room, desk_x, desk_z, sofa_z, side, rng):
     lx = desk_x + 0.68
     toys.mug(b, (lx, top, desk_z - 0.05), "Ceramic" if number != 14 else "RedPaint", turn=rng.uniform(0, 360))
     if number == 13:
-        toys.joystick(b, (lx - 0.02, top, desk_z + 0.25), turn=180 + rng.uniform(-20, 20))
+        # (its joystick is the computer's: computer() gives it to pc.station, its lead into the sound card)
         toys.floppies(b, (desk_x - 0.68, top, desk_z - 0.33), 180 + rng.uniform(-10, 10), 4, rng)
         toys.pencil(b, (desk_x + 0.38, top, desk_z - 0.4), turn=rng.uniform(0, 180))
     elif number == 14:
         toys.puzzle_cube(b, (lx - 0.02, top, desk_z + 0.25), turn=rng.uniform(0, 90), twist=22)
-        toys.cassette(b, (desk_x - 0.66, top, desk_z - 0.36), turn=180 + rng.uniform(-25, 25), label="GamepadYellow")
+        b.asset("portable_cassette_player", (desk_x - 0.66, top + 0.006, desk_z - 0.36), rot=(-90, 180 + rng.uniform(-25, 25), 0), parts=TAPE, loose=True)   # the player's tape
         toys.soda_can(b, (lx + 0.06, top, desk_z + 0.1), "coke")
     else:
         toys.floppies(b, (lx - 0.02, top, desk_z + 0.25), 180 + rng.uniform(-10, 10), 6, rng)
@@ -545,7 +545,9 @@ def computer(b, number, at_xz, parts, rng):
         w = world @ Vector((x, socket[1], wall_z))
         return tuple(here @ Vector((w.x, w.y, Z0))), (0, 180 - turn, 0)
     with b.at(at, (0, turn, 0)):
-        pc.station(b, "rest", lie, desk=desk_boxes, seed=index, stuck=random.Random(300 + index).randint(2, 4), lan=socket, mains=mains)
+        # N13's joystick on the desk at the monitor's far side from the tower, as its clutter had it (desk +0.66, +0.25 in the room)
+        stick = (-0.56, -0.25, rng.uniform(-20, 20)) if number == 13 else None
+        pc.station(b, "rest", lie, desk=desk_boxes, seed=index, stuck=random.Random(300 + index).randint(2, 4), lan=socket, mains=mains, joystick=stick)
         # the network's socket in the wall: a white plate, its socket looking into the room
         b.obj("Room things")
         sx, sy, sz = socket

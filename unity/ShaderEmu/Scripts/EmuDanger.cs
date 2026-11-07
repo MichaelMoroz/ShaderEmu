@@ -35,6 +35,7 @@ public class EmuDanger : UdonSharpBehaviour
     private readonly int[] zoneTo = { 41, 288, 16, 23, 27, 30 };
     private readonly string[] zoneNames = { "Kernel", "Linux", "Windows", "Display, GPU", "3D program", "Sound" };
     private const int HighTo = 288, Strips = 3;
+    private const int VramShare = 16;      // the VRAM's weight against RAM's megabytes (its 64 MB are mostly empty shelves)
 
     void Start()
     {
@@ -124,12 +125,27 @@ public class EmuDanger : UdonSharpBehaviour
         int most = 0;
         for (int z = 0; z < 6; z++)
             if ((zones & (1 << z)) != 0) most += zoneTo[z] - zoneFrom[z];
+        // a 3D program's memory is its textures in the VRAM too (they are drawn from there, not from RAM): with its key
+        // lit, a particle lands there as if the VRAM were VramShare megabytes more
+        int ram = most;
+        if ((zones & (1 << 4)) != 0) most += VramShare;
         // A round of the machine takes one flip, so a frame has room for a few: what is owed beyond
         // that goes as more bits of the same word, up to all 32 of it.
         int wanted = Mathf.FloorToInt(owed), each = Mathf.Clamp((wanted + 7) / 8, 1, 32);
         for (int n = 0; n < 16 && owed >= 1f; n++)
         {
             int megabyte = Random.Range(0, most), bit = Random.Range(0, 32);
+            if (megabyte >= ram)
+            {
+                // a run of texels, a channel's eight bits each (alpha less often: a keyed texture's holes)
+                int bitsHere = Mathf.Clamp(Mathf.Min(each, Mathf.FloorToInt(owed)), 1, 32), run = Mathf.Max(1, bitsHere / 8);
+                int channel = Random.Range(0, 7) < 6 ? 1 << Random.Range(0, 3) : 8;
+                if (!machine.ZapVram(Random.Range(0, 4096), Random.Range(0, 4096), run, channel, Random.Range(0, 0xffffff))) break;
+                owed -= run * 8;
+                flips += run * 8;
+                told = false;
+                continue;
+            }
             for (int z = 0; z < 6; z++)
             {
                 if ((zones & (1 << z)) == 0) continue;

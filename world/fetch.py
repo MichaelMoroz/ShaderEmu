@@ -153,11 +153,12 @@ def model(asset, lines):
         print("model %-26s material %-34s cutout %d metallic %.2f smoothness %.2f" % (asset, name, cutout, metallic, smooth))
 
 
-# Moulded plastic seen close to: ambientCG's scan "Plastic 004" (ambientcg.com, CC0), a pebbled case
-# grain with worn streaks. It is laid over every plastic's own maps as detail maps
+# Moulded plastic seen close to: ambientCG's scan "Plastic 013 A" (ambientcg.com/a/Plastic013A, CC0), an even,
+# fine moulded grain of white plastic with no wear (7 November 2026, the developer's: "Plastic 004" before, a
+# pebbled grain with worn streaks, which read as dirt on every case and key). It is laid over every plastic's own maps as detail maps
 # (ShaderEmuModels.cs: PlasticDetail), so its colour and roughness are written as overlays about
 # 0.5, which changes nothing: the plastic's own colour and sheen stay what they are.
-PLASTIC_SCAN = "Plastic004"
+PLASTIC_SCAN = "Plastic013A"
 
 
 def plastic_detail():

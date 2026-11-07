@@ -695,6 +695,28 @@ public class EmuMachine : UdonSharpBehaviour
         return true;
     }
 
+    // Radiation in the VRAM (VramZap.shader, docs/world/danger.md "The VRAM"): every bit of the channels given
+    // (bit 0 red, 1 green, 2 blue, 3 alpha) flipped in a run of `wide` texels at (x, y) of its level 0, at once (no
+    // commit: the VRAM is the host's texture). The levels are made again at most twice a second, or a texture
+    // drawn small would not show it. A program's next upload of that texture writes it whole again.
+    public Material vramZapMaterial;
+    private float vramLevelsAt;
+    public bool ZapVram(int x, int y, int wide, int channels, int seed)
+    {
+        if (!powered || vram == null || vramZapMaterial == null) return false;
+        vramZapMaterial.SetVector("_ZapRect", new Vector4(x / 4096f, y / 4096f, Mathf.Min(x + wide, 4096) / 4096f, (y + 1) / 4096f));
+        vramZapMaterial.SetVector("_ZapChannels", new Vector4(channels & 1, (channels >> 1) & 1, (channels >> 2) & 1, (channels >> 3) & 1));
+        vramZapMaterial.SetFloat("_ZapSeed", seed);
+        vramZapMaterial.SetFloat("_ZapDensity", 1f);
+        VRCGraphics.Blit(blackTexture, vram, vramZapMaterial, 0);
+        if (Time.time >= vramLevelsAt)
+        {
+            vramLevelsAt = Time.time + 0.5f;
+            vram.GenerateMips();
+        }
+        return true;
+    }
+
     // The next one waiting goes to the commit about to be drawn; true if there was one.
     private bool ZapNext()
     {

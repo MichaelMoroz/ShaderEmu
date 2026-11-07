@@ -8,7 +8,6 @@ SPECS = {
     # toys.py
     "toys.floppy": (True, "ECMA-147 (1990), 6.1 and figs. 7 to 10: case, holes, recesses, hub, shutter's travel"),
     "toys.soda_can": (True, "can.py: Crown's and American Canning's 211 x 413 body and 202 end"),
-    "toys.cassette": (False, "outline quoted second-hand (IEC 60094-7 not read), the label, window, hubs and screws guessed"),
     "toys.puzzle_cube": (False, "57 mm only; the pieces, tiles and colours not from a source"),
     "toys.die": (False, "16 mm and its pips guessed"),
     "toys.yoyo": (False, "profile guessed"),
