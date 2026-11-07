@@ -49,9 +49,17 @@ in the fetch's memory, `host_ask(ADDRESS, BYTES, SECONDS)`, `host_answered()`.
 - The Clipboard key is on the console keyboard's strip, the display keyboard's strip, and a classroom place's
   strip ("Station fields", for its owner: `EmuStations.Clipboard`). Close puts the field away.
 
-Not tried: any of it in Unity or VRChat. The Udon scripts and the builder compile with Roslyn against the
-project's assemblies (UdonSharp's own rules not checked); nothing has been built, baked or played with them, and
-whether VRChat's keyboard in a headset pastes into a legacy `InputField` is not known.
+**Checked in the editor's play mode** (7 November 2026, a world built by "Build world" with the fxc2 editor, its
+machine booting an image with `nxexport`): `EmuClip.clipTest`, set on the scene's Clip, logs each step. The
+desktop came up (800 x 600); `nxexport --clipboard` showed `data:text/plain;name=hostname;base64,cnZjCg==` in the
+field (status 200, the title line above it), and the bar had handed the same text over as the clipboard, which the
+Clipboard key showed; `nxexport --import /root/imp` brought the field up empty, a paste given to it with To the
+machine became `/root/imp/hello.txt` ("hello from the field"), and the field went away; the clipboard's To the
+machine put "from-the-world-field" on the machine's clipboard (`clip:paste`, the bar, `nxexport --paste`).
+
+Not tried: VRChat itself, a headset (whether VRChat's keyboard there pastes into a legacy `InputField`), the field
+before a classroom place's tube (the test had no place of its own), a text of several pages, and the restyled
+plate after "Bake lighting".
 
 ## In the harnesses
 

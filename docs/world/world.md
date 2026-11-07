@@ -44,7 +44,10 @@ the world's files; the Unity side and the machine's image are steps of their own
    editor (`tools/fxc2/scripts/unity-overlay.ps1 -Editor ... -Dest DIR`), then put `tools/fxc2/bin/unity`'s
    two files (the stub `D3DCompiler_47.dll` and `fxc2_d3dcompiler.dll`) into `DIR\Data\Tools` over what the
    script put there: with the bare compiler in the stub's place, `UnityShaderCompiler.exe` dies at its start
-   ("Protocol error - failed to read magic number") and the editor crashes.
+   ("Protocol error - failed to read magic number") and the editor crashes. A project that Unity's own
+   compiler has opened keeps its failures in `Library\ShaderCache` and `ShaderCache.db`: move both aside
+   before the first run with fxc2 (`tools/fxc2/README.md`), or the machine's shaders still fail (X4580) and the
+   machine never starts.
 4. **Copy `unity/ShaderEmu` over the project's `Assets/ShaderEmu`** (`robocopy SRC DST /E`: its exit 3 is
    "copied, and old files left"). Keep a copy of what was there.
 5. **In the editor, in this order** (each a menu of "ShaderEmu", and each a public method for
