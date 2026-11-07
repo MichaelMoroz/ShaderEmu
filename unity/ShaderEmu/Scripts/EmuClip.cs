@@ -142,10 +142,34 @@ public class EmuClip : UdonSharpBehaviour
         else if (testStep == 8 && Time.time >= testAt)
         {
             TestConsole("clipboard", 3);
-            Debug.Log("[ClipTest] done");
-            testStep = 9;
+            // a classroom place: the first free one taken (its tower's POWER), then its strip's Clipboard key
+            if (stations != null)
+            {
+                Debug.Log("[ClipTest] the classroom: " + (stations.linkSpots != null ? stations.linkSpots.Length : 0) + " places' spots");
+                stations.Take0();
+                testStep = 9;
+                testAt = Time.time + 15f;   // (a place is this visitor's once the places are assigned again)
+            }
+            else testStep = 10;
         }
-        if (testStep < 9) SendCustomEventDelayedSeconds("TestStep", 1f);
+        else if (testStep == 9 && Time.time >= testAt)
+        {
+            int own = stations.Own();
+            EmuShare mine = stations.hub != null ? stations.hub.Mine() : null;
+            Debug.Log("[ClipTest] the place taken: Own() " + own + ", this player's share " + (mine != null ? "station " + mine.station : "none"));
+            stations.Clipboard();
+            Transform spot = own >= 0 && own < stations.linkSpots.Length ? stations.linkSpots[own] : null;
+            Debug.Log("[ClipTest] the classroom place " + own + "'s Clipboard key: " + Shown() + "; the field " +
+                      (spot != null ? (Vector3.Distance(panel.transform.position, spot.position) * 1000f).ToString("0") + " mm from the place's spot" : "with no place's spot"));
+            Close();
+            testStep = 10;
+        }
+        else if (testStep == 10)
+        {
+            Debug.Log("[ClipTest] done");
+            testStep = 11;
+        }
+        if (testStep < 11) SendCustomEventDelayedSeconds("TestStep", 1f);
     }
 
     // The guest left `bytes` in the fetch's memory: read from the state ("show" also shows them).

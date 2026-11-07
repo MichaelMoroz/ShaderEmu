@@ -55,11 +55,13 @@ desktop came up (800 x 600); `nxexport --clipboard` showed `data:text/plain;name
 field (status 200, the title line above it), and the bar had handed the same text over as the clipboard, which the
 Clipboard key showed; `nxexport --import /root/imp` brought the field up empty, a paste given to it with To the
 machine became `/root/imp/hello.txt` ("hello from the field"), and the field went away; the clipboard's To the
-machine put "from-the-world-field" on the machine's clipboard (`clip:paste`, the bar, `nxexport --paste`).
+machine put "from-the-world-field" on the machine's clipboard (`clip:paste`, the bar, `nxexport --paste`). Then a
+classroom place was taken (`Take0`, as its keys take it; place 0 of 15), and its strip's Clipboard key
+(`EmuStations.Clipboard`) showed the same clipboard in the field, which stood 0 mm from that place's spot before
+its tube.
 
-Not tried: VRChat itself, a headset (whether VRChat's keyboard there pastes into a legacy `InputField`), the field
-before a classroom place's tube (the test had no place of its own), a text of several pages, and the restyled
-plate after "Bake lighting".
+Not tried: VRChat itself, a headset (whether VRChat's keyboard there pastes into a legacy `InputField`), a text
+of several pages, and the restyled plate after "Bake lighting".
 
 ## In the harnesses
 
