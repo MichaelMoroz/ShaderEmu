@@ -247,6 +247,7 @@ public class EmuClip : UdonSharpBehaviour
         {
             p.SetPositionAndRotation(stations.linkSpots[own].position, stations.linkSpots[own].rotation);
             p.localScale = homeSize * PlaceShrink;
+            atPlace = true;
             CubeSize(PlaceCubeShare / PlaceShrink);
         }
         else
@@ -254,12 +255,25 @@ public class EmuClip : UdonSharpBehaviour
             p.SetPositionAndRotation(homeAt, homeTurn);
             p.localScale = homeSize;
             CubeSize(1);
+            atPlace = false;
         }
     }
+
+    private Text fieldText;                      // the field's text: its size is the photo's steps' larger one in mode 3
+    public const int TextSize = 16, PhotoTextSize = 34, PhotoTextSizePlace = 46;   // (a place's panel is 0.32 of the wall's)
+    private bool atPlace;
 
     private void Show(int how)
     {
         if (panel == null) return;
+        // the panel's own keys, by their names (a visitor saw them on the photo's panel, where they are to be hidden)
+        Transform keys = panel.transform;
+        Transform k = keys.Find("Give");
+        if (k != null) giveButton = k.gameObject;
+        k = keys.Find("Last page");
+        if (k != null) backButton = k.gameObject;
+        k = keys.Find("Next page");
+        if (k != null) onButton = k.gameObject;
         mode = how;
         pages = text.Length == 0 ? 1 : (text.Length + Page - 1) / Page;
         page = 0;
@@ -271,13 +285,15 @@ public class EmuClip : UdonSharpBehaviour
     private void ShowPage()
     {
         int from = page * Page;
+        if (fieldText == null) fieldText = field.textComponent;
+        if (fieldText != null) fieldText.fontSize = mode == 3 ? (atPlace ? PhotoTextSizePlace : PhotoTextSize) : TextSize;
         field.text = from < text.Length ? text.Substring(from, Mathf.Min(Page, text.Length - from)) : "";
         if (titleLabel != null)
             titleLabel.text = mode == 3 ? title :
                               mode == 1 ? "Paste the text for the machine here (Ctrl+V), then press To the machine." :
                               mode == 2 ? "The machine's clipboard. Copy it (Ctrl+A, Ctrl+C), or write here and press To the machine." :
                               title + ". Copy it: click the field, Ctrl+A, Ctrl+C" + (pages > 1 ? ", page by page." : ".");
-        if (pageLabel != null) pageLabel.text = pages > 1 ? "Page " + (page + 1) + " of " + pages + "  (" + text.Length + " characters)" :
+        if (pageLabel != null) pageLabel.text = mode == 3 ? "" : pages > 1 ? "Page " + (page + 1) + " of " + pages + "  (" + text.Length + " characters)" :
                                                 text.Length + " characters";
         if (giveButton != null) giveButton.SetActive(mode == 1 || mode == 2);
         if (backButton != null) backButton.SetActive(pages > 1);
@@ -320,13 +336,10 @@ public class EmuClip : UdonSharpBehaviour
         photoMaterial.SetVector("_Lengths", new Vector4(entries / 65536, entries % 65536, tail / 65536, tail % 65536));
         photo.enabled = true;
         title = "A photo of " + name + " (" + (entries + tail) + " bytes)";
-        text = "1. Open VRChat's camera and hold it inside the glowing cube in front of this panel: its picture becomes the file " +
-               "(coloured noise). Take the picture. Any of the camera's sizes; a smaller one than the file needs shows red.\n\n" +
-               "2. On your PC the picture is in Pictures\\VRChat as a PNG. Use that file itself, not a copy shared or uploaded " +
-               "(those may be recompressed).\n\n" +
-               "3. Open it in Paint, then File, Save as, BMP picture (a 24-bit bitmap). Never JPEG: it changes the bytes.\n\n" +
-               "4. Rename the .bmp to .zip (Windows must show file name extensions: File Explorer, View, Show, File name extensions) " +
-               "and open it: it is the zip of " + name + ". A damaged picture fails the zip's check instead of giving wrong files.";
+        text = "1. Hold VRChat's camera inside the glowing cube in front of this panel and take a picture.\n\n" +
+               "2. On your PC open it in Paint (Pictures\\VRChat, the PNG itself, no copy that was shared).\n\n" +
+               "3. File, Save as, BMP picture. Never JPEG.\n\n" +
+               "4. Rename the .bmp to .zip and open it: " + name + ".";
         Show(3);
         return true;
     }

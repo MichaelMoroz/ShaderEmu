@@ -252,13 +252,21 @@ public static partial class ShaderEmuBuilder
 
     // What a behaviour writes or paints while the world runs: every label and image its fields name.
     // The proxies are read as they are: copying Udon into them wiped the light volumes' instances.
+    // Keys a behaviour shows and hides while the world runs (a GameObject field of one, with a Button: EmuClip's Give and its
+    // pages): never drawn on a plate, whose picture stays when the key goes (the photo's panel showed To the machine, and
+    // the pages, painted, with the keys themselves hidden: 8 November 2026). The canvas draws them, as a key asleep.
+    static readonly HashSet<GameObject> Toggled = new HashSet<GameObject>();
+
     static void Changing(Transform world, HashSet<Object> labels, HashSet<Object> plates)
     {
+        Toggled.Clear();
         foreach (UdonSharpBehaviour behaviour in world.GetComponentsInChildren<UdonSharpBehaviour>(true))
         {
             foreach (FieldInfo field in behaviour.GetType().GetFields(BindingFlags.Public | BindingFlags.Instance))
             {
                 object value = field.GetValue(behaviour);
+                if (value is GameObject && ((GameObject)value).GetComponent<Button>() != null) Toggled.Add((GameObject)value);
+                if (value is GameObject[]) foreach (GameObject one in (GameObject[])value) if (one != null && one.GetComponent<Button>() != null) Toggled.Add(one);
                 if (value is TextMeshProUGUI || value is Text) labels.Add((Object)value);
                 else if (value is TextMeshProUGUI[]) foreach (TextMeshProUGUI label in (TextMeshProUGUI[])value) { if (label != null) labels.Add(label); }
                 else if (value is Image && field.Name != "keyPlate") plates.Add((Object)value);
@@ -581,6 +589,9 @@ public static partial class ShaderEmuBuilder
             asleep.Add(child.gameObject);
             child.gameObject.SetActive(true);
         }
+        List<GameObject> shownApart = new List<GameObject>();   // keys a behaviour hides later: out of the picture while it is taken
+        foreach (Button key in canvas.GetComponentsInChildren<Button>(true))
+            if (Toggled.Contains(key.gameObject) && key.gameObject.activeSelf && apart.Add(key.gameObject)) shownApart.Add(key.gameObject);
         List<Graphic> still = new List<Graphic>();     // drawn on the plate, then not by the canvas
         List<Graphic> live = new List<Graphic>();      // not on the plate: the canvas draws them
         List<Graphic> print = new List<Graphic>();     // lettering: the plate's own
@@ -679,7 +690,9 @@ public static partial class ShaderEmuBuilder
         }
 
         foreach (Graphic graphic in live) graphic.enabled = false;
+        foreach (GameObject key in shownApart) key.SetActive(false);
         Plate(canvas, canvas.name, WillShow(canvas), print);
+        foreach (GameObject key in shownApart) key.SetActive(true);
         foreach (Graphic graphic in live) graphic.enabled = true;
         foreach (Graphic graphic in still)
         {

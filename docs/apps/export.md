@@ -28,7 +28,10 @@ The developer's idea: VRChat's camera, put into a cube before the screen, gets a
   sees it, `PhotoCube.shader`). Open VRChat's camera, hold it inside the cube and take a picture: it shows coloured
   noise, which is the file. On the PC the picture is in `Pictures\VRChat` as a PNG: open it in Paint, Save as, BMP
   picture (a 24-bit bitmap), rename the `.bmp` to `.zip` and open it. The panel says this (`EmuClip.ShowPhoto`), and the
-  window too. A link to the PNG opened in the machine gives the zip back (below, "Import").
+  window too. A link to the PNG opened in the machine gives the zip back (below, "Import"). The panel's steps are larger
+  than its usual text (`EmuClip.PhotoTextSize`, 34, and 46 at a classroom place, where the panel is 0.32 of the wall's), and
+  its keys (To the machine, the pages) are hidden: they are found by their names on the panel, and the panel's baked
+  picture leaves them out (`Toggled` in `ShaderEmuRetro.cs`), or a hidden key stayed painted on the plate.
 - **Only the camera's picture.** `Photo.shader` draws one triangle over the whole picture only while
   `_VRChatCameraMode` (VRChat's global: 0 the player's own view on a desktop or in a headset, 1 and 2 the handheld
   camera in VR and on a desktop, 3 a screenshot) is not 0, `_VRChatMirrorMode` is 0, and the camera's place is inside
@@ -87,9 +90,10 @@ the same at most (512 bytes a header, files rounded to 512, long names' extra en
 zlib's `deflateBound` formula for any level and liblzma's `lzma_stream_buffer_bound`; as it is, the file. `--text`
 prints the bound beside the text made, and `export-text` fails on `BOUND BROKEN`.
 
-**Bars.** Packing shows `ui_progress.h`'s window after 0.7 s: deflate and LZMA fed 64 KB at a time against the files'
-bytes, busybox's tar against its archive's bound as it grows; closing it stops the packing. An import's unpacking has it
-too. A zip is of the selection's names from their common folder, folders' entries and modes kept; symbolic links are
+**Bars.** Packing draws its bar inside the window, over the status line ("Packing etc.zip: 0.4 of 4.0 MB (Esc stops)",
+`bar` in `nxexport.c`; a window of its own before 8 November 2026): deflate and LZMA fed 64 KB at a time against the
+files' bytes, busybox's tar against its archive's bound as it grows; Escape or closing the window stops the packing. The
+Import window draws its unpacking's bar under its status line. A zip is of the selection's names from their common folder, folders' entries and modes kept; symbolic links are
 left out. tar.gz and tar.xz are busybox's `tar` of the same, packed in the program (zlib, liblzma).
 
 QR codes were a target until 7 November 2026 (Project Nayuki's generator): a code holds 1,370 characters at most, and

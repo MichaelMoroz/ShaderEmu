@@ -41,7 +41,6 @@
 #include "ui.h"
 #include "ui_ask.h"
 #include "host_ask.h"
-#include "ui_progress.h"
 
 #define WIDTH 560
 #define HEIGHT 520
@@ -84,17 +83,78 @@ static struct {
 	int done;
 } have;
 static unsigned long long packed_so_far;	/* the files' bytes packed: the bar */
-static int stopped;	/* the bar's window closed: the packing ends */
+static int stopped;	/* Escape or the window closed while packing: the packing ends */
 
-/* The bar, in the window's programs only (a test's command line shows none): `done` of `total`, and a line. */
+/* The bar inside the window, where its status line is (bar_x, bar_y, bar_w: draw and the import's window set them): what is
+ * being done (bar_doing) and how far, drawn when it moves; the window's events looked at meanwhile (Escape stops, an
+ * exposure draws the window again by bar_redraw). */
+static int bar_x = 20, bar_y, bar_w = 480;
+static char bar_doing[160];
+static unsigned bar_drawn = ~0u, bar_at;
+static void (*bar_redraw)(void);
+
+static unsigned
+ms_now(void)
+{
+	struct timespec now;
+
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	return (unsigned)now.tv_sec * 1000u + (unsigned)(now.tv_nsec / 1000000);
+}
+
+/* "1.2 of 12.0 MB" */
+static const char *
+megabytes(unsigned long long done, unsigned long long total)
+{
+	static char line[48];
+
+	snprintf(line, sizeof line, "%llu.%llu of %llu.%llu MB", done >> 20, (done & 0xfffff) * 10 >> 20, total >> 20, (total & 0xfffff) * 10 >> 20);
+	return line;
+}
+
+static void
+bar_begin(const char *doing)
+{
+	snprintf(bar_doing, sizeof bar_doing, "%s", doing);
+	bar_drawn = ~0u, bar_at = 0, stopped = 0;
+}
+
+/* The bar, in the window's programs only (a test's command line shows none): `done` of `total` (0: no share known), and a line. */
 static void
 bar(unsigned long long done, unsigned long long total, const char *line)
 {
-	if (!windowed)
+	GR_EVENT event;
+	unsigned share = total ? (unsigned)(done * 1000 / total) : 0, now;
+	char text[260];
+
+	if (!windowed || !window)
 		return;
-	progress_show(done, total, line ? line : progress_megabytes(done, total));
-	if (progress_closed)
-		stopped = 1;
+	for (;;) {
+		GrCheckNextEvent(&event);
+		if (event.type == GR_EVENT_TYPE_NONE)
+			break;
+		if (event.type == GR_EVENT_TYPE_EXPOSURE) {
+			if (bar_redraw)
+				bar_redraw();
+			bar_drawn = ~0u;
+		}
+		if (event.type == GR_EVENT_TYPE_CLOSE_REQ || (event.type == GR_EVENT_TYPE_KEY_DOWN && event.keystroke.ch == MWKEY_ESCAPE))
+			stopped = 1;
+	}
+	now = ms_now();
+	if (share == bar_drawn && now - bar_at < 500)
+		return;
+	if (bar_drawn != ~0u && now - bar_at < 100)
+		return;
+	snprintf(text, sizeof text, "%s: %s%s", bar_doing, line ? line : megabytes(done, total), stopped ? "" : "  (Esc stops)");
+	ui_fill(window, bar_x, bar_y, bar_w, 30, UI_FACE);
+	ui_text_fit(window, bar_x, bar_y, bar_w, text, BLACK);
+	ui_bevel(window, bar_x, bar_y + 18, bar_w, 12, 1);
+	ui_fill(window, bar_x + 1, bar_y + 19, bar_w - 2, 10, WHITE);
+	if (share)
+		ui_fill(window, bar_x + 1, bar_y + 19, (int)((bar_w - 2) * (unsigned long long)share / 1000), 10, UI_SELECTED);
+	GrFlush();
+	bar_drawn = share, bar_at = now;
 }
 
 static void
@@ -649,7 +709,7 @@ pack(void)
 		char title[200];
 
 		snprintf(title, sizeof title, "Packing %s", packed_name);
-		progress_begin(title);
+		bar_begin(title);
 	}
 	if (packing == ZIP)
 		ok = pack_zip(&out);
@@ -661,8 +721,6 @@ pack(void)
 			free(raw);
 		}
 	}
-	if (windowed)
-		progress_end();
 	if (!ok) {
 		free(out.p);
 		if (stopped)
@@ -868,6 +926,7 @@ draw(void)
 	    "Export", 0);
 	key(WIDTH - 120, y, 100, 30, K_CLOSE, "Close", 0);
 	y += 46;
+	bar_x = 20, bar_y = y, bar_w = WIDTH - 40;	/* (a packing's bar is drawn over the status line) */
 	ui_text_fit(window, 20, y, WIDTH - 40, status, BLACK);
 	y += 30;
 	if (target == TO_PHOTO) {
@@ -979,6 +1038,7 @@ export_window(void)
 		return 1;
 	ui_init();
 	windowed = 1;
+	bar_redraw = draw;
 	measure();
 	window = GrNewWindowEx(UI_FIXED, "Export", GR_ROOT_WINDOW_ID, -1, -1, WIDTH, HEIGHT, UI_FACE);
 	GrSelectEvents(window, GR_EVENT_MASK_EXPOSURE | GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_BUTTON_DOWN | GR_EVENT_MASK_CLOSE_REQ);
@@ -1272,10 +1332,8 @@ take_in(const char *in, size_t n, const char *folder)
 	}
 	free(bytes);
 	if (windowed)
-		progress_begin("Unpacking what was pasted");
+		bar_begin("Unpacking what was pasted");
 	unpack_beside(path, unpacked, sizeof unpacked);
-	if (windowed)
-		progress_end();
 	if (unpacked[0])
 		say("Imported %s (%zu bytes), unpacked into %s.", path, made, unpacked);
 	else
@@ -1306,6 +1364,7 @@ import_window(const char *folder)
 	if (GrOpen() >= 0) {
 		ui_init();
 		windowed = 1;
+		bar_x = 20, bar_y = 76, bar_w = 480;	/* (the unpacking's bar, under the status line) */
 		window = GrNewWindowEx(UI_FIXED, "Import", GR_ROOT_WINDOW_ID, -1, -1, 520, 150, UI_FACE);
 		GrSelectEvents(window, GR_EVENT_MASK_EXPOSURE | GR_EVENT_MASK_BUTTON_DOWN | GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_CLOSE_REQ);
 		GrMapWindow(window);

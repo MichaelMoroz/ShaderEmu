@@ -304,6 +304,9 @@
   so the picture saved as BMP and renamed `.zip` is the zip; `open` finds the zip in a link to that PNG. The shader and
   `rvc_persist.h`'s `photoByte` are one layout: a change to either changes both, and `test_all.py export-photo` (the bitmap
   `rvc_cpu` makes opened as a zip) must pass. QR codes went with it.
+- A panel's picture is baked on a plate with only what changes left to the canvas (`ShaderEmuRetro.cs`, `PanelLook`): a key a
+  behaviour shows and hides holds a `GameObject` field of it (as `EmuClip.giveButton`), which keeps it off the picture
+  (`Toggled`, 8 November 2026): a key baked on the plate stays painted there when its object is hidden.
 - A setting a program wants kept is a key of the registry all programs share (`registry.h`,
   `nxreg`; `/persistence/registry`, `docs/system/persist.md`), not a file of its own: `program.name`,
   set at once, read at start. A test that must have the defaults does not read it (`RAY_FRAMES`).
