@@ -307,6 +307,9 @@
 - A panel's picture is baked on a plate with only what changes left to the canvas (`ShaderEmuRetro.cs`, `PanelLook`): a key a
   behaviour shows and hides holds a `GameObject` field of it (as `EmuClip.giveButton`), which keeps it off the picture
   (`Toggled`, 8 November 2026): a key baked on the plate stays painted there when its object is hidden.
+- No text of the world lies over another, those switched off at build too (8 November 2026, the developer's rule; `docs/world/world.md`,
+  "Texts that overlap"): "ShaderEmu/Check texts over each other in the open scene" (`ShaderEmuTexts`) must say 0 pairs after a change to a
+  panel, a panel that opens at another's place closes it, and a pair never shown together goes into its `Apart` list with why.
 - A setting a program wants kept is a key of the registry all programs share (`registry.h`,
   `nxreg`; `/persistence/registry`, `docs/system/persist.md`), not a file of its own: `program.name`,
   set at once, read at start. A test that must have the defaults does not read it (`RAY_FRAMES`).

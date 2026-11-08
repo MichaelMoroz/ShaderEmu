@@ -1149,6 +1149,8 @@ public class EmuMachine : UdonSharpBehaviour
             panel.SetPositionAndRotation(linksAt, linksTurn);
             panel.localScale = linksSize;
         }
+        // (the field's panel opens at the same place: one at a time, or their texts lie over each other)
+        if (open && clip != null) clip.Close();
         linksPanel.SetActive(open);
         ShowLinks();
     }

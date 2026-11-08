@@ -316,6 +316,21 @@ lightmap, which shows a line wherever two pieces of a wall meet and at every cor
   added to the builder's layout needs the layout written out again, the texture and the model.
 - A panel that is closed when the room is built (the browser's links) is drawn as it will
   open; its plate has no lightmap and takes the probes' light.
+- A key a behaviour shows and hides (one of its `GameObject` fields, as `EmuClip.giveButton`) is never drawn on the
+  plate (`Toggled` in `ShaderEmuRetro.cs`): a key baked there stayed painted when its object was hidden.
+
+### Texts that overlap
+
+"ShaderEmu/Check texts over each other in the open scene" (`ShaderEmuTexts.Check`; `-executeMethod ShaderEmuTexts.Batch`
+opens the world's scene and logs it) measures every text of every panel, those off or empty when the world is built too,
+where its font lays it out in its rectangle (wrapped, aligned, past the rectangle where it overflows; an empty one that a
+behaviour holds is its whole rectangle, an empty one nothing writes is left out), and finds a text over another text, or
+across part of another graphic (a key, a field), of its own panel or of a panel in nearly one plane with it (within 5 cm,
+facing within 15 degrees). Boxes that meet by 2 units or less only touch. Panels never shown together are its `Apart`
+list, each with why (a holodeck's plate and its button, the two keyboards, the notice that follows a hand, the field's
+panel and the links panel, which open at one place one at a time since 8 November 2026). It must say 0 pairs after a
+change to a panel; on 8 November 2026 it said 0 of 1,027 texts on 161 panels, after the field's panel and the links panel
+were made one at a time (they lay over each other when both were open).
 
 ## How the pieces fit
 

@@ -277,6 +277,8 @@ public class EmuClip : UdonSharpBehaviour
         mode = how;
         pages = text.Length == 0 ? 1 : (text.Length + Page - 1) / Page;
         page = 0;
+        // (the links panel opens at the same place: one at a time, or their texts lie over each other)
+        if (machine != null && machine.linksPanel != null && machine.linksPanel.activeSelf) machine.PlaceLinks(false, null);
         Place();
         panel.SetActive(true);
         ShowPage();
